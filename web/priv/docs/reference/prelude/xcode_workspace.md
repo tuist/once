@@ -22,10 +22,14 @@ workspace references and merges their targets into one graph, so dependencies
 that cross a project boundary are wired. A referenced project that is not on
 disk is skipped instead of failing the graph.
 
-A project checked in beside the workspace root is also a recognized native
-project named `xcode`, so its seed is supplied without any `once.toml`. Use
-`once native init xcode` to persist the seed, or declare the
-target explicitly when the project lives in a subdirectory.
+Xcode projects, including projects in nested packages, are recognized as
+native projects named `xcode`, so their seeds are supplied without any
+`once.toml`. Use `once native init xcode` to persist a selected seed.
+
+When an Xcode project uses a workspace-level `Package.resolved`, Once uses its
+matching pinned revisions while lowering remote Swift packages. Checksum-pinned
+binary package archives download as normal cacheable dependencies instead of
+being fetched while the graph loads.
 
 See [Xcode Projects](/guide/graph/apple/xcode) for a walkthrough.
 
@@ -37,6 +41,7 @@ See [Xcode Projects](/guide/graph/apple/xcode) for a walkthrough.
 | `configuration` | string | no | `Debug` | Xcode build configuration whose settings drive target lowering |
 | `sdk_variant` | string | no | `simulator` | `simulator` or `device` selection applied to lowered targets on non-macOS platforms |
 | `xcode_developer_dir` | string | no | active Xcode | `DEVELOPER_DIR` override folded into lowered targets' cache keys |
+| `binary_artifact_authorization_env` | string | no |  | Environment-variable name that supplies a web Authorization header while downloading private binary package archives. Its value is not recorded. |
 | `resolver_inputs` | list&lt;string&gt; | no | `[]` | Package-relative text globs supplied to resolution. Defaults to `srcs` when empty |
 
 None of these attributes are configurable by platform select.
@@ -58,6 +63,7 @@ None of these attributes are configurable by platform select.
 | Unit test and interface test bundle | [`apple_test_bundle`](/reference/prelude/apple_test_bundle) |
 | Bundle | [`apple_resource_bundle`](/reference/prelude/apple_resource_bundle) |
 | Referenced `.xcframework` | [`apple_xcframework_import`](/reference/prelude/apple_xcframework_import) |
+| Remote binary Swift package target | [`archive_download`](/reference/prelude/archive_download), then [`apple_xcframework_import`](/reference/prelude/apple_xcframework_import) |
 
 ## Providers
 

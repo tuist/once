@@ -78,6 +78,7 @@ struct DiscoveryScan<'a> {
     stop_markers: BTreeMap<&'a str, Vec<usize>>,
     descend_markers: BTreeMap<&'a str, Vec<usize>>,
     stop_schema_count: usize,
+    has_non_stop_schema: bool,
     retained: RetainedMatches,
 }
 
@@ -91,17 +92,21 @@ impl<'a> DiscoveryScan<'a> {
         let mut stop_markers = BTreeMap::<&str, Vec<usize>>::new();
         let mut descend_markers = BTreeMap::<&str, Vec<usize>>::new();
         for (index, schema) in schemas.iter().enumerate() {
-            let markers = if schema.on_match == "stop" {
-                &mut stop_markers
-            } else {
+            let markers = if schema.on_match == "descend" {
                 &mut descend_markers
+            } else {
+                &mut stop_markers
             };
             markers
                 .entry(schema.markers[0].as_str())
                 .or_default()
                 .push(index);
         }
-        let stop_schema_count = stop_markers.values().map(Vec::len).sum();
+        let stop_schema_count = schemas
+            .iter()
+            .filter(|schema| schema.on_match == "stop")
+            .count();
+        let has_non_stop_schema = schemas.iter().any(|schema| schema.on_match != "stop");
         Ok(Self {
             root,
             schemas,
@@ -109,6 +114,7 @@ impl<'a> DiscoveryScan<'a> {
             stop_markers,
             descend_markers,
             stop_schema_count,
+            has_non_stop_schema,
             retained: RetainedMatches::new(root, schemas.len(), retained_match_limit)?,
         })
     }
@@ -142,9 +148,10 @@ impl<'a> DiscoveryScan<'a> {
         let package = entry.path();
         let marker_depth = entry.depth().saturating_add(1);
         let mut package_name = None;
-        if self
-            .retained
-            .all_stop_schemas_rooted(self.stop_schema_count)
+        if !self.has_non_stop_schema
+            && self
+                .retained
+                .all_stop_schemas_rooted(self.stop_schema_count)
         {
             return Ok(());
         }

@@ -882,6 +882,73 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         Ok(NoneType)
     }
 
+    /// Download a checksum-pinned ZIP archive and expand it into a declared
+    /// directory output. `authorization_env` is the name of an environment
+    /// variable read only when the action executes; its value is never stored
+    /// in the action declaration, action digest, or evidence.
+    fn download_and_extract(
+        url: &str,
+        sha256: &str,
+        destination: &str,
+        authorization_env: Option<String>,
+        identifier: Option<String>,
+        cacheable: Option<bool>,
+    ) -> anyhow::Result<NoneType> {
+        if !analysis_active() {
+            return Ok(NoneType);
+        }
+        if url.trim().is_empty() {
+            return Err(anyhow!("download_and_extract url must not be empty"));
+        }
+        if sha256.len() != 64 || !sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(anyhow!(
+                "download_and_extract sha256 must be exactly 64 hexadecimal characters"
+            ));
+        }
+        if authorization_env
+            .as_deref()
+            .is_some_and(|name| name.trim().is_empty())
+        {
+            return Err(anyhow!(
+                "download_and_extract authorization_env must not be empty"
+            ));
+        }
+        let action = DeclaredAction {
+            operation: Some(DeclaredActionOperation::DownloadAndExtract {
+                url: url.to_string(),
+                sha256: sha256.to_string(),
+                destination: destination.to_string(),
+                authorization_env,
+            }),
+            argv: Vec::new(),
+            arg_files: Vec::new(),
+            inputs: Vec::new(),
+            outputs: vec![destination.to_string()],
+            stdout: None,
+            stderr: None,
+            clean_paths: Vec::new(),
+            create_dirs: Vec::new(),
+            cwd: None,
+            env: BTreeMap::new(),
+            sandbox: None,
+            network: None,
+            success_exit_codes: vec![0],
+            cacheable: cacheable.unwrap_or(true),
+            inherit_parent_env: false,
+            depends_on_prior_actions: false,
+            toolchain_identity: None,
+            identifier: Some(
+                identifier.unwrap_or_else(|| format!("download_and_extract:{destination}")),
+            ),
+        };
+        with_store_mut(|store| {
+            if let Some(store) = store {
+                store.actions.push(action);
+            }
+        });
+        Ok(NoneType)
+    }
+
     /// Build a structured command-line fragment. `args` is a list of
     /// string arguments. When `use_arg_file` is set, it must be a dict
     /// with `path` plus optional `format` and `arg_format`. The supported
@@ -2435,6 +2502,7 @@ mod observation_completeness_tests {
         "cmd_args",
         "copy_path",
         "declare_output",
+        "download_and_extract",
         "execution_path",
         "json_decode",
         "link_path",

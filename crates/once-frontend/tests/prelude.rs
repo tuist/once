@@ -94,6 +94,14 @@ fn apple_prelude_source() -> String {
     )
 }
 
+fn archive_prelude_source() -> String {
+    format!(
+        "{}\n{}",
+        include_str!("../prelude/common.star"),
+        include_str!("../prelude/archive.star")
+    )
+}
+
 fn android_prelude_source() -> String {
     format!(
         "{}\n{}",
@@ -14331,6 +14339,77 @@ result = repr(graph["products"]["FixtureShared\x1fShared"])
 }
 
 #[test]
+fn prelude_xcode_lowers_binary_package_artifacts_to_cached_dependencies() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+infos = [{{
+    "identity": "UrlPredictor",
+    "path": "Packages/UrlPredictor",
+    "info": {{
+        "products": [{{"name": "URLPredictorRust", "targets": ["URLPredictorRust"]}}],
+        "targets": [{{
+            "name": "URLPredictorRust",
+            "type": "binary",
+            "url": "https://downloads.example.test/URLPredictorRust.zip",
+            "checksum": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        }}],
+    }},
+}}]
+ctx = {{
+    "label": {{"package": "clients/ios", "id": "clients/ios/xcode"}},
+    "attr": {{"binary_artifact_authorization_env": "VENDOR_AUTHORIZATION"}},
+}}
+graph = _xcode_local_swift_package_specs(ctx, infos, "ios", "17.0", "simulator")
+result = repr([
+    graph["specs"][0]["kind"],
+    graph["specs"][0]["attrs"],
+    graph["specs"][1]["kind"],
+    graph["specs"][1]["deps"],
+    graph["specs"][1]["attrs"]["bundle"],
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["archive_download", {"url": "https://downloads.example.test/URLPredictorRust.zip", "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "authorization_env": "VENDOR_AUTHORIZATION"}, "apple_xcframework_import", ["./SwiftPackage_UrlPredictor_URLPredictorRust_Artifact"], ".once/out/clients/ios/SwiftPackage_UrlPredictor_URLPredictorRust_Artifact/archive/URLPredictorRust.xcframework"]"#
+    );
+}
+
+#[test]
+fn prelude_archive_download_omits_an_empty_authorization_env() {
+    let prelude = archive_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{"id": "downloads/Vendor"}},
+    "attr": {{
+        "url": "https://downloads.example.test/Vendor.zip",
+        "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    }},
+}}
+_archive_download_impl(ctx)
+result = repr("ok")
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(workspace.path(), "downloads/Vendor");
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(result.unwrap(), r#""ok""#);
+    assert_eq!(store.actions.len(), 1);
+    assert_eq!(
+        store.actions[0].operation,
+        Some(DeclaredActionOperation::DownloadAndExtract {
+            url: "https://downloads.example.test/Vendor.zip".to_string(),
+            sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
+            destination: ".once/out/downloads/Vendor/archive".to_string(),
+            authorization_env: None,
+        })
+    );
+}
+
+#[test]
 fn prelude_xcode_adds_package_identity_only_when_package_access_is_available() {
     let prelude = xcode_prelude_source();
     let source = format!(
@@ -14656,6 +14735,133 @@ result = repr(_collect_dep_compile_inputs(deps, "build")[5])
         eval_prelude_source_to_repr(source).unwrap(),
         r#"["out/spm/frameworks"]"#
     );
+}
+
+#[allow(clippy::too_many_lines)]
+#[test]
+fn prelude_apple_xcframework_import_exposes_static_clang_module_to_swift() {
+    let prelude = apple_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let package = workspace.path().join("App/Sources");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(
+        package.join("App.swift"),
+        "import URLPredictorRust\nfunc predictor() {}\n",
+    )
+    .unwrap();
+
+    let root = workspace.path().display().to_string();
+    let slice = "Vendor.xcframework/macos-arm64";
+    let archive = format!("{slice}/liburl_predictor.a");
+    let headers = format!("{slice}/Headers");
+    let modulemap = format!("{headers}/URLPredictorRust/module.modulemap");
+    let header = format!("{headers}/URLPredictorRust/ddg_url_predictor.h");
+    let available_libraries = serde_json::json!({
+        "AvailableLibraries": [{
+            "LibraryIdentifier": "macos-arm64",
+            "LibraryPath": "liburl_predictor.a",
+            "BinaryPath": "liburl_predictor.a",
+            "HeadersPath": "Headers",
+            "SupportedArchitectures": ["arm64"],
+            "SupportedPlatform": "macos",
+        }],
+    })
+    .to_string();
+    let slice_files = [
+        format!("{root}/{archive}"),
+        format!("{root}/{modulemap}"),
+        format!("{root}/{header}"),
+    ]
+    .join("\n");
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return {root:?}
+
+def host_arch():
+    return "arm64"
+
+def host_which(name):
+    return name
+
+def host_file_exists(path):
+    return path == workspace_root() + "/Vendor.xcframework/Info.plist"
+
+def host_file_read(path):
+    if path == workspace_root() + "/{modulemap}":
+        return "module URLPredictorRust {{\n  header \\\"ddg_url_predictor.h\\\"\n  export *\n}}\n"
+    fail("unexpected host_file_read: " + path)
+
+def host_command(argv, env = None, merge_stderr = None):
+    if argv[0] == "plutil":
+        return {available_libraries:?}
+    if argv[0] == "find":
+        return {slice_files:?}
+    if "--version" in argv:
+        return "Swift version 6.0\n"
+    fail("unexpected host_command: " + str(argv))
+
+import_ctx = {{
+    "label": {{"package": "", "name": "Vendor", "id": "Vendor"}},
+    "attr": {{
+        "bundle": "Vendor.xcframework",
+        "platform": "macos",
+        "sdk_variant": "simulator",
+        "arch": "arm64",
+    }},
+    "configuration": {{"tokens": []}},
+    "deps": [],
+    "srcs": [],
+    "build_dir": ".once/out/Vendor",
+    "capability": "build",
+}}
+dependency = _apple_xcframework_import_impl(import_ctx)
+ctx = {{
+    "label": {{"package": "App", "name": "App", "id": "App/App"}},
+    "attr": {{
+        "platform": "macos",
+        "module_name": "App",
+        "xcode_developer_dir": "/opt/Xcode/Developer",
+    }},
+    "configuration": {{"tokens": []}},
+    "deps": [dependency],
+    "srcs": ["Sources/**/*.swift"],
+    "build_dir": ".once/out/App/App",
+    "capability": "build",
+}}
+result = repr(_apple_library_impl(ctx))
+"#,
+    );
+    let store = store_for(workspace.path(), "App");
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let provider = result.unwrap();
+    assert!(provider.contains(&archive), "{provider}");
+    let compiler = action_by_identifier(&store, "swift_module_compile_App");
+    assert!(
+        compiler
+            .argv
+            .windows(2)
+            .any(|args| { args == ["-Xcc".to_string(), format!("-fmodule-map-file={modulemap}")] }),
+        "Swift must receive the static XCFramework module map: {:?}",
+        compiler.argv
+    );
+    assert!(
+        compiler
+            .argv
+            .windows(2)
+            .any(|args| { args == ["-Xcc".to_string(), "-I".to_string()] })
+            && compiler.argv.contains(&headers),
+        "Swift must receive the static XCFramework headers: {:?}",
+        compiler.argv
+    );
+    for input in [&archive, &modulemap, &header] {
+        assert!(
+            compiler.inputs.contains(input),
+            "static XCFramework input `{input}` is missing from {:?}",
+            compiler.inputs
+        );
+    }
 }
 
 #[test]
@@ -15769,6 +15975,85 @@ result = repr(_xcode_parse_workspace_data({data:?}, ""))
 }
 
 #[test]
+fn prelude_xcode_uses_workspace_lockfile_for_a_nested_project() {
+    let prelude = xcode_prelude_source();
+    let unrelated = serde_json::json!({
+        "version": 3,
+        "pins": [{
+            "identity": "unrelated",
+            "kind": "remoteSourceControl",
+            "state": {"revision": "unrelated-revision"},
+        }],
+    })
+    .to_string();
+    let workspace = serde_json::json!({
+        "version": 1,
+        "object": {
+            "pins": [{
+                "package": "ProtonCore",
+                "repositoryURL": "https://example.invalid/protoncore.git",
+                "state": {"revision": "workspace-revision"},
+            }],
+        },
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "/workspace"
+
+def host_which(name):
+    return name
+
+def host_command(argv, env = None, cwd = None, merge_stderr = None):
+    if argv[0] == "find":
+        return "/workspace/Other.xcworkspace/xcshareddata/swiftpm/Package.resolved\n/workspace/ProtonVPN.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+    fail("unexpected host_command: " + str(argv))
+
+def host_file_exists(path):
+    return path.endswith("Other.xcworkspace/xcshareddata/swiftpm/Package.resolved") or path.endswith("ProtonVPN.xcworkspace/xcshareddata/swiftpm/Package.resolved")
+
+def host_file_read(path):
+    if path.endswith("Other.xcworkspace/xcshareddata/swiftpm/Package.resolved"):
+        return {unrelated:?}
+    if path.endswith("ProtonVPN.xcworkspace/xcshareddata/swiftpm/Package.resolved"):
+        return {workspace:?}
+    fail("unexpected host_file_read: " + path)
+
+refs = {{"PACKAGE": {{"identity": "protoncore"}}}}
+result = repr(_xcode_package_resolved_pins({{}}, "apps/ios/iOS.xcodeproj", "apps/ios/iOS.xcodeproj", refs))
+"#,
+    );
+
+    let result = eval_prelude_source_to_repr(source).unwrap();
+    assert!(result.contains("protoncore"), "{result}");
+    assert!(result.contains("workspace-revision"), "{result}");
+    assert!(!result.contains("unrelated-revision"), "{result}");
+}
+
+#[test]
+fn prelude_xcode_keeps_nested_project_paths_workspace_relative() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def glob(patterns):
+    return ["apps/ios/iOS.xcodeproj/project.pbxproj"]
+
+ctx = {{
+    "label": {{"package": "apps/ios", "id": "apps/ios/xcode"}},
+    "attr": {{}},
+}}
+result = repr(_xcode_project_path(ctx))
+"#,
+    );
+
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#""apps/ios/iOS.xcodeproj""#
+    );
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn prelude_xcode_workspace_resolver_lowers_native_targets() {
     let prelude = xcode_prelude_source();
@@ -15955,6 +16240,6 @@ result = repr([
     let out = eval_prelude_source_to_repr(source).unwrap();
     assert_eq!(
         out,
-        r#"[["App"], ["apple_framework", "apple_application", "apple_test_bundle"], ["./Feature"], ["./App"], ["Source/Core/Feature.swift"], {"Source/Core/Feature.swift": "[\"-DNDEBUG\",\"-fno-objc-arc\"]"}, ["App.swift"], "dev.once.App", "TEAM123", ["iphone", "ipad"], "16.0", True]"#
+        r#"[["App"], ["apple_framework", "apple_application", "apple_test_bundle"], ["./Feature"], ["./App"], ["app/Source/Core/Feature.swift"], {"app/Source/Core/Feature.swift": "[\"-DNDEBUG\",\"-fno-objc-arc\"]"}, ["app/App.swift"], "dev.once.App", "TEAM123", ["iphone", "ipad"], "16.0", True]"#
     );
 }

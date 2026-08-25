@@ -200,6 +200,7 @@ defmodule OnceSiteWeb.Docs.Sidebar do
                 apple_resource_bundle apple_thinned_package apple_test_bundle
                 apple_xcframework_import swift_package_workspace swift_package_dependencies swift_package_pin)
               ),
+              target_group("Core", ~w(archive_download)),
               target_group("Xcode", ~w(xcode_workspace)),
               target_group("Android", ~w(android_resource android_library android_local_test
                 android_instrumentation_test android_binary)),

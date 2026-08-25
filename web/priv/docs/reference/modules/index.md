@@ -134,8 +134,9 @@ native = native_project(
   control directory is neither, and walking one to look for inputs is the
   largest avoidable cost of loading a large workspace.
 - `on_match = "stop"` keeps the shallowest matching root, which suits native
-  workspaces that own nested package manifests. `"descend"` also recognizes
-  nested projects.
+  workspaces that own nested package manifests. `"descend"` recognizes every
+  nested file marker. `"all"` recognizes every matching directory, including
+  directory-spanning markers such as `*.xcodeproj/project.pbxproj`.
 - `max_depth` bounds discovery.
 - `requires_tools` reports executables needed when the seed resolver runs.
 
@@ -599,6 +600,11 @@ separate update workflow.
   time. When requested, `sha256_output` records the
   [Secure Hash Algorithm 256-bit](https://csrc.nist.gov/pubs/fips/180-4/upd1/final)
   digest.
+- `download_and_extract(url, sha256, destination, authorization_env = None)`
+  streams a checksum-pinned [ZIP archive](https://www.loc.gov/preservation/digital/formats/fdd/fdd000354.shtml)
+  into a declared directory output. An optional environment-variable name
+  provides a web Authorization header only while the action executes, so its
+  value is excluded from action declarations, cache keys, logs, and evidence.
 - `toml_decode(src)` and `json_decode(src)` decode data into Starlark
   values.
 

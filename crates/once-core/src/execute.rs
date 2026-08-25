@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
+use futures::StreamExt;
 use once_cas::{ActionResult, CacheProvider};
 use sha2::Digest as ShaDigest;
+use tokio::io::AsyncWriteExt;
 
 use crate::{
     archive, contract, local, outputs, remote, Action, CopyPathMode, Error, OutputSymlinkMode,
@@ -45,6 +47,7 @@ pub(crate) async fn run(
     execute_portable_action(action, workspace_root, cache).await
 }
 
+#[allow(clippy::too_many_lines)]
 async fn execute_portable_action(
     action: &Action,
     workspace_root: &Path,
@@ -145,8 +148,274 @@ async fn execute_portable_action(
             }
             capture_file_action_outputs(&outputs, workspace_root, cache).await
         }
+        Action::DownloadAndExtract {
+            url,
+            sha256,
+            destination,
+            authorization_env,
+            ..
+        } => {
+            download_and_extract(
+                url,
+                sha256,
+                destination,
+                authorization_env.as_deref(),
+                workspace_root,
+            )
+            .await?;
+            capture_file_action_outputs(std::slice::from_ref(destination), workspace_root, cache)
+                .await
+        }
         Action::RunCommand { .. } => unreachable!("command actions are dispatched separately"),
     }
+}
+
+#[allow(clippy::too_many_lines)]
+async fn download_and_extract(
+    url: &str,
+    expected_sha256: &str,
+    destination: &WorkspacePath,
+    authorization_env: Option<&str>,
+    workspace_root: &Path,
+) -> Result<()> {
+    let parsed = reqwest::Url::parse(url).map_err(|source| Error::InvalidDownloadAndExtract {
+        reason: format!("invalid URL `{url}`: {source}"),
+    })?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(Error::InvalidDownloadAndExtract {
+            reason: "URL must use HTTP or HTTPS".to_string(),
+        });
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(Error::InvalidDownloadAndExtract {
+            reason: "URL user-info is not allowed; use authorization_env instead".to_string(),
+        });
+    }
+    if !is_sha256(expected_sha256) {
+        return Err(Error::InvalidDownloadAndExtract {
+            reason: "sha256 must be exactly 64 hexadecimal characters".to_string(),
+        });
+    }
+    let absolute_destination = destination.resolve(workspace_root);
+    let destination_parent =
+        absolute_destination
+            .parent()
+            .ok_or_else(|| Error::InvalidDownloadAndExtract {
+                reason: format!(
+                    "destination `{}` has no parent directory",
+                    destination.as_str()
+                ),
+            })?;
+    tokio::fs::create_dir_all(destination_parent)
+        .await
+        .map_err(|source| Error::FileAction {
+            action: "download_and_extract",
+            path: destination.as_str().to_string(),
+            source,
+        })?;
+
+    let client =
+        reqwest::Client::builder()
+            .build()
+            .map_err(|source| Error::InvalidDownloadAndExtract {
+                reason: format!("creating HTTP client: {source}"),
+            })?;
+    let mut request = client.get(parsed);
+    if let Some(name) = authorization_env {
+        let value = std::env::var(name)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| Error::DownloadAuthorizationMissing {
+                name: name.to_string(),
+            })?;
+        request = request.header(reqwest::header::AUTHORIZATION, value);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|source| Error::InvalidDownloadAndExtract {
+            reason: format!("requesting `{url}`: {source}"),
+        })?
+        .error_for_status()
+        .map_err(|source| Error::InvalidDownloadAndExtract {
+            reason: format!("requesting `{url}`: {source}"),
+        })?;
+
+    let archive = tempfile::NamedTempFile::new_in(destination_parent).map_err(|source| {
+        Error::FileAction {
+            action: "download_and_extract",
+            path: destination.as_str().to_string(),
+            source,
+        }
+    })?;
+    let archive_path = archive.path().to_path_buf();
+    let mut file = tokio::fs::File::create(&archive_path)
+        .await
+        .map_err(|source| Error::FileAction {
+            action: "download_and_extract",
+            path: archive_path.display().to_string(),
+            source,
+        })?;
+    let mut digest = sha2::Sha256::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|source| Error::InvalidDownloadAndExtract {
+            reason: format!("reading `{url}`: {source}"),
+        })?;
+        digest.update(&chunk);
+        file.write_all(&chunk)
+            .await
+            .map_err(|source| Error::FileAction {
+                action: "download_and_extract",
+                path: archive_path.display().to_string(),
+                source,
+            })?;
+    }
+    file.flush().await.map_err(|source| Error::FileAction {
+        action: "download_and_extract",
+        path: archive_path.display().to_string(),
+        source,
+    })?;
+    drop(file);
+
+    let digest = digest.finalize();
+    let mut actual_sha256 = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut actual_sha256, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    if !actual_sha256.eq_ignore_ascii_case(expected_sha256) {
+        return Err(Error::DownloadChecksumMismatch {
+            url: url.to_string(),
+            expected: expected_sha256.to_string(),
+            actual: actual_sha256,
+        });
+    }
+
+    let extracted_destination = absolute_destination.clone();
+    let staging_parent = destination_parent.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let staging = tempfile::Builder::new()
+            .prefix(".once-download-")
+            .tempdir_in(&staging_parent)
+            .map_err(|source| Error::FileAction {
+                action: "download_and_extract",
+                path: staging_parent.display().to_string(),
+                source,
+            })?;
+        let staged_output = staging.path().join("output");
+        extract_zip_archive(&archive_path, &staged_output)?;
+        remove_path_blocking(&extracted_destination).map_err(|source| Error::FileAction {
+            action: "download_and_extract",
+            path: extracted_destination.display().to_string(),
+            source,
+        })?;
+        std::fs::rename(&staged_output, &extracted_destination).map_err(|source| {
+            Error::FileAction {
+                action: "download_and_extract",
+                path: extracted_destination.display().to_string(),
+                source,
+            }
+        })
+    })
+    .await
+    .map_err(|source| Error::FileAction {
+        action: "download_and_extract",
+        path: destination.as_str().to_string(),
+        source: std::io::Error::other(source.to_string()),
+    })??;
+    Ok(())
+}
+
+fn is_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn extract_zip_archive(archive_path: &Path, destination: &Path) -> Result<()> {
+    std::fs::create_dir_all(destination).map_err(|source| Error::FileAction {
+        action: "download_and_extract",
+        path: destination.display().to_string(),
+        source,
+    })?;
+    let archive_file = std::fs::File::open(archive_path).map_err(|source| Error::FileAction {
+        action: "download_and_extract",
+        path: archive_path.display().to_string(),
+        source,
+    })?;
+    let mut archive =
+        zip::ZipArchive::new(archive_file).map_err(|source| Error::InvalidDownloadAndExtract {
+            reason: format!("opening ZIP archive: {source}"),
+        })?;
+    for index in 0..archive.len() {
+        let mut entry =
+            archive
+                .by_index(index)
+                .map_err(|source| Error::InvalidDownloadAndExtract {
+                    reason: format!("reading ZIP entry {index}: {source}"),
+                })?;
+        let Some(relative) = entry.enclosed_name() else {
+            return Err(Error::InvalidDownloadAndExtract {
+                reason: format!("ZIP entry `{}` escapes the destination", entry.name()),
+            });
+        };
+        if relative.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        }) {
+            return Err(Error::InvalidDownloadAndExtract {
+                reason: format!("ZIP entry `{}` escapes the destination", entry.name()),
+            });
+        }
+        let output = destination.join(relative);
+        let unix_mode = entry.unix_mode().unwrap_or(0);
+        let file_type = unix_mode & 0o170_000;
+        if file_type != 0 && file_type != 0o100_000 && file_type != 0o040_000 {
+            return Err(Error::InvalidDownloadAndExtract {
+                reason: format!("ZIP entry `{}` has an unsupported file type", entry.name()),
+            });
+        }
+        if entry.is_dir() {
+            std::fs::create_dir_all(&output).map_err(|source| Error::FileAction {
+                action: "download_and_extract",
+                path: output.display().to_string(),
+                source,
+            })?;
+            continue;
+        }
+        let parent = output
+            .parent()
+            .ok_or_else(|| Error::InvalidDownloadAndExtract {
+                reason: format!("ZIP entry `{}` has no parent directory", entry.name()),
+            })?;
+        std::fs::create_dir_all(parent).map_err(|source| Error::FileAction {
+            action: "download_and_extract",
+            path: parent.display().to_string(),
+            source,
+        })?;
+        let mut output_file =
+            std::fs::File::create(&output).map_err(|source| Error::FileAction {
+                action: "download_and_extract",
+                path: output.display().to_string(),
+                source,
+            })?;
+        std::io::copy(&mut entry, &mut output_file).map_err(|source| Error::FileAction {
+            action: "download_and_extract",
+            path: output.display().to_string(),
+            source,
+        })?;
+        #[cfg(unix)]
+        if unix_mode != 0 {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&output, std::fs::Permissions::from_mode(unix_mode & 0o777))
+                .map_err(|source| Error::FileAction {
+                action: "download_and_extract",
+                path: output.display().to_string(),
+                source,
+            })?;
+        }
+    }
+    Ok(())
 }
 
 async fn execute_command(

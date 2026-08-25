@@ -52,6 +52,12 @@ pub enum DeclaredActionOperation {
         sha256_output: Option<String>,
         format: DeclaredArchiveFormat,
     },
+    DownloadAndExtract {
+        url: String,
+        sha256: String,
+        destination: String,
+        authorization_env: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
