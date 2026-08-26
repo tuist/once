@@ -401,6 +401,7 @@ let package = Package(
         tests.attrs.get("product_name"),
         Some(&AttrValue::String("AppTests".to_string()))
     );
+    assert!(!tests.attrs.contains_key("module_name"));
     assert!(tests.deps.contains(&app.label.id));
 }
 
