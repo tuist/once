@@ -1425,15 +1425,23 @@ def _xcode_acquire_binary_package_artifacts(package):
             fail("binary package artifact checksum mismatch for `" + name + "`")
         host_command([ditto, "-x", "-k", archive, root])
 
-def _xcode_local_swift_package_infos(ctx):
+def _xcode_local_swift_package_infos(ctx, project_dir, package_refs):
     # Package metadata is analysis input only. Compilation remains entirely in
-    # Once's Apple target kinds, so resolving an Xcode workspace never invokes
-    # Swift Package Manager's build command.
+    # Once's Apple target kinds. Follow only local package references declared
+    # by the project, rather than every Package.swift in the repository: a
+    # nested developer tool is a separate workspace unless Xcode references it.
     infos = []
-    for manifest in glob(["**/Package.swift"]):
-        if _xcode_is_excluded_source_path(manifest) or _xcode_is_dependency_tree_path(manifest):
+    seen = {}
+    for ref in package_refs.values():
+        if ref.get("kind") != "local":
             continue
-        package_dir = _parent_dir(manifest)
+        package_dir = _xcode_join(project_dir, ref.get("path") or "")
+        if package_dir in seen:
+            continue
+        seen[package_dir] = True
+        manifest = _xcode_join(package_dir, "Package.swift")
+        if not host_file_exists(_xcode_abs(manifest)):
+            continue
         info = _xcode_swift_package_info(ctx, package_dir)
         _xcode_acquire_binary_package_artifacts(info)
         infos.append(info)
@@ -1549,11 +1557,11 @@ def _xcode_expand_swift_package_infos(ctx, initial_infos):
         pending = discovered
     return infos
 
-def _xcode_swift_package_target_id(identity, target_name):
-    return "SwiftPackage_" + _xcode_sanitized_target_name(identity) + "_" + _xcode_sanitized_target_name(target_name)
+def _xcode_swift_package_target_id(identity, target_name, target_prefix = "SwiftPackage"):
+    return target_prefix + "_" + _xcode_sanitized_target_name(identity) + "_" + _xcode_sanitized_target_name(target_name)
 
-def _xcode_swift_package_host_target_id(identity, target_name):
-    return _xcode_swift_package_target_id(identity, target_name) + "_MacroHost"
+def _xcode_swift_package_host_target_id(identity, target_name, target_prefix = "SwiftPackage"):
+    return _xcode_swift_package_target_id(identity, target_name, target_prefix) + "_MacroHost"
 
 def _xcode_host_directory_exists(path):
     parent = _parent_dir(path)
@@ -1834,7 +1842,7 @@ def _xcode_swift_package_target_flags(target, platform, default_language_mode):
         "language_mode": swift_language_mode,
     }
 
-def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, sdk_variant, lazy_products = {}, lazy_dependency = ""):
+def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, sdk_variant, lazy_products = {}, lazy_dependency = "", target_prefix = "SwiftPackage"):
     # Lower source package targets as ordinary Apple libraries. Products merely
     # name one or more targets, so consumers depend on the product's primary
     # target while that target keeps its declared package dependencies.
@@ -1848,8 +1856,8 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
         for target in package["info"].get("targets") or []:
             name = target.get("name") or ""
             if name:
-                target_id = _xcode_swift_package_target_id(identity, name)
-                host_target_id = target_id if (target.get("type") or "") in ["binary", "macro", "test"] else _xcode_swift_package_host_target_id(identity, name)
+                target_id = _xcode_swift_package_target_id(identity, name, target_prefix)
+                host_target_id = target_id if (target.get("type") or "") in ["binary", "macro", "test"] else _xcode_swift_package_host_target_id(identity, name, target_prefix)
                 target_ids[identity + "\x1f" + name] = target_id
                 target_ids[identity.lower() + "\x1f" + name] = target_id
                 host_target_ids[identity + "\x1f" + name] = host_target_id
@@ -2830,7 +2838,6 @@ def _xcode_workspace_resolver(ctx):
     # test hosts against the workspace-wide name map.
     all_specs = []
     test_plan_settings = _xcode_test_plan_settings(ctx)
-    local_package_infos = _xcode_local_swift_package_infos(ctx)
     for project in projects:
         objects = project["objects"]
         native_targets = project["native_targets"]
@@ -2852,6 +2859,7 @@ def _xcode_workspace_resolver(ctx):
         # package manifest supplies graph metadata only; Once compiles every
         # source target directly rather than delegating package builds.
         package_refs = _xcode_spm_package_refs(objects)
+        local_package_infos = _xcode_local_swift_package_infos(ctx, project_dir, package_refs)
         package_infos = _xcode_expand_swift_package_infos(
             ctx,
             local_package_infos + _xcode_remote_swift_package_infos(ctx, project_path, package_refs),
@@ -2862,7 +2870,14 @@ def _xcode_workspace_resolver(ctx):
             per_target_products[target.get("name") or ""] = products
         package_platform = _xcode_spm_platform(ctx, objects, native_targets, project_settings, configuration, path_maps)
         package_minimum_os = _xcode_spm_min_os(ctx, objects, native_targets, package_platform, configuration, project_settings, path_maps)
-        package_graph = _xcode_local_swift_package_specs(ctx, package_infos, package_platform, package_minimum_os, ctx["attr"].get("sdk_variant") or "simulator")
+        package_graph = _xcode_local_swift_package_specs(
+            ctx,
+            package_infos,
+            package_platform,
+            package_minimum_os,
+            ctx["attr"].get("sdk_variant") or "simulator",
+            target_prefix = "XcodePackage_" + _xcode_sanitized_target_name(ctx["label"]["id"]),
+        )
         xcframework_specs = _xcode_workspace_xcframework_specs(ctx, package_platform, ctx["attr"].get("sdk_variant") or "simulator")
 
         for target in native_targets:

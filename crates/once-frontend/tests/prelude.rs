@@ -14308,6 +14308,34 @@ result = repr(_xcode_spm_package_refs(objects)["ref"]["identity"])
 }
 
 #[test]
+fn prelude_xcode_reads_only_referenced_local_swift_packages() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "/workspace"
+
+def host_file_exists(path):
+    return path == "/workspace/Packages/Shared/Package.swift"
+
+def host_command(argv, env = None, cwd = None, merge_stderr = None):
+    return '{{"name":"Shared","targets":[]}}'
+
+refs = {{
+    "shared": {{"kind": "local", "path": "../Packages/Shared"}},
+    "tool": {{"kind": "local", "path": "../tools/GraphTool"}},
+}}
+infos = _xcode_local_swift_package_infos({{}}, "Apps", refs)
+result = repr([[info["identity"], info["path"]] for info in infos])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["Shared", "Packages/Shared"]]"#
+    );
+}
+
+#[test]
 fn prelude_xcode_reconciles_local_package_products_into_native_targets() {
     let prelude = xcode_prelude_source();
     let source = format!(
@@ -14320,13 +14348,24 @@ infos = [{{
         "targets": [{{"name": "Shared", "type": "regular", "dependencies": [], "exclude": [], "settings": []}}],
     }},
 }}]
-graph = _xcode_local_swift_package_specs({{}}, infos, "macos", "13.0", "simulator")
-result = repr(graph["products"]["FixtureShared\x1fShared"])
+standalone = _xcode_local_swift_package_specs({{}}, infos, "macos", "13.0", "simulator")
+xcode = _xcode_local_swift_package_specs(
+    {{}},
+    infos,
+    "macos",
+    "13.0",
+    "simulator",
+    target_prefix = "XcodePackage_xcode",
+)
+result = repr([
+    standalone["products"]["FixtureShared\x1fShared"],
+    xcode["products"]["FixtureShared\x1fShared"],
+])
 "#
     );
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
-        r#""SwiftPackage_FixtureShared_Shared""#
+        r#"["SwiftPackage_FixtureShared_Shared", "XcodePackage_xcode_FixtureShared_Shared"]"#
     );
 }
 
