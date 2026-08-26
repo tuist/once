@@ -10400,6 +10400,19 @@ fn prelude_swift_package_default_executable_matches_compiler_toolchain() {
 }
 
 #[test]
+fn prelude_swift_package_uses_the_compiler_host_target_for_macos_tests() {
+    let source = format!(
+        r#"{}
+{}
+result = repr(_swift_package_host_macos_minimum_os({{"version": "Apple Swift version 6.3.3\nTarget: arm64-apple-macosx14.0"}}))
+"#,
+        xcode_prelude_source(),
+        include_str!("../prelude/swift_package.star")
+    );
+    assert_eq!(eval_prelude_source_to_repr(source).unwrap(), r#""14.0""#);
+}
+
+#[test]
 fn prelude_swift_package_example_expands_local_dependency_pin() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("prelude/examples/swift-package-dependencies-minimal");
@@ -13254,6 +13267,52 @@ result = repr(provider["archive"])
 }
 
 #[test]
+fn prelude_apple_library_propagates_the_cxx_standard_library() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let source_dir = workspace.path().join("ios/Native/Sources");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(
+        source_dir.join("Native.cc"),
+        "int native_value() { return 42; }\n",
+    )
+    .unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    fail("host_which must not be called in direct mode")
+
+def host_command(argv, env = None, merge_stderr = None):
+    if "--version" in argv:
+        return "Apple clang version 18.0\n"
+    fail("unexpected host_command: " + str(argv))
+
+ctx = {{
+    "label": {{
+        "package": "ios/Native",
+        "name": "Native",
+        "id": "ios/Native/Native",
+    }},
+    "attr": {{
+        "platform": "ios",
+        "sdk_variant": "simulator",
+        "xcode_developer_dir": "/opt/Xcode/Developer",
+    }},
+    "deps": [],
+    "srcs": ["Sources/Native.cc"],
+    "build_dir": ".once/out/ios/Native/Native",
+    "capability": "build",
+}}
+result = repr(_apple_library_impl(ctx)["transitive_linkopts"])
+"#
+    );
+    let store = store_for(workspace.path(), "ios/Native");
+    let (_, output) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(output.unwrap(), r#"["-lc++"]"#);
+}
+
+#[test]
 fn prelude_apple_library_preserves_one_canonical_authored_modulemap() {
     let prelude = all_prelude_source();
     let workspace = TempDir::new().unwrap();
@@ -14348,6 +14407,14 @@ fn prelude_xcode_reconciles_local_package_products_into_native_targets() {
     let prelude = xcode_prelude_source();
     let source = format!(
         r#"{prelude}
+def glob(patterns):
+    if "Packages/Shared/Sources" in patterns[0]:
+        return ["Packages/Shared/Sources/Shared.swift"]
+    return []
+
+def host_file_read(path):
+    return ""
+
 infos = [{{
     "identity": "FixtureShared",
     "path": "Packages/Shared",
@@ -14356,9 +14423,9 @@ infos = [{{
         "targets": [{{"name": "Shared", "type": "regular", "dependencies": [], "exclude": [], "settings": []}}],
     }},
 }}]
-standalone = _xcode_local_swift_package_specs({{}}, infos, "macos", "13.0", "simulator")
+standalone = _xcode_local_swift_package_specs({{"label": {{"package": ""}}}}, infos, "macos", "13.0", "simulator")
 xcode = _xcode_local_swift_package_specs(
-    {{}},
+    {{"label": {{"package": ""}}}},
     infos,
     "macos",
     "13.0",
@@ -14368,12 +14435,13 @@ xcode = _xcode_local_swift_package_specs(
 result = repr([
     standalone["products"]["FixtureShared\x1fShared"],
     xcode["products"]["FixtureShared\x1fShared"],
+    standalone["specs"][0]["attrs"]["alwayslink"],
 ])
 "#
     );
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
-        r#"["SwiftPackage_FixtureShared_Shared", "XcodePackage_xcode_FixtureShared_Shared"]"#
+        r#"["SwiftPackage_FixtureShared_Shared", "XcodePackage_xcode_FixtureShared_Shared", True]"#
     );
 }
 
@@ -14528,6 +14596,28 @@ result = repr([
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
         r#"["swift_macro", ["./SwiftPackage_SyntaxPackage_SyntaxSupport_MacroHost"], "ios", "SwiftPackage_SyntaxPackage_SyntaxSupport_MacroHost", "macos"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_uses_declared_swift_package_deployment_target_by_default() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+package = {{
+    "info": {{
+        "platforms": [{{"platformName": "macos", "version": "10.15"}}],
+    }},
+}}
+result = repr([
+    _xcode_swift_package_minimum_os(package, "macos", ""),
+    _xcode_swift_package_minimum_os(package, "macos", "13.0"),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["10.15", "13.0"]"#
     );
 }
 

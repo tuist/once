@@ -1,5 +1,8 @@
 def _swift_package_workspace_resolver(ctx):
     attrs = ctx["attrs"]
+    configuration = attrs.get("configuration") or "debug"
+    if configuration not in ["debug", "release"]:
+        fail(ctx["label"]["id"] + ": configuration must be `debug` or `release`")
     package_path = attrs.get("package_path") or "."
     if package_path.startswith("./"):
         package_path = package_path[2:]
@@ -13,13 +16,29 @@ def _swift_package_workspace_resolver(ctx):
     info = json_decode(host_command([swift, "package", "dump-package", "--package-path", _swiftpm_absolute_package_path(ctx, attrs.get("package_path") or ".")], env = swiftc["env"]))
     package = {"identity": _basename(package_path) or info.get("name") or ctx["label"]["name"], "path": package_path, "info": info}
     packages = [package] + _swift_package_remote_infos(ctx)
-    graph = _xcode_local_swift_package_specs(ctx, packages, attrs.get("platform") or "macos", attrs.get("minimum_os") or "13.0", attrs.get("sdk_variant") or "simulator")
+    platform = attrs.get("platform") or "macos"
+    minimum_os = attrs.get("minimum_os") or _xcode_swift_package_minimum_os(package, platform, "") or "13.0"
+    host_minimum_os = _swift_package_host_macos_minimum_os(swiftc) if platform == "macos" or platform == "macosx" else ""
+    graph = _xcode_local_swift_package_specs(ctx, packages, platform, minimum_os, attrs.get("sdk_variant") or "simulator", host_minimum_os = host_minimum_os, configuration = configuration)
     roots = []
     for product in info.get("products") or []:
         target_id = graph["products"].get(package["identity"] + "\x1f" + (product.get("name") or ""))
         if target_id and target_id not in roots:
             roots.append(target_id)
     return {"targets": graph["specs"], "roots": roots}
+
+def _swift_package_host_macos_minimum_os(swiftc):
+    marker = "-apple-macosx"
+    for line in (swiftc.get("version") or "").split("\n"):
+        if not line.startswith("Target: "):
+            continue
+        triple = line[len("Target: "):]
+        marker_index = triple.find(marker)
+        if marker_index >= 0:
+            version = triple[marker_index + len(marker):].split("-")[0]
+            if version:
+                return version
+    return "13.0"
 
 def _swift_package_remote_infos(ctx):
     resolved = ctx["files"].get("Package.resolved")
@@ -56,7 +75,7 @@ def _swift_package_workspace_impl(ctx):
 
 swift_package_workspace = target_kind(
     docs = "Native Swift Package Manager workspace seed. Its resolver reads Package.swift, materializes locked source-control dependency sources, and lowers every library, executable, macro, binary, and test target into the existing Apple target kinds for direct compilation.",
-    attrs = [attr("package_path", "string", default = ".", docs = "Package-relative directory containing Package.swift. Defaults to the native integration package.", configurable = False), attr("resolver_inputs", "list<string>", default = "[]", docs = "Package-relative source globs supplied to native integration resolution. Defaults to srcs when empty.", configurable = False), attr("platform", "string", default = "macos", docs = "Apple platform used when lowering the Swift package targets.", configurable = False), attr("minimum_os", "string", default = "13.0", docs = "Minimum Apple operating system version used when lowering package targets.", configurable = False), attr("sdk_variant", "string", default = "simulator", docs = "Simulator or device software development kit selection. Ignored for macOS.", configurable = False), attr("swift", "string", default = "swift", docs = "Swift Package Manager executable or workspace-relative executable path. The default selects the executable paired with the resolved Swift compiler.", configurable = False), attr("xcode_developer_dir", "string", docs = "Pin a specific Xcode developer directory for Swift and the Apple software development kit.", configurable = False)],
+    attrs = [attr("package_path", "string", default = ".", docs = "Package-relative directory containing Package.swift. Defaults to the native integration package.", configurable = False), attr("resolver_inputs", "list<string>", default = "[]", docs = "Package-relative source globs supplied to native integration resolution. Defaults to srcs when empty.", configurable = False), attr("platform", "string", default = "macos", docs = "Apple platform used when lowering the Swift package targets.", configurable = False), attr("minimum_os", "string", docs = "Optional minimum Apple operating system version override. Package platform declarations are used by default.", configurable = False), attr("sdk_variant", "string", default = "simulator", docs = "Simulator or device software development kit selection. Ignored for macOS.", configurable = False), attr("configuration", "string", default = "debug", docs = "Swift package compilation configuration, either debug or release.", configurable = False), attr("swift", "string", default = "swift", docs = "Swift Package Manager executable or workspace-relative executable path. The default selects the executable paired with the resolved Swift compiler.", configurable = False), attr("xcode_developer_dir", "string", docs = "Pin a specific Xcode developer directory for Swift and the Apple software development kit.", configurable = False)],
     resolver = _swift_package_workspace_resolver, deps = [dep("deps", ["apple_linkable", "apple_test_bundle", "native_linkable"], "First-party Swift package products emitted by native integration discovery.")], providers = ["swift_package_workspace"], capabilities = [capability("build", [])], tools = [tool("swift", ["swift", "swiftc"])], examples = [example("swift-package-workspace-native-project", name = "Swift Package Manager native integration seed", use_when = "Use this when a Swift Package Manager workspace should derive first-party build and test targets from Package.swift.", platforms = ["macos"])], impl = _swift_package_workspace_impl,
 )
 

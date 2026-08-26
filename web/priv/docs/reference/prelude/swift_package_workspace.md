@@ -22,6 +22,14 @@ Package Manager supplies manifest and lockfile metadata, but does not build
 the dependency products. Registry dependencies are not supported by native
 package lowering yet.
 
+Once force-loads the lowered package archives when linking a product. This
+preserves Swift extension conformances and other package-target code in the
+same way Swift Package Manager's direct object-file links do.
+
+On macOS, test targets compile for the selected Swift compiler's host target,
+matching `swift test`. Package libraries continue to use the package's declared
+deployment target, or the explicit `minimum_os` override.
+
 ## Attributes
 
 | Attribute | Type | Required | Default | Description |
@@ -29,8 +37,9 @@ package lowering yet.
 | `package_path` | string | no | `.` | Package-relative directory containing `Package.swift` |
 | `resolver_inputs` | list&lt;string&gt; | no | `srcs` | Package-relative source globs available while deriving the graph |
 | `platform` | string | no | `macos` | Apple platform used when lowering package targets |
-| `minimum_os` | string | no | `13.0` | Minimum operating system version for lowered targets |
+| `minimum_os` | string | no |  | Optional minimum operating system version override; package platform declarations are used by default |
 | `sdk_variant` | string | no | `simulator` | Simulator or device software development kit selection; ignored for macOS |
+| `configuration` | string | no | `debug` | Native compilation configuration, either `debug` or `release` |
 | `swift` | string | no | `swift` | Swift Package Manager executable; the default is paired with the selected Swift compiler |
 | `xcode_developer_dir` | string | no |  | Specific Xcode developer directory |
 

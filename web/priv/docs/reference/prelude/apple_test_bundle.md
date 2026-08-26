@@ -17,9 +17,12 @@ before signing it.
 
 Resources follow Xcode bundle placement. iOS test resources are placed at the
 root of the test bundle, while macOS test resources are placed under
-`Contents/Resources`. Structured resource roots preserve their own directory
-name. Custom property-list templates can expand build-setting placeholders,
-including the absolute source root supplied by an Xcode project adapter.
+`Contents/Resources`. When `resource_bundle_name` is set, resources are
+instead packaged into a named resource bundle inside the test product,
+matching Swift Package Manager resource lookup. Structured resource roots preserve their own
+directory name. Custom property-list templates can expand build-setting
+placeholders, including the absolute source root supplied by an Xcode project
+adapter.
 
 The compiler receives both the XCTest framework search path and the platform
 developer library search path. The latter contains XCTest's Swift module
@@ -47,10 +50,13 @@ Once build actions.
 | `sdk_variant` | string | no | `simulator` | `simulator` or `device`; ignored on macOS (not configurable) |
 | `xcode_developer_dir` | string | no | active Xcode | Xcode developer directory used to resolve build tools |
 | `product_name` | string | no | target name | Test bundle product name (not configurable) |
+| `module_name` | string | no | product name | Swift module name (not configurable) |
 | `bundle_id` | string | no | `dev.once.tests.<product_name>` | Test bundle identifier (not configurable) |
 | `test_host` | target | no |  | Application target hosting the test bundle |
 | `resources` | list&lt;string&gt; | no | `[]` | Resource glob patterns bundled into the test bundle |
 | `structured_resources` | list&lt;string&gt; | no | `[]` | Resource directory roots whose own basename is preserved inside the test bundle |
+| `resource_bundle_name` | string | no |  | Optional resource bundle name; `.bundle` is added when omitted |
+| `resource_bundle_id` | string | no |  | Bundle identifier written to generated resource bundle metadata |
 | `asset_catalogs` | list&lt;string&gt; | no | `[]` | Asset catalog paths compiled into the test bundle |
 | `info_plist` | string | no |  | Info.plist template path |
 | `info_plist_substitutions` | map&lt;string,string&gt; | no | `{}` | Build-setting values substituted into property-list placeholders |
@@ -110,6 +116,8 @@ The target emits `apple_test_bundle`, `apple_bundle`, and `once_test_info`.
 | Other Apple platform property list | `.once/out/<target>/<product_name>.xctest/Info.plist` |
 | macOS resources | `.once/out/<target>/<product_name>.xctest/Contents/Resources` |
 | Other Apple platform resources | `.once/out/<target>/<product_name>.xctest` |
+| Named macOS resource bundle | `.once/out/<target>/<product_name>.xctest/Contents/Resources/<resource_bundle_name>.bundle` |
+| Named resource bundle on other Apple platforms | `.once/out/<target>/<product_name>.xctest/<resource_bundle_name>.bundle` |
 | Compiled asset catalog | `Assets.car` in the platform-specific resource location |
 | Runtime frameworks | The test bundle's `Frameworks` directory when dependencies require them |
 | macOS code signature | `.once/out/<target>/<product_name>.xctest/Contents/_CodeSignature/CodeResources` |

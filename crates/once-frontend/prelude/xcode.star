@@ -1658,13 +1658,15 @@ def _xcode_swift_package_target_headers(package_path, target):
 
 def _xcode_swift_package_target_modulemap(package_path, target):
     target_path = _xcode_swift_package_target_path(target)
-    public_headers_path = _xcode_join(package_path + "/" + target_path, target.get("publicHeadersPath") or "include")
+    root = package_path + "/" if package_path else ""
+    public_headers_path = _xcode_join(root + target_path, target.get("publicHeadersPath") or "include")
     candidate = public_headers_path + "/module.modulemap"
     return candidate if host_file_exists(_xcode_abs(candidate)) else ""
 
 def _xcode_swift_package_include_dirs(package_path, target):
     target_path = _xcode_swift_package_target_path(target)
-    include_dir = _xcode_join(package_path + "/" + target_path, target.get("publicHeadersPath") or "include")
+    root = package_path + "/" if package_path else ""
+    include_dir = _xcode_join(root + target_path, target.get("publicHeadersPath") or "include")
     if package_path.startswith(".once/"):
         include_absolute = _xcode_abs(include_dir)
         if _xcode_host_directory_exists(include_absolute) and host_command([host_which("find"), "-L", include_absolute, "-name", "*.h", "-type", "f"]).strip():
@@ -1674,7 +1676,7 @@ def _xcode_swift_package_include_dirs(package_path, target):
         return [include_dir]
     return []
 
-def _xcode_swift_package_target_header_dirs(package_path, target):
+def _xcode_swift_package_target_all_headers(package_path, target):
     target_path = _xcode_swift_package_target_path(target)
     root = package_path + "/" if package_path else ""
     excluded = target.get("exclude") or []
@@ -1685,7 +1687,13 @@ def _xcode_swift_package_target_header_dirs(package_path, target):
         headers = [_xcode_workspace_relative(path) for path in host_command([host_which("find"), absolute, "-name", "*.h", "-type", "f"]).split("\n") if path]
     else:
         headers = glob([root + target_path + "/**/*.h"])
-    return _unique([_parent_dir(header) for header in headers if _parent_dir(header) and not _xcode_swift_package_target_path_is_excluded(root, target_path, excluded, header)])
+    return [header for header in headers if not _xcode_swift_package_target_path_is_excluded(root, target_path, excluded, header)]
+
+def _xcode_swift_package_target_header_dirs(package_path, target):
+    return _unique([_parent_dir(header) for header in _xcode_swift_package_target_all_headers(package_path, target) if _parent_dir(header)])
+
+def _xcode_swift_package_target_modulemap_headers(package_path, target, modulemap):
+    return _xcode_modulemap_headers(modulemap, _xcode_swift_package_target_all_headers(package_path, target))
 
 def _xcode_swift_package_target_datamodels(package_path, target):
     target_path = _xcode_swift_package_target_path(target)
@@ -1769,11 +1777,13 @@ private final class BundleFinder {}
 extension Bundle {
     static let module: Bundle = {
         let paths = [
+            Bundle.main.resourceURL?.appendingPathComponent(""" + repr(bundle_name) + """),
+            Bundle(for: BundleFinder.self).resourceURL?.appendingPathComponent(""" + repr(bundle_name) + """),
             Bundle.main.bundleURL.appendingPathComponent(""" + repr(bundle_name) + """),
             Bundle(for: BundleFinder.self).bundleURL.appendingPathComponent(""" + repr(bundle_name) + """),
         ]
         for path in paths {
-            if let bundle = Bundle(url: path) {
+            if let path, let bundle = Bundle(url: path) {
                 return bundle
             }
         }
@@ -1842,7 +1852,9 @@ def _xcode_swift_package_minimum_os(package, platform, fallback):
     for declaration in package["info"].get("platforms") or []:
         if (declaration.get("platformName") or "").lower() == wanted:
             declared = declaration.get("version") or fallback
-            return declared if _xcode_version_key(declared) > _xcode_version_key(fallback) else fallback
+            if fallback and _xcode_version_key(declared) < _xcode_version_key(fallback):
+                return fallback
+            return declared
     return fallback
 
 def _xcode_swift_package_language_mode(package):
@@ -1897,7 +1909,7 @@ def _xcode_swift_package_target_flags(target, platform, default_language_mode):
         "language_mode": swift_language_mode,
     }
 
-def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, sdk_variant, lazy_products = {}, lazy_dependency = "", target_prefix = "SwiftPackage"):
+def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, sdk_variant, lazy_products = {}, lazy_dependency = "", target_prefix = "SwiftPackage", host_minimum_os = "", configuration = "debug"):
     # Lower source package targets as ordinary Apple libraries. Products merely
     # name one or more targets, so consumers depend on the product's primary
     # target while that target keeps its declared package dependencies.
@@ -1936,7 +1948,7 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
         identity = package["identity"]
         package_path = package["path"]
         package_minimum_os = _xcode_swift_package_minimum_os(package, platform, minimum_os)
-        package_host_minimum_os = _xcode_swift_package_minimum_os(package, "macos", "13.0")
+        package_host_minimum_os = _xcode_swift_package_minimum_os(package, "macos", host_minimum_os or "13.0")
         for target in package["info"].get("targets") or []:
             target_type = target.get("type") or ""
             name = target.get("name") or ""
@@ -1995,10 +2007,11 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
                     },
                 })
                 continue
+            target_minimum_os = package_host_minimum_os if target_type == "test" and (platform == "macos" or platform == "macosx") else package_minimum_os
             variants = [{
                 "id": target_id,
                 "platform": platform,
-                "minimum_os": package_minimum_os,
+                "minimum_os": target_minimum_os,
                 "sdk_variant": sdk_variant,
                 "target_ids": target_ids,
                 "product_ids": product_ids,
@@ -2031,7 +2044,7 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
                     "minimum_os": variant["minimum_os"],
                     "module_name": name,
                     "sdk_variant": variant["sdk_variant"],
-                    "defines": ["SWIFT_PACKAGE"],
+                    "defines": ["SWIFT_PACKAGE"] + (["DEBUG"] if configuration == "debug" else []),
                     "swift_flags": _xcode_swift_package_name_flags(package) + ["-swift-version", flags["language_mode"]] + flags["swift"],
                     "clang_flags": ["-std=c++17"] + flags["clang"],
                     "exported_header_dirs": _xcode_swift_package_include_dirs(package_path, target),
@@ -2045,14 +2058,23 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
                 if target_type == "test":
                     spec_kind = "apple_test_bundle"
                 else:
+                    # Swift Package Manager links package-target object files
+                    # directly into its products. Keep the same whole-archive
+                    # semantics after Once archives each target so Swift
+                    # extension conformances remain available at runtime.
+                    attrs["alwayslink"] = True
+                    modulemap = _xcode_swift_package_target_modulemap(package_path, target)
+                    modulemap_headers = _xcode_swift_package_target_modulemap_headers(package_path, target, modulemap)
                     attrs["exported_deps"] = dependencies
                     attrs["swift_flags"] = attrs["swift_flags"] + ["-enable-testing"]
-                    attrs["exported_headers"] = _unique(_xcode_swift_package_target_headers(package_path, target))
-                    attrs["modulemap"] = _xcode_swift_package_target_modulemap(package_path, target)
+                    attrs["exported_headers"] = _unique(_xcode_swift_package_target_headers(package_path, target) + modulemap_headers)
+                    attrs["modulemap"] = modulemap
+                    attrs["modulemap_headers"] = modulemap_headers
                     attrs["enable_modules"] = True
                     attrs["xctest_support"] = uses_xctest
+                if resource_bundle_name:
                     attrs["resource_bundle_name"] = resource_bundle_name
-                    attrs["resource_bundle_id"] = identity.lower() + "." + name + ".resources" if resource_bundle_name else ""
+                    attrs["resource_bundle_id"] = identity.lower() + "." + name + ".resources"
                 specs.append({
                     "name": variant_id,
                     "kind": spec_kind,

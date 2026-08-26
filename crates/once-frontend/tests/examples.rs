@@ -300,13 +300,75 @@ let package = Package(
 }
 
 #[cfg(target_os = "macos")]
+fn write_c_local_support(root: &Path) {
+    fs::create_dir_all(root.join("Sources/CLocalSupport/include")).expect("C source directory");
+    fs::write(
+        root.join("Sources/CLocalSupport/LocalSupport.c"),
+        "#include \"LocalSupport.h\"\nint localValue(void) { return 42; }\n",
+    )
+    .expect("C source file");
+    fs::write(
+        root.join("Sources/CLocalSupport/LocalSupport.h"),
+        "int localValue(void);\n",
+    )
+    .expect("C header file");
+    fs::write(
+        root.join("Sources/CLocalSupport/include/module.modulemap"),
+        "module CLocalSupport [system] {\n  header \"../LocalSupport.h\"\n  export *\n}\n",
+    )
+    .expect("C module map");
+}
+
+#[cfg(target_os = "macos")]
+fn assert_local_c_support(graph: &[GraphTarget]) {
+    let c_support = graph
+        .iter()
+        .find(|target| target.label.id == "SwiftPackage_LazyRemote_CLocalSupport")
+        .expect("directly lowered C library");
+    assert_eq!(
+        c_support.attrs.get("modulemap"),
+        Some(&AttrValue::String(
+            "Sources/CLocalSupport/include/module.modulemap".to_string()
+        ))
+    );
+    assert_eq!(
+        c_support.attrs.get("exported_headers"),
+        Some(&AttrValue::List(vec![AttrValue::String(
+            "Sources/CLocalSupport/LocalSupport.h".to_string()
+        )]))
+    );
+}
+
+#[cfg(target_os = "macos")]
+fn assert_package_test_target(graph: &[GraphTarget], app: &GraphTarget) {
+    let tests = graph
+        .iter()
+        .find(|target| target.label.id == "SwiftPackage_LazyRemote_AppTests")
+        .expect("directly lowered test bundle");
+    assert_eq!(tests.kind, "apple_test_bundle");
+    assert!(tests.deps.contains(&app.label.id));
+    assert_eq!(
+        tests.attrs.get("defines"),
+        Some(&AttrValue::List(vec![
+            AttrValue::String("SWIFT_PACKAGE".to_string()),
+            AttrValue::String("DEBUG".to_string()),
+        ]))
+    );
+    assert_eq!(
+        tests.attrs.get("resource_bundle_name"),
+        Some(&AttrValue::String("LazyRemote_AppTests.bundle".to_string()))
+    );
+}
+
+#[cfg(target_os = "macos")]
 #[test]
 fn swift_package_native_project_lowers_remote_packages_directly() {
     let tmp = TempDir::new().expect("tempdir");
     let (remote_url, revision) = local_swift_package(tmp.path());
 
     fs::create_dir_all(tmp.path().join("Sources/App")).expect("source directory");
-    fs::create_dir_all(tmp.path().join("Tests/AppTests")).expect("test source directory");
+    write_c_local_support(tmp.path());
+    fs::create_dir_all(tmp.path().join("Tests/AppTests/Resources")).expect("test source directory");
     fs::write(
         tmp.path().join("Package.swift"),
         format!(
@@ -319,10 +381,12 @@ let package = Package(
         .package(url: "{remote_url}", exact: "1.0.0"),
     ],
     targets: [
+        .target(name: "CLocalSupport"),
         .target(name: "App", dependencies: [
+            "CLocalSupport",
             .product(name: "RemoteSupport", package: "remote-support"),
         ]),
-        .testTarget(name: "AppTests", dependencies: ["App"]),
+        .testTarget(name: "AppTests", dependencies: ["App"], resources: [.process("Resources")]),
     ]
 )
 "#
@@ -352,7 +416,7 @@ let package = Package(
     .expect("package lock");
     fs::write(
         tmp.path().join("Sources/App/App.swift"),
-        "import RemoteSupport\n",
+        "import CLocalSupport\nimport RemoteSupport\n",
     )
     .expect("source file");
     fs::write(
@@ -360,6 +424,11 @@ let package = Package(
         "import XCTest\n@testable import App\n",
     )
     .expect("test source file");
+    fs::write(
+        tmp.path().join("Tests/AppTests/Resources/fixture.txt"),
+        "fixture\n",
+    )
+    .expect("test resource");
 
     let graph = once_frontend::load_graph_workspace(tmp.path())
         .expect("native graph loads with a locked remote package");
@@ -392,12 +461,8 @@ let package = Package(
         .find(|target| target.label.id == "SwiftPackage_LazyRemote_App")
         .expect("first-party app target");
     assert!(app.deps.contains(&remote.label.id));
-    let tests = graph
-        .iter()
-        .find(|target| target.label.id == "SwiftPackage_LazyRemote_AppTests")
-        .expect("directly lowered test bundle");
-    assert_eq!(tests.kind, "apple_test_bundle");
-    assert!(tests.deps.contains(&app.label.id));
+    assert_local_c_support(&graph);
+    assert_package_test_target(&graph, app);
 }
 
 #[cfg(unix)]

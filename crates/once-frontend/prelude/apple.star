@@ -161,6 +161,7 @@ def _resolve_swiftc(platform, sdk_variant, xcode_developer_dir):
         "swiftc_path": swiftc_path,
         "sdk_name": sdk,
         "sdk_path": sdk_path,
+        "version": version,
         "identity": identity,
         "env": env,
     }
@@ -1224,6 +1225,8 @@ def _apple_library_impl(ctx):
     c_srcs = _filter_c_sources(all_srcs)
     cxx_srcs = _filter_cxx_sources(all_srcs)
     assembly_srcs = _filter_assembly_sources(all_srcs)
+    if len(cxx_srcs) > 0:
+        linkopts = list(linkopts) + ["-lc++"]
     if len(swift_srcs) == 0 and len(objc_srcs) == 0 and len(c_srcs) == 0 and len(cxx_srcs) == 0 and len(assembly_srcs) == 0:
         fail("apple_library " + ctx["label"]["id"] + " has no compilable sources (.swift/.m/.mm/.c/.cc/.cpp/.cxx/.s/.S)")
 
@@ -3413,12 +3416,12 @@ def _apple_embed_framework_bundles(ctx, deps, bundle_dir, frameworks_dir, codesi
         "files": embedded_files,
     }
 
-def _apple_embed_resource_bundles(ctx, deps, bundle_dir, codesign, identifier_prefix):
+def _apple_embed_resource_bundles(ctx, deps, bundle_dir, codesign, identifier_prefix, own_bundles = []):
     embedded_paths = []
     embedded_stamps = []
     embedded_files = []
     destination_sources = {}
-    for bundle in _apple_collect_resource_bundles(deps):
+    for bundle in _apple_collect_resource_bundles(deps, own_bundles):
         bundle_path = bundle["path"]
         bundle_basename = _basename(bundle_path)
         previous_source = destination_sources.get(bundle_basename)
@@ -4550,6 +4553,8 @@ def _apple_test_bundle_impl(ctx):
     labels = attrs.get("labels") or []
     resources = attrs.get("resources") or []
     structured_resources = attrs.get("structured_resources") or []
+    resource_bundle_name = attrs.get("resource_bundle_name") or ""
+    resource_bundle_id = attrs.get("resource_bundle_id") or ""
     info_plist_template = attrs.get("info_plist") or ""
     info_plist_substitutions = attrs.get("info_plist_substitutions") or {}
 
@@ -4690,6 +4695,8 @@ def _apple_test_bundle_impl(ctx):
         module_name,
         "-target",
         triple,
+        "-working-directory",
+        ".",
         "-parse-as-library",
         "-Xlinker",
         "-bundle",
@@ -4939,17 +4946,32 @@ def _apple_test_bundle_impl(ctx):
         write_path(info_plist, _render_plist(plist_entries, {"XCTContainsUITests": True} if ui_testing else {}))
 
     resource_destination = bundle_dir + "/Contents/Resources" if platform == "macos" or platform == "macosx" else bundle_dir
-    resource_files = _apple_materialize_resources(
-        ctx,
-        resources,
-        resource_destination,
-        platform,
-        minimum_os,
-        xcode_developer_dir,
-        module_name,
-        "apple_test_bundle_resource_" + module_name,
-        structured_resources,
-    )
+    resource_bundle = None
+    if resource_bundle_name:
+        resource_bundle = _apple_create_resource_bundle(
+            ctx,
+            resources,
+            structured_resources,
+            resource_bundle_name,
+            resource_bundle_id or ("dev.once." + module_name + ".resources"),
+            platform,
+            minimum_os,
+            xcode_developer_dir,
+            module_name,
+        )
+        resource_files = resource_bundle["files"]
+    else:
+        resource_files = _apple_materialize_resources(
+            ctx,
+            resources,
+            resource_destination,
+            platform,
+            minimum_os,
+            xcode_developer_dir,
+            module_name,
+            "apple_test_bundle_resource_" + module_name,
+            structured_resources,
+        )
 
     asset_catalogs = [_package_relative(ctx, catalog) for catalog in (attrs.get("asset_catalogs") or [])]
     asset_files = []
@@ -4988,6 +5010,14 @@ def _apple_test_bundle_impl(ctx):
         codesign,
         "apple_test_bundle_embed",
     )
+    embedded_resource_bundles = _apple_embed_resource_bundles(
+        ctx,
+        deps,
+        resource_destination,
+        codesign,
+        "apple_test_bundle_embed_resource",
+        [resource_bundle] if resource_bundle != None else [],
+    )
     if platform == "macos" or platform == "macosx":
         test_cs_stamp = declare_output(bundle_dir + "/Contents/_CodeSignature/CodeResources")
     else:
@@ -4996,6 +5026,7 @@ def _apple_test_bundle_impl(ctx):
     test_codesign_inputs.extend(resource_files)
     test_codesign_inputs.extend(asset_files)
     test_codesign_inputs.extend(embedded_frameworks["stamps"])
+    test_codesign_inputs.extend(embedded_resource_bundles["stamps"])
     run_action(
         argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", test_bundle_path],
         inputs = test_codesign_inputs,
@@ -5055,6 +5086,7 @@ def _apple_test_bundle_impl(ctx):
         runner_codesign_inputs.extend(resource_files)
         runner_codesign_inputs.extend(asset_files)
         runner_codesign_inputs.extend(embedded_frameworks["stamps"])
+        runner_codesign_inputs.extend(embedded_resource_bundles["stamps"])
         run_action(
             argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", runner_application_path],
             inputs = runner_codesign_inputs,
@@ -5163,6 +5195,7 @@ exit "$status"
             if app_file not in test_inputs:
                 test_inputs.append(app_file)
         test_inputs.extend(embedded_frameworks["paths"])
+        test_inputs.extend(embedded_resource_bundles["paths"])
         for src in swift_srcs:
             if src not in test_inputs:
                 test_inputs.append(src)
@@ -6073,10 +6106,13 @@ apple_test_bundle = target_kind(
         attr("sdk_variant", "string", default = "\"simulator\"", docs = "`simulator` or `device` SDK selection. Ignored on macOS", configurable = False),
         attr("xcode_developer_dir", "string", docs = "Pin a specific Xcode by overriding `DEVELOPER_DIR`. Folded into the action cache key"),
         attr("product_name", "string", docs = "Test bundle product name. Defaults to the target name", configurable = False),
+        attr("module_name", "string", docs = "Swift module name. Defaults to product_name", configurable = False),
         attr("bundle_id", "string", docs = "Test bundle identifier. Defaults to `dev.once.tests.<product_name>`", configurable = False),
         attr("test_host", "target", docs = "Application target hosting the test bundle"),
         attr("resources", "list<string>", default = "[]", docs = "Resource glob patterns bundled into the test bundle"),
         attr("structured_resources", "list<string>", default = "[]", docs = "Resource directory roots whose own basename is preserved inside the test bundle"),
+        attr("resource_bundle_name", "string", docs = "Optional resource bundle name. The `.bundle` suffix is added when omitted", configurable = False),
+        attr("resource_bundle_id", "string", docs = "Bundle identifier written to generated resource bundle metadata", configurable = False),
         attr("asset_catalogs", "list<string>", default = "[]", docs = "Asset catalog paths compiled into the test bundle"),
         attr("info_plist", "string", docs = "Info.plist template path"),
         attr("info_plist_substitutions", "map<string,string>", default = "{}", docs = "Build-setting values substituted into `$(NAME)` or `${NAME}` placeholders in the Info.plist template", configurable = False),
