@@ -1016,6 +1016,37 @@ def _xcode_workspace_input_path(path):
         return ""
     return relative
 
+def _xcode_target_input_path(ctx, path):
+    path = _xcode_workspace_input_path(path)
+    package = ctx["label"]["package"]
+    prefix = package + "/" if package else ""
+    if prefix and path.startswith(prefix):
+        return path[len(prefix):]
+    return path
+
+def _xcode_lowered_attrs(ctx, attrs):
+    for key in ["bridging_header", "prefix_header", "modulemap", "info_plist", "entitlements"]:
+        if attrs.get(key):
+            attrs[key] = _xcode_target_input_path(ctx, attrs[key])
+    for key in [
+        "exported_header_dirs",
+        "exported_headers",
+        "private_header_dirs",
+        "modulemap_headers",
+        "auxiliary_modulemaps",
+        "asset_catalogs",
+        "resources",
+        "structured_resources",
+    ]:
+        if attrs.get(key):
+            attrs[key] = [_xcode_target_input_path(ctx, path) for path in attrs[key]]
+    if attrs.get("per_source_clang_flags"):
+        attrs["per_source_clang_flags"] = {
+            _xcode_target_input_path(ctx, path): flags
+            for path, flags in attrs["per_source_clang_flags"].items()
+        }
+    return attrs
+
 def _xcode_script_path(value, subs):
     path = _xcode_resolve_vars(value or "", subs)
     if not path or path.startswith("$("):
@@ -2799,6 +2830,11 @@ def _xcode_test_host_ref(objects, settings, name_map):
 # ---------------------------------------------------------------------------
 
 def _xcode_workspace_resolver(ctx):
+    # `plutil` may be present off macOS, but only Xcode's `xcrun` supplies the
+    # SDK and compiler information this resolver needs. Probe it first so the
+    # generic resolver machinery can surface a structured unavailable-tool
+    # diagnostic instead of executing an incompatible `plutil`.
+    host_which("xcrun")
     entry_path = _xcode_project_path(ctx)
     configuration = ctx["attr"].get("configuration") or "Debug"
 
@@ -3152,11 +3188,13 @@ def _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_
         # whose only input is JavaScript.
         return None
 
+    attrs = _xcode_lowered_attrs(ctx, attrs)
+
     return {
         "name": sanitized,
         "kind": spec_kind,
         "deps": _unique(deps),
-        "srcs": files["sources"],
+        "srcs": [_xcode_target_input_path(ctx, path) for path in files["sources"]],
         "attrs": attrs,
     }
 
