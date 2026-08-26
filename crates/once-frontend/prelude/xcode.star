@@ -1538,17 +1538,18 @@ def _xcode_remote_swift_package_infos(ctx, entry_path, project_path, package_ref
             infos.append(info)
     return infos
 
-def _xcode_remote_swift_package_info(ctx, identity, pin, url = ""):
+def _xcode_remote_swift_package_info(ctx, identity, pin, url = "", checkout_root = ".once/xcode-packages"):
     state = pin.get("state") or {}
     revision = state.get("revision") or ""
     if not revision:
         return None
     git = host_which("git")
-    package_dir = ".once/xcode-packages/" + _xcode_sanitized_target_name(identity)
+    package_dir = checkout_root + "/" + _xcode_sanitized_target_name(identity)
     absolute = _xcode_abs(package_dir)
     manifest = absolute + "/Package.swift"
     if not host_file_exists(manifest):
         if not _xcode_host_directory_exists(absolute):
+            host_command([host_which("mkdir"), "-p", _parent_dir(absolute)])
             host_command([git, "clone", "--no-checkout", url or pin.get("location") or "", absolute])
         host_command([git, "-C", absolute, "fetch", "--depth", "1", "origin", revision])
         host_command([git, "-C", absolute, "checkout", "--detach", revision])
@@ -1611,8 +1612,15 @@ def _xcode_swift_package_target_path_is_excluded(root, target_path, excluded, pa
             return True
     return False
 
+def _xcode_swift_package_target_path(target):
+    path = target.get("path") or ""
+    if path:
+        return path
+    directory = "Tests" if (target.get("type") or "") == "test" else "Sources"
+    return directory + "/" + (target.get("name") or "")
+
 def _xcode_swift_package_target_sources(package_path, target):
-    target_path = target.get("path") or "Sources/" + (target.get("name") or "")
+    target_path = _xcode_swift_package_target_path(target)
     root = package_path + "/" if package_path else ""
     excluded = target.get("exclude") or []
     patterns = [root + target_path + "/**/*"]
@@ -1633,7 +1641,7 @@ def _xcode_is_documentation_path(path):
     return ".docc/" in path.lower()
 
 def _xcode_swift_package_target_headers(package_path, target):
-    target_path = target.get("path") or "Sources/" + (target.get("name") or "")
+    target_path = _xcode_swift_package_target_path(target)
     root = package_path + "/" if package_path else ""
     public_headers_path = _xcode_join(root + target_path, target.get("publicHeadersPath") or "include")
     excluded = target.get("exclude") or []
@@ -1649,13 +1657,13 @@ def _xcode_swift_package_target_headers(package_path, target):
     return [path for path in glob([public_headers_path + "/**/*.h"]) if not _xcode_swift_package_target_path_is_excluded(root, target_path, excluded, path)]
 
 def _xcode_swift_package_target_modulemap(package_path, target):
-    target_path = target.get("path") or "Sources/" + (target.get("name") or "")
+    target_path = _xcode_swift_package_target_path(target)
     public_headers_path = _xcode_join(package_path + "/" + target_path, target.get("publicHeadersPath") or "include")
     candidate = public_headers_path + "/module.modulemap"
     return candidate if host_file_exists(_xcode_abs(candidate)) else ""
 
 def _xcode_swift_package_include_dirs(package_path, target):
-    target_path = target.get("path") or "Sources/" + (target.get("name") or "")
+    target_path = _xcode_swift_package_target_path(target)
     include_dir = _xcode_join(package_path + "/" + target_path, target.get("publicHeadersPath") or "include")
     if package_path.startswith(".once/"):
         include_absolute = _xcode_abs(include_dir)
@@ -1667,7 +1675,7 @@ def _xcode_swift_package_include_dirs(package_path, target):
     return []
 
 def _xcode_swift_package_target_header_dirs(package_path, target):
-    target_path = target.get("path") or "Sources/" + (target.get("name") or "")
+    target_path = _xcode_swift_package_target_path(target)
     root = package_path + "/" if package_path else ""
     excluded = target.get("exclude") or []
     if package_path.startswith(".once/"):
@@ -1680,7 +1688,7 @@ def _xcode_swift_package_target_header_dirs(package_path, target):
     return _unique([_parent_dir(header) for header in headers if _parent_dir(header) and not _xcode_swift_package_target_path_is_excluded(root, target_path, excluded, header)])
 
 def _xcode_swift_package_target_datamodels(package_path, target):
-    target_path = target.get("path") or "Sources/" + (target.get("name") or "")
+    target_path = _xcode_swift_package_target_path(target)
     root = package_path + "/" + target_path
     absolute = _xcode_abs(root)
     if not _xcode_host_directory_exists(absolute):
@@ -1728,7 +1736,7 @@ def _xcode_swift_package_resource_bundle_name(package, target):
     return package_name + "_" + target_name + ".bundle"
 
 def _xcode_swift_package_resource_paths(package_path, target):
-    target_path = target.get("path") or "Sources/" + (target.get("name") or "")
+    target_path = _xcode_swift_package_target_path(target)
     root = package_path + "/" if package_path else ""
     paths = []
     for resource in target.get("resources") or []:
@@ -1738,7 +1746,7 @@ def _xcode_swift_package_resource_paths(package_path, target):
     return _unique(paths)
 
 def _xcode_swift_package_structured_resource_paths(package_path, target):
-    target_path = target.get("path") or "Sources/" + (target.get("name") or "")
+    target_path = _xcode_swift_package_target_path(target)
     root = package_path + "/" if package_path else ""
     paths = []
     for resource in target.get("resources") or []:
@@ -2018,33 +2026,39 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
                 resource_paths = _xcode_swift_package_resource_paths(package_path, target)
                 structured_resource_paths = _xcode_swift_package_structured_resource_paths(package_path, target)
                 resource_bundle_name = _xcode_swift_package_resource_bundle_name(package, target) if resource_paths else ""
+                attrs = {
+                    "platform": variant_platform,
+                    "minimum_os": variant["minimum_os"],
+                    "module_name": name,
+                    "sdk_variant": variant["sdk_variant"],
+                    "defines": ["SWIFT_PACKAGE"],
+                    "swift_flags": _xcode_swift_package_name_flags(package) + ["-swift-version", flags["language_mode"]] + flags["swift"],
+                    "clang_flags": ["-std=c++17"] + flags["clang"],
+                    "exported_header_dirs": _xcode_swift_package_include_dirs(package_path, target),
+                    "private_header_dirs": _xcode_swift_package_target_header_dirs(package_path, target),
+                    "prebuild_actions": prebuild_actions,
+                    "resources": resource_paths,
+                    "structured_resources": structured_resource_paths,
+                    "swift_testing": uses_swift_testing,
+                }
+                spec_kind = "apple_library"
+                if target_type == "test":
+                    spec_kind = "apple_test_bundle"
+                else:
+                    attrs["exported_deps"] = dependencies
+                    attrs["swift_flags"] = attrs["swift_flags"] + ["-enable-testing"]
+                    attrs["exported_headers"] = _unique(_xcode_swift_package_target_headers(package_path, target))
+                    attrs["modulemap"] = _xcode_swift_package_target_modulemap(package_path, target)
+                    attrs["enable_modules"] = True
+                    attrs["xctest_support"] = uses_xctest
+                    attrs["resource_bundle_name"] = resource_bundle_name
+                    attrs["resource_bundle_id"] = identity.lower() + "." + name + ".resources" if resource_bundle_name else ""
                 specs.append({
                     "name": variant_id,
-                    "kind": "apple_library",
+                    "kind": spec_kind,
                     "deps": dependencies,
                     "srcs": sources + core_data["sources"],
-                    "attrs": {
-                        "platform": variant_platform,
-                        "minimum_os": variant["minimum_os"],
-                        "module_name": name,
-                        "sdk_variant": variant["sdk_variant"],
-                        "defines": ["SWIFT_PACKAGE"],
-                        "exported_deps": dependencies,
-                        "swift_flags": _xcode_swift_package_name_flags(package) + ["-swift-version", flags["language_mode"]] + flags["swift"],
-                        "clang_flags": ["-std=c++17"] + flags["clang"],
-                        "exported_headers": _unique(_xcode_swift_package_target_headers(package_path, target)),
-                        "exported_header_dirs": _xcode_swift_package_include_dirs(package_path, target),
-                        "private_header_dirs": _xcode_swift_package_target_header_dirs(package_path, target),
-                        "modulemap": _xcode_swift_package_target_modulemap(package_path, target),
-                        "enable_modules": True,
-                        "swift_testing": uses_swift_testing,
-                        "xctest_support": uses_xctest,
-                        "prebuild_actions": prebuild_actions,
-                        "resources": resource_paths,
-                        "structured_resources": structured_resource_paths,
-                        "resource_bundle_name": resource_bundle_name,
-                        "resource_bundle_id": identity.lower() + "." + name + ".resources" if resource_bundle_name else "",
-                    },
+                    "attrs": attrs,
                 })
     return {"specs": specs, "products": product_ids, "modules": module_ids}
 

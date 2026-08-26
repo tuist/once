@@ -37,9 +37,11 @@ only when it should be reviewed in `once.toml`:
 once native init swift_package
 ```
 
-By default, native package lowering does not fetch remote dependencies during
-graph loading. See [`swift_package_workspace`](/reference/prelude/swift_package_workspace)
-for its complete contract.
+For locked source-control dependencies, native package lowering materializes
+the pinned sources during graph loading, then compiles them directly through
+Once's Apple target kinds. See
+[`swift_package_workspace`](/reference/prelude/swift_package_workspace) for
+its complete contract.
 
 When the Xcode workspace resolver lowers package sources into Apple targets,
 compiler language and access-control flags follow the manifest tools version.
@@ -63,11 +65,11 @@ compiler, software development kit, linker, and code-signing path work.
 
 ## Packages With Remote Dependencies
 
-Commit `Package.resolved` with `Package.swift`. Native discovery reads those
-files locally and never downloads packages. When a build first needs a locked
-remote product, Once fetches and builds it as a dependency action. Later builds
-reuse that action from the cache while the manifest, lock file, and Swift
-toolchain remain unchanged.
+Commit `Package.resolved` with `Package.swift`. Native package lowering uses
+the lockfile to materialize each source-control dependency at its pinned
+revision. It then derives and compiles the dependency targets directly, so
+Swift Package Manager does not build a separate dependency graph. Registry
+dependencies are not supported by this native path yet.
 
 The ordinary workflow stays the same:
 

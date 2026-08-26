@@ -12,6 +12,8 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
+#[cfg(target_os = "macos")]
+use std::process::Command;
 
 #[cfg(unix)]
 use once_frontend::analysis::{AnalysisEngine, AnalysisResult};
@@ -243,76 +245,159 @@ fn swift_package_native_project_loads_without_a_once_manifest() {
 }
 
 #[cfg(target_os = "macos")]
+fn run_git(directory: &Path, args: &[&str]) {
+    let status = Command::new("git")
+        .args(args)
+        .current_dir(directory)
+        .status()
+        .expect("run git");
+    assert!(status.success(), "git command failed");
+}
+
+#[cfg(target_os = "macos")]
+fn local_swift_package(root: &Path) -> (String, String) {
+    let remote = root.join("remote-support");
+    fs::create_dir_all(remote.join("Sources/RemoteSupport")).expect("remote source directory");
+    fs::write(
+        remote.join("Package.swift"),
+        r#"// swift-tools-version: 6.0
+import PackageDescription
+
+let package = Package(
+    name: "RemoteSupport",
+    products: [.library(name: "RemoteSupport", targets: ["RemoteSupport"])],
+    targets: [.target(name: "RemoteSupport")]
+)
+"#,
+    )
+    .expect("remote package manifest");
+    fs::write(
+        remote.join("Sources/RemoteSupport/RemoteSupport.swift"),
+        "public func remoteValue() -> Int { 42 }\n",
+    )
+    .expect("remote source");
+    for args in [
+        &["init", "--quiet"][..],
+        &["config", "user.email", "once@example.invalid"][..],
+        &["config", "user.name", "Once tests"][..],
+        &["add", "."][..],
+        &["commit", "--quiet", "-m", "initial"][..],
+    ] {
+        run_git(&remote, args);
+    }
+    let revision = String::from_utf8(
+        Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&remote)
+            .output()
+            .expect("read remote revision")
+            .stdout,
+    )
+    .expect("remote revision is utf-8")
+    .trim()
+    .to_string();
+    (format!("file://{}", remote.display()), revision)
+}
+
+#[cfg(target_os = "macos")]
 #[test]
-fn swift_package_native_project_defers_remote_packages_until_build() {
+fn swift_package_native_project_lowers_remote_packages_directly() {
     let tmp = TempDir::new().expect("tempdir");
+    let (remote_url, revision) = local_swift_package(tmp.path());
+
     fs::create_dir_all(tmp.path().join("Sources/App")).expect("source directory");
+    fs::create_dir_all(tmp.path().join("Tests/AppTests")).expect("test source directory");
     fs::write(
         tmp.path().join("Package.swift"),
-        r#"// swift-tools-version: 6.0
+        format!(
+            r#"// swift-tools-version: 6.0
 import PackageDescription
 
 let package = Package(
     name: "LazyRemote",
     dependencies: [
-        .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
+        .package(url: "{remote_url}", exact: "1.0.0"),
     ],
     targets: [
         .target(name: "App", dependencies: [
-            .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            .product(name: "RemoteSupport", package: "remote-support"),
         ]),
+        .testTarget(name: "AppTests", dependencies: ["App"]),
     ]
 )
-"#,
+"#
+        ),
     )
     .expect("package manifest");
     fs::write(
         tmp.path().join("Package.resolved"),
-        r#"{
+        format!(
+            r#"{{
   "version": 3,
   "pins": [
-    {
-      "identity": "swift-argument-parser",
+    {{
+      "identity": "remote-support",
       "kind": "remoteSourceControl",
-      "location": "https://github.com/apple/swift-argument-parser.git",
-      "state": {
-        "revision": "d3f6f4d8adfda4094733522fe7d4d0df8d67dbe0",
-        "version": "1.5.0"
-      }
-    }
+      "location": "{remote_url}",
+      "state": {{
+        "revision": "{revision}",
+        "version": "1.0.0"
+      }}
+    }}
   ]
-}
-"#,
+}}
+"#
+        ),
     )
     .expect("package lock");
     fs::write(
         tmp.path().join("Sources/App/App.swift"),
-        "import ArgumentParser\n",
+        "import RemoteSupport\n",
     )
     .expect("source file");
+    fs::write(
+        tmp.path().join("Tests/AppTests/AppTests.swift"),
+        "import XCTest\n@testable import App\n",
+    )
+    .expect("test source file");
 
     let graph = once_frontend::load_graph_workspace(tmp.path())
-        .expect("native graph loads without fetching remote packages");
+        .expect("native graph loads with a locked remote package");
     assert!(
         !tmp.path().join(".build").exists(),
-        "graph loading must not fetch remote Swift packages"
+        "graph loading must not create Swift Package Manager build state"
+    );
+    assert!(
+        tmp.path()
+            .join(".once/swift-package-packages/remote-support/Package.swift")
+            .exists(),
+        "the pinned remote source must be materialized for direct compilation"
+    );
+    assert!(
+        !graph
+            .iter()
+            .any(|target| target.kind == "swift_package_dependencies"),
+        "native package lowering must not delegate compilation to Swift Package Manager"
     );
     let remote = graph
         .iter()
-        .find(|target| target.label.id == "SwiftPackage_LazyRemote_RemoteDependencies")
-        .expect("lazy remote dependency target");
-    assert_eq!(remote.kind, "swift_package_dependencies");
-    assert_eq!(
-        remote.attrs.get("_lazy_resolution"),
-        Some(&AttrValue::Bool(true))
-    );
+        .find(|target| {
+            target.kind == "apple_library"
+                && target.attrs.get("module_name")
+                    == Some(&AttrValue::String("RemoteSupport".to_string()))
+        })
+        .expect("directly lowered remote library");
     let app = graph
         .iter()
         .find(|target| target.label.id == "SwiftPackage_LazyRemote_App")
         .expect("first-party app target");
-    assert!(app
-        .deps
-        .contains(&"SwiftPackage_LazyRemote_RemoteDependencies".to_string()));
+    assert!(app.deps.contains(&remote.label.id));
+    let tests = graph
+        .iter()
+        .find(|target| target.label.id == "SwiftPackage_LazyRemote_AppTests")
+        .expect("directly lowered test bundle");
+    assert_eq!(tests.kind, "apple_test_bundle");
+    assert!(tests.deps.contains(&app.label.id));
 }
 
 #[cfg(unix)]
