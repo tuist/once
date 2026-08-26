@@ -150,6 +150,11 @@ impl TuistCache {
             Err(error) => return Err(error),
         }
 
+        if is_empty_blob(digest) {
+            self.local.mirror_blob(digest, &[]).await?;
+            return Ok(Vec::new());
+        }
+
         let bytes = self.get_blob_remote(digest).await?;
         let mirrored = self.local.mirror_blob(digest, &bytes).await?;
         if mirrored != *digest {
@@ -164,6 +169,10 @@ impl TuistCache {
 
     pub async fn ensure_blob_local(&self, digest: &Digest) -> Result<()> {
         if self.local.has_blob(digest).await? {
+            return Ok(());
+        }
+        if is_empty_blob(digest) {
+            self.local.mirror_blob(digest, &[]).await?;
             return Ok(());
         }
         let remote_digest = self.remote_blob_digest(digest).await?;
@@ -242,6 +251,9 @@ impl TuistCache {
     /// to a cache miss instead of a hard error.
     pub async fn has_blob(&self, digest: &Digest) -> Result<bool> {
         if self.has_local_blob(digest).await? {
+            return Ok(true);
+        }
+        if is_empty_blob(digest) {
             return Ok(true);
         }
         Ok(self.head_blob_remote(digest).await.unwrap_or(false))
@@ -1735,6 +1747,10 @@ fn non_empty_str(value: &str) -> Option<&str> {
     }
 }
 
+fn is_empty_blob(digest: &Digest) -> bool {
+    *digest == Digest::of_bytes(&[])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1785,6 +1801,29 @@ mod tests {
         let cache = tuist_cache(&temp, None);
 
         assert_eq!(cache.instance_name(), "default");
+    }
+
+    #[tokio::test]
+    async fn empty_blob_is_available_without_remote_storage() {
+        let temp = TempDir::new().unwrap();
+        let cache = tuist_cache(&temp, None);
+        let digest = Digest::of_bytes(&[]);
+
+        assert!(!cache.local().has_blob(&digest).await.unwrap());
+        assert!(cache.has_blob(&digest).await.unwrap());
+        assert!(cache.get_blob(&digest).await.unwrap().is_empty());
+        assert!(cache.local().has_blob(&digest).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn empty_blob_materializes_without_remote_storage() {
+        let temp = TempDir::new().unwrap();
+        let cache = tuist_cache(&temp, None);
+        let digest = Digest::of_bytes(&[]);
+
+        cache.ensure_blob_local(&digest).await.unwrap();
+
+        assert!(cache.local().get_blob(&digest).await.unwrap().is_empty());
     }
 
     #[test]
