@@ -329,12 +329,13 @@ pub async fn forget_action(cache: &CacheProvider, action: Digest, output: Output
 }
 
 /// Resolve an action digest from either a pre-computed value or a list
-/// of `--input` declarations. Clap's `ArgGroup` already enforces that
-/// exactly one of the two is provided, so this never sees both filled
-/// or both empty.
+/// of `--input` declarations.
 async fn resolve_action_digest(action: Option<Digest>, inputs: &[String]) -> Result<Digest> {
-    if let Some(digest) = action {
-        return Ok(digest);
+    match (action, inputs.is_empty()) {
+        (Some(_), false) => anyhow::bail!("pass either an action digest or --input, not both"),
+        (None, true) => anyhow::bail!("pass an action digest or at least one --input"),
+        (Some(digest), true) => return Ok(digest),
+        (None, false) => {}
     }
     let specs: Vec<InputSpec> = inputs.iter().map(|s| InputSpec::parse(s)).collect();
     validate_stdin_uniqueness(&specs)?;

@@ -1,13 +1,12 @@
 use std::path::PathBuf;
 
-use clap::Subcommand;
+use usage::Subcommands;
 
-#[derive(Subcommand)]
+#[derive(Subcommands)]
 pub enum RuntimeCmd {
     /// Start a target in a persisted runtime session.
     Start {
         /// Target id, e.g. `tools/demo/LaunchApp` or `./LaunchApp`.
-        #[arg(required_unless_present = "list")]
         target: Option<String>,
     },
 
@@ -23,15 +22,15 @@ pub enum RuntimeCmd {
         session: String,
 
         /// Log source to read: `stdout` or `stderr`.
-        #[arg(long, value_parser = ["stdout", "stderr"])]
+        #[usage(long, choices("stdout", "stderr"))]
         source: Option<String>,
 
         /// Cursor returned by a previous logs call.
-        #[arg(long)]
+        #[usage(long)]
         cursor: Option<String>,
 
         /// Maximum number of log records to return.
-        #[arg(long)]
+        #[usage(long)]
         limit: Option<usize>,
     },
 
@@ -47,19 +46,19 @@ pub enum RuntimeCmd {
         session_dir: PathBuf,
 
         /// Socket path. Defaults to `<session-dir>/control.sock`.
-        #[arg(long)]
+        #[usage(long)]
         socket: Option<PathBuf>,
     },
 
     /// Internal: supervise a target process for a runtime session.
-    #[command(hide = true)]
+    #[usage(hide = true)]
     Supervise {
         /// Runtime session directory containing session.json and logs.
-        #[arg(long)]
+        #[usage(long)]
         session_dir: PathBuf,
 
         /// Canonical target id to run under supervision.
-        #[arg(long)]
+        #[usage(long)]
         target: String,
     },
 }

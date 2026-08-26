@@ -1,12 +1,12 @@
-use clap::Subcommand;
+use usage::Subcommands;
 
-#[derive(Subcommand)]
+#[derive(Subcommands)]
 pub enum ToolchainCmd {
     /// Print the toolchain contract derived from mise.toml.
     Inspect {
         /// Mise platform key to inspect, e.g. linux-x64. Defaults to
         /// the current host platform.
-        #[arg(long)]
+        #[usage(long)]
         platform: Option<String>,
     },
 }

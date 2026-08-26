@@ -49,7 +49,7 @@ struct ExecTrailer<'a> {
 
 /// Inputs to [`exec`], grouped so the function signature stays
 /// readable as the verb gains options. Owned types: the call site
-/// builds these from clap and hands them over.
+/// builds these from the command-line parser and hands them over.
 pub struct ExecArgs {
     pub sandbox: SandboxMode,
     pub script: bool,

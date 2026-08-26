@@ -25,8 +25,8 @@ pub(crate) async fn dispatch(cli: Cli) -> Result<ExitCode> {
     let xdg = Xdg::from_env();
     let resource_limits = cli
         .memory_limit
-        .map_or_else(ResourceLimits::default, |memory| {
-            ResourceLimits::default().with_memory_bytes(memory)
+        .map_or_else(ResourceLimits::default, |memory_limit| {
+            ResourceLimits::default().with_memory_bytes(memory_limit.bytes())
         });
     tracing::debug!(
         memory_limit_bytes = resource_limits.memory_bytes,
@@ -164,7 +164,10 @@ async fn run_command(
                 commands::exec::ExecArgs {
                     sandbox,
                     script,
-                    env,
+                    env: env
+                        .into_iter()
+                        .map(cli::EnvironmentAssignment::into_inner)
+                        .collect(),
                     cwd,
                     timeout_ms,
                     cache_failures,
@@ -683,7 +686,7 @@ async fn run_cache_command(
         }
         Some(cli::CacheCmd::Gc { max_size, dry_run }) => {
             let cache = crate::cache_provider::resolve(workspace, xdg)?;
-            commands::cache::gc(&cache, max_size, dry_run, output)
+            commands::cache::gc(&cache, max_size.bytes(), dry_run, output)
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }
@@ -723,7 +726,17 @@ async fn run_cache_command(
                     stderr,
                     outputs,
                 }) => commands::cache::put_action(
-                    &cache, action, inputs, exit_code, stdout, stderr, outputs, output,
+                    &cache,
+                    action,
+                    inputs,
+                    exit_code,
+                    stdout,
+                    stderr,
+                    outputs
+                        .into_iter()
+                        .map(cli::OutputDigest::into_inner)
+                        .collect(),
+                    output,
                 )
                 .await
                 .map(|()| ExitCode::SUCCESS),

@@ -10,20 +10,29 @@ mod logging;
 mod reference;
 mod render;
 
+use std::ffi::OsStr;
 use std::io::Write;
 use std::process::ExitCode;
 
-use clap::Parser;
 use tracing::Instrument;
+use usage::Error;
 
 use cli::Cli;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
-    let cli = match Cli::try_parse() {
+    let process_args = std::env::args_os().collect::<Vec<_>>();
+    let argv = process_args
+        .iter()
+        .map(std::ffi::OsString::as_os_str)
+        .collect::<Vec<_>>();
+    let cli = match Cli::try_parse_from(&argv) {
         Ok(cli) => cli,
-        Err(e) => return handle_parse_error(&e),
+        Err(error) => return handle_parse_error(&argv, &error),
     };
+    if let Some(path) = cli.incomplete_command_help_path() {
+        return handle_incomplete_command(path);
+    }
     let command = cli.surface_path().join(" ");
     let format = cli.format;
     let logging = logging::init(cli.verbose);
@@ -95,19 +104,68 @@ fn structured_dispatch_error(format: cli::Format, error: &anyhow::Error) -> Stri
     })
 }
 
-fn handle_parse_error(e: &clap::Error) -> ExitCode {
+fn handle_parse_error(argv: &[&OsStr], error: &Error<'static, '_>) -> ExitCode {
     let logging = logging::init(0);
     let log_path = log_path(&logging);
-    let code = cli::exit_from(e.exit_code());
+    let code = match error {
+        Error::Help { cmd, long } => {
+            if let Some(body) = Cli::render_help(cmd, *long) {
+                print!("{body}");
+            }
+            ExitCode::SUCCESS
+        }
+        Error::HelpAll { cmd } => {
+            if let Some(body) = usage::help::render_all(Cli::spec(), cmd) {
+                print!("{body}");
+            }
+            ExitCode::SUCCESS
+        }
+        Error::Version { .. } => {
+            println!("once {}", cli::CLI_VERSION);
+            ExitCode::SUCCESS
+        }
+        Error::MissingArgsHelp { cmd } => {
+            if let Some(body) = Cli::render_help(cmd, false) {
+                eprint!("{body}");
+            }
+            ExitCode::from(2)
+        }
+        _ => {
+            eprint!("{}", Cli::render_failure(argv, error));
+            ExitCode::from(2)
+        }
+    };
     tracing::info!(
         session_id = %logging.session_id(),
         log_path,
         exit_code = ?code,
         "argument parsing stopped"
     );
-    if let Err(print_error) = e.print() {
-        tracing::error!(error = %print_error, "failed to print clap error");
+    code
+}
+
+fn handle_incomplete_command(path: &[&str]) -> ExitCode {
+    let command = path.iter().try_fold(Cli::spec().root, |command, segment| {
+        command
+            .subcommands
+            .iter()
+            .copied()
+            .find(|subcommand| subcommand.cmd.name == *segment)
+    });
+    let logging = logging::init(0);
+    let log_path = log_path(&logging);
+    let code = ExitCode::from(2);
+    if let Some(command) = command {
+        if let Some(body) = Cli::render_help(command.cmd, false) {
+            eprint!("{body}");
+        }
     }
+    tracing::info!(
+        session_id = %logging.session_id(),
+        log_path,
+        exit_code = ?code,
+        "argument parsing stopped"
+    );
     code
 }
 

@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
-use clap::{Arg, Command, CommandFactory};
 use serde::Serialize;
+use usage::spec::{ArgMeta, CommandMeta, FlagMeta};
 
 use crate::cli::Cli;
 
@@ -38,16 +38,17 @@ pub(super) struct ArgSurface {
 }
 
 pub(super) fn load(path: &[&str]) -> Result<CommandSurface> {
-    let mut command = Cli::command();
-    let selected = select_command(&mut command, path).context("selecting command surface")?;
+    let selected = select_command(Cli::spec().root, path).context("selecting command surface")?;
     Ok(build_command_surface(selected, &BTreeSet::new()))
 }
 
-fn select_command<'a>(command: &'a mut Command, path: &[&str]) -> Result<&'a mut Command> {
+fn select_command<'a>(command: &'a CommandMeta<'a>, path: &[&str]) -> Result<&'a CommandMeta<'a>> {
     if let Some((head, tail)) = path.split_first() {
         let next = command
-            .get_subcommands_mut()
-            .find(|subcommand| subcommand.get_name() == *head)
+            .subcommands
+            .iter()
+            .copied()
+            .find(|subcommand| subcommand.cmd.name == *head)
             .with_context(|| format!("unknown command path segment `{head}`"))?;
         return select_command(next, tail);
     }
@@ -55,31 +56,44 @@ fn select_command<'a>(command: &'a mut Command, path: &[&str]) -> Result<&'a mut
 }
 
 fn build_command_surface(
-    command: &Command,
+    command: &CommandMeta<'_>,
     inherited_globals: &BTreeSet<String>,
 ) -> CommandSurface {
     let mut globals = inherited_globals.clone();
-    let args = command
-        .get_arguments()
-        .filter(|arg| !arg.is_hide_set())
-        .filter(|arg| !arg.is_global_set() || !inherited_globals.contains(arg.get_id().as_str()))
-        .map(|arg| {
-            if arg.is_global_set() {
-                globals.insert(arg.get_id().as_str().to_string());
+    let mut args = command
+        .flags
+        .iter()
+        .filter(|flag| !flag.hide && !flag.builtin)
+        .filter(|flag| !flag.flag.global || !inherited_globals.contains(flag.flag.name))
+        .map(|flag| {
+            if flag.flag.global {
+                globals.insert(flag.flag.name.to_string());
             }
-            build_arg_surface(arg)
+            build_flag_surface(flag)
         })
         .collect::<Vec<_>>();
+    args.extend(
+        command
+            .args
+            .iter()
+            .filter(|arg| !arg.hide)
+            .map(build_positional_surface),
+    );
     let subcommands = command
-        .get_subcommands()
-        .filter(|subcommand| !subcommand.is_hide_set())
+        .subcommands
+        .iter()
+        .copied()
+        .filter(|subcommand| !subcommand.hide)
         .map(|subcommand| build_command_surface(subcommand, &globals))
         .collect::<Vec<_>>();
     CommandSurface {
-        name: command.get_name().to_string(),
-        about: command.get_about().map(ToString::to_string),
+        name: command.cmd.name.to_string(),
+        about: command.about.map(ToString::to_string),
         aliases: command
-            .get_all_aliases()
+            .cmd
+            .aliases
+            .iter()
+            .filter(|alias| !command.hidden_aliases.contains(alias))
             .map(ToString::to_string)
             .collect::<Vec<_>>(),
         args,
@@ -87,52 +101,58 @@ fn build_command_surface(
     }
 }
 
-fn build_arg_surface(arg: &Arg) -> ArgSurface {
-    let kind = if arg.is_positional() {
-        ArgKind::Positional
-    } else if arg.get_action().takes_values() {
+fn build_flag_surface(flag: &FlagMeta<'_>) -> ArgSurface {
+    let kind = if flag.flag.takes_value {
         ArgKind::Option
     } else {
         ArgKind::Flag
     };
     ArgSurface {
-        id: arg.get_id().as_str().to_string(),
-        syntax: arg_syntax(arg),
+        id: flag.flag.name.to_string(),
+        syntax: flag_syntax(flag),
         kind,
-        required: arg.is_required_set(),
-        help: arg.get_help().map(ToString::to_string),
+        required: flag.required,
+        help: flag.help.map(ToString::to_string),
     }
 }
 
-fn arg_syntax(arg: &Arg) -> String {
-    if arg.is_positional() {
-        let value = arg
-            .get_value_names()
-            .and_then(|names| names.first())
-            .map_or_else(|| arg.get_id().as_str().to_uppercase(), ToString::to_string);
-        return if arg.is_required_set() {
+fn build_positional_surface(arg: &ArgMeta<'_>) -> ArgSurface {
+    let value = arg
+        .value_names
+        .first()
+        .copied()
+        .unwrap_or(arg.arg.name)
+        .to_uppercase();
+    ArgSurface {
+        id: arg.arg.name.to_string(),
+        syntax: if arg.required {
             format!("<{value}>")
         } else {
             format!("[{value}]")
-        };
+        },
+        kind: ArgKind::Positional,
+        required: arg.required,
+        help: arg.help.map(ToString::to_string),
     }
+}
 
+fn flag_syntax(flag: &FlagMeta<'_>) -> String {
     let mut parts = Vec::new();
-    if let Some(short) = arg.get_short() {
-        parts.push(format!("-{short}"));
+    for short in flag.flag.shorts {
+        parts.push(format!("-{}", *short as char));
     }
-    if let Some(long) = arg.get_long() {
+    for long in flag.flag.longs {
         parts.push(format!("--{long}"));
     }
     let mut syntax = parts.join(", ");
-    if arg.get_action().takes_values() {
-        let value = arg
-            .get_value_names()
-            .and_then(|names| names.first())
-            .map_or("VALUE".to_string(), ToString::to_string);
+    if flag.flag.takes_value {
+        let value = flag
+            .value_name
+            .or_else(|| flag.value_names.first().copied())
+            .unwrap_or("VALUE");
         syntax.push(' ');
         syntax.push('<');
-        syntax.push_str(&value);
+        syntax.push_str(value);
         syntax.push('>');
     }
     syntax
@@ -140,7 +160,14 @@ fn arg_syntax(arg: &Arg) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
+
     use super::*;
+
+    fn parse(argv: &[&str]) -> crate::cli::Cli {
+        let argv = argv.iter().map(OsStr::new).collect::<Vec<_>>();
+        crate::cli::Cli::try_parse_from(&argv).unwrap()
+    }
 
     #[test]
     fn root_surface_includes_run_and_global_list_flag() {
@@ -170,10 +197,8 @@ mod tests {
 
     #[test]
     fn every_subcommand_surface_path_resolves() {
-        use clap::Parser;
-
         // Guards against drift between `Cmd::surface_path` and the
-        // clap `#[command(name = ...)]` strings. A mismatch otherwise
+        // declared command names. A mismatch otherwise
         // only surfaces at runtime as "unknown command path segment"
         // when `<subcommand> --list` is invoked.
         let invocations: &[&[&str]] = &[
@@ -213,8 +238,7 @@ mod tests {
             &["once", "runtime", "rpc", "/tmp/session"],
         ];
         for argv in invocations {
-            let cli = crate::cli::Cli::try_parse_from(*argv)
-                .unwrap_or_else(|e| panic!("parsing {argv:?}: {e}"));
+            let cli = parse(argv);
             let path = cli.surface_path();
             let surface = load(&path).unwrap_or_else(|e| {
                 panic!("resolving surface for {argv:?} (path {path:?}): {e:#}")

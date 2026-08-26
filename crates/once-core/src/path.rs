@@ -8,6 +8,7 @@
 
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
@@ -96,6 +97,14 @@ impl TryFrom<&str> for WorkspacePath {
     type Error = WorkspacePathError;
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Self::try_from(value.to_string())
+    }
+}
+
+impl FromStr for WorkspacePath {
+    type Err = WorkspacePathError;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        Self::try_from(raw)
     }
 }
 

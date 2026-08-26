@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,22 @@ impl LintSeverity {
             Some("note") => Self::Note,
             Some("none") => Self::None,
             _ => Self::Warning,
+        }
+    }
+}
+
+impl FromStr for LintSeverity {
+    type Err = String;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        match raw {
+            "none" => Ok(Self::None),
+            "note" => Ok(Self::Note),
+            "warning" => Ok(Self::Warning),
+            "error" => Ok(Self::Error),
+            _ => Err(format!(
+                "expected `none`, `note`, `warning`, or `error`, got `{raw}`"
+            )),
         }
     }
 }
