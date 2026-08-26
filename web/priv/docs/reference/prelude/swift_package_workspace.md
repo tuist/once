@@ -15,10 +15,12 @@ without `once.toml` can therefore query and build its first-party package
 targets directly. Discovery skips generated package-manager state such as
 `.build` and `.swiftpm`.
 
-Remote package metadata is not fetched during graph loading. When a first-party
-target needs a product from a locked remote package, the resolver adds a
-dependency action that fetches and builds that product only when a build needs
-it. The action is keyed by the package manifest, lock file, and Swift toolchain.
+For locked source-control dependencies, the resolver materializes the pinned
+sources and lowers their package targets into the same Apple target kinds.
+Once compiles those targets directly with the selected Swift compiler. Swift
+Package Manager supplies manifest and lockfile metadata, but does not build
+the dependency products. Registry dependencies are not supported by native
+package lowering yet.
 
 ## Attributes
 
