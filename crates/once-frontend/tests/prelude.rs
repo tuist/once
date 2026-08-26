@@ -16240,6 +16240,6 @@ result = repr([
     let out = eval_prelude_source_to_repr(source).unwrap();
     assert_eq!(
         out,
-        r#"[["App"], ["apple_framework", "apple_application", "apple_test_bundle"], ["./Feature"], ["./App"], ["app/Source/Core/Feature.swift"], {"app/Source/Core/Feature.swift": "[\"-DNDEBUG\",\"-fno-objc-arc\"]"}, ["app/App.swift"], "dev.once.App", "TEAM123", ["iphone", "ipad"], "16.0", True]"#
+        r#"[["App"], ["apple_framework", "apple_application", "apple_test_bundle"], ["./Feature"], ["./App"], ["Source/Core/Feature.swift"], {"Source/Core/Feature.swift": "[\"-DNDEBUG\",\"-fno-objc-arc\"]"}, ["App.swift"], "dev.once.App", "TEAM123", ["iphone", "ipad"], "16.0", True]"#
     );
 }
