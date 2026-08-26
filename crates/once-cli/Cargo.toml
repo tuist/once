@@ -17,7 +17,7 @@ once-frontend.workspace = true
 
 anyhow.workspace = true
 blake3.workspace = true
-clap.workspace = true
+usage.workspace = true
 console.workspace = true
 glob.workspace = true
 notify.workspace = true

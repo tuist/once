@@ -1,6 +1,6 @@
-use clap::Subcommand;
+use usage::Subcommands;
 
-#[derive(Subcommand)]
+#[derive(Subcommands)]
 pub enum NativeCmd {
     /// List recognized native roots and their current matches.
     List,
@@ -10,7 +10,7 @@ pub enum NativeCmd {
         /// Native integration name from `once native list`.
         name: String,
         /// Workspace-relative path of the matched root.
-        #[arg(long, value_name = "PATH")]
+        #[usage(long, value_name = "PATH")]
         path: Option<String>,
     },
 
@@ -19,7 +19,7 @@ pub enum NativeCmd {
         /// Native integration name from `once native list`.
         name: String,
         /// Workspace-relative path of the matched root.
-        #[arg(long, value_name = "PATH")]
+        #[usage(long, value_name = "PATH")]
         path: Option<String>,
     },
 }

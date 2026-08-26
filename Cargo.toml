@@ -27,7 +27,7 @@ anyhow = "1"
 bazel-remote-apis = "0.27"
 base64 = "0.22"
 blake3 = "1"
-clap = { version = "4", features = ["derive"] }
+usage = { package = "usage-rs", version = "6.4.1" }
 console = "0.16"
 fd-lock = "4"
 futures = "0.3"

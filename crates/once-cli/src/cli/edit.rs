@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use clap::Subcommand;
+use usage::Subcommands;
 
-#[derive(Subcommand)]
+#[derive(Subcommands)]
 pub enum EditCmd {
     /// Apply a batch of operations to one `once.toml` atomically.
     ///
@@ -13,7 +13,7 @@ pub enum EditCmd {
     /// untouched.
     Apply {
         /// Path to a JSON file. When omitted, the JSON document is read from stdin.
-        #[arg(long, value_name = "PATH")]
+        #[usage(long, value_name = "PATH")]
         file: Option<PathBuf>,
     },
 
@@ -28,7 +28,7 @@ pub enum EditCmd {
         /// Example slug from `once query schema`.
         slug: String,
         /// Workspace-relative directory that receives the example.
-        #[arg(long, default_value = "", value_name = "DIR")]
+        #[usage(long, default = "", value_name = "DIR")]
         destination: String,
     },
 }

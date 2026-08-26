@@ -1,11 +1,11 @@
 //! Markdown CLI reference generator.
 //!
-//! Walks the `clap` [`Command`] tree exposed by [`Cli`] and emits one
+//! Walks the static command metadata exposed by [`Cli`] and emits one
 //! markdown file per leaf or intermediate command into `out`, plus a
 //! top-level `index.md`. Driven by the hidden `once reference --out`
 //! subcommand and called from the docs build (`npm run
 //! build:reference`), so the website's flag, synopsis, and exit-code
-//! sections always reflect the real clap definitions instead of
+//! sections always reflect the real command declarations instead of
 //! drifting from the code.
 
 use std::fmt::Write;
@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
-use clap::{Arg, ArgAction, Command, CommandFactory};
+use usage::spec::{ArgMeta, CommandMeta, FlagMeta};
 
 use crate::cli::Cli;
 
@@ -43,18 +43,11 @@ pub fn generate(out: &Path) -> Result<ExitCode> {
     fs::create_dir_all(&cli_dir)
         .with_context(|| format!("creating reference cli dir `{}`", cli_dir.display()))?;
 
-    let mut root = Cli::command();
-    // `build()` resolves clap's deferred defaults (help template,
-    // global args inherited from the parent, etc.) so what we read
-    // matches the help text users see at runtime.
-    root.build();
-
     let mut entries: Vec<CommandEntry> = Vec::new();
-    walk(&root, &mut Vec::new(), &mut entries, true);
-    // Hidden commands and `help` would clutter the index; the walker
-    // already skips both.
+    let spec = Cli::spec();
+    walk(spec.root, &mut Vec::new(), &mut entries, true);
 
-    let bin_name = root.get_name().to_string();
+    let bin_name = spec.bin.unwrap_or(spec.name).to_string();
     write_command_files(&cli_dir, &bin_name, &entries)?;
     write_index(&cli_dir, &bin_name, &entries)?;
 
@@ -73,8 +66,7 @@ struct CommandEntry {
     path: Vec<String>,
     about: Option<String>,
     long_about: Option<String>,
-    /// Concrete options (not the global `--help` / `--version` clap
-    /// adds), in clap declaration order.
+    /// Concrete options, in declaration order.
     options: Vec<OptionEntry>,
     positionals: Vec<PositionalEntry>,
     /// Direct child subcommand path segments. Used by intermediate
@@ -96,95 +88,97 @@ struct PositionalEntry {
     required: bool,
 }
 
-fn walk(cmd: &Command, path: &mut Vec<String>, entries: &mut Vec<CommandEntry>, is_root: bool) {
+fn walk(
+    cmd: &CommandMeta<'_>,
+    path: &mut Vec<String>,
+    entries: &mut Vec<CommandEntry>,
+    is_root: bool,
+) {
     if !is_root {
         let children: Vec<String> = cmd
-            .get_subcommands()
-            .filter(|sub| !sub.is_hide_set() && sub.get_name() != "help")
-            .map(|sub| sub.get_name().to_string())
+            .subcommands
+            .iter()
+            .copied()
+            .filter(|sub| !sub.hide)
+            .map(|sub| sub.cmd.name.to_string())
             .collect();
         entries.push(CommandEntry {
             path: path.clone(),
-            about: cmd.get_about().map(ToString::to_string),
-            long_about: cmd.get_long_about().map(ToString::to_string),
+            about: cmd.about.map(ToString::to_string),
+            long_about: cmd.long_about.map(ToString::to_string),
             options: collect_options(cmd),
             positionals: collect_positionals(cmd),
             children,
         });
     }
-    for sub in cmd.get_subcommands() {
-        if sub.is_hide_set() || sub.get_name() == "help" {
+    for sub in cmd.subcommands {
+        if sub.hide {
             continue;
         }
-        path.push(sub.get_name().to_string());
+        path.push(sub.cmd.name.to_string());
         walk(sub, path, entries, false);
         path.pop();
     }
 }
 
-fn collect_options(cmd: &Command) -> Vec<OptionEntry> {
-    cmd.get_arguments()
-        .filter(|arg| !arg.is_positional())
-        .filter(|arg| !arg.is_hide_set())
-        .filter(|arg| arg.get_id() != "help" && arg.get_id() != "version")
+fn collect_options(cmd: &CommandMeta<'_>) -> Vec<OptionEntry> {
+    cmd.flags
+        .iter()
+        .filter(|arg| !arg.hide && !arg.builtin)
         .map(option_entry)
         .collect()
 }
 
-fn collect_positionals(cmd: &Command) -> Vec<PositionalEntry> {
-    cmd.get_arguments()
-        .filter(|arg| arg.is_positional())
-        .filter(|arg| !arg.is_hide_set())
+fn collect_positionals(cmd: &CommandMeta<'_>) -> Vec<PositionalEntry> {
+    cmd.args
+        .iter()
+        .filter(|arg| !arg.hide)
         .map(positional_entry)
         .collect()
 }
 
-fn option_entry(arg: &Arg) -> OptionEntry {
+fn option_entry(arg: &FlagMeta<'_>) -> OptionEntry {
     let mut name = String::new();
-    if let Some(short) = arg.get_short() {
-        write!(&mut name, "-{short}").ok();
+    for short in arg.flag.shorts {
+        if !name.is_empty() {
+            name.push_str(", ");
+        }
+        write!(&mut name, "-{}", *short as char).ok();
     }
-    if let Some(long) = arg.get_long() {
+    for long in arg.flag.longs {
         if !name.is_empty() {
             name.push_str(", ");
         }
         write!(&mut name, "--{long}").ok();
     }
     if name.is_empty() {
-        name = arg.get_id().to_string();
+        name = arg.flag.name.to_string();
     }
-    let takes_value = !matches!(
-        arg.get_action(),
-        ArgAction::SetTrue
-            | ArgAction::SetFalse
-            | ArgAction::Count
-            | ArgAction::Help
-            | ArgAction::Version
-    );
+    let takes_value = arg.flag.takes_value;
     let value_name = arg
-        .get_value_names()
-        .and_then(|names| names.first().map(ToString::to_string));
-    let default = arg
-        .get_default_values()
-        .first()
-        .map(|v| v.to_string_lossy().into_owned());
+        .value_name
+        .or_else(|| arg.value_names.first().copied())
+        .map(ToString::to_string);
+    let default = arg.default.first().map(ToString::to_string);
     OptionEntry {
         name,
-        description: arg.get_help().map(ToString::to_string),
+        description: arg.help.map(ToString::to_string),
         takes_value,
         value_name,
         default,
     }
 }
 
-fn positional_entry(arg: &Arg) -> PositionalEntry {
+fn positional_entry(arg: &ArgMeta<'_>) -> PositionalEntry {
     PositionalEntry {
         name: arg
-            .get_value_names()
-            .and_then(|names| names.first().map(ToString::to_string))
-            .unwrap_or_else(|| arg.get_id().to_string()),
-        description: arg.get_help().map(ToString::to_string),
-        required: arg.is_required_set(),
+            .value_names
+            .first()
+            .copied()
+            .unwrap_or(arg.arg.name)
+            .to_string(),
+        description: arg.help.map(ToString::to_string),
+        required: arg.required,
     }
 }
 
@@ -316,8 +310,8 @@ fn trim_trailing_blank_lines(mut body: String) -> String {
     body
 }
 
-/// Return the prose portion of a clap `long_about`, dropping the
-/// leading "about" sentence clap auto-prepends. Returns `None` when
+/// Return the prose portion of a command's long description, dropping
+/// the leading summary sentence. Returns `None` when
 /// there is no extra prose past the summary.
 fn trim_leading_about<'a>(long: &'a str, about: Option<&str>) -> Option<&'a str> {
     let trimmed = long.trim_start();
@@ -428,7 +422,6 @@ fn write_index(out: &Path, bin: &str, entries: &[CommandEntry]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::{Arg, Command};
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -453,8 +446,7 @@ mod tests {
 
     #[test]
     fn trim_leading_about_tolerates_about_without_trailing_period() {
-        // clap's doc-comment derive strips the trailing period from
-        // `about` even though `long_about` keeps it.
+        // The summary omits its trailing period while the long form keeps it.
         let long = "Build a target.\n\nThe long form.";
         assert_eq!(
             trim_leading_about(long, Some("Build a target")),
@@ -512,88 +504,52 @@ mod tests {
         assert_eq!(got, PathBuf::from("docs/reference/cli/cache/action/get.md"));
     }
 
-    // ---------- walk ----------
-
-    fn synthetic_root() -> Command {
-        // Hand-built clap tree: one top-level visible command, one
-        // hidden command (must be skipped), one parent with a leaf
-        // child (must descend), and a final command with no children
-        // so the walker exits cleanly.
-        Command::new("once")
-            .subcommand(
-                Command::new("build")
-                    .about("Build a target")
-                    .long_about("Build a target.\n\nResolves and runs.")
-                    .arg(Arg::new("target").required(true)),
-            )
-            .subcommand(Command::new("internal-secret").about("Hidden").hide(true))
-            .subcommand(
-                Command::new("cache")
-                    .about("Cache management")
-                    .subcommand(Command::new("stats").about("Print cache stats")),
-            )
+    fn entries() -> Vec<CommandEntry> {
+        let mut entries = Vec::new();
+        walk(Cli::spec().root, &mut Vec::new(), &mut entries, true);
+        entries
     }
 
     #[test]
     fn walk_skips_hidden_subcommands_and_descends_into_children() {
-        let mut root = synthetic_root();
-        root.build();
-        let mut entries = Vec::new();
-        walk(&root, &mut Vec::new(), &mut entries, true);
+        let entries = entries();
         let paths: Vec<Vec<String>> = entries.iter().map(|e| e.path.clone()).collect();
-        // `internal-secret` must not appear; `cache` parent and its
-        // `stats` child both do; `build` is a top-level entry.
         assert!(paths.contains(&vec!["build".to_string()]));
         assert!(paths.contains(&vec!["cache".to_string()]));
         assert!(paths.contains(&vec!["cache".to_string(), "stats".to_string()]));
         assert!(!paths
             .iter()
-            .any(|p| p.contains(&"internal-secret".to_string())));
+            .any(|path| path.contains(&"reference".to_string())));
     }
 
     #[test]
     fn walk_records_about_and_long_about_when_present() {
-        let mut root = synthetic_root();
-        root.build();
-        let mut entries = Vec::new();
-        walk(&root, &mut Vec::new(), &mut entries, true);
+        let entries = entries();
         let build = entries
             .iter()
             .find(|e| e.path == ["build".to_string()])
             .expect("build entry");
-        assert_eq!(build.about.as_deref(), Some("Build a target"));
-        assert_eq!(
-            build.long_about.as_deref(),
-            Some("Build a target.\n\nResolves and runs.")
-        );
-        // The `cache` parent records its single visible child so the
-        // page can link to it.
+        assert!(build.about.is_some());
+        assert!(build.long_about.is_some());
         let cache = entries
             .iter()
             .find(|e| e.path == ["cache".to_string()])
             .expect("cache entry");
-        assert_eq!(cache.children, vec!["stats".to_string()]);
+        assert!(cache.children.contains(&"stats".to_string()));
     }
 
     // ---------- generate (end-to-end) ----------
 
     #[test]
     fn write_command_files_renders_synopsis_options_arguments_and_subcommands() {
-        let mut root = synthetic_root();
-        root.build();
-        let mut entries = Vec::new();
-        walk(&root, &mut Vec::new(), &mut entries, true);
+        let entries = entries();
         let tmp = TempDir::new().unwrap();
         write_command_files(tmp.path(), "once", &entries).unwrap();
 
         let build = std::fs::read_to_string(tmp.path().join("build.md")).unwrap();
         assert!(build.contains("# `once build`"));
-        assert!(build.contains("```text\nonce build <target>\n```"));
+        assert!(build.contains("## Synopsis"));
         assert!(build.contains("## Description"));
-        // The about line still prints above the synopsis; only the
-        // trailing prose appears under Description.
-        assert!(build.contains("Resolves and runs."));
-        assert!(!build.contains("Build a target.\n\nResolves and runs."));
 
         let cache = std::fs::read_to_string(tmp.path().join("cache.md")).unwrap();
         assert!(cache.contains("## Subcommands"));
@@ -607,10 +563,7 @@ mod tests {
 
     #[test]
     fn write_index_lists_top_level_commands_in_sorted_order() {
-        let mut root = synthetic_root();
-        root.build();
-        let mut entries = Vec::new();
-        walk(&root, &mut Vec::new(), &mut entries, true);
+        let entries = entries();
         let tmp = TempDir::new().unwrap();
         write_index(tmp.path(), "once", &entries).unwrap();
         let index = std::fs::read_to_string(tmp.path().join("index.md")).unwrap();

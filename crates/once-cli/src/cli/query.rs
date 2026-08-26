@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use clap::Subcommand;
+use usage::Subcommands;
 
-#[derive(Subcommand)]
+#[derive(Subcommands)]
 pub enum QueryCmd {
     /// Describe the configured workspace and graph loading state.
     ///
@@ -15,7 +15,7 @@ pub enum QueryCmd {
     /// List declared graph targets.
     Targets {
         /// Only include targets with this target kind.
-        #[arg(long)]
+        #[usage(long)]
         kind: Option<String>,
     },
 
@@ -40,13 +40,13 @@ pub enum QueryCmd {
     },
 
     /// List target kinds with their one-line docs and example slugs.
-    #[command(alias = "rules")]
+    #[usage(alias = "rules")]
     TargetKinds {
         /// Match an ecosystem, target-kind family, or intent against the catalog.
         ///
         /// A family term takes priority over generic intent words. When no family
         /// or kind segment matches, Once searches docs, examples, and source references.
-        #[arg(long, value_name = "TEXT")]
+        #[usage(long, value_name = "TEXT")]
         query: Option<String>,
     },
 
@@ -58,7 +58,7 @@ pub enum QueryCmd {
         /// Public HTTPS address for source code, metadata, or documentation.
         url: String,
         /// Maximum response bytes to return.
-        #[arg(long, default_value_t = 256 * 1024, value_name = "COUNT")]
+        #[usage(long, default = "262144", value_name = "COUNT")]
         max_bytes: usize,
     },
 
@@ -75,13 +75,13 @@ pub enum QueryCmd {
     /// manifest into one stable digest with categorized components.
     GraphFingerprint {
         /// Exclude resolved source file contents from the digest.
-        #[arg(long)]
+        #[usage(long)]
         no_sources: bool,
         /// Exclude the Mise toolchain declarations from the digest.
-        #[arg(long)]
+        #[usage(long)]
         no_toolchain: bool,
         /// Exclude the root workspace manifest from the digest.
-        #[arg(long)]
+        #[usage(long)]
         no_manifest: bool,
     },
 
@@ -96,22 +96,22 @@ pub enum QueryCmd {
     /// known package conservatively select every test.
     AffectedTests {
         /// Changed workspace-relative path. Repeat for multiple paths.
-        #[arg(long = "changed-path", value_name = "PATH")]
+        #[usage(long = "changed-path", value_name = "PATH")]
         changed_paths: Vec<String>,
     },
 
     /// Create an immutable test plan without assigning work to runners.
     TestPlan {
         /// Changed workspace-relative path. Repeat for multiple paths.
-        #[arg(long = "changed-path", value_name = "PATH", conflicts_with = "target")]
+        #[usage(long = "changed-path", value_name = "PATH", conflicts = "target")]
         changed_paths: Vec<String>,
         /// Create an explicit plan for this target instead of selecting by changed path.
-        #[arg(long, conflicts_with = "changed_paths")]
+        #[usage(long, conflicts = "changed_paths")]
         target: Option<String>,
         /// Select one current, filterable unit from `once query test-manifest`.
         /// Planning fails when the target does not support exact filtering or
         /// the unit is absent from the persisted whole-target manifest.
-        #[arg(long = "test-unit", requires = "target")]
+        #[usage(long = "test-unit", requires = "target")]
         test_unit: Option<String>,
     },
 
@@ -120,7 +120,7 @@ pub enum QueryCmd {
         /// Target id, such as `tests/unit`.
         target: String,
         /// Return the normalized status and totals without case-level records.
-        #[arg(long)]
+        #[usage(long)]
         summary_only: bool,
     },
 
@@ -133,10 +133,10 @@ pub enum QueryCmd {
     /// List persisted test batch attempts and measured durations.
     TestAttempts {
         /// Only include attempts for this canonical target id.
-        #[arg(long)]
+        #[usage(long)]
         target: Option<String>,
         /// Return only the newest matching attempts.
-        #[arg(long, value_name = "COUNT")]
+        #[usage(long, value_name = "COUNT")]
         limit: Option<usize>,
     },
 
@@ -154,7 +154,7 @@ pub enum QueryCmd {
         /// Subject id, e.g. `cli` or `cli:test`.
         subject: Option<String>,
         /// Return only the newest matching records.
-        #[arg(long, value_name = "COUNT")]
+        #[usage(long, value_name = "COUNT")]
         limit: Option<usize>,
     },
 
@@ -164,7 +164,7 @@ pub enum QueryCmd {
     /// from stdin.
     ValidateTarget {
         /// Path to a JSON file. When omitted, the JSON document is read from stdin.
-        #[arg(long, value_name = "PATH")]
+        #[usage(long, value_name = "PATH")]
         file: Option<PathBuf>,
     },
 
@@ -182,10 +182,10 @@ pub enum QueryCmd {
         /// Target id whose scripted capability should be probed.
         target: String,
         /// Capability to validate.
-        #[arg(long, default_value = "build")]
+        #[usage(long, default = "build")]
         capability: String,
         /// Validate only one zero-based action index.
-        #[arg(long)]
+        #[usage(long)]
         action: Option<usize>,
     },
 

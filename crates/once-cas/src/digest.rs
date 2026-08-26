@@ -1,5 +1,6 @@
 use std::fmt;
 use std::io::{self, Read};
+use std::str::FromStr;
 
 use serde::de::{self, Deserializer, Visitor};
 use serde::{Deserialize, Serialize, Serializer};
@@ -70,6 +71,14 @@ impl Digest {
         let mut out = [0u8; Self::LEN];
         hex::decode_to_slice(s, &mut out).ok()?;
         Some(Self(out))
+    }
+}
+
+impl FromStr for Digest {
+    type Err = String;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        Self::from_hex(raw).ok_or_else(|| "expected a 64-character lowercase BLAKE3 digest".into())
     }
 }
 

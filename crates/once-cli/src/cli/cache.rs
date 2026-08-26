@@ -1,9 +1,50 @@
 use std::path::PathBuf;
+use std::str::FromStr;
 
-use clap::{ArgGroup, Subcommand};
 use once_cas::Digest;
+use usage::Subcommands;
 
-#[derive(Subcommand)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CacheSize(u64);
+
+impl CacheSize {
+    pub(crate) const fn bytes(self) -> u64 {
+        self.0
+    }
+}
+
+impl FromStr for CacheSize {
+    type Err = String;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        parse_size(raw).map(Self)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct OutputDigest(String, Digest);
+
+impl OutputDigest {
+    pub(crate) fn into_inner(self) -> (String, Digest) {
+        (self.0, self.1)
+    }
+}
+
+impl FromStr for OutputDigest {
+    type Err = String;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        let (path, digest) = raw
+            .split_once('=')
+            .ok_or_else(|| "expected workspace/path=blob_digest".to_string())?;
+        if path.is_empty() {
+            return Err("output path must not be empty".into());
+        }
+        Ok(Self(path.to_string(), digest.parse()?))
+    }
+}
+
+#[derive(Subcommands)]
 pub enum CacheCmd {
     /// Print blob and action counts plus on-disk size.
     Stats,
@@ -20,30 +61,28 @@ pub enum CacheCmd {
         /// suffix: `500MB`, `2GiB`, `750k`. Decimal suffixes (KB/MB/GB/
         /// TB) are powers of 1000; binary suffixes (KiB/MiB/GiB/TiB) are
         /// powers of 1024.
-        #[arg(long = "max-size", value_name = "SIZE", value_parser = parse_size)]
-        max_size: u64,
+        #[usage(long = "max-size", value_name = "SIZE")]
+        max_size: CacheSize,
 
         /// Report what would be reclaimed without deleting anything.
-        #[arg(long)]
+        #[usage(long)]
         dry_run: bool,
     },
 
     /// Read and write content-addressed blobs.
-    #[command(arg_required_else_help = true)]
     Blob {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         cmd: Option<CacheBlobCmd>,
     },
 
     /// Read and write cached action results.
-    #[command(arg_required_else_help = true)]
     Action {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         cmd: Option<CacheActionCmd>,
     },
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommands)]
 pub enum CacheBlobCmd {
     /// Store bytes from a file or stdin and print their BLAKE3 digest.
     Put {
@@ -54,11 +93,10 @@ pub enum CacheBlobCmd {
     /// Fetch blob bytes by content digest.
     Get {
         /// Blob digest to fetch.
-        #[arg(value_parser = parse_digest)]
         digest: Digest,
 
         /// File to write. Defaults to stdout; use `-` for stdout.
-        #[arg(short, long)]
+        #[usage(short, long)]
         output: Option<PathBuf>,
     },
 
@@ -67,38 +105,31 @@ pub enum CacheBlobCmd {
     /// the structured output.
     Exists {
         /// Blob digest to probe.
-        #[arg(value_parser = parse_digest)]
         digest: Digest,
     },
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommands)]
 pub enum CacheActionCmd {
     /// Fetch an action result.
     ///
     /// Identify the action either by passing its digest directly, or
     /// by declaring its inputs with `--input`; the same declaration
     /// must be used on `put` to write under the same key.
-    #[command(group(
-        ArgGroup::new("action_key")
-            .required(true)
-            .args(["action", "inputs"])
-            .multiple(false)
-    ))]
     Get {
         /// Pre-computed action digest.
-        #[arg(value_parser = parse_digest)]
+        #[usage(conflicts = "inputs")]
         action: Option<Digest>,
 
         /// Input spec (see `cache hash` for the grammar). Repeatable;
         /// inputs are hashed in order and combined into the action
         /// digest.
-        #[arg(long = "input", value_name = "SPEC")]
+        #[usage(long = "input", value_name = "SPEC", conflicts = "action")]
         inputs: Vec<String>,
 
         /// Exit 0 only when there is a hit AND the recorded exit code
         /// is 0. On miss or on a cached failure, exit non-zero.
-        #[arg(long)]
+        #[usage(long)]
         if_success: bool,
     },
 
@@ -107,43 +138,36 @@ pub enum CacheActionCmd {
     /// Identify the action either by passing its digest directly, or
     /// by declaring its inputs with `--input`; the same declaration
     /// can be used on `get` to read back the result.
-    #[command(group(
-        ArgGroup::new("action_key")
-            .required(true)
-            .args(["action", "inputs"])
-            .multiple(false)
-    ))]
     Put {
         /// Pre-computed action digest.
-        #[arg(value_parser = parse_digest)]
+        #[usage(conflicts = "inputs")]
         action: Option<Digest>,
 
         /// Input spec (see `cache hash` for the grammar). Repeatable.
-        #[arg(long = "input", value_name = "SPEC")]
+        #[usage(long = "input", value_name = "SPEC", conflicts = "action")]
         inputs: Vec<String>,
 
         /// Process exit code captured for the action. Defaults to 0
         /// since the common case is recording a success.
-        #[arg(long, default_value_t = 0)]
+        #[usage(long, default = "0")]
         exit_code: i32,
 
         /// Optional blob digest containing captured stdout.
-        #[arg(long, value_parser = parse_digest)]
+        #[usage(long)]
         stdout: Option<Digest>,
 
         /// Optional blob digest containing captured stderr.
-        #[arg(long, value_parser = parse_digest)]
+        #[usage(long)]
         stderr: Option<Digest>,
 
         /// Declared output as `workspace/path=blob_digest`. Repeatable.
-        #[arg(long = "output", value_parser = parse_output_digest)]
-        outputs: Vec<(String, Digest)>,
+        #[usage(long = "output")]
+        outputs: Vec<OutputDigest>,
     },
 
     /// Delete one cached action result.
     Forget {
         /// Action digest to remove.
-        #[arg(value_parser = parse_digest)]
         action: Digest,
     },
 }
@@ -191,10 +215,6 @@ impl CacheActionCmd {
     }
 }
 
-fn parse_digest(raw: &str) -> std::result::Result<Digest, String> {
-    Digest::from_hex(raw).ok_or_else(|| "expected a 64-character lowercase BLAKE3 digest".into())
-}
-
 /// Parse a byte size with an optional decimal (KB/MB/GB/TB, powers of
 /// 1000) or binary (KiB/MiB/GiB/TiB, powers of 1024) suffix. A bare
 /// number, or a `B` suffix, is bytes. Case-insensitive; surrounding
@@ -231,56 +251,66 @@ fn parse_size(raw: &str) -> std::result::Result<u64, String> {
         .ok_or_else(|| format!("`{raw}` overflows a 64-bit byte count"))
 }
 
-fn parse_output_digest(raw: &str) -> std::result::Result<(String, Digest), String> {
-    let (path, digest) = raw
-        .split_once('=')
-        .ok_or_else(|| "expected workspace/path=blob_digest".to_string())?;
-    if path.is_empty() {
-        return Err("output path must not be empty".into());
-    }
-    Ok((path.to_string(), parse_digest(digest)?))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::parse_size;
+    use std::str::FromStr;
+
+    use super::CacheSize;
 
     #[test]
     fn parses_bare_bytes_and_b_suffix() {
-        assert_eq!(parse_size("0").unwrap(), 0);
-        assert_eq!(parse_size("1024").unwrap(), 1024);
-        assert_eq!(parse_size("512B").unwrap(), 512);
+        assert_eq!(CacheSize::from_str("0").unwrap().bytes(), 0);
+        assert_eq!(CacheSize::from_str("1024").unwrap().bytes(), 1024);
+        assert_eq!(CacheSize::from_str("512B").unwrap().bytes(), 512);
     }
 
     #[test]
     fn parses_decimal_and_binary_suffixes() {
-        assert_eq!(parse_size("500MB").unwrap(), 500_000_000);
-        assert_eq!(parse_size("2GiB").unwrap(), 2 * 1024 * 1024 * 1024);
-        assert_eq!(parse_size("1TB").unwrap(), 1_000_000_000_000);
+        assert_eq!(CacheSize::from_str("500MB").unwrap().bytes(), 500_000_000);
+        assert_eq!(
+            CacheSize::from_str("2GiB").unwrap().bytes(),
+            2 * 1024 * 1024 * 1024
+        );
+        assert_eq!(
+            CacheSize::from_str("1TB").unwrap().bytes(),
+            1_000_000_000_000
+        );
     }
 
     #[test]
     fn is_case_insensitive_and_allows_a_space_before_the_unit() {
-        assert_eq!(parse_size("750 mib").unwrap(), 750 * 1024 * 1024);
-        assert_eq!(parse_size("  4gb ").unwrap(), 4_000_000_000);
+        assert_eq!(
+            CacheSize::from_str("750 mib").unwrap().bytes(),
+            750 * 1024 * 1024
+        );
+        assert_eq!(
+            CacheSize::from_str("  4gb ").unwrap().bytes(),
+            4_000_000_000
+        );
     }
 
     #[test]
     fn short_binary_aliases_match_their_long_forms() {
-        assert_eq!(parse_size("3g").unwrap(), parse_size("3GiB").unwrap());
-        assert_eq!(parse_size("8k").unwrap(), parse_size("8KiB").unwrap());
+        assert_eq!(
+            CacheSize::from_str("3g").unwrap().bytes(),
+            CacheSize::from_str("3GiB").unwrap().bytes()
+        );
+        assert_eq!(
+            CacheSize::from_str("8k").unwrap().bytes(),
+            CacheSize::from_str("8KiB").unwrap().bytes()
+        );
     }
 
     #[test]
     fn rejects_garbage_and_unknown_units() {
-        assert!(parse_size("").is_err());
-        assert!(parse_size("MB").is_err());
-        assert!(parse_size("12ZB").is_err());
-        assert!(parse_size("abc").is_err());
+        assert!(CacheSize::from_str("").is_err());
+        assert!(CacheSize::from_str("MB").is_err());
+        assert!(CacheSize::from_str("12ZB").is_err());
+        assert!(CacheSize::from_str("abc").is_err());
     }
 
     #[test]
     fn rejects_overflow() {
-        assert!(parse_size("99999999999999999999TiB").is_err());
+        assert!(CacheSize::from_str("99999999999999999999TiB").is_err());
     }
 }

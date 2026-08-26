@@ -1,9 +1,9 @@
-//! CLI argument parsing - the `clap` types and the small helpers they use.
+//! Command-line argument parsing and its small helper types.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::str::FromStr;
 
-use clap::{Parser, Subcommand, ValueEnum};
 use once_core::{LintSeverity, NetworkPolicy, SandboxMode, WorkspacePath};
 
 mod auth;
@@ -15,6 +15,7 @@ mod runtime;
 mod toolchain;
 
 pub use auth::AuthCmd;
+pub(crate) use cache::OutputDigest;
 pub use cache::{CacheActionCmd, CacheBlobCmd, CacheCmd};
 pub use edit::EditCmd;
 pub use native::NativeCmd;
@@ -31,7 +32,7 @@ pub const CACHE_DIR: &str = ".once";
 /// (`cache stats`, `run`, `exec` trailers). `human` is the
 /// readable default; `json` and `toon` let agents and scripts consume
 /// output without scraping prose.
-#[derive(Copy, Clone, Debug, ValueEnum, Default, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, usage::ValueEnum, Default, PartialEq, Eq)]
 pub enum Format {
     #[default]
     Human,
@@ -76,51 +77,104 @@ pub const CLI_VERSION: &str = match option_env!("ONCE_VERSION") {
     None => env!("CARGO_PKG_VERSION"),
 };
 
-#[derive(Parser)]
-#[command(
-    name = "once",
+/// Map a subprocess exit code to a command-line interface [`ExitCode`].
+///
+/// `Command::status().code()` returns `None` when the child was killed
+/// by a signal; we surface that as 255 (the lowest 8 bits of -1) which
+/// is what most build tools do. We do not attempt the shell convention
+/// of `128 + signo` since we don't have the signal number on stable
+/// Rust without `std::os::unix`-specific code, and pretending otherwise
+/// would be misleading.
+#[must_use]
+pub fn exit_from(code: i32) -> ExitCode {
+    let clamped = u8::try_from(code & 0xff).unwrap_or(1);
+    ExitCode::from(clamped)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MemoryLimit(u64);
+
+impl MemoryLimit {
+    pub(crate) const fn bytes(self) -> u64 {
+        self.0
+    }
+}
+
+impl FromStr for MemoryLimit {
+    type Err = String;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        parse_byte_size(raw).map(Self)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct EnvironmentAssignment(String, String);
+
+impl EnvironmentAssignment {
+    pub(crate) fn into_inner(self) -> (String, String) {
+        (self.0, self.1)
+    }
+}
+
+impl FromStr for EnvironmentAssignment {
+    type Err = String;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        let (key, value) = raw
+            .split_once('=')
+            .ok_or_else(|| format!("expected KEY=VALUE, got `{raw}`"))?;
+        Ok(Self(key.to_string(), value.to_string()))
+    }
+}
+
+#[derive(usage::Cli)]
+#[usage(
+    bin = "once",
     version = CLI_VERSION,
     about = "Graph-aware, cacheable, remotely-executable repository automation",
-    arg_required_else_help = true
+    arg_required_else_help = true,
+    unknown_flags = "error",
+    args_override_self = false
 )]
 pub struct Cli {
     /// Project root. Defaults to the current directory; the cache
     /// lives under `<project>/.once/`. Mirrors `make -C`.
-    #[arg(short = 'C', long = "directory", global = true, value_name = "DIR")]
+    #[usage(short = 'C', long = "directory", global = true, value_name = "DIR")]
     pub directory: Option<PathBuf>,
 
     /// Output format for Once's structured data (`cache
     /// stats`, `run`/`exec` trailers). Defaults to a human-readable
     /// rendering; pass `json` or `toon` to get machine-parseable
     /// output for scripting and for agent consumers.
-    #[arg(long, global = true, value_enum, default_value_t = Format::Human)]
+    #[usage(long, global = true, value_enum, default = "human")]
     pub format: Format,
 
     /// Increase log verbosity. Repeat for more (-v: info, -vv: debug,
     /// -vvv: trace). Overridden by `RUST_LOG`.
-    #[arg(short, long, action = clap::ArgAction::Count, global = true)]
+    #[usage(short, long, count, global = true)]
     pub verbose: u8,
 
     /// Suppress human-mode success and progress trailers. Errors and the structured
     /// envelope of `--format json`/`toon` still print. Mirrors the
     /// `-q` flag of common build tools.
-    #[arg(short = 'q', long, global = true)]
+    #[usage(short = 'q', long, global = true)]
     pub quiet: bool,
 
     /// Print the command surface at the current command depth.
-    #[arg(long, global = true)]
+    #[usage(long, global = true)]
     pub list: bool,
 
     /// Maximum memory scheduling budget for local actions.
     /// Defaults to two thirds of the memory visible to the host or container.
-    #[arg(long, global = true, value_name = "SIZE", value_parser = parse_byte_size)]
-    pub memory_limit: Option<u64>,
+    #[usage(long, global = true, value_name = "SIZE")]
+    pub(crate) memory_limit: Option<MemoryLimit>,
 
-    #[command(subcommand)]
+    #[usage(subcommand)]
     pub command: Option<Cmd>,
 }
 
-#[derive(Subcommand)]
+#[derive(usage::Subcommands)]
 pub enum Cmd {
     /// Build a declared target.
     ///
@@ -131,10 +185,9 @@ pub enum Cmd {
     /// else runs and lands its declared outputs in
     /// `<workspace>/.once/out/<target>/`. Use `once query targets` to
     /// list available ids.
-    #[command(arg_required_else_help = true)]
     Build {
         /// Local filesystem sandbox policy for command actions.
-        #[arg(long, value_parser = parse_sandbox_mode, default_value = "off")]
+        #[usage(long, default = "off")]
         sandbox: SandboxMode,
 
         /// Override the workspace build configuration. Recognized keys are
@@ -142,11 +195,10 @@ pub enum Cmd {
         /// Targets configured with `select` resolve against the merged
         /// configuration, and their outputs are scoped so different values
         /// never collide.
-        #[arg(long, value_name = "KEY=VALUE")]
+        #[usage(long, value_name = "KEY=VALUE")]
         config: Vec<String>,
 
         /// Target id, such as `services/api/Api` or `./Api`.
-        #[arg(required_unless_present = "list")]
         target: Option<String>,
     },
 
@@ -154,22 +206,20 @@ pub enum Cmd {
     ///
     /// Executes the target's `lint` capability, normalizes its report,
     /// and returns a failing status when a finding meets `--fail-on`.
-    #[command(arg_required_else_help = true)]
     Lint {
         /// Local filesystem sandbox policy for command actions.
-        #[arg(long, value_parser = parse_sandbox_mode, default_value = "off")]
+        #[usage(long, default = "off")]
         sandbox: SandboxMode,
 
         /// Override the workspace build configuration. See `once build --config`.
-        #[arg(long, value_name = "KEY=VALUE")]
+        #[usage(long, value_name = "KEY=VALUE")]
         config: Vec<String>,
 
         /// Lowest finding severity that makes this command fail.
-        #[arg(long, value_parser = parse_lint_severity, default_value = "warning")]
+        #[usage(long, default = "warning")]
         fail_on: LintSeverity,
 
         /// Target id, such as `quality/python` or `./python`.
-        #[arg(required_unless_present = "list")]
         target: Option<String>,
     },
 
@@ -178,43 +228,41 @@ pub enum Cmd {
     /// Resolves the target id against the workspace graph and executes
     /// its `run` capability through the action cache. Use `--remote`
     /// to ask a compute provider to execute the command.
-    #[command(arg_required_else_help = true)]
     Run {
         /// Local filesystem sandbox policy for command actions.
-        #[arg(long, value_parser = parse_sandbox_mode, default_value = "off")]
+        #[usage(long, default = "off")]
         sandbox: SandboxMode,
 
         /// Override the workspace build configuration. See `once build --config`.
-        #[arg(long, value_name = "KEY=VALUE")]
+        #[usage(long, value_name = "KEY=VALUE")]
         config: Vec<String>,
 
         /// Ask graph target kinds to open a visible runtime interface when supported.
-        #[arg(long)]
+        #[usage(long)]
         visible: bool,
 
         /// Serve a local JSON-RPC runtime control socket for this run.
-        #[arg(long)]
+        #[usage(long)]
         runtime_rpc: bool,
 
         /// Runtime RPC socket path. Defaults to
         /// `.once/runtime/<session>/control.sock`.
-        #[arg(long)]
+        #[usage(long)]
         runtime_rpc_socket: Option<PathBuf>,
 
         /// Run the target's action on a compute provider.
-        #[arg(long)]
+        #[usage(long)]
         remote: bool,
 
         /// Compute provider used with --remote. Defaults to the configured execution provider.
-        #[arg(long, value_name = "PROVIDER")]
+        #[usage(long, value_name = "PROVIDER")]
         compute: Option<String>,
 
         /// Target id, e.g. `examples/hello/hello` or `./hello`.
-        #[arg(required_unless_present = "list")]
         target: Option<String>,
 
         /// Target-kind-specific arguments supplied to the generic run capability.
-        #[arg(last = true, value_name = "ARG")]
+        #[usage(double_dash = "required", value_name = "ARG")]
         arguments: Vec<String>,
     },
 
@@ -226,60 +274,52 @@ pub enum Cmd {
     /// With `--changed-path` or `--all`, stable target batches are pulled
     /// from a duration-informed dynamic queue. `--jobs` caps local workers
     /// without changing the plan or batch identities.
-    #[command(arg_required_else_help = true)]
     Test {
         /// Local filesystem sandbox policy for command actions.
-        #[arg(long, value_parser = parse_sandbox_mode, default_value = "off")]
+        #[usage(long, default = "off")]
         sandbox: SandboxMode,
 
         /// Override the workspace build configuration. See `once build --config`.
-        #[arg(long, value_name = "KEY=VALUE")]
+        #[usage(long, value_name = "KEY=VALUE")]
         config: Vec<String>,
 
         /// Maximum number of test batches to execute concurrently.
         /// Defaults to the host's available parallelism for an affected plan.
-        #[arg(short = 'j', long, value_name = "COUNT")]
+        #[usage(short = 'j', long, value_name = "COUNT")]
         jobs: Option<usize>,
 
         /// Run every discovered test target through the dynamic scheduler.
-        #[arg(long, conflicts_with_all = ["target", "changed_paths", "test_unit"])]
+        #[usage(long, conflicts("target", "changed_paths", "test_unit"))]
         all: bool,
 
         /// Select tests affected by a workspace-relative changed path.
         /// Repeat for multiple paths. Cannot be combined with a target id.
-        #[arg(
-            long = "changed-path",
-            value_name = "PATH",
-            action = clap::ArgAction::Append,
-            conflicts_with = "target"
-        )]
+        #[usage(long = "changed-path", value_name = "PATH", conflicts = "target")]
         changed_paths: Vec<String>,
 
         /// Run one current, filterable unit from `once query test-manifest`.
         /// The request is rejected before scheduling when the target does not
         /// support exact filtering or the unit is absent from the manifest.
-        #[arg(
+        #[usage(
             long = "test-unit",
             value_name = "UNIT",
             requires = "target",
-            conflicts_with_all = ["changed_paths", "all", "batch_test_units"]
+            conflicts("changed_paths", "all", "batch_test_units")
         )]
         test_unit: Option<String>,
 
-        #[arg(
+        #[usage(
             long = "batch-test-unit",
             hide = true,
             requires = "target",
-            conflicts_with = "test_unit",
-            action = clap::ArgAction::Append
+            conflicts = "test_unit"
         )]
         batch_test_units: Vec<String>,
 
-        #[arg(long, hide = true, requires = "batch_test_units")]
+        #[usage(long, hide = true, requires = "batch_test_units")]
         test_batch_id: Option<String>,
 
         /// Target id, such as `tests/unit` or `./unit`.
-        #[arg(required_unless_present_any = ["list", "changed_paths", "all"])]
         target: Option<String>,
     },
 
@@ -292,10 +332,9 @@ pub enum Cmd {
     /// stderr, and exit code. With `--script`, or when argv looks like
     /// `<runtime> <script> [args...]` and the file has `once`
     /// headers, Once applies script-aware parsing instead.
-    #[command(arg_required_else_help = true)]
     Exec {
         /// Local filesystem sandbox policy for the command action.
-        #[arg(long, value_parser = parse_sandbox_mode, default_value = "off")]
+        #[usage(long, default = "off")]
         sandbox: SandboxMode,
 
         /// Interpret argv as `<runtime> <script> [args...]` and apply
@@ -303,27 +342,27 @@ pub enum Cmd {
         /// explicit form, for example `once exec --script bash
         /// scripts/build.sh`, and for directly executable scripts via
         /// a shebang such as `#!/usr/bin/env -S once exec -- bash`.
-        #[arg(long)]
+        #[usage(long)]
         script: bool,
 
         /// Pass an environment variable to the command. Repeatable.
-        #[arg(short = 'e', value_parser = parse_env)]
-        env: Vec<(String, String)>,
+        #[usage(short = 'e')]
+        env: Vec<EnvironmentAssignment>,
 
         /// Working directory, relative to the project root. Must not
         /// be absolute or escape the project.
-        #[arg(long, value_parser = parse_workspace_path)]
+        #[usage(long)]
         cwd: Option<WorkspacePath>,
 
         /// Per-action timeout in milliseconds. The child is killed if
         /// it exceeds the deadline.
-        #[arg(long, value_name = "MS")]
+        #[usage(long, value_name = "MS")]
         timeout_ms: Option<u64>,
 
         /// Cache non-zero exits the same way zero exits are cached.
         /// Off by default; transient failures shouldn't poison the
         /// cache.
-        #[arg(long)]
+        #[usage(long)]
         cache_failures: bool,
 
         /// Run the action twice while bypassing the cache and report whether
@@ -331,11 +370,11 @@ pub enum Cmd {
         /// normally. Exits non-zero when any divergence is found. Useful for
         /// catching nondeterministic tools and undeclared inputs that leak
         /// through the cache key.
-        #[arg(long)]
+        #[usage(long)]
         verify_reproducible: bool,
 
         /// Run the command on a compute provider.
-        #[arg(long)]
+        #[usage(long)]
         remote: bool,
 
         /// Whether the command may reach the network. Defaults to
@@ -343,15 +382,15 @@ pub enum Cmd {
         /// behavior). `deny` isolates the command from the network on Linux
         /// so an undeclared fetch fails loudly instead of leaking into the
         /// cache key.
-        #[arg(long, value_parser = parse_network_policy, default_value = "unrestricted")]
+        #[usage(long, default = "unrestricted")]
         network: NetworkPolicy,
 
         /// Compute provider used with --remote. Defaults to the configured execution provider.
-        #[arg(long, value_name = "PROVIDER")]
+        #[usage(long, value_name = "PROVIDER")]
         compute: Option<String>,
 
         /// Command and arguments. Use `--` to separate from once flags.
-        #[arg(trailing_var_arg = true, required_unless_present = "list")]
+        #[usage(trailing_var_arg = true)]
         argv: Vec<String>,
     },
 
@@ -364,9 +403,8 @@ pub enum Cmd {
     /// reproducibility checks, and external tooling. Useful for
     /// answering "did this run hit the cache?" without scraping
     /// command output.
-    #[command(arg_required_else_help = true)]
     Cache {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         cmd: Option<CacheCmd>,
     },
 
@@ -378,9 +416,8 @@ pub enum Cmd {
     /// in the OS keychain; `auth logout` drops the stored token. The
     /// cache provider configuration itself lives in workspace
     /// `once.toml`.
-    #[command(arg_required_else_help = true)]
     Auth {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         cmd: Option<AuthCmd>,
     },
 
@@ -391,9 +428,8 @@ pub enum Cmd {
     /// script adapters or graph target kinds. Pair with `once query schema`
     /// when debugging "why did the cache miss?" questions where the
     /// toolchain identity is suspect.
-    #[command(arg_required_else_help = true)]
     Toolchain {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         cmd: Option<ToolchainCmd>,
     },
 
@@ -442,12 +478,12 @@ pub enum Cmd {
     /// String literals can be quoted with single or double quotes and
     /// support `\n`, `\r`, `\t`, `\\`, `\"`, and `\'` escapes. Other
     /// escape forms, including Unicode escapes, are rejected.
-    #[command(arg_required_else_help = true, verbatim_doc_comment)]
+    #[usage(verbatim_doc_comment)]
     Query {
         /// Read-only Cypher-like graph query expression.
-        #[arg(value_name = "QUERY")]
+        #[usage(value_name = "QUERY")]
         expression: Option<String>,
-        #[command(subcommand)]
+        #[usage(subcommand)]
         cmd: Option<QueryCmd>,
     },
 
@@ -460,9 +496,8 @@ pub enum Cmd {
     /// observe or stop a run after the original command has returned.
     /// `runtime rpc` serves a JSON-RPC control socket for a session
     /// that already has runtime metadata.
-    #[command(arg_required_else_help = true)]
     Runtime {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         cmd: Option<RuntimeCmd>,
     },
 
@@ -474,16 +509,14 @@ pub enum Cmd {
     /// structured diagnostics for failed edits. `edit
     /// materialize-example` copies a target kind starter without
     /// printing its file contents and refuses conflicting paths.
-    #[command(arg_required_else_help = true)]
     Edit {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         cmd: Option<EditCmd>,
     },
 
     /// Discover, inspect, and initialize native workspace roots.
-    #[command(arg_required_else_help = true)]
     Native {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         cmd: Option<NativeCmd>,
     },
 
@@ -499,11 +532,11 @@ pub enum Cmd {
         /// Workspace root the agent tools resolve targets against.
         /// Defaults to the value of the global `-C/--directory` flag
         /// (or the current directory).
-        #[arg(long, value_name = "DIR")]
+        #[usage(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
 
         /// Advertise and allow state-changing editing and execution tools.
-        #[arg(long)]
+        #[usage(long)]
         allow_run: bool,
     },
 
@@ -511,15 +544,15 @@ pub enum Cmd {
     /// from `--help` because it is a documentation build hook, not a
     /// user-facing verb. Drives `docs/reference/cli/*.md` so the
     /// website's flag and synopsis sections never drift from the
-    /// real clap definitions.
-    #[command(hide = true, arg_required_else_help = true)]
+    /// real command declarations.
+    #[usage(hide = true)]
     Reference {
         /// Directory to emit per-subcommand markdown files into.
-        #[arg(long, value_name = "DIR")]
+        #[usage(long, value_name = "DIR")]
         out: PathBuf,
     },
 
-    #[command(name = "__change-tracker", hide = true)]
+    #[usage(name = "__change-tracker", hide = true)]
     ChangeTracker,
 }
 
@@ -528,6 +561,45 @@ impl Cli {
         self.command
             .as_ref()
             .map_or_else(Vec::new, Cmd::surface_path)
+    }
+
+    pub(crate) fn incomplete_command_help_path(&self) -> Option<&'static [&'static str]> {
+        if self.list {
+            return None;
+        }
+
+        match self.command.as_ref()? {
+            Cmd::Build { target: None, .. } => Some(&["build"]),
+            Cmd::Lint { target: None, .. } => Some(&["lint"]),
+            Cmd::Run { target: None, .. } => Some(&["run"]),
+            Cmd::Test {
+                target: None,
+                changed_paths,
+                all: false,
+                ..
+            } if changed_paths.is_empty() => Some(&["test"]),
+            Cmd::Exec { argv, .. } if argv.is_empty() => Some(&["exec"]),
+            Cmd::Cache { cmd: None } => Some(&["cache"]),
+            Cmd::Cache {
+                cmd: Some(CacheCmd::Blob { cmd: None }),
+            } => Some(&["cache", "blob"]),
+            Cmd::Cache {
+                cmd: Some(CacheCmd::Action { cmd: None }),
+            } => Some(&["cache", "action"]),
+            Cmd::Auth { cmd: None } => Some(&["auth"]),
+            Cmd::Toolchain { cmd: None } => Some(&["toolchain"]),
+            Cmd::Query {
+                expression: None,
+                cmd: None,
+            } => Some(&["query"]),
+            Cmd::Runtime { cmd: None } => Some(&["runtime"]),
+            Cmd::Runtime {
+                cmd: Some(RuntimeCmd::Start { target: None }),
+            } => Some(&["runtime", "start"]),
+            Cmd::Edit { cmd: None } => Some(&["edit"]),
+            Cmd::Native { cmd: None } => Some(&["native"]),
+            _ => None,
+        }
     }
 }
 
@@ -595,36 +667,6 @@ impl Cmd {
     }
 }
 
-fn parse_env(raw: &str) -> std::result::Result<(String, String), String> {
-    let (k, v) = raw
-        .split_once('=')
-        .ok_or_else(|| format!("expected KEY=VALUE, got `{raw}`"))?;
-    Ok((k.to_string(), v.to_string()))
-}
-
-fn parse_workspace_path(raw: &str) -> std::result::Result<WorkspacePath, String> {
-    WorkspacePath::try_from(raw).map_err(|e| e.to_string())
-}
-
-fn parse_sandbox_mode(raw: &str) -> std::result::Result<SandboxMode, String> {
-    raw.parse()
-}
-
-fn parse_network_policy(raw: &str) -> std::result::Result<NetworkPolicy, String> {
-    raw.parse()
-}
-
-fn parse_lint_severity(raw: &str) -> std::result::Result<LintSeverity, String> {
-    match raw {
-        "note" => Ok(LintSeverity::Note),
-        "warning" => Ok(LintSeverity::Warning),
-        "error" => Ok(LintSeverity::Error),
-        _ => Err(format!(
-            "expected `note`, `warning`, or `error`, got `{raw}`"
-        )),
-    }
-}
-
 fn parse_byte_size(raw: &str) -> std::result::Result<u64, String> {
     let value = raw.trim();
     let digit_count = value.bytes().take_while(u8::is_ascii_digit).count();
@@ -655,23 +697,16 @@ fn parse_byte_size(raw: &str) -> std::result::Result<u64, String> {
         .ok_or_else(|| format!("byte size `{raw}` is too large"))
 }
 
-/// Map a subprocess exit code to a CLI [`ExitCode`].
-///
-/// `Command::status().code()` returns `None` when the child was killed
-/// by a signal; we surface that as 255 (the lowest 8 bits of -1) which
-/// is what most build tools do. We do not attempt the shell convention
-/// of `128 + signo` since we don't have the signal number on stable
-/// Rust without `std::os::unix`-specific code, and pretending otherwise
-/// would be misleading.
-#[must_use]
-pub fn exit_from(code: i32) -> ExitCode {
-    let clamped = u8::try_from(code & 0xff).unwrap_or(1);
-    ExitCode::from(clamped)
-}
-
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
+
     use super::*;
+
+    fn parse(argv: &[&str]) -> Cli {
+        let argv = argv.iter().map(OsStr::new).collect::<Vec<_>>();
+        Cli::try_parse_from(&argv).unwrap()
+    }
 
     #[test]
     fn output_show_human_trailers_only_when_human_and_not_quiet() {
@@ -686,21 +721,24 @@ mod tests {
 
     #[test]
     fn byte_sizes_accept_decimal_binary_and_raw_values() {
-        assert_eq!(parse_byte_size("1024").unwrap(), 1024);
-        assert_eq!(parse_byte_size("2MB").unwrap(), 2_000_000);
-        assert_eq!(parse_byte_size("2 MiB").unwrap(), 2 * 1024 * 1024);
+        assert_eq!(MemoryLimit::from_str("1024").unwrap().bytes(), 1024);
+        assert_eq!(MemoryLimit::from_str("2MB").unwrap().bytes(), 2_000_000);
+        assert_eq!(
+            MemoryLimit::from_str("2 MiB").unwrap().bytes(),
+            2 * 1024 * 1024
+        );
     }
 
     #[test]
     fn byte_sizes_reject_zero_unknown_suffixes_and_overflow() {
-        assert!(parse_byte_size("0").is_err());
-        assert!(parse_byte_size("1XB").is_err());
-        assert!(parse_byte_size("18446744073709551615TiB").is_err());
+        assert!(MemoryLimit::from_str("0").is_err());
+        assert!(MemoryLimit::from_str("1XB").is_err());
+        assert!(MemoryLimit::from_str("18446744073709551615TiB").is_err());
     }
 
     #[test]
     fn run_accepts_target_arguments_after_separator() {
-        let cli = Cli::try_parse_from([
+        let cli = parse(&[
             "once",
             "run",
             "server/application_dev",
@@ -708,8 +746,7 @@ mod tests {
             "phx.server",
             "--port",
             "4001",
-        ])
-        .unwrap();
+        ]);
 
         let Some(Cmd::Run {
             target, arguments, ..
@@ -719,5 +756,32 @@ mod tests {
         };
         assert_eq!(target.as_deref(), Some("server/application_dev"));
         assert_eq!(arguments, ["phx.server", "--port", "4001"]);
+    }
+
+    #[test]
+    fn rejects_unknown_options() {
+        let argv = ["once", "build", "target", "--unrecognized"].map(OsStr::new);
+
+        assert!(Cli::try_parse_from(&argv).is_err());
+    }
+
+    #[test]
+    fn identifies_commands_that_need_their_help_rendered() {
+        assert_eq!(
+            parse(&["once", "build"]).incomplete_command_help_path(),
+            Some(&["build"][..])
+        );
+        assert_eq!(
+            parse(&["once", "cache", "blob"]).incomplete_command_help_path(),
+            Some(&["cache", "blob"][..])
+        );
+        assert_eq!(
+            parse(&["once", "test", "--all"]).incomplete_command_help_path(),
+            None
+        );
+        assert_eq!(
+            parse(&["once", "run", "--list"]).incomplete_command_help_path(),
+            None
+        );
     }
 }
