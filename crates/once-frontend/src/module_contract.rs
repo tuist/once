@@ -348,6 +348,10 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
                 "Declare a deterministic archive from explicit file, directory, and tree entries with fixed metadata.",
             ),
             entry(
+                "download_and_extract(url, sha256, destination, authorization_env = None, identifier = None, cacheable = True)",
+                "Download a checksum-pinned ZIP archive into a cacheable directory output. Authentication, when needed, is read from the named environment variable only while the action executes.",
+            ),
+            entry(
                 "cmd_args(args, use_arg_file = None)",
                 "Build a structured argument list, optionally backed by an argument file.",
             ),

@@ -263,6 +263,20 @@ pub enum Action {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         input_digest: Option<Digest>,
     },
+    /// Downloads a checksum-pinned ZIP archive and expands it into a directory.
+    ///
+    /// Authentication is deliberately an environment variable name, never a
+    /// header value, so action declarations, cache keys, logs, and evidence do
+    /// not contain credentials.
+    DownloadAndExtract {
+        url: String,
+        sha256: String,
+        destination: WorkspacePath,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        authorization_env: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_digest: Option<Digest>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -372,7 +386,8 @@ impl Action {
             | Action::MaterializeHostTree { .. }
             | Action::PreparePath { .. }
             | Action::WriteTreeDigest { .. }
-            | Action::WriteArchive { .. } => &DEFAULT_RESOURCE_REQUEST,
+            | Action::WriteArchive { .. }
+            | Action::DownloadAndExtract { .. } => &DEFAULT_RESOURCE_REQUEST,
         }
     }
 
@@ -386,7 +401,8 @@ impl Action {
             | Action::MaterializeHostTree { input_digest, .. }
             | Action::PreparePath { input_digest, .. }
             | Action::WriteTreeDigest { input_digest, .. }
-            | Action::WriteArchive { input_digest, .. } => *input_digest,
+            | Action::WriteArchive { input_digest, .. }
+            | Action::DownloadAndExtract { input_digest, .. } => *input_digest,
         }
     }
 }

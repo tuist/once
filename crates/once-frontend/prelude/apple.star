@@ -2108,6 +2108,26 @@ def _apple_xcframework_platform(platform):
         return "xros"
     return platform
 
+def _apple_xcframework_module_name(modulemaps, fallback):
+    for modulemap in modulemaps:
+        for raw_line in host_file_read(workspace_root() + "/" + modulemap).split("\n"):
+            parts = raw_line.strip().replace("{", " ").split()
+            if len(parts) >= 2 and parts[0] == "module":
+                return parts[1]
+            if len(parts) >= 3 and parts[0] == "framework" and parts[1] == "module":
+                return parts[2]
+            if len(parts) >= 3 and parts[0] == "explicit" and parts[1] == "module":
+                return parts[2]
+    return fallback
+
+def _apple_xcframework_static_library_name(path):
+    name = _basename(path)
+    if name.endswith(".a"):
+        name = name[:len(name) - 2]
+    if name.startswith("lib"):
+        name = name[3:]
+    return name
+
 def _apple_xcframework_import_impl(ctx):
     attrs = _resolve_attrs(ctx, ctx["attr"], ctx["label"]["id"], ["bundle"])
     bundle = attrs.get("bundle") or ""
@@ -2136,26 +2156,65 @@ def _apple_xcframework_import_impl(ctx):
         break
     if selected == None:
         fail(ctx["label"]["id"] + ": XCFramework `" + bundle + "` has no " + wanted_platform + " " + wanted_variant + " slice for " + wanted_arch)
-    framework = bundle + "/" + selected["LibraryIdentifier"] + "/" + selected["LibraryPath"]
-    absolute_framework = workspace_root() + "/" + framework
-    files = [path[len(workspace_root()) + 1:] for path in host_command([host_which("find"), absolute_framework, "-type", "f"]).split("\n") if path]
-    if not files:
-        fail(ctx["label"]["id"] + ": selected XCFramework slice is missing `" + framework + "`")
-    module_name = attrs.get("module_name") or _basename(selected["LibraryPath"]).replace(".framework", "")
-    binary = framework + "/" + module_name
-    linkage = "static" if "current ar archive" in host_command([host_which("file"), workspace_root() + "/" + binary]) else "dynamic"
-    own_bundle = _apple_framework_bundle(framework, module_name, files, ctx["label"]["id"])
+    library_path = selected.get("LibraryPath") or selected.get("BinaryPath") or ""
+    if not library_path:
+        fail(ctx["label"]["id"] + ": selected XCFramework slice has no library path")
+    slice_path = bundle + "/" + selected["LibraryIdentifier"]
+    library = slice_path + "/" + library_path
+    binary_path = selected.get("BinaryPath") or ""
+    if not binary_path:
+        binary_path = library_path + "/" + _basename(library_path).replace(".framework", "") if library_path.endswith(".framework") else library_path
+    binary = slice_path + "/" + binary_path
+    absolute_slice = workspace_root() + "/" + slice_path
+    files = [path[len(workspace_root()) + 1:] for path in host_command([host_which("find"), absolute_slice, "-type", "f"]).split("\n") if path]
+    is_framework = library_path.endswith(".framework")
+    expected_binary = binary if is_framework else library
+    if not files or expected_binary not in files:
+        fail(ctx["label"]["id"] + ": selected XCFramework slice is missing `" + library + "`")
+    linkage = "static" if library_path.endswith(".a") or "current ar archive" in host_command([host_which("file"), workspace_root() + "/" + binary]) else "dynamic"
+    if not is_framework:
+        headers_path = selected.get("HeadersPath") or ""
+        headers_dir = slice_path + "/" + headers_path if headers_path else ""
+        modulemaps = []
+        for path in files:
+            if path.endswith(".modulemap") and (not headers_dir or path.startswith(headers_dir + "/")):
+                modulemaps.append(path)
+        if not modulemaps:
+            for path in files:
+                if path.endswith(".modulemap"):
+                    modulemaps.append(path)
+        module_name = attrs.get("module_name") or _apple_xcframework_module_name(modulemaps, _apple_xcframework_static_library_name(library_path))
+        return {
+            "label_id": ctx["label"]["id"],
+            "framework_path": library,
+            "framework_module_name": module_name,
+            "framework_files": files,
+            "transitive_exported_header_dirs": [headers_dir] if headers_dir else [],
+            "transitive_modulemaps": modulemaps,
+            "transitive_archives": [binary] if linkage == "static" else [],
+            "transitive_framework_search_dirs": [],
+            "transitive_framework_files": files,
+            "transitive_link_framework_bundles": [],
+            "transitive_framework_bundles": [],
+            "transitive_frameworks": [],
+            "transitive_sdk_frameworks": [],
+            "transitive_weak_sdk_frameworks": [],
+            "transitive_sdk_dylibs": [],
+            "transitive_linkopts": [],
+        }
+    module_name = attrs.get("module_name") or _basename(library_path).replace(".framework", "")
+    own_bundle = _apple_framework_bundle(library, module_name, files, ctx["label"]["id"])
     own_bundle["linkage"] = linkage
     return {
         "label_id": ctx["label"]["id"],
-        "framework_path": framework,
+        "framework_path": library,
         "framework_module_name": module_name,
         "framework_files": files,
         "transitive_swiftmodule_dirs": [],
         "transitive_archives": [binary] if linkage == "static" else [],
         "transitive_link_framework_bundles": [own_bundle],
         "transitive_framework_bundles": [] if linkage == "static" else [own_bundle],
-        "transitive_frameworks": [] if linkage == "static" else [framework],
+        "transitive_frameworks": [] if linkage == "static" else [library],
         "transitive_sdk_frameworks": [],
         "transitive_weak_sdk_frameworks": [],
         "transitive_sdk_dylibs": [],
@@ -5806,15 +5865,16 @@ apple_library = target_kind(
 )
 
 apple_xcframework_import = target_kind(
-    docs = "Selects a platform and architecture slice from a prebuilt XCFramework and exposes it as an Apple framework dependency.",
+    docs = "Selects a platform and architecture slice from a prebuilt XCFramework and exposes its framework or static library to Apple targets.",
     impl = _apple_xcframework_import_impl,
     attrs = [
         attr("bundle", "string", required = True, docs = "Workspace-relative `.xcframework` bundle"),
         attr("platform", "string", required = True, docs = "Apple platform whose slice is imported", configurable = False),
         attr("sdk_variant", "string", default = "\"simulator\"", docs = "`simulator` or `device` slice selection", configurable = False),
         attr("arch", "string", docs = "Target architecture. Defaults to the execution host architecture.", configurable = False),
-        attr("module_name", "string", docs = "Framework module name. Defaults to the selected framework bundle name", configurable = False),
+        attr("module_name", "string", docs = "Framework or Clang module name. Defaults to the selected framework bundle name or static library module map", configurable = False),
     ],
+    deps = [dep("deps", ["artifact"], "Optional checksum-pinned archive artifact that materializes the XCFramework before this target is analysed.", max_count = 1)],
     providers = ["apple_linkable", "apple_framework", "apple_bundle"],
     capabilities = [capability("build", ["default", "framework"])],
     examples = [

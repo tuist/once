@@ -1,5 +1,6 @@
 PRELUDE_SOURCES = [
     "common.star",
+    "archive.star",
     "lint.star",
     "apple.star",
     "android.star",
@@ -22,12 +23,13 @@ PRELUDE_SOURCES = [
 ]
 
 PRELUDE_DEPENDENCIES = {
+    "xcode.star": ["apple.star", "archive.star"],
     "react_native.star": ["android.star"],
-    "xcode.star": ["apple.star"],
     "swift_package.star": ["apple.star", "xcode.star"],
 }
 
 PRELUDE_TARGET_KINDS = {
+    "archive.star": ["archive_download"],
     "lint.star": [
         "ruff_lint",
         "golangci_lint",

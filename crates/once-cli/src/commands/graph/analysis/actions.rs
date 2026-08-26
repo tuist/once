@@ -1382,9 +1382,12 @@ async fn run_uncached_action(
         | Action::MaterializeHostTree { .. }
         | Action::PreparePath { .. }
         | Action::WriteTreeDigest { .. }
-        | Action::WriteArchive { .. } => once_core::run_uncached(action, workspace, cache, false)
-            .await
-            .map_err(Into::into),
+        | Action::WriteArchive { .. }
+        | Action::DownloadAndExtract { .. } => {
+            once_core::run_uncached(action, workspace, cache, false)
+                .await
+                .map_err(Into::into)
+        }
     }
 }
 
@@ -1778,6 +1781,7 @@ fn declared_arg_file_format_name(format: DeclaredArgFileFormat) -> &'static str 
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn operation_to_action(operation: DeclaredActionOperation, input_digest: Digest) -> Result<Action> {
     Ok(match operation {
         DeclaredActionOperation::WriteFile { path, bytes } => Action::WriteFile {
@@ -1877,6 +1881,18 @@ fn operation_to_action(operation: DeclaredActionOperation, input_digest: Digest)
             format,
             input_digest,
         )?,
+        DeclaredActionOperation::DownloadAndExtract {
+            url,
+            sha256,
+            destination,
+            authorization_env,
+        } => Action::DownloadAndExtract {
+            url,
+            sha256,
+            destination: workspace_path(&destination, "download_and_extract destination")?,
+            authorization_env,
+            input_digest: Some(input_digest),
+        },
     })
 }
 

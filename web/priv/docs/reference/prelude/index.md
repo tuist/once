@@ -58,6 +58,11 @@ required analyzer is not built in.
 - [`apple_xcframework_import`](/reference/prelude/apple_xcframework_import):
   one platform and architecture slice of a prebuilt XCFramework
 
+## Core target kinds
+
+- [`archive_download`](/reference/prelude/archive_download): checksum-pinned
+  compressed archive materialized as a cacheable directory
+
 ## Xcode target kinds
 
 - [`xcode_workspace`](/reference/prelude/xcode_workspace): existing Xcode

@@ -5,13 +5,16 @@ Prebuilt XCFramework import.
 ## Description
 
 Selects one platform and architecture slice from a prebuilt `.xcframework` and
-exposes it to Apple consumers as a framework dependency. The bundle's
+exposes it to Apple consumers as a framework or static-library dependency. The bundle's
 `Info.plist` is read to find the slice whose supported platform, platform
 variant, and architecture match the requested ones. The selected framework's
 linkage is detected from its binary, so a static slice is linked into the
 consumer while a dynamic slice is linked and embedded.
 
-The bundle is consumed where it sits. Nothing is recompiled.
+The bundle is consumed where it sits. Nothing is recompiled. A static-library
+slice exports its headers and module map to downstream compilation, then links
+its archive into the final consumer. The module name defaults to the selected
+framework name, or to the static-library module map when one is present.
 
 ## Attributes
 
@@ -31,6 +34,10 @@ platform select.
 The target emits `apple_linkable`, `apple_framework`, and `apple_bundle`, so
 applications, frameworks, libraries, and test bundles can depend on it through
 ordinary `deps` entries.
+
+The optional `deps` edge accepts one `artifact` provider. It lets a generated
+`archive_download` dependency materialize a remote bundle before this target is
+analysed.
 
 ## Capabilities
 

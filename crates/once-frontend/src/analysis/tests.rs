@@ -1023,6 +1023,38 @@ fn materialize_host_file_records_a_content_addressed_operation() {
 }
 
 #[test]
+fn download_and_extract_records_a_checksum_pinned_operation() {
+    let tmp = TempDir::new().unwrap();
+    let store = store_for(tmp.path(), "p");
+    let (store, ()) = with_active_store(store, || {
+        run(r#"download_and_extract(
+    "https://downloads.example.test/Vendor.zip",
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ".once/out/p/archive",
+    authorization_env = "VENDOR_AUTHORIZATION",
+    identifier = "vendor-artifact",
+)"#)
+        .unwrap();
+    });
+
+    assert_eq!(store.actions.len(), 1);
+    let action = &store.actions[0];
+    assert_eq!(action.inputs, Vec::<String>::new());
+    assert_eq!(action.outputs, vec![".once/out/p/archive".to_string()]);
+    assert_eq!(action.identifier.as_deref(), Some("vendor-artifact"));
+    assert!(!action.depends_on_prior_actions);
+    assert_eq!(
+        action.operation,
+        Some(DeclaredActionOperation::DownloadAndExtract {
+            url: "https://downloads.example.test/Vendor.zip".to_string(),
+            sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
+            destination: ".once/out/p/archive".to_string(),
+            authorization_env: Some("VENDOR_AUTHORIZATION".to_string()),
+        })
+    );
+}
+
+#[test]
 fn materialize_host_tree_records_a_content_addressed_operation() {
     let tmp = TempDir::new().unwrap();
     let source = tmp.path().join("toolchain");
