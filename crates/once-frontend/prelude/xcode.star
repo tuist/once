@@ -37,18 +37,17 @@ def _xcode_abs(path):
 def _xcode_project_path(ctx):
     configured = ctx["attr"].get("project")
     if configured:
-        return configured
+        package = ctx["label"]["package"]
+        return _xcode_join(package, configured) if package else configured
     candidates = [path for path in glob(["*.xcodeproj/project.pbxproj"]) if _ends_with(path, "/project.pbxproj")]
     if len(candidates) == 0:
         fail(ctx["label"]["id"] + ": no `project` attribute was set and no `*.xcodeproj/project.pbxproj` was found in the package")
     if len(candidates) > 1:
         fail(ctx["label"]["id"] + ": multiple Xcode projects found; set the `project` attribute to one of: " + ", ".join(candidates))
-    # candidates are workspace-relative; trim to package-relative.
-    package = ctx["label"]["package"]
-    relative = candidates[0]
-    if package and relative.startswith(package + "/"):
-        relative = relative[len(package) + 1:]
-    return relative
+    # `glob` always returns workspace-relative paths, including when the
+    # native seed belongs to a nested package. The resolver reads project
+    # files through the workspace root, so keep that coordinate system.
+    return _parent_dir(candidates[0])
 
 def _xcode_is_workspace(path):
     return _ends_with(path, ".xcworkspace") or _ends_with(path, "/contents.xcworkspacedata")
@@ -1017,6 +1016,37 @@ def _xcode_workspace_input_path(path):
         return ""
     return relative
 
+def _xcode_target_input_path(ctx, path):
+    path = _xcode_workspace_input_path(path)
+    package = ctx["label"]["package"]
+    prefix = package + "/" if package else ""
+    if prefix and path.startswith(prefix):
+        return path[len(prefix):]
+    return path
+
+def _xcode_lowered_attrs(ctx, attrs):
+    for key in ["bridging_header", "prefix_header", "modulemap", "info_plist", "entitlements"]:
+        if attrs.get(key):
+            attrs[key] = _xcode_target_input_path(ctx, attrs[key])
+    for key in [
+        "exported_header_dirs",
+        "exported_headers",
+        "private_header_dirs",
+        "modulemap_headers",
+        "auxiliary_modulemaps",
+        "asset_catalogs",
+        "resources",
+        "structured_resources",
+    ]:
+        if attrs.get(key):
+            attrs[key] = [_xcode_target_input_path(ctx, path) for path in attrs[key]]
+    if attrs.get("per_source_clang_flags"):
+        attrs["per_source_clang_flags"] = {
+            _xcode_target_input_path(ctx, path): flags
+            for path, flags in attrs["per_source_clang_flags"].items()
+        }
+    return attrs
+
 def _xcode_script_path(value, subs):
     path = _xcode_resolve_vars(value or "", subs)
     if not path or path.startswith("$("):
@@ -1395,36 +1425,6 @@ def _xcode_swift_package_info(ctx, package_dir, identity = ""):
         "info": info,
     }
 
-def _xcode_acquire_binary_package_artifacts(package):
-    package_path = package.get("path") or ""
-    if not package_path:
-        return
-    package_absolute = _xcode_abs(package_path)
-    mkdir = host_which("mkdir")
-    curl = host_which("curl")
-    ditto = host_which("ditto")
-    shasum = host_which("shasum")
-    for target in package["info"].get("targets") or []:
-        if (target.get("type") or "") != "binary":
-            continue
-        url = target.get("url") or ""
-        checksum = target.get("checksum") or ""
-        name = target.get("name") or ""
-        if not url or not checksum or not name:
-            continue
-        root = package_absolute + "/.once/binary-artifacts"
-        bundle = root + "/" + name + ".xcframework"
-        artifact_bundle = root + "/" + name + ".artifactbundle"
-        if _xcode_host_directory_exists(bundle) or _xcode_host_directory_exists(artifact_bundle):
-            continue
-        host_command([mkdir, "-p", root])
-        archive = root + "/" + name + ".zip"
-        host_command([curl, "--fail", "--location", "--retry", "2", "--output", archive, url])
-        actual = host_command([shasum, "-a", "256", archive]).split(" ")[0]
-        if actual.lower() != checksum.lower():
-            fail("binary package artifact checksum mismatch for `" + name + "`")
-        host_command([ditto, "-x", "-k", archive, root])
-
 def _xcode_local_swift_package_infos(ctx):
     # Package metadata is analysis input only. Compilation remains entirely in
     # Once's Apple target kinds, so resolving an Xcode workspace never invokes
@@ -1435,35 +1435,79 @@ def _xcode_local_swift_package_infos(ctx):
             continue
         package_dir = _parent_dir(manifest)
         info = _xcode_swift_package_info(ctx, package_dir)
-        _xcode_acquire_binary_package_artifacts(info)
         infos.append(info)
     return infos
 
-def _xcode_package_resolved_pins(ctx, project_path):
+def _xcode_workspace_resolved_path(workspace_path):
+    bundle = _parent_dir(workspace_path) if _ends_with(workspace_path, "/contents.xcworkspacedata") else workspace_path
+    return bundle + "/xcshareddata/swiftpm/Package.resolved"
+
+def _xcode_workspace_resolved_candidates():
+    root = _xcode_workspace_root()
+    if not root:
+        return []
+    find = host_which("find")
+    return sorted([
+        _xcode_workspace_relative(path)
+        for path in host_command([find, root, "-type", "f", "-path", "*.xcworkspace/xcshareddata/swiftpm/Package.resolved"]).split("\n")
+        if path
+    ])
+
+def _xcode_resolved_pins_from_path(path):
+    if not path:
+        return {}
+    absolute = _xcode_abs(path)
+    if not host_file_exists(absolute):
+        return {}
+    pins = {}
+    data = json_decode(host_file_read(absolute))
+    for pin in data.get("pins") or (data.get("object") or {}).get("pins") or []:
+        identity = (pin.get("identity") or pin.get("package") or "").lower()
+        if identity:
+            pins[identity] = pin
+    return pins
+
+def _xcode_pins_match_package_refs(pins, package_refs):
+    if not package_refs:
+        return True
+    for ref in package_refs.values():
+        identity = (ref.get("identity") or "").lower()
+        if identity and pins.get(identity):
+            return True
+    return False
+
+def _xcode_package_resolved_pins(ctx, entry_path, project_path, package_refs):
     bundle = project_path
     if _ends_with(bundle, "/project.pbxproj"):
         bundle = _parent_dir(bundle)
-    candidates = [
+    candidates = []
+    if _xcode_is_workspace(entry_path):
+        candidates.append(_xcode_workspace_resolved_path(entry_path))
+    candidates.extend([
         bundle + "/project.xcworkspace/xcshareddata/swiftpm/Package.resolved",
         bundle + "/project.workspace/xcshareddata/swiftpm/Package.resolved",
-    ]
+    ])
+    candidates.extend(_xcode_workspace_resolved_candidates())
+    seen = {}
+    fallback = {}
     for candidate in candidates:
-        absolute = _xcode_abs(candidate)
-        if not host_file_exists(absolute):
+        if candidate in seen:
             continue
-        pins = {}
-        for pin in json_decode(host_file_read(absolute)).get("pins") or []:
-            identity = (pin.get("identity") or "").lower()
-            if identity:
-                pins[identity] = pin
-        return pins
-    return {}
+        seen[candidate] = True
+        pins = _xcode_resolved_pins_from_path(candidate)
+        if not pins:
+            continue
+        if _xcode_pins_match_package_refs(pins, package_refs):
+            return pins
+        if not fallback:
+            fallback = pins
+    return fallback
 
-def _xcode_remote_swift_package_infos(ctx, project_path, package_refs):
+def _xcode_remote_swift_package_infos(ctx, entry_path, project_path, package_refs):
     # The lockfile is authoritative for source-control revisions. Git provides
     # source acquisition only; package manifests are then lowered to Once Apple
     # targets and compiled by Once rather than by Swift Package Manager.
-    pins = _xcode_package_resolved_pins(ctx, project_path)
+    pins = _xcode_package_resolved_pins(ctx, entry_path, project_path, package_refs)
     git = host_which("git")
     root = _xcode_workspace_root() + ".once/xcode-packages"
     infos = []
@@ -1506,23 +1550,12 @@ def _xcode_remote_swift_package_info(ctx, identity, pin, url = ""):
             host_command([git, "-C", absolute, "fetch", "--depth", "1", "origin", revision])
             host_command([git, "-C", absolute, "checkout", "--detach", revision])
     info = _xcode_swift_package_info(ctx, package_dir, identity)
-    _xcode_acquire_binary_package_artifacts(info)
     return info
 
 def _xcode_package_resolved_pins_at(package_path):
     if not package_path:
         return {}
-    resolved = _xcode_abs(package_path + "/Package.resolved")
-    if not host_file_exists(resolved):
-        return {}
-    pins = {}
-    data = json_decode(host_file_read(resolved))
-    entries = data.get("pins") or (data.get("object") or {}).get("pins") or []
-    for pin in entries:
-        identity = (pin.get("identity") or "").lower()
-        if identity:
-            pins[identity] = pin
-    return pins
+    return _xcode_resolved_pins_from_path(package_path + "/Package.resolved")
 
 def _xcode_expand_swift_package_infos(ctx, initial_infos):
     infos = list(initial_infos)
@@ -1646,20 +1679,34 @@ def _xcode_swift_package_target_datamodels(package_path, target):
         return []
     return [_xcode_workspace_relative(path) for path in host_command([host_which("find"), absolute, "-type", "d", "-name", "*.xcdatamodeld"]).split("\n") if path]
 
-def _xcode_swift_package_binary_bundles(package_path, target):
+def _xcode_swift_package_binary_artifact(ctx, package_path, target_id, target):
+    name = target.get("name") or ""
+    url = target.get("url") or ""
+    checksum = target.get("checksum") or ""
+    if name and url and checksum:
+        artifact_target = target_id + "_Artifact"
+        package = ctx["label"].get("package") or ""
+        output = ".once/out/" + ((package + "/") if package else "") + artifact_target + "/archive"
+        return {
+            "target": artifact_target,
+            "bundle": output + "/" + name + ".xcframework",
+            "url": url,
+            "sha256": checksum,
+        }
     target_path = target.get("path") or ""
     if target_path.endswith(".xcframework"):
         candidate = package_path + "/" + target_path
         absolute = _xcode_abs(candidate)
         if _xcode_host_directory_exists(absolute):
-            return [candidate]
+            return {"bundle": candidate}
     root = package_path or "."
     absolute = _xcode_abs(root)
     if not _xcode_host_directory_exists(absolute):
-        return []
-    name = target.get("name") or ""
+        return None
     bundles = [_xcode_workspace_relative(path) for path in host_command([host_which("find"), absolute, "-type", "d", "-name", name + ".xcframework"]).split("\n") if path]
-    return _unique(bundles)
+    if len(bundles) == 1:
+        return {"bundle": bundles[0]}
+    return None
 
 def _xcode_include_flags(paths):
     flags = []
@@ -1881,15 +1928,31 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
                 continue
             target_id = target_ids[identity + "\x1f" + name]
             if target_type == "binary":
-                bundles = _xcode_swift_package_binary_bundles(package_path, target)
-                if len(bundles) == 1:
+                artifact = _xcode_swift_package_binary_artifact(ctx, package_path, target_id, target)
+                if artifact != None:
+                    artifact_target = artifact.get("target") or ""
+                    if artifact_target:
+                        artifact_attrs = {
+                            "url": artifact["url"],
+                            "sha256": artifact["sha256"],
+                        }
+                        authorization_env = ctx["attr"].get("binary_artifact_authorization_env") or ""
+                        if authorization_env:
+                            artifact_attrs["authorization_env"] = authorization_env
+                        specs.append({
+                            "name": artifact_target,
+                            "kind": "archive_download",
+                            "deps": [],
+                            "srcs": [],
+                            "attrs": artifact_attrs,
+                        })
                     specs.append({
                         "name": target_id,
                         "kind": "apple_xcframework_import",
-                        "deps": [],
+                        "deps": ["./" + artifact_target] if artifact_target else [],
                         "srcs": [],
                         "attrs": {
-                            "bundle": bundles[0],
+                            "bundle": artifact["bundle"],
                             "platform": platform,
                             "sdk_variant": sdk_variant,
                         },
@@ -2767,6 +2830,11 @@ def _xcode_test_host_ref(objects, settings, name_map):
 # ---------------------------------------------------------------------------
 
 def _xcode_workspace_resolver(ctx):
+    # `plutil` may be present off macOS, but only Xcode's `xcrun` supplies the
+    # SDK and compiler information this resolver needs. Probe it first so the
+    # generic resolver machinery can surface a structured unavailable-tool
+    # diagnostic instead of executing an incompatible `plutil`.
+    host_which("xcrun")
     entry_path = _xcode_project_path(ctx)
     configuration = ctx["attr"].get("configuration") or "Debug"
 
@@ -2854,7 +2922,7 @@ def _xcode_workspace_resolver(ctx):
         package_refs = _xcode_spm_package_refs(objects)
         package_infos = _xcode_expand_swift_package_infos(
             ctx,
-            local_package_infos + _xcode_remote_swift_package_infos(ctx, project_path, package_refs),
+            local_package_infos + _xcode_remote_swift_package_infos(ctx, entry_path, project_path, package_refs),
         )
         per_target_products = {}
         for target in native_targets:
@@ -3120,11 +3188,13 @@ def _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_
         # whose only input is JavaScript.
         return None
 
+    attrs = _xcode_lowered_attrs(ctx, attrs)
+
     return {
         "name": sanitized,
         "kind": spec_kind,
         "deps": _unique(deps),
-        "srcs": files["sources"],
+        "srcs": [_xcode_target_input_path(ctx, path) for path in files["sources"]],
         "attrs": attrs,
     }
 
@@ -3148,6 +3218,7 @@ xcode_workspace = target_kind(
         attr("configuration", "string", default = "Debug", docs = "Xcode build configuration whose settings drive target lowering.", configurable = False),
         attr("sdk_variant", "string", default = "simulator", docs = "`simulator` or `device` SDK selection applied to lowered Apple targets on non-macOS platforms.", configurable = False),
         attr("xcode_developer_dir", "string", docs = "Optional `DEVELOPER_DIR` override folded into lowered Apple target cache keys.", configurable = False),
+        attr("binary_artifact_authorization_env", "string", docs = "Optional environment-variable name supplying an Authorization header while downloading private binary package artifacts. The variable value is never recorded in the graph or cache.", configurable = False),
         attr("resolver_inputs", "list<string>", default = "[]", docs = "Package-relative text globs supplied to native integration resolution. Defaults to srcs when empty.", configurable = False),
     ],
     resolver = _xcode_workspace_resolver,
@@ -3181,10 +3252,7 @@ xcode = native_project(
     markers = ["*.xcodeproj/project.pbxproj"],
     inputs = ["*.xcodeproj/**/*.xcscheme", "*.xcworkspace/contents.xcworkspacedata", "**/*.xcconfig"],
     exclude = _native_project_generated_dirs() + ["Pods", "Carthage", "DerivedData", "node_modules"],
-    on_match = "stop",
-    # The resolver reads project paths relative to the workspace root, so a seed
-    # is only synthesized for a project checked in beside the workspace root. A
-    # project nested deeper is declared explicitly from the root package.
-    max_depth = 1,
+    on_match = "all",
+    max_depth = 16,
     requires_tools = ["plutil", "xcrun"],
 )

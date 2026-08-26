@@ -48,6 +48,16 @@ pub enum Error {
     InvalidHostFile { reason: String },
     #[error("invalid action contract validation: {reason}")]
     InvalidContractValidation { reason: String },
+    #[error("invalid download-and-extract action: {reason}")]
+    InvalidDownloadAndExtract { reason: String },
+    #[error("download authorization environment variable `{name}` is not set")]
+    DownloadAuthorizationMissing { name: String },
+    #[error("download checksum mismatch for `{url}`: expected {expected}, got {actual}")]
+    DownloadChecksumMismatch {
+        url: String,
+        expected: String,
+        actual: String,
+    },
     #[error("host file `{path}` changed after analysis: expected digest {expected}, got {actual}")]
     HostFileDigestMismatch {
         path: String,

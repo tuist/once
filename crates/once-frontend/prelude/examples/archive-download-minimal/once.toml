@@ -1,0 +1,7 @@
+[[target]]
+name = "OnceSource"
+kind = "archive_download"
+
+[target.attrs]
+url = "https://codeload.github.com/tuist/once/zip/a63fc4d5d34a59845e2a7ad0bfb3d2adc1fc7c28"
+sha256 = "53c8832dda94ef6a7f75a5f57f49acd79e2b81c9cf86e2105dddf0f6ad2ba8b9"

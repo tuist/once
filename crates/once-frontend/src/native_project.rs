@@ -305,10 +305,10 @@ fn native_project_schema(name: String, dict: &DictRef<'_>) -> Result<NativeProje
     let exclude = string_list(dict, "exclude")?;
     let input_exclude = string_list(dict, "input_exclude")?;
     let on_match = required_string(dict, "on_match")?;
-    if on_match != "stop" && on_match != "descend" {
+    if on_match != "stop" && on_match != "descend" && on_match != "all" {
         return Err(native_project_error(
             &name,
-            format!("native project `{name}` on_match must be `stop` or `descend`"),
+            format!("native project `{name}` on_match must be `stop`, `descend`, or `all`"),
         ));
     }
     let max_depth = positive_usize(required_i32(dict, "max_depth")?, &name, "max_depth")?;
@@ -320,11 +320,14 @@ fn native_project_schema(name: String, dict: &DictRef<'_>) -> Result<NativeProje
     // walk visits files, so a primary marker that needs directory
     // expansion or a parent segment can only be matched by the
     // stop-mode directory pass.
-    if (marker_is_pattern(&markers[0]) || markers[0].contains('/')) && on_match != "stop" {
+    if (marker_is_pattern(&markers[0]) || markers[0].contains('/'))
+        && on_match != "stop"
+        && on_match != "all"
+    {
         return Err(native_project_error(
                         &name,
                         format!(
-                            "native project `{name}` marker `{}` spans a directory, so it requires on_match = \"stop\"",
+                            "native project `{name}` marker `{}` spans a directory, so it requires on_match = \"stop\" or \"all\"",
                             markers[0]
                         ),
                     ));
@@ -616,7 +619,7 @@ mod tests {
     }
 
     #[test]
-    fn built_in_native_projects_detect_xcode_projects_at_the_workspace_root() {
+    fn built_in_native_projects_detect_xcode_projects_in_nested_packages() {
         let temporary = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(temporary.path().join("Browser.xcodeproj")).unwrap();
         std::fs::write(
@@ -639,11 +642,16 @@ mod tests {
             .iter()
             .filter(|matched| matched.native_project == "xcode")
             .collect::<Vec<_>>();
-        assert_eq!(xcode.len(), 1);
-        assert!(xcode[0].package.is_empty());
+        assert_eq!(xcode.len(), 2);
+        assert_eq!(xcode[0].package, "");
         assert_eq!(
             xcode[0].markers,
             vec!["Browser.xcodeproj/project.pbxproj".to_string()]
+        );
+        assert_eq!(xcode[1].package, "ios");
+        assert_eq!(
+            xcode[1].markers,
+            vec!["Nested.xcodeproj/project.pbxproj".to_string()]
         );
     }
 

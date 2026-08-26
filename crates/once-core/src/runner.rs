@@ -371,6 +371,8 @@ fn action_uses_cache(action: &Action) -> bool {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+    use std::fmt::Write as _;
+    use std::io::Cursor;
     use std::time::Duration;
 
     use crate::action::ACTION_DIGEST_DOMAIN;
@@ -380,7 +382,10 @@ mod tests {
         WorkspacePath,
     };
     use once_cas::{CacheProvider, Cas, Digest};
+    use sha2::Digest as _;
     use tempfile::TempDir;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     fn fresh_cas() -> (TempDir, Cas) {
         let tmp = TempDir::new().unwrap();
@@ -406,6 +411,34 @@ mod tests {
             success_exit_codes: vec![0],
             remote: None,
         }
+    }
+
+    fn archive_bytes() -> Vec<u8> {
+        let cursor = Cursor::new(Vec::new());
+        let mut archive = zip::ZipWriter::new(cursor);
+        let options = zip::write::SimpleFileOptions::default();
+        archive
+            .start_file("Vendor.xcframework/Info.plist", options)
+            .unwrap();
+        std::io::Write::write_all(&mut archive, b"fixture plist").unwrap();
+        archive.finish().unwrap().into_inner()
+    }
+
+    async fn serve_archive_once(bytes: Vec<u8>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request).await.unwrap();
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                bytes.len()
+            );
+            stream.write_all(headers.as_bytes()).await.unwrap();
+            stream.write_all(&bytes).await.unwrap();
+        });
+        format!("http://{address}/Vendor.zip")
     }
 
     #[tokio::test]
@@ -734,6 +767,38 @@ mod tests {
             std::fs::read_to_string(tmp.path().join("out/layer.tar.sha256")).unwrap(),
             digest
         );
+    }
+
+    #[tokio::test]
+    async fn download_and_extract_restores_a_cached_archive_directory() {
+        let (tmp, cache) = fresh_cas();
+        let archive = archive_bytes();
+        let digest = sha2::Sha256::digest(&archive);
+        let mut checksum = String::with_capacity(digest.len() * 2);
+        for byte in digest {
+            write!(&mut checksum, "{byte:02x}").unwrap();
+        }
+        let url = serve_archive_once(archive).await;
+        let action = Action::DownloadAndExtract {
+            url,
+            sha256: checksum,
+            destination: WorkspacePath::try_from("out/Vendor").unwrap(),
+            authorization_env: Some("VENDOR_AUTHORIZATION".to_string()),
+            input_digest: Some(Digest::of_bytes(b"vendor-archive")),
+        };
+        std::env::set_var("VENDOR_AUTHORIZATION", "Bearer test-token");
+        let runner = Runner::new(cache, tmp.path(), RunOpts::default());
+
+        let first = runner.run(&action).await.unwrap();
+        assert_eq!(first.cache, CacheState::Miss);
+        let plist = tmp.path().join("out/Vendor/Vendor.xcframework/Info.plist");
+        assert_eq!(std::fs::read(&plist).unwrap(), b"fixture plist");
+
+        std::fs::remove_dir_all(tmp.path().join("out/Vendor")).unwrap();
+        let second = runner.run(&action).await.unwrap();
+        assert_eq!(second.cache, CacheState::Hit);
+        assert_eq!(std::fs::read(&plist).unwrap(), b"fixture plist");
+        std::env::remove_var("VENDOR_AUTHORIZATION");
     }
 
     #[tokio::test]

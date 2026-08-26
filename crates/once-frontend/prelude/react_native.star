@@ -1201,6 +1201,7 @@ _REACT_NATIVE_EXAMPLE = [
         "react-native-application-minimal",
         name = "React Native New Architecture application",
         use_when = "You want a current React Native application with Hermes, Fabric, iOS, Android, and Metro development mode.",
+        platforms = ["macos"],
     ),
 ]
 
