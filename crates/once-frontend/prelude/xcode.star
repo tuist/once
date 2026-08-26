@@ -2029,7 +2029,6 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
                 attrs = {
                     "platform": variant_platform,
                     "minimum_os": variant["minimum_os"],
-                    "module_name": name,
                     "sdk_variant": variant["sdk_variant"],
                     "defines": ["SWIFT_PACKAGE"],
                     "swift_flags": _xcode_swift_package_name_flags(package) + ["-swift-version", flags["language_mode"]] + flags["swift"],
@@ -2044,7 +2043,9 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
                 spec_kind = "apple_library"
                 if target_type == "test":
                     spec_kind = "apple_test_bundle"
+                    attrs["product_name"] = name
                 else:
+                    attrs["module_name"] = name
                     attrs["exported_deps"] = dependencies
                     attrs["swift_flags"] = attrs["swift_flags"] + ["-enable-testing"]
                     attrs["exported_headers"] = _unique(_xcode_swift_package_target_headers(package_path, target))

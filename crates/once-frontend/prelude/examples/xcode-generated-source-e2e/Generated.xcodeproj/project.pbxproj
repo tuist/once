@@ -4,13 +4,14 @@
 	classes = {};
 	objectVersion = 56;
 	objects = {
-		ROOT = {isa = PBXProject; buildConfigurationList = PROJECT_CONFIGS; mainGroup = GROUP; targets = (TARGET); };
+		ROOT = {isa = PBXProject; buildConfigurationList = PROJECT_CONFIGS; mainGroup = GROUP; packageReferences = (SHARED_PACKAGE); targets = (TARGET); };
 		PROJECT_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (PROJECT_DEBUG); defaultConfigurationName = Debug; };
 		PROJECT_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {SDKROOT = macosx; MACOSX_DEPLOYMENT_TARGET = 13.0; }; };
 		GROUP = {isa = PBXGroup; children = (HELLO); sourceTree = "<group>"; };
 		HELLO = {isa = PBXFileReference; path = Hello.swift; sourceTree = "<group>"; };
 		TARGET = {isa = PBXNativeTarget; buildConfigurationList = TARGET_CONFIGS; buildPhases = (SOURCES, GENERATE); dependencies = (); packageProductDependencies = (SHARED_PRODUCT); name = Generated; productType = "com.apple.product-type.library.static"; };
-		SHARED_PRODUCT = {isa = XCSwiftPackageProductDependency; productName = Shared; };
+		SHARED_PACKAGE = {isa = XCLocalSwiftPackageReference; relativePath = Packages/Shared; };
+		SHARED_PRODUCT = {isa = XCSwiftPackageProductDependency; package = SHARED_PACKAGE; productName = Shared; };
 		TARGET_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (TARGET_DEBUG); defaultConfigurationName = Debug; };
 		TARGET_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; }; };
 		SOURCES = {isa = PBXSourcesBuildPhase; files = (HELLO_BUILD); };

@@ -397,6 +397,10 @@ let package = Package(
         .find(|target| target.label.id == "SwiftPackage_LazyRemote_AppTests")
         .expect("directly lowered test bundle");
     assert_eq!(tests.kind, "apple_test_bundle");
+    assert_eq!(
+        tests.attrs.get("product_name"),
+        Some(&AttrValue::String("AppTests".to_string()))
+    );
     assert!(tests.deps.contains(&app.label.id));
 }
 
