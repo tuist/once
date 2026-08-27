@@ -1,0 +1,11 @@
+[[target]]
+name = "feature_workspace"
+kind = "xcode_workspace"
+srcs = [
+  "Feature.xcodeproj/project.pbxproj",
+  "Sources/Feature/**/*.swift",
+  "Vendor/RustComponents.xcframework/Info.plist",
+]
+
+[target.attrs]
+project = "Feature.xcodeproj"

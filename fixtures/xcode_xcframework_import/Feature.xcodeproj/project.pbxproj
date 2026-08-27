@@ -1,0 +1,27 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+		PROJECT = {isa = PBXProject; buildConfigurationList = PROJECT_CONFIGS; mainGroup = ROOT; targets = (FEATURE); };
+		PROJECT_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (PROJECT_DEBUG); defaultConfigurationName = Debug; };
+		PROJECT_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 15.0; SWIFT_VERSION = 5.0; }; };
+
+		ROOT = {isa = PBXGroup; children = (SOURCES_GROUP, VENDOR_GROUP); sourceTree = "<group>"; };
+		SOURCES_GROUP = {isa = PBXGroup; path = Sources/Feature; sourceTree = "<group>"; children = (FEATURE_SOURCE); };
+		VENDOR_GROUP = {isa = PBXGroup; path = Vendor; sourceTree = "<group>"; children = (RUST_COMPONENTS); };
+		FEATURE_SOURCE = {isa = PBXFileReference; path = Feature.swift; sourceTree = "<group>"; };
+		RUST_COMPONENTS = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = RustComponents.xcframework; sourceTree = "<group>"; };
+
+		FEATURE_SOURCE_BUILD = {isa = PBXBuildFile; fileRef = FEATURE_SOURCE; };
+		RUST_COMPONENTS_BUILD = {isa = PBXBuildFile; fileRef = RUST_COMPONENTS; };
+		SOURCES = {isa = PBXSourcesBuildPhase; files = (FEATURE_SOURCE_BUILD); };
+		FRAMEWORKS = {isa = PBXFrameworksBuildPhase; files = (RUST_COMPONENTS_BUILD); };
+
+		FEATURE_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (FEATURE_DEBUG); defaultConfigurationName = Debug; };
+		FEATURE_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = dev.once.Feature; }; };
+		FEATURE = {isa = PBXNativeTarget; buildConfigurationList = FEATURE_CONFIGS; buildPhases = (SOURCES, FRAMEWORKS); dependencies = (); name = Feature; productName = Feature; productType = "com.apple.product-type.framework"; };
+	};
+	rootObject = PROJECT;
+}
