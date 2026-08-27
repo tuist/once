@@ -15139,6 +15139,32 @@ result = repr([_xcode_auxiliary_modulemaps(settings, {{}}, ""), attrs["private_h
 }
 
 #[test]
+fn prelude_xcode_normalizes_workspace_header_search_paths() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{"attr": {{"sdk_variant": "simulator"}}}}
+files = {{
+    "source_flags": {{}},
+    "project_header_dirs": [],
+    "sources": [],
+    "headers": [],
+    "exported_headers": [],
+    "frameworks": [],
+}}
+settings = {{"HEADER_SEARCH_PATHS": ["$(SRCROOT)/../../Common/SharedHeaders/include"]}}
+subs = {{"SRCROOT": "Modules/App/ReproApp", "PROJECT_DIR": "Modules/App/ReproApp"}}
+attrs = _xcode_common_attrs(ctx, {{"name": "App"}}, settings, subs, "ios", files)
+result = repr([_xcode_header_search_dirs(settings, subs), attrs["private_header_dirs"], attrs["clang_flags"]])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["Modules/Common/SharedHeaders/include"], ["Modules/Common/SharedHeaders/include"], ["-I", "Modules/Common/SharedHeaders/include"]]"#
+    );
+}
+
+#[test]
 fn prelude_xcode_lowers_native_search_and_link_flags() {
     let prelude = xcode_prelude_source();
     let source = format!(

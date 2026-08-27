@@ -2448,7 +2448,7 @@ def _xcode_header_search_dirs(settings, subs):
             if resolved and resolved != "$(inherited)" and not resolved.startswith("$("):
                 if not resolved.startswith("/") and project_dir and resolved != project_dir and not resolved.startswith(project_dir + "/"):
                     resolved = _xcode_join(project_dir, resolved)
-                paths.append(resolved)
+                paths.append(_xcode_normalize_path(resolved))
     return _unique(paths)
 
 def _xcode_auxiliary_modulemaps(settings, subs, primary_modulemap):
