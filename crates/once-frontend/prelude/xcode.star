@@ -2159,6 +2159,28 @@ def _xcode_framework_product_dependencies(objects, target, name_to_id):
                 names.append(dependency)
     return names
 
+def _xcode_framework_xcframework_dependencies(objects, target, file_paths, xcframework_names):
+    # A prebuilt XCFramework has no PBXTargetDependency. Its ownership is
+    # expressed by the target's Frameworks build phase, so recover the graph
+    # edge from that phase instead of guessing from the bundle path.
+    dependencies = []
+    for phase_id in target.get("buildPhases") or []:
+        phase = objects.get(phase_id) or {}
+        if phase.get("isa") != "PBXFrameworksBuildPhase":
+            continue
+        for build_file_id in phase.get("files") or []:
+            build_file = objects.get(build_file_id) or {}
+            file_ref_id = build_file.get("fileRef")
+            file_ref = objects.get(file_ref_id) or {}
+            bundle = file_paths.get(file_ref_id) or _xcode_file_ref_path({}, file_ref)
+            bundle = _xcode_workspace_relative(bundle)
+            if not _ends_with(bundle, ".xcframework"):
+                continue
+            dependency = xcframework_names.get(bundle) or ""
+            if dependency and dependency not in dependencies:
+                dependencies.append(dependency)
+    return dependencies
+
 def _xcode_sanitized_target_name(name):
     out = []
     for ch in name.elems():
@@ -2962,16 +2984,17 @@ def _xcode_workspace_resolver(ctx):
             target_prefix = "XcodePackage_" + _xcode_sanitized_target_name(ctx["label"]["id"]),
         )
         xcframework_specs = _xcode_workspace_xcframework_specs(ctx, package_platform, ctx["attr"].get("sdk_variant") or "simulator")
+        xcframework_names = {
+            spec["attrs"]["bundle"]: spec["name"]
+            for spec in xcframework_specs
+        }
 
         for target in native_targets:
             spec = _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_closure, configuration, file_paths, project_dir, path_maps, test_plan_settings)
             if spec == None:
                 continue
-            target_name = target.get("name") or ""
-            for xcframework in xcframework_specs:
-                bundle = xcframework["attrs"]["bundle"]
-                if target_name and ("/" + target_name + "/") in ("/" + bundle + "/"):
-                    spec["deps"] = _unique(spec["deps"] + ["./" + xcframework["name"]])
+            for dependency in _xcode_framework_xcframework_dependencies(objects, target, file_paths, xcframework_names):
+                spec["deps"] = _unique(spec["deps"] + ["./" + dependency])
             for product in per_target_products[target.get("name") or ""]:
                 identity = product.get("package_identity") or ""
                 dep_id = package_graph["products"].get(identity + "\x1f" + product["name"]) or package_graph["products"].get(product["name"])

@@ -62,6 +62,12 @@ Describe 'apple graph'
     cp -R "$REPO_ROOT/fixtures/xcode_firefox_app/." "$WORKSPACE/"
   }
 
+  copy_xcode_xcframework_import_fixture() {
+    cp -R "$REPO_ROOT/fixtures/xcode_xcframework_import/." "$WORKSPACE/"
+    mkdir -p "$WORKSPACE/Vendor"
+    cp -R "$REPO_ROOT/fixtures/xcode_firefox_app/RustComponents.xcframework" "$WORKSPACE/Vendor/"
+  }
+
   copy_xcode_wikipedia_app_fixture() {
     cp -R "$REPO_ROOT/fixtures/xcode_wikipedia_app/." "$WORKSPACE/"
   }
@@ -296,6 +302,17 @@ SH
     The stdout should include '"status":"completed"'
     The path "$WORKSPACE/.once/out/Generated/Generated.swiftmodule" should be file
     The path "$WORKSPACE/.once/out/Generated/Generated.swift" should be file
+  End
+
+  It 'builds a Swift target that imports a linked XCFramework'
+    Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+    copy_xcode_xcframework_import_fixture
+
+    When call once --format json build Feature
+    The status should be success
+    The stdout should include '"target":"Feature"'
+    The stdout should include '"status":"completed"'
+    The path "$WORKSPACE/.once/out/Feature/Feature.framework/Feature" should be file
   End
 
   It 'lowers a Firefox-style multi-library project from a real .xcodeproj'
