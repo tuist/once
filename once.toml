@@ -38,3 +38,12 @@ kind = "dockerfile_image"
 [target.attrs]
 dockerfile = "web/Dockerfile"
 tag = "once-web:once-dockerfile"
+
+[[target]]
+name = "apple_linux_toolchain_image"
+kind = "dockerfile_image"
+srcs = ["images/apple-linux-toolchain/**"]
+
+[target.attrs]
+dockerfile = "images/apple-linux-toolchain/Dockerfile"
+tag = "once-apple-linux-toolchain:local"

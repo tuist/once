@@ -1,0 +1,76 @@
+{
+  "schema_version": 2,
+  "execution_platform": {
+    "operating_system": "linux",
+    "architectures": ["x86_64", "aarch64"]
+  },
+  "tools": {
+    "swift": { "command": "swift" },
+    "swiftc": { "command": "swiftc" },
+    "clang": { "command": "clang" },
+    "clangxx": { "command": "clang++" },
+    "linker": { "command": "ld64.lld" },
+    "archiver": { "command": "llvm-ar" },
+    "lipo": { "command": "llvm-lipo" },
+    "static_library": { "command": "llvm-libtool-darwin" },
+    "property_list": {
+      "command": "plutil",
+      "implementation": "once-plutil",
+      "supported_conversions": ["json", "xml1", "binary1"]
+    },
+    "asset_catalog": {
+      "command": "actool",
+      "implementation": "viraptor/actool",
+      "revision": "e7a65f308dea3aa25cf885d2ae33a0caec4448bb"
+    },
+    "interface_builder": {
+      "command": "ibtool",
+      "implementation": "viraptor/ibtool",
+      "revision": "e5c4cd02f5dcaf3f8b4ddd193a471bb802e71645",
+      "platform_scope": ["macos"],
+      "status": "experimental"
+    },
+    "code_signing": {
+      "command": "rcodesign",
+      "implementation": "apple-codesign",
+      "version": "0.29.0",
+      "compatible_with_apple_codesign_cli": false
+    }
+  },
+  "apple_platform_content": {
+    "included": false,
+    "mounted_input_required": true,
+    "required_for_framework_builds": [
+      "platform SDK sysroot",
+      "target Swift modules and runtimes when required by the target",
+      "platform libraries required by the linker"
+    ],
+    "reason": "Apple software is intentionally excluded from the redistributable image."
+  },
+  "unsupported_capabilities": [
+    {
+      "xcode_tool": "momc",
+      "capability": "Core Data model compilation"
+    },
+    {
+      "xcode_tool": "intentbuilderc",
+      "capability": "intent-definition compilation"
+    },
+    {
+      "xcode_tool": "derq",
+      "capability": "entitlement record generation"
+    },
+    {
+      "xcode_tool": "ipatool",
+      "capability": "device-specific application thinning"
+    },
+    {
+      "xcode_tool": "xcrun",
+      "capability": "Xcode tool and software development kit discovery"
+    },
+    {
+      "xcode_tool": "xcodebuild",
+      "capability": "Xcode build orchestration"
+    }
+  ]
+}

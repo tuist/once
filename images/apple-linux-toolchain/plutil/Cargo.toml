@@ -1,0 +1,17 @@
+[package]
+name = "once-plutil"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "plutil"
+path = "src/main.rs"
+
+[dependencies]
+apple-plist = "=1.0.1"
+serde_json = "=1.0.149"
+
+[workspace]

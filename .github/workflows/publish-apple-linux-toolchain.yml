@@ -1,0 +1,189 @@
+name: publish Apple Linux toolchain
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "images/apple-linux-toolchain/**"
+  pull_request:
+    paths:
+      - "images/apple-linux-toolchain/**"
+  workflow_dispatch:
+
+concurrency:
+  group: apple-linux-toolchain-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MISE_AUTO_INSTALL: "false"
+  MISE_EXEC_AUTO_INSTALL: "false"
+  MISE_GITHUB_ATTESTATIONS: 0
+  MISE_NOT_FOUND_AUTO_INSTALL: "false"
+  MISE_TASK_RUN_AUTO_INSTALL: "false"
+  MISE_VERSION: "2026.4.18"
+
+jobs:
+  verify:
+    name: verify image
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - name: Build Linux x86-64 image
+        run: |
+          docker buildx build \
+            --load \
+            --platform linux/amd64 \
+            --tag once-apple-linux-toolchain:verify \
+            images/apple-linux-toolchain
+      - name: Verify image tools and policy
+        run: docker run --rm once-apple-linux-toolchain:verify once-apple-linux-toolchain-verify
+
+  detect-release:
+    name: detect image release
+    needs: verify
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      should-release: ${{ steps.detect.outputs.should-release }}
+      tag: ${{ steps.detect.outputs.tag }}
+      version: ${{ steps.detect.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: "git-cliff"
+      - id: detect
+        name: Detect releasable image changes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          config=images/apple-linux-toolchain/cliff.toml
+          latest_tag="$(git tag --list 'apple-linux-toolchain-v[0-9]*' --sort=-version:refname | head -n 1)"
+          cliff_args=(
+            --config "${config}"
+            --repository .
+            --include-path 'images/apple-linux-toolchain/**'
+          )
+          if [[ -n "${latest_tag}" ]]; then
+            range="${latest_tag}..HEAD"
+            changelog="$(mise exec -- git-cliff "${cliff_args[@]}" -- "${range}")"
+          else
+            changelog="$(mise exec -- git-cliff "${cliff_args[@]}")"
+          fi
+
+          should_release=false
+          if [[ -z "${latest_tag}" ]] || grep -qE '^- ' <<<"${changelog}"; then
+            should_release=true
+          fi
+
+          if [[ "${should_release}" == true ]]; then
+            if [[ -n "${latest_tag}" ]]; then
+              version="$(mise exec -- git-cliff "${cliff_args[@]}" --bumped-version -- "${range}")"
+            else
+              version="$(mise exec -- git-cliff "${cliff_args[@]}" --bumped-version)"
+            fi
+            version="${version#apple-linux-toolchain-v}"
+            if [[ ! "${version}" =~ ^[0-9]+[.][0-9]+[.][0-9]+$ ]]; then
+              echo "git-cliff returned an invalid image version: ${version}" >&2
+              exit 1
+            fi
+          else
+            version="${latest_tag#apple-linux-toolchain-v}"
+          fi
+
+          {
+            echo "should-release=${should_release}"
+            echo "version=${version}"
+            echo "tag=apple-linux-toolchain-v${version}"
+          } >> "${GITHUB_OUTPUT}"
+
+  publish:
+    name: publish image
+    needs: detect-release
+    if: needs.detect-release.outputs.should-release == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - id: image
+        name: Set image tags
+        run: |
+          owner="$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          echo "name=ghcr.io/${owner}/once-apple-linux-toolchain" >> "${GITHUB_OUTPUT}"
+          echo "sha=sha-$(printf '%s' "${GITHUB_SHA}" | cut -c1-12)" >> "${GITHUB_OUTPUT}"
+          echo "created=$(date --utc +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_OUTPUT}"
+      - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf
+        with:
+          context: images/apple-linux-toolchain
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ steps.image.outputs.name }}:${{ needs.detect-release.outputs.version }}
+            ${{ steps.image.outputs.name }}:${{ steps.image.outputs.sha }}
+            ${{ steps.image.outputs.name }}:latest
+          labels: |
+            org.opencontainers.image.created=${{ steps.image.outputs.created }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.detect-release.outputs.version }}
+          build-args: |
+            BUILD_DATE=${{ steps.image.outputs.created }}
+            VCS_REF=${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+
+  release:
+    name: publish GitHub release
+    needs: [detect-release, publish]
+    if: needs.detect-release.outputs.should-release == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: "git-cliff"
+      - name: Generate release notes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mise exec -- git-cliff \
+            --config images/apple-linux-toolchain/cliff.toml \
+            --repository . \
+            --include-path 'images/apple-linux-toolchain/**' \
+            --tag "${{ needs.detect-release.outputs.tag }}" \
+            --unreleased \
+            > release-notes.md
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ needs.detect-release.outputs.tag }}" \
+            --target "${GITHUB_SHA}" \
+            --title "Apple Linux toolchain ${{ needs.detect-release.outputs.version }}" \
+            --notes-file release-notes.md
