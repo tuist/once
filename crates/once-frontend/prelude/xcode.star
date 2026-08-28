@@ -2159,14 +2159,15 @@ def _xcode_framework_product_dependencies(objects, target, name_to_id):
                 names.append(dependency)
     return names
 
-def _xcode_framework_xcframework_dependencies(objects, target, file_paths, xcframework_names):
+def _xcode_xcframework_dependencies(objects, target, file_paths, xcframework_names):
     # A prebuilt XCFramework has no PBXTargetDependency. Its ownership is
-    # expressed by the target's Frameworks build phase, so recover the graph
-    # edge from that phase instead of guessing from the bundle path.
+    # expressed by a build phase, including custom Copy Files phases used for
+    # static XCFramework dependencies, so recover the graph edge from the
+    # phase instead of guessing from the bundle path.
     dependencies = []
     for phase_id in target.get("buildPhases") or []:
         phase = objects.get(phase_id) or {}
-        if phase.get("isa") != "PBXFrameworksBuildPhase":
+        if phase.get("isa") not in ["PBXFrameworksBuildPhase", "PBXCopyFilesBuildPhase"]:
             continue
         for build_file_id in phase.get("files") or []:
             build_file = objects.get(build_file_id) or {}
@@ -2993,7 +2994,7 @@ def _xcode_workspace_resolver(ctx):
             spec = _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_closure, configuration, file_paths, project_dir, path_maps, test_plan_settings)
             if spec == None:
                 continue
-            for dependency in _xcode_framework_xcframework_dependencies(objects, target, file_paths, xcframework_names):
+            for dependency in _xcode_xcframework_dependencies(objects, target, file_paths, xcframework_names):
                 spec["deps"] = _unique(spec["deps"] + ["./" + dependency])
             for product in per_target_products[target.get("name") or ""]:
                 identity = product.get("package_identity") or ""

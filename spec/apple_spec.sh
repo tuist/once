@@ -304,7 +304,7 @@ SH
     The path "$WORKSPACE/.once/out/Generated/Generated.swift" should be file
   End
 
-  It 'builds a Swift target that imports a linked XCFramework'
+  It 'builds a Swift target that imports an XCFramework from a Copy Files phase'
     Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
     copy_xcode_xcframework_import_fixture
 

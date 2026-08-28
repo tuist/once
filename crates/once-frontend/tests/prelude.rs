@@ -15847,7 +15847,38 @@ fn prelude_xcode_recovers_xcframework_dependencies_from_framework_phase() {
     let source = format!(
         r#"{prelude}
 objects = json_decode({objects:?})
-result = repr(_xcode_framework_xcframework_dependencies(
+result = repr(_xcode_xcframework_dependencies(
+    objects,
+    objects["FEATURE"],
+    {{"DEPENDENCY": "Vendor/DependencyModule.xcframework"}},
+    {{"Vendor/DependencyModule.xcframework": "XCFramework_Vendor_DependencyModule.xcframework"}},
+))
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["XCFramework_Vendor_DependencyModule.xcframework"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_recovers_xcframework_dependencies_from_copy_files_phase() {
+    let prelude = xcode_prelude_source();
+    let objects = serde_json::json!({
+        "DEPENDENCY": {
+            "isa": "PBXFileReference",
+            "path": "DependencyModule.xcframework",
+            "sourceTree": "<group>"
+        },
+        "BUILD": {"isa": "PBXBuildFile", "fileRef": "DEPENDENCY"},
+        "COPY_XCFRAMEWORK": {"isa": "PBXCopyFilesBuildPhase", "files": ["BUILD"]},
+        "FEATURE": {"isa": "PBXNativeTarget", "buildPhases": ["COPY_XCFRAMEWORK"]},
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+objects = json_decode({objects:?})
+result = repr(_xcode_xcframework_dependencies(
     objects,
     objects["FEATURE"],
     {{"DEPENDENCY": "Vendor/DependencyModule.xcframework"}},
