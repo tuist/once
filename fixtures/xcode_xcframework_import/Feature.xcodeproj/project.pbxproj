@@ -17,11 +17,11 @@
 		FEATURE_SOURCE_BUILD = {isa = PBXBuildFile; fileRef = FEATURE_SOURCE; };
 		RUST_COMPONENTS_BUILD = {isa = PBXBuildFile; fileRef = RUST_COMPONENTS; };
 		SOURCES = {isa = PBXSourcesBuildPhase; files = (FEATURE_SOURCE_BUILD); };
-		FRAMEWORKS = {isa = PBXFrameworksBuildPhase; files = (RUST_COMPONENTS_BUILD); };
+		COPY_XCFRAMEWORK = {isa = PBXCopyFilesBuildPhase; dstPath = _StaticXCFrameworkDependencies/Feature; dstSubfolderSpec = 16; files = (RUST_COMPONENTS_BUILD); };
 
 		FEATURE_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (FEATURE_DEBUG); defaultConfigurationName = Debug; };
 		FEATURE_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = dev.once.Feature; }; };
-		FEATURE = {isa = PBXNativeTarget; buildConfigurationList = FEATURE_CONFIGS; buildPhases = (SOURCES, FRAMEWORKS); dependencies = (); name = Feature; productName = Feature; productType = "com.apple.product-type.framework"; };
+		FEATURE = {isa = PBXNativeTarget; buildConfigurationList = FEATURE_CONFIGS; buildPhases = (SOURCES, COPY_XCFRAMEWORK); dependencies = (); name = Feature; productName = Feature; productType = "com.apple.product-type.framework"; };
 	};
 	rootObject = PROJECT;
 }
