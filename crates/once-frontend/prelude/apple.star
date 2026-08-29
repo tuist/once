@@ -2156,10 +2156,14 @@ def _apple_clang_profile_runtime(platform, sdk_variant, xcode_developer_dir):
     device_suffix, simulator_suffix = suffixes
     suffix = simulator_suffix if sdk_variant == "simulator" and platform != "macos" else device_suffix
     env = {"DEVELOPER_DIR": xcode_developer_dir} if xcode_developer_dir else {}
-    clang = host_command([host_which("xcrun"), "--find", "clang"], env = env).strip()
+    # Resolved fail-soft: a hermetic or mocked toolchain without these lookup
+    # commands simply links without the runtime, as before.
+    swallow = "\"$@\" 2>/dev/null; exit 0"
+    sh = host_which("sh")
+    clang = host_command([sh, "-c", swallow, "clang-lookup", host_which("xcrun"), "--find", "clang"], env = env).strip()
     if not clang:
         return ""
-    resource_dir = host_command([clang, "-print-resource-dir"], env = env).strip()
+    resource_dir = host_command([sh, "-c", swallow, "clang-resource-dir", clang, "-print-resource-dir"], env = env).strip()
     if not resource_dir:
         return ""
     path = resource_dir + "/lib/darwin/libclang_rt.profile_" + suffix + ".a"

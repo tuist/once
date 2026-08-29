@@ -6931,6 +6931,8 @@ def host_which(name):
         return "/usr/bin/xcrun"
     if name == "codesign":
         return "/usr/bin/codesign"
+    if name == "sh":
+        return "/bin/sh"
     fail("unexpected host_which: " + name)
 
 def host_command(argv, env = None, merge_stderr = None):
@@ -7299,6 +7301,8 @@ def host_which(name):
         return "/usr/bin/xcrun"
     if name == "codesign":
         return "/usr/bin/codesign"
+    if name == "sh":
+        return "/bin/sh"
     fail("unexpected host_which: " + name)
 
 def host_command(argv, env = None, merge_stderr = None):
@@ -14997,9 +15001,9 @@ def host_path_exists(path):
     return path.endswith(".a")
 
 def host_command(argv, env = None, merge_stderr = None):
-    if argv[1] == "--find":
+    if "--find" in argv:
         return "/toolchain/usr/bin/clang\n"
-    if argv[1] == "-print-resource-dir":
+    if "-print-resource-dir" in argv:
         return "/toolchain/usr/lib/clang/21\n"
     fail("unexpected host command: " + str(argv))
 
