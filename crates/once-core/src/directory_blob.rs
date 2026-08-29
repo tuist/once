@@ -541,9 +541,11 @@ fn restore_streamed_directory_file(
     reader: &mut impl Read,
 ) -> Result<()> {
     let mut output =
-        std::fs::File::create(&entry.destination).map_err(|source| Error::RestoreOutput {
-            path: logical_path.to_string(),
-            source,
+        crate::file_blob::create_replacing_readonly(&entry.destination).map_err(|source| {
+            Error::RestoreOutput {
+                path: logical_path.to_string(),
+                source,
+            }
         })?;
     let copied =
         std::io::copy(&mut reader.take(entry.content_len), &mut output).map_err(|source| {

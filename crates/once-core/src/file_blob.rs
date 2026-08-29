@@ -13,6 +13,21 @@ use crate::{Error, Result};
 
 pub(crate) const FILE_BLOB_MAGIC: &[u8] = b"once.file.v1\0";
 
+/// Open `abs` for writing, replacing a read-only file left by an earlier
+/// restore. Two actions can declare the same output path with different
+/// content (a linked binary and its re-signed copy); when the first restore
+/// materializes the blob's read-only mode, truncating it in place fails with
+/// a permission error, so fall back to unlinking and recreating the path.
+pub(crate) fn create_replacing_readonly(abs: &Path) -> std::io::Result<std::fs::File> {
+    match std::fs::File::create(abs) {
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied && abs.is_file() => {
+            std::fs::remove_file(abs)?;
+            std::fs::File::create(abs)
+        }
+        result => result,
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn capture_file_blob(path: &Path) -> std::io::Result<Vec<u8>> {
     let metadata = std::fs::metadata(path)?;
@@ -74,7 +89,7 @@ pub(crate) fn restore_file_blob_from_reader(
             source,
         })?;
     }
-    let mut output = std::fs::File::create(abs).map_err(|source| Error::RestoreOutput {
+    let mut output = create_replacing_readonly(abs).map_err(|source| Error::RestoreOutput {
         path: logical_path.to_string(),
         source,
     })?;
@@ -207,5 +222,23 @@ mod tests {
         restore_file_blob_from_reader("restored", &restored, blob.as_slice()).unwrap();
 
         assert_eq!(std::fs::read(restored).unwrap(), bytes);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn restore_replaces_a_read_only_output_left_by_an_earlier_restore() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let restored = dir.path().join("restored");
+        std::fs::write(&source, b"signed").unwrap();
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let blob = capture_file_blob(&source).unwrap();
+
+        restore_file_blob_from_reader("restored", &restored, blob.as_slice()).unwrap();
+        restore_file_blob_from_reader("restored", &restored, blob.as_slice()).unwrap();
+
+        assert_eq!(std::fs::read(restored).unwrap(), b"signed");
     }
 }
