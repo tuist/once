@@ -480,6 +480,32 @@ TOML
     The path "$WORKSPACE/.once/out/Client/Client.app/Client" should be file
   End
 
+  ios_simulator_unavailable() {
+    xcrun simctl list devices available 2>/dev/null | grep -Eq "iPhone|iPad" && return 1
+    return 0
+  }
+
+  It 'runs the cache-substituted style test bundle on a simulator'
+    Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+    Skip if 'no iOS simulator available on this host' ios_simulator_unavailable
+    copy_xcode_prebuilt_cache_app_fixture
+    cat > "$WORKSPACE/once.toml" <<'TOML'
+[[target]]
+name = "ClientWorkspace"
+kind = "xcode_workspace"
+srcs = ["Client.xcodeproj/project.pbxproj"]
+
+[target.attrs]
+project = "Client.xcodeproj"
+TOML
+
+    When call once --format json test ClientTests
+    The status should be success
+    The stdout should include '"target":"ClientTests"'
+    The stdout should include '"status":"completed"'
+    The contents of file "$WORKSPACE/.once/out/ClientTests/test/test_results.json" should include '"status":"passed"'
+  End
+
   It 'lists the cache-substituted style targets with their Once kinds'
     Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
     copy_xcode_prebuilt_cache_app_fixture
