@@ -16690,7 +16690,7 @@ result = repr([
     );
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
-        r#"[True, False, True]"#
+        r"[True, False, True]"
     );
 }
 
