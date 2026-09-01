@@ -77,6 +77,9 @@ Describe 'apple graph'
   }
 
   copy_xcode_prebuilt_cache_app_fixture() {
+    if apple_toolchain_unavailable; then
+      return 0
+    fi
     cp -R "$REPO_ROOT/fixtures/xcode_prebuilt_cache_app/." "$WORKSPACE/"
     REMOTE_VENDOR_DIR="${TMPDIR:-/tmp}/once-remote-vendor-fixture"
     rm -rf "$REMOTE_VENDOR_DIR"
