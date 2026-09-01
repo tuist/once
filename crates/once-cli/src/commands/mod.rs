@@ -5,6 +5,7 @@
 pub mod auth;
 pub mod cache;
 pub mod change_tracker;
+pub mod compatibility;
 pub mod edit;
 pub mod evidence;
 pub mod exec;
@@ -18,3 +19,4 @@ pub mod surface;
 pub mod test_schedule;
 pub mod toolchain;
 pub mod util;
+pub mod xcodebuild;

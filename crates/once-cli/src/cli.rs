@@ -520,6 +520,17 @@ pub enum Cmd {
         cmd: Option<NativeCmd>,
     },
 
+    /// Accept an Xcode build invocation and use the Once graph when its
+    /// semantics are supported. Other invocations pass through to the system
+    /// Xcode build tool unchanged. Configure this as a mise command wrapper
+    /// to make ordinary `xcodebuild` commands use this compatibility surface.
+    #[usage(name = "xcodebuild")]
+    Compatibility {
+        /// Arguments supplied by the Xcode build invocation.
+        #[usage(trailing_var_arg = true, value_name = "ARG")]
+        argv: Vec<String>,
+    },
+
     /// Expose Once's graph and memory queries to a coding agent.
     ///
     /// Speaks the Model Context Protocol over standard input and output so a
@@ -653,6 +664,7 @@ impl Cmd {
                 }
                 path
             }
+            Self::Compatibility { .. } => vec!["xcodebuild"],
             Self::Runtime { cmd } => {
                 let mut path = vec!["runtime"];
                 if let Some(cmd) = cmd {
@@ -756,6 +768,16 @@ mod tests {
         };
         assert_eq!(target.as_deref(), Some("server/application_dev"));
         assert_eq!(arguments, ["phx.server", "--port", "4001"]);
+    }
+
+    #[test]
+    fn compatibility_accepts_xcodebuild_arguments_after_separator() {
+        let cli = parse(&["once", "xcodebuild", "--", "-showBuildSettings"]);
+
+        let Some(Cmd::Compatibility { argv }) = cli.command else {
+            panic!("expected compatibility command");
+        };
+        assert_eq!(argv, ["-showBuildSettings"]);
     }
 
     #[test]

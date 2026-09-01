@@ -157,6 +157,45 @@ once test ClientTests
 See [Testing and Scheduling](/guide/graph/testing) for selection and reporting,
 and that target kind's limitations for the test shapes that are supported.
 
+## Keep `xcodebuild` Commands
+
+Once can also sit behind the familiar `xcodebuild` command when a project uses
+[mise](https://mise.jdx.dev/) command wrappers. Add this to the project's
+`mise.toml`, then run `mise reshim` and activate mise in the shell that starts
+the build:
+
+```toml
+[wrappers.xcodebuild]
+command = "once"
+args = ["xcodebuild", "--"]
+```
+
+The wrapper preserves the original arguments. The separator belongs to Once and
+is not passed to Xcode. Once uses the graph for a build
+when it can prove the request is equivalent: one resolved Once Xcode workspace
+seed for a discovered project, a scheme that exactly matches one reachable Once
+build target, an explicit `-configuration Debug` argument, and the default or
+explicit `build` action. An explicit `-project` value must name that discovered
+project. For example:
+
+```sh
+xcodebuild -project Client.xcodeproj -scheme Client -configuration Debug build
+```
+
+For troubleshooting without mise, call the compatibility surface directly and
+put the separator before the Xcode arguments:
+
+```sh
+once xcodebuild -- -project Client.xcodeproj -scheme Client -configuration Debug build
+```
+
+Every other request invokes the system `xcodebuild` with the same arguments and
+exit status. This includes tests, archives, exports, destinations, package
+resolution, custom build settings, workspaces, missing or other configurations,
+help, and version queries. The fallback lets editors, continuous integration,
+and coding agents keep their existing command vocabulary while Once takes over
+only the forms it can model accurately.
+
 ## Work From a Workspace
 
 Point `project` at an `.xcworkspace` to resolve every project the workspace
