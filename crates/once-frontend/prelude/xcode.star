@@ -1842,9 +1842,13 @@ def _xcode_swift_package_dependencies(target, identity, target_ids, product_ids,
             if key == "product" and len(values) > 1 and type(values[1]) == "string" and values[1]:
                 package_identity = values[1]
             name = values[0]
-            dep_id = target_ids.get(package_identity + "\x1f" + name) or target_ids.get(package_identity.lower() + "\x1f" + name) or product_ids.get(package_identity + "\x1f" + name) or product_ids.get(package_identity.lower() + "\x1f" + name) or product_ids.get(name)
-            if dep_id and dep_id not in deps:
-                deps.append("./" + dep_id)
+            dependency_ids = target_ids.get(package_identity + "\x1f" + name) or target_ids.get(package_identity.lower() + "\x1f" + name) or product_ids.get(package_identity + "\x1f" + name) or product_ids.get(package_identity.lower() + "\x1f" + name) or product_ids.get(name)
+            if dependency_ids and type(dependency_ids) != "list":
+                dependency_ids = [dependency_ids]
+            if dependency_ids:
+                for dep_id in dependency_ids:
+                    if dep_id and "./" + dep_id not in deps:
+                        deps.append("./" + dep_id)
             elif lazy_dependency and lazy_products.get(package_identity.lower() + "\x1f" + name) and "./" + lazy_dependency not in deps:
                 deps.append("./" + lazy_dependency)
     return deps
@@ -1929,9 +1933,8 @@ def _xcode_swift_package_target_flags(target, platform, default_language_mode):
     }
 
 def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, sdk_variant, lazy_products = {}, lazy_dependency = "", target_prefix = "SwiftPackage"):
-    # Lower source package targets as ordinary Apple libraries. Products merely
-    # name one or more targets, so consumers depend on the product's primary
-    # target while that target keeps its declared package dependencies.
+    # Lower source package targets as ordinary Apple libraries. Products group
+    # one or more targets, so consumers receive the complete product closure.
     target_ids = {}
     product_ids = {}
     host_target_ids = {}
@@ -1953,8 +1956,17 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
             targets = product.get("targets") or []
             if targets:
                 product_name = product.get("name") or ""
-                product_id = target_ids.get(identity + "\x1f" + targets[0]) or ""
-                host_product_id = host_target_ids.get(identity + "\x1f" + targets[0]) or ""
+                product_target_ids = []
+                host_product_target_ids = []
+                for target_name in targets:
+                    product_target_id = target_ids.get(identity + "\x1f" + target_name) or ""
+                    if product_target_id and product_target_id not in product_target_ids:
+                        product_target_ids.append(product_target_id)
+                    host_product_target_id = host_target_ids.get(identity + "\x1f" + target_name) or ""
+                    if host_product_target_id and host_product_target_id not in host_product_target_ids:
+                        host_product_target_ids.append(host_product_target_id)
+                product_id = product_target_ids[0] if len(product_target_ids) == 1 else product_target_ids
+                host_product_id = host_product_target_ids[0] if len(host_product_target_ids) == 1 else host_product_target_ids
                 product_ids[identity + "\x1f" + product_name] = product_id
                 product_ids[identity.lower() + "\x1f" + product_name] = product_id
                 product_ids[product_name] = product_id
@@ -3385,14 +3397,19 @@ def _xcode_workspace_resolver(ctx):
                 spec["deps"] = _unique(spec["deps"] + ["./" + dependency])
             for product in per_target_products[target.get("name") or ""]:
                 identity = product.get("package_identity") or ""
-                dep_id = package_graph["products"].get(identity + "\x1f" + product["name"]) or package_graph["products"].get(product["name"])
-                if dep_id:
+                dep_ids = package_graph["products"].get(identity + "\x1f" + product["name"]) or package_graph["products"].get(product["name"])
+                if dep_ids and type(dep_ids) != "list":
+                    dep_ids = [dep_ids]
+                for dep_id in dep_ids or []:
                     spec["deps"] = _unique(spec["deps"] + ["./" + dep_id])
             dependency_modules = _unique(_xcode_swift_imports(spec["srcs"]) + _xcode_disabled_autolink_modules(spec["attrs"].get("swift_flags") or []))
             for module in dependency_modules:
-                dep_id = name_to_id.get(module) or package_graph["products"].get(module) or package_graph["modules"].get(module) or xcframework_modules.get(_xcode_product_dependency_key(module))
-                if dep_id and dep_id != spec["name"]:
-                    spec["deps"] = _unique(spec["deps"] + ["./" + dep_id])
+                dep_ids = name_to_id.get(module) or package_graph["products"].get(module) or package_graph["modules"].get(module) or xcframework_modules.get(_xcode_product_dependency_key(module))
+                if dep_ids and type(dep_ids) != "list":
+                    dep_ids = [dep_ids]
+                for dep_id in dep_ids or []:
+                    if dep_id != spec["name"]:
+                        spec["deps"] = _unique(spec["deps"] + ["./" + dep_id])
             if spec["kind"] == "apple_library":
                 spec["attrs"]["exported_deps"] = list(spec["deps"])
             all_specs.append(spec)
