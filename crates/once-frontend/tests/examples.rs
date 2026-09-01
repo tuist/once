@@ -245,6 +245,52 @@ fn swift_package_native_project_loads_without_a_once_manifest() {
 }
 
 #[cfg(target_os = "macos")]
+#[test]
+fn swift_package_workspace_keeps_all_targets_of_a_library_product() {
+    let tmp = TempDir::new().expect("tempdir");
+    fs::create_dir_all(tmp.path().join("Sources/First")).expect("first source directory");
+    fs::create_dir_all(tmp.path().join("Sources/Second")).expect("second source directory");
+    fs::write(
+        tmp.path().join("Package.swift"),
+        r#"// swift-tools-version: 6.0
+import PackageDescription
+
+let package = Package(
+    name: "MultiProduct",
+    products: [.library(name: "MultiProduct", targets: ["First", "Second"])],
+    targets: [.target(name: "First"), .target(name: "Second")]
+)
+"#,
+    )
+    .expect("package manifest");
+    fs::write(
+        tmp.path().join("Sources/First/First.swift"),
+        "public func first() {}\n",
+    )
+    .expect("first source");
+    fs::write(
+        tmp.path().join("Sources/Second/Second.swift"),
+        "public func second() {}\n",
+    )
+    .expect("second source");
+
+    let graph = once_frontend::load_graph_workspace(tmp.path())
+        .expect("Swift package workspace with a multi-target product loads");
+    let workspace = graph
+        .iter()
+        .find(|target| target.label.id == "swift_package")
+        .expect("Swift package workspace target");
+
+    assert_eq!(
+        workspace.deps,
+        vec![
+            "SwiftPackage_MultiProduct_First",
+            "SwiftPackage_MultiProduct_Second",
+        ]
+    );
+}
+
+#[cfg(target_os = "macos")]
 fn run_git(directory: &Path, args: &[&str]) {
     let status = Command::new("git")
         .args(args)

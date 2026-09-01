@@ -14378,6 +14378,36 @@ result = repr([
 }
 
 #[test]
+fn prelude_xcode_preserves_every_target_in_a_package_product() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+infos = [{{
+    "identity": "FixtureShared",
+    "path": "Packages/Shared",
+    "info": {{
+        "products": [{{"name": "Shared", "targets": ["Core", "Extras"]}}],
+        "targets": [
+            {{"name": "Core", "type": "regular", "dependencies": [], "exclude": [], "settings": []}},
+            {{"name": "Extras", "type": "regular", "dependencies": [], "exclude": [], "settings": []}},
+        ],
+    }},
+}}]
+graph = _xcode_local_swift_package_specs({{}}, infos, "macos", "13.0", "simulator")
+consumer = {{"dependencies": [{{"product": ["Shared", "FixtureShared", None, None]}}]}}
+result = repr([
+    graph["products"]["FixtureShared\x1fShared"],
+    _xcode_swift_package_dependencies(consumer, "Consumer", {{}}, graph["products"], "macos"),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["SwiftPackage_FixtureShared_Core", "SwiftPackage_FixtureShared_Extras"], ["./SwiftPackage_FixtureShared_Core", "./SwiftPackage_FixtureShared_Extras"]]"#
+    );
+}
+
+#[test]
 fn prelude_xcode_lowers_binary_package_artifacts_to_cached_dependencies() {
     let prelude = xcode_prelude_source();
     let source = format!(
