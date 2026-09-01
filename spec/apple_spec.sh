@@ -76,6 +76,20 @@ Describe 'apple graph'
     cp -R "$REPO_ROOT/fixtures/xcode_signal_app/." "$WORKSPACE/"
   }
 
+  copy_xcode_prebuilt_cache_app_fixture() {
+    if apple_toolchain_unavailable; then
+      return 0
+    fi
+    cp -R "$REPO_ROOT/fixtures/xcode_prebuilt_cache_app/." "$WORKSPACE/"
+    REMOTE_VENDOR_DIR="${TMPDIR:-/tmp}/once-remote-vendor-fixture"
+    rm -rf "$REMOTE_VENDOR_DIR"
+    if ! vendor_log="$(sh "$WORKSPACE/tools/build_vendors.sh" "$WORKSPACE/Vendor" "$REMOTE_VENDOR_DIR" 2>&1)"; then
+      printf '%s\n' "$vendor_log" >&2
+      return 1
+    fi
+    sed -i '' "s|__REMOTE_VENDOR_DIR__|$REMOTE_VENDOR_DIR|" "$WORKSPACE/Client.xcodeproj/project.pbxproj"
+  }
+
   create_mock_apple_run_fixture() {
     mkdir -p "$WORKSPACE/bin" "$WORKSPACE/apps/ios/Sources/App"
     cat > "$WORKSPACE/apps/ios/Sources/App/App.swift" <<'SWIFT'
@@ -447,6 +461,73 @@ TOML
     The stdout should include '"name":"SignalNotification","kind":"apple_application"'
     The stdout should include '"name":"SignalCore","kind":"apple_library"'
     The stdout should include '"name":"SignalAppTests","kind":"apple_test_bundle"'
+  End
+
+  It 'builds a cache-substituted style app graph around prebuilt XCFrameworks'
+    Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+    copy_xcode_prebuilt_cache_app_fixture
+    cat > "$WORKSPACE/once.toml" <<'TOML'
+[[target]]
+name = "ClientWorkspace"
+kind = "xcode_workspace"
+srcs = ["Client.xcodeproj/project.pbxproj"]
+
+[target.attrs]
+project = "Client.xcodeproj"
+TOML
+
+    When call once --format json build ClientWorkspace
+    The status should be success
+    The stdout should include '"target":"ClientWorkspace"'
+    The stdout should include '"status":"completed"'
+    The path "$WORKSPACE/.once/out/Client/Client.app/Client" should be file
+  End
+
+  ios_simulator_unavailable() {
+    xcrun simctl list devices available 2>/dev/null | grep -Eq "iPhone|iPad" && return 1
+    return 0
+  }
+
+  It 'runs the cache-substituted style test bundle on a simulator'
+    Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+    Skip if 'no iOS simulator available on this host' ios_simulator_unavailable
+    copy_xcode_prebuilt_cache_app_fixture
+    cat > "$WORKSPACE/once.toml" <<'TOML'
+[[target]]
+name = "ClientWorkspace"
+kind = "xcode_workspace"
+srcs = ["Client.xcodeproj/project.pbxproj"]
+
+[target.attrs]
+project = "Client.xcodeproj"
+TOML
+
+    When call once --format json test ClientTests
+    The status should be success
+    The stdout should include '"target":"ClientTests"'
+    The stdout should include '"status":"completed"'
+    The contents of file "$WORKSPACE/.once/out/ClientTests/test/test_results.json" should include '"status":"passed"'
+  End
+
+  It 'lists the cache-substituted style targets with their Once kinds'
+    Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+    copy_xcode_prebuilt_cache_app_fixture
+    cat > "$WORKSPACE/once.toml" <<'TOML'
+[[target]]
+name = "ClientWorkspace"
+kind = "xcode_workspace"
+srcs = ["Client.xcodeproj/project.pbxproj"]
+
+[target.attrs]
+project = "Client.xcodeproj"
+TOML
+
+    When call once --format json query targets
+    The status should be success
+    The stdout should include '"name":"Client","kind":"apple_application"'
+    The stdout should include '"name":"FeatureKit","kind":"apple_library"'
+    The stdout should include '"name":"SharedKit","kind":"apple_library"'
+    The stdout should include '"name":"ClientTests","kind":"apple_test_bundle"'
   End
 
   It 'runs Apple application artifacts through the simulator launch path'

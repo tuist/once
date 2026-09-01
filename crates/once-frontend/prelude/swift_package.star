@@ -16,9 +16,12 @@ def _swift_package_workspace_resolver(ctx):
     graph = _xcode_local_swift_package_specs(ctx, packages, attrs.get("platform") or "macos", attrs.get("minimum_os") or "13.0", attrs.get("sdk_variant") or "simulator")
     roots = []
     for product in info.get("products") or []:
-        target_id = graph["products"].get(package["identity"] + "\x1f" + (product.get("name") or ""))
-        if target_id and target_id not in roots:
-            roots.append(target_id)
+        target_ids = graph["products"].get(package["identity"] + "\x1f" + (product.get("name") or ""))
+        if target_ids and type(target_ids) != "list":
+            target_ids = [target_ids]
+        for target_id in target_ids or []:
+            if target_id not in roots:
+                roots.append(target_id)
     return {"targets": graph["specs"], "roots": roots}
 
 def _swift_package_remote_infos(ctx):

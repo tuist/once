@@ -6931,6 +6931,8 @@ def host_which(name):
         return "/usr/bin/xcrun"
     if name == "codesign":
         return "/usr/bin/codesign"
+    if name == "sh":
+        return "/bin/sh"
     fail("unexpected host_which: " + name)
 
 def host_command(argv, env = None, merge_stderr = None):
@@ -6940,6 +6942,8 @@ def host_command(argv, env = None, merge_stderr = None):
         return "/sdks/iPhoneSimulator.sdk\n"
     if "--version" in argv:
         return "Swift version test\n"
+    if "-print-resource-dir" in argv:
+        return "/toolchain/resource\n"
     fail("unexpected host_command: " + str(argv))
 
 ctx = {{
@@ -7297,6 +7301,8 @@ def host_which(name):
         return "/usr/bin/xcrun"
     if name == "codesign":
         return "/usr/bin/codesign"
+    if name == "sh":
+        return "/bin/sh"
     fail("unexpected host_which: " + name)
 
 def host_command(argv, env = None, merge_stderr = None):
@@ -7306,6 +7312,8 @@ def host_command(argv, env = None, merge_stderr = None):
         return "/sdks/iPhoneSimulator.sdk\n"
     if "--version" in argv:
         return "Swift version test\n"
+    if "-print-resource-dir" in argv:
+        return "/toolchain/resource\n"
     fail("unexpected host_command: " + str(argv))
 
 ctx = {{
@@ -7527,6 +7535,209 @@ fn prelude_apple_thinned_package_rejects_multiple_applications() {
     clippy::too_many_lines,
     reason = "the inline Starlark fixture keeps this provider contract in one test"
 )]
+fn prelude_apple_swift_framework_uses_private_header_search_paths() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let sources = workspace.path().join("framework/Sources");
+    let headers = workspace.path().join("framework/Vendor/include/yoga");
+    std::fs::create_dir_all(&sources).unwrap();
+    std::fs::create_dir_all(&headers).unwrap();
+    std::fs::write(sources.join("Plugin.swift"), "public struct Plugin {}\n").unwrap();
+    std::fs::write(headers.join("YGEnums.h"), "typedef int YGEnum;\n").unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    if name == "xcrun":
+        return "/usr/bin/xcrun"
+    if name == "codesign":
+        return "/usr/bin/codesign"
+    if name == "find":
+        return "/usr/bin/find"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None, merge_stderr = None):
+    if argv[0] == "/usr/bin/find":
+        return "framework/Vendor/include/yoga/YGEnums.h\n"
+    if "--find" in argv:
+        return "/toolchain/" + argv[len(argv) - 1] + "\n"
+    if "--show-sdk-path" in argv:
+        return "/sdks/iPhoneSimulator.sdk\n"
+    if "--version" in argv:
+        return "Swift version test\n"
+    if "-print-resource-dir" in argv:
+        return "/toolchain/resource\n"
+    fail("unexpected host_command: " + str(argv))
+
+ctx = {{
+    "label": {{
+        "package": "framework",
+        "name": "Plugin",
+        "id": "framework/Plugin",
+    }},
+    "attr": {{
+        "platform": "ios",
+        "bundle_id": "dev.once.Plugin",
+        "minimum_os": "17.0",
+        "sdk_variant": "simulator",
+        "private_header_dirs": ["Vendor/include"],
+    }},
+    "deps": [{{
+        "label_id": "vendor/Binary",
+        "transitive_link_framework_bundles": [{{
+            "path": ".once/vendor/Binary.framework",
+            "module_name": "Binary",
+            "files": [".once/vendor/Binary.framework/Binary"],
+            "label_id": "vendor/Binary",
+            "linkage": "static",
+        }}],
+        "transitive_framework_bundles": [],
+    }}],
+    "srcs": ["Sources/**/*.swift"],
+    "build_dir": ".once/out/framework/Plugin",
+    "capability": "build",
+}}
+provider = _apple_framework_impl(ctx)
+result = repr([
+    provider["framework_path"],
+    provider.get("transitive_framework_search_dirs") or [],
+    provider.get("transitive_framework_files") or [],
+])
+"#
+    );
+    let store = store_for(workspace.path(), "framework");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(
+        out.unwrap(),
+        r#"[".once/out/framework/Plugin/Plugin.framework", [".once/vendor"], [".once/vendor/Binary.framework/Binary"]]"#
+    );
+    let compile = action_by_identifier(&store, "apple_framework_compile_Plugin");
+    assert!(compile
+        .argv
+        .windows(4)
+        .any(|args| { args == ["-Xcc", "-I", "-Xcc", "framework/Vendor/include"] }));
+    assert!(action_has_input_suffix(
+        compile,
+        "framework/Vendor/include/yoga/YGEnums.h"
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the inline Starlark fixture keeps this provider contract in one test"
+)]
+fn prelude_xcode_framework_loads_prebuilt_swift_macro_executables() {
+    let prelude = xcode_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let sources = workspace.path().join("framework/Sources");
+    std::fs::create_dir_all(&sources).unwrap();
+    std::fs::write(sources.join("Plugin.swift"), "public struct Plugin {}\n").unwrap();
+
+    let macro_cache = TempDir::new().unwrap();
+    let macro_path = macro_cache.path().join("FixtureMacros.macro");
+    std::fs::write(&macro_path, "fixture macro executable\n").unwrap();
+
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    if name == "xcrun":
+        return "/usr/bin/xcrun"
+    if name == "codesign":
+        return "/usr/bin/codesign"
+    if name == "find":
+        return "/usr/bin/find"
+    fail("unexpected host_which: " + name)
+
+def host_command(argv, env = None, merge_stderr = None):
+    if argv[0] == "/usr/bin/find":
+        return ""
+    if "--find" in argv:
+        return "/toolchain/" + argv[len(argv) - 1] + "\n"
+    if "--show-sdk-path" in argv:
+        return "/sdks/iPhoneSimulator.sdk\n"
+    if "--version" in argv:
+        return "Swift version test\n"
+    if "-print-resource-dir" in argv:
+        return "/toolchain/resource\n"
+    fail("unexpected host_command: " + str(argv))
+
+files = {{
+    "source_flags": {{}},
+    "project_header_dirs": [],
+    "sources": ["framework/Sources/Plugin.swift"],
+    "headers": [],
+    "exported_headers": [],
+    "frameworks": [],
+}}
+attrs = _xcode_common_attrs(
+    {{"attr": {{"sdk_variant": "simulator"}}}},
+    {{"name": "Plugin"}},
+    {{"SWIFT_LOAD_BINARY_MACROS": [{macro_descriptor:?}]}},
+    {{}},
+    "ios",
+    files,
+)
+attrs["bundle_id"] = "dev.once.Plugin"
+attrs["minimum_os"] = "17.0"
+ctx = {{
+    "label": {{
+        "package": "framework",
+        "name": "Plugin",
+        "id": "framework/Plugin",
+    }},
+    "attr": attrs,
+    "deps": [],
+    "srcs": ["Sources/**/*.swift"],
+    "build_dir": ".once/out/framework/Plugin",
+    "capability": "build",
+}}
+provider = _apple_framework_impl(ctx)
+result = repr(provider["framework_path"])
+"#,
+        macro_descriptor = format!("{}#FixtureMacros", macro_path.display()),
+    );
+    let store = store_for(workspace.path(), "framework");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(
+        out.unwrap(),
+        r#"".once/out/framework/Plugin/Plugin.framework""#
+    );
+    let compile = action_by_identifier(&store, "apple_framework_compile_Plugin");
+    let staged_macro = ".once/out/framework/binary-swift-plugins/0/FixtureMacros.macro";
+    assert!(
+        compile.argv.windows(4).any(|args| {
+            args == [
+                "-Xfrontend",
+                "-load-plugin-executable",
+                "-Xfrontend",
+                &format!("{staged_macro}#FixtureMacros"),
+            ]
+        }),
+        "{:?}",
+        compile.argv
+    );
+    assert!(action_has_input_suffix(compile, staged_macro));
+    assert!(store.actions.iter().any(|action| {
+        matches!(
+            action.operation,
+            Some(DeclaredActionOperation::MaterializeHostTree { ref source, ref destination, .. })
+                if source == macro_cache.path().to_string_lossy().as_ref()
+                    && destination == ".once/out/framework/binary-swift-plugins/0"
+        )
+    }));
+}
+
+#[cfg(unix)]
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the inline Starlark fixture keeps this provider contract in one test"
+)]
 fn prelude_apple_framework_stops_static_links_and_propagates_runtime_frameworks() {
     let prelude = all_prelude_source();
     let workspace = TempDir::new().unwrap();
@@ -7560,6 +7771,8 @@ def host_command(argv, env = None, merge_stderr = None):
         return "/sdks/iPhoneSimulator.sdk\n"
     if "--version" in argv:
         return "Swift version test\n"
+    if "-print-resource-dir" in argv:
+        return "/toolchain/resource\n"
     fail("unexpected host_command: " + str(argv))
 
 support = {{
@@ -14378,6 +14591,36 @@ result = repr([
 }
 
 #[test]
+fn prelude_xcode_preserves_every_target_in_a_package_product() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+infos = [{{
+    "identity": "FixtureShared",
+    "path": "Packages/Shared",
+    "info": {{
+        "products": [{{"name": "Shared", "targets": ["Core", "Extras"]}}],
+        "targets": [
+            {{"name": "Core", "type": "regular", "dependencies": [], "exclude": [], "settings": []}},
+            {{"name": "Extras", "type": "regular", "dependencies": [], "exclude": [], "settings": []}},
+        ],
+    }},
+}}]
+graph = _xcode_local_swift_package_specs({{}}, infos, "macos", "13.0", "simulator")
+consumer = {{"dependencies": [{{"product": ["Shared", "FixtureShared", None, None]}}]}}
+result = repr([
+    graph["products"]["FixtureShared\x1fShared"],
+    _xcode_swift_package_dependencies(consumer, "Consumer", {{}}, graph["products"], "macos"),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["SwiftPackage_FixtureShared_Core", "SwiftPackage_FixtureShared_Extras"], ["./SwiftPackage_FixtureShared_Core", "./SwiftPackage_FixtureShared_Extras"]]"#
+    );
+}
+
+#[test]
 fn prelude_xcode_lowers_binary_package_artifacts_to_cached_dependencies() {
     let prelude = xcode_prelude_source();
     let source = format!(
@@ -14773,6 +15016,200 @@ result = repr(_collect_dep_compile_inputs(deps, "build")[5])
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
         r#"["out/spm/frameworks"]"#
+    );
+}
+
+#[test]
+fn prelude_apple_resolves_clang_profile_runtime_archive() {
+    let prelude = apple_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    return "/usr/bin/" + name
+
+def host_path_exists(path):
+    return path.endswith(".a")
+
+def host_command(argv, env = None, merge_stderr = None):
+    if "--find" in argv:
+        return "/toolchain/usr/bin/clang\n"
+    if "-print-resource-dir" in argv:
+        return "/toolchain/usr/lib/clang/21\n"
+    fail("unexpected host command: " + str(argv))
+
+result = repr([
+    _apple_clang_profile_runtime("ios", "simulator", ""),
+    _apple_clang_profile_runtime("ios", "device", ""),
+    _apple_clang_profile_runtime("macos", "simulator", ""),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["/toolchain/usr/lib/clang/21/lib/darwin/libclang_rt.profile_iossim.a", "/toolchain/usr/lib/clang/21/lib/darwin/libclang_rt.profile_ios.a", "/toolchain/usr/lib/clang/21/lib/darwin/libclang_rt.profile_osx.a"]"#
+    );
+}
+
+#[test]
+fn prelude_apple_xcframework_import_keeps_dependency_link_data_compile_only() {
+    // An inferred prebuilt-module dependency edge must make the dependency's
+    // modules loadable by consumers (search dirs, module files, autolink
+    // suppression through the propagated framework bundles) without turning
+    // the dependency into a link input. Archives, SDK libraries, and linker
+    // options stay own-only; the generated project's build phases remain the
+    // only source of link edges.
+    let prelude = apple_prelude_source();
+    let available_libraries = serde_json::json!({
+        "AvailableLibraries": [{
+            "LibraryIdentifier": "ios-arm64-simulator",
+            "LibraryPath": "Primary.framework",
+            "BinaryPath": "Primary.framework/Primary",
+            "SupportedArchitectures": ["arm64"],
+            "SupportedPlatform": "ios",
+            "SupportedPlatformVariant": "simulator",
+        }],
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "/workspace"
+
+def host_arch():
+    return "arm64"
+
+def host_file_exists(path):
+    return path == "/workspace/Primary.xcframework/Info.plist"
+
+def host_which(name):
+    return name
+
+def host_command(argv, env = None, merge_stderr = None):
+    if argv[0] == "plutil":
+        return {available_libraries:?}
+    if argv[0] == "find":
+        return "/workspace/Primary.xcframework/ios-arm64-simulator/Primary.framework/Primary\n/workspace/Primary.xcframework/ios-arm64-simulator/Primary.framework/Modules/Primary.swiftmodule/arm64-apple-ios-simulator.swiftmodule\n"
+    if argv[0] == "file":
+        return "current ar archive\n"
+    fail("unexpected host_command: " + str(argv))
+
+support = {{
+    "path": "Cache/Support.xcframework/ios-arm64-simulator/Support.framework",
+    "module_name": "Support",
+    "files": [
+        "Cache/Support.xcframework/ios-arm64-simulator/Support.framework/Support",
+        "Cache/Support.xcframework/ios-arm64-simulator/Support.framework/Modules/Support.swiftmodule/arm64-apple-ios-simulator.swiftmodule",
+    ],
+    "label_id": "Support",
+    "linkage": "static",
+}}
+ctx = {{
+    "label": {{"package": "", "name": "Primary", "id": "Primary"}},
+    "attr": {{
+        "bundle": "Primary.xcframework",
+        "platform": "ios",
+        "sdk_variant": "simulator",
+    }},
+    "configuration": {{"tokens": []}},
+    "deps": [{{
+        "label_id": "Support",
+        "transitive_swiftmodule_dirs": [".once/out/Support"],
+        "transitive_archives": ["Cache/Support.xcframework/ios-arm64-simulator/Support.framework/Support"],
+        "transitive_link_framework_bundles": [support],
+        "transitive_framework_bundles": [],
+        "transitive_sdk_frameworks": ["UIKit"],
+        "transitive_linkopts": ["-ObjC"],
+    }}],
+    "srcs": [],
+    "build_dir": ".once/out/Primary",
+    "capability": "build",
+}}
+provider = _apple_xcframework_import_impl(ctx)
+result = repr([
+    provider["transitive_archives"],
+    [bundle["module_name"] for bundle in provider["transitive_link_framework_bundles"]],
+    provider["transitive_framework_bundles"],
+    provider["transitive_sdk_frameworks"],
+    provider["transitive_linkopts"],
+    provider["transitive_swiftmodule_dirs"],
+    provider["transitive_framework_search_dirs"],
+    provider["transitive_framework_files"],
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["Primary.xcframework/ios-arm64-simulator/Primary.framework/Primary"], ["Primary", "Support"], [], [], [], [".once/out/Support"], [], []]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_registers_absolute_xcframework_refs_via_workspace_alias() {
+    let prelude = xcode_prelude_source();
+    let objects = serde_json::json!({
+        "EXTERNAL": {"isa": "PBXFileReference", "lastKnownFileType": "wrapper.xcframework", "name": "External.xcframework", "path": "/ext/cache/hash/External.xcframework", "sourceTree": "<absolute>"},
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "/workspace"
+
+created = {{}}
+
+def host_path_exists(path):
+    return path in created
+
+def host_file_exists(path):
+    return path == "/ext/cache/hash/External.xcframework/Info.plist"
+
+def host_which(name):
+    return name
+
+def host_command(argv, env = None, cwd = None, merge_stderr = None):
+    if argv[0] == "sh":
+        created[argv[6]] = True
+        return ""
+    fail("unexpected host command: " + str(argv))
+
+objects = json_decode({objects:?})
+specs = []
+names = {{}}
+_xcode_register_absolute_xcframework_refs(objects, specs, names, "ios", "simulator")
+result = repr([
+    [spec["attrs"]["bundle"] for spec in specs],
+    names.get("/ext/cache/hash/External.xcframework"),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[[".once/xcframework-refs/_ext_cache_hash/External.xcframework"], "XCFramework_.once_xcframework-refs__ext_cache_hash_External.xcframework"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_collects_absolute_xcframework_file_references() {
+    let prelude = xcode_prelude_source();
+    let objects = serde_json::json!({
+        "EXTERNAL": {"isa": "PBXFileReference", "lastKnownFileType": "wrapper.xcframework", "name": "External.xcframework", "path": "/ext/cache/hash/External.xcframework", "sourceTree": "<absolute>"},
+        "INTERNAL": {"isa": "PBXFileReference", "lastKnownFileType": "wrapper.xcframework", "name": "Internal.xcframework", "path": "/workspace/Vendor/Internal.xcframework", "sourceTree": "<absolute>"},
+        "RELATIVE": {"isa": "PBXFileReference", "lastKnownFileType": "wrapper.xcframework", "path": "Vendor/Relative.xcframework", "sourceTree": "<group>"},
+        "OTHER": {"isa": "PBXFileReference", "path": "/ext/cache/libz.tbd", "sourceTree": "<absolute>"},
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "/workspace"
+
+objects = json_decode({objects:?})
+result = repr(_xcode_absolute_xcframework_refs(objects))
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["/ext/cache/hash/External.xcframework"]"#
     );
 }
 
@@ -15181,6 +15618,23 @@ result = repr([_xcode_clang_flags(settings, subs), _xcode_linkopts(settings, sub
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
         r#"[["-DSQLITE_HAS_CODEC", "-I", "/Pods/SQLCipher"], ["-Xlinker", "-ObjC", "-profile-generate", "-Xlinker", "-no_application_extension"]]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_drops_linker_option_groups_with_unresolved_arguments() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+settings = {{
+    "OTHER_LDFLAGS": "$(inherited) -weak_library \"$(BUILT_PRODUCTS_DIR)/Optional.framework/Optional\" -ObjC",
+}}
+result = repr(_xcode_linkopts(settings, {{}}))
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["-Xlinker", "-ObjC"]"#
     );
 }
 
@@ -15894,6 +16348,431 @@ result = repr(_xcode_xcframework_dependencies(
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
         r#"["XCFramework_Vendor_DependencyModule.xcframework"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_recovers_xcframework_dependencies_through_workspace_symlink() {
+    let prelude = xcode_prelude_source();
+    let objects = serde_json::json!({
+        "DEPENDENCY": {
+            "isa": "PBXFileReference",
+            "path": "/cache/hash/DependencyModule.xcframework",
+            "sourceTree": "<absolute>"
+        },
+        "BUILD": {"isa": "PBXBuildFile", "fileRef": "DEPENDENCY"},
+        "COPY_XCFRAMEWORK": {
+            "isa": "PBXCopyFilesBuildPhase",
+            "dstPath": "_StaticXCFrameworkDependencies/Feature",
+            "dstSubfolderSpec": 16,
+            "files": ["BUILD"]
+        },
+        "FEATURE": {"isa": "PBXNativeTarget", "buildPhases": ["COPY_XCFRAMEWORK"]},
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "/workspace"
+
+def host_path_exists(path):
+    return True
+
+def host_which(name):
+    return "/usr/bin/" + name
+
+def host_command(argv, env = None, merge_stderr = None):
+    if argv[0] == "/usr/bin/realpath":
+        if argv[1] == "/workspace/Derived/FrameworkSearchPaths/DependencyModule.xcframework":
+            return "/cache/hash/DependencyModule.xcframework\n"
+        return argv[1] + "\n"
+    fail("unexpected host command: " + str(argv))
+
+objects = json_decode({objects:?})
+specs = [{{
+    "name": "XCFramework_Derived_FrameworkSearchPaths_DependencyModule.xcframework",
+    "attrs": {{"bundle": "Derived/FrameworkSearchPaths/DependencyModule.xcframework"}},
+}}]
+result = repr(_xcode_xcframework_dependencies(
+    objects,
+    objects["FEATURE"],
+    {{"DEPENDENCY": "/cache/hash/DependencyModule.xcframework"}},
+    _xcode_xcframework_name_map(specs),
+))
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["XCFramework_Derived_FrameworkSearchPaths_DependencyModule.xcframework"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_matches_imported_modules_to_cached_xcframework_references() {
+    let prelude = xcode_prelude_source();
+    let objects = serde_json::json!({
+        "DEPENDENCY": {
+            "isa": "PBXFileReference",
+            "name": "Dependency-Module.xcframework",
+            "path": "/cache/hash/Dependency-Module.xcframework",
+            "sourceTree": "<absolute>"
+        },
+        "UNRELATED": {
+            "isa": "PBXFileReference",
+            "name": "Unrelated.framework",
+            "path": "/cache/hash/Unrelated.framework",
+            "sourceTree": "<absolute>"
+        },
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+objects = json_decode({objects:?})
+modules = _xcode_xcframework_module_map(
+    objects,
+    {{"DEPENDENCY": "/cache/hash/Dependency-Module.xcframework"}},
+    {{"/cache/hash/Dependency-Module.xcframework": "XCFramework_Dependency_Module"}},
+)
+result = repr([
+    modules.get(_xcode_product_dependency_key("Dependency_Module")),
+    modules.get(_xcode_product_dependency_key("Unrelated")),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["XCFramework_Dependency_Module", None]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_recovers_transitive_modules_from_disabled_autolink_flags() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+modules = _xcode_disabled_autolink_modules([
+    "-Xfrontend", "-disable-autolink-framework", "-Xfrontend", "Dependency_Module",
+    "-Xfrontend", "-disable-autolink-library", "-Xfrontend", "SupportLibrary",
+    "-enable-upcoming-feature", "MemberImportVisibility",
+])
+cached = {{
+    _xcode_product_dependency_key("Dependency-Module"): "XCFramework_Dependency_Module",
+    _xcode_product_dependency_key("SupportLibrary"): "XCFramework_SupportLibrary",
+}}
+result = repr([cached.get(_xcode_product_dependency_key(module)) for module in modules])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["XCFramework_Dependency_Module", "XCFramework_SupportLibrary"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_recovers_dependencies_from_prebuilt_swiftmodule_symbols() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+cached = {{
+    _xcode_product_dependency_key("PrimaryModule"): "XCFramework_Primary",
+    _xcode_product_dependency_key("Support_Module"): "XCFramework_Support",
+}}
+result = repr(_xcode_xcframework_dependency_ids(
+    "XCFramework_Primary",
+    ["PrimaryModule", "Support_Module", "unrelated_symbol"],
+    cached,
+))
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["XCFramework_Support"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_rejects_prebuilt_dependency_edges_that_close_a_cycle() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+specs = {{
+    "Primary": {{"name": "Primary", "deps": ["./Support"]}},
+    "Support": {{"name": "Support", "deps": []}},
+    "Leaf": {{"name": "Leaf", "deps": []}},
+}}
+result = repr(_xcode_acyclic_xcframework_dependencies(
+    "Support",
+    ["Primary", "Leaf"],
+    specs,
+))
+"#
+    );
+    assert_eq!(eval_prelude_source_to_repr(source).unwrap(), r#"["Leaf"]"#);
+}
+
+#[test]
+fn prelude_xcode_attaches_xcframework_dependencies_from_serialized_imports() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "/workspace"
+
+def host_path_exists(path):
+    return True
+
+def host_file_exists(path):
+    return True
+
+def host_arch():
+    return "arm64"
+
+def host_which(name):
+    return "/usr/bin/" + name
+
+def host_command(argv, env = None, cwd = None, merge_stderr = None):
+    tool = argv[0].split("/")[-1]
+    if tool == "realpath":
+        return argv[1] + "\n"
+    if tool == "plutil":
+        return '{{"AvailableLibraries": [{{"LibraryIdentifier": "ios-arm64-simulator", "SupportedPlatform": "ios", "SupportedPlatformVariant": "simulator", "SupportedArchitectures": ["arm64"]}}]}}'
+    if tool == "find":
+        if argv[-1] == "*.swiftinterface":
+            return ""
+        root = argv[2]
+        name = "ModuleA" if root.find("ModuleA.xcframework") >= 0 else "ModuleB"
+        return root + "/" + name + ".framework/Modules/" + name + ".swiftmodule/arm64-apple-ios-simulator.swiftmodule\n"
+    if tool == "xcrun":
+        if "--show-sdk-path" in argv:
+            return "/SDKs/iPhoneSimulator.sdk\n"
+        return "26.0\n"
+    if tool == "strings":
+        # Symbol noise: ModuleB's binary mentions ModuleA even though the
+        # serialized imports of ModuleB do not include it.
+        polluted = argv[1].find("ModuleB.xcframework") >= 0
+        return "ModuleA\nnoise\n" if polluted else "ModuleB\nnoise\n"
+    if tool == "sh":
+        if argv[4] == "ModuleA":
+            return "<stdin>:1:8: error: missing required modules: 'Foundation', 'ModuleB'\n"
+        return ""
+    fail("unexpected host command: " + str(argv))
+
+specs = [
+    {{"name": "App", "kind": "apple_application", "deps": ["./XCF_B", "./XCF_A"], "attrs": {{}}}},
+    {{"name": "XCF_A", "kind": "apple_xcframework_import", "deps": [], "attrs": {{"bundle": "Vendor/ModuleA.xcframework", "platform": "ios", "sdk_variant": "simulator", "arch": "arm64"}}}},
+    {{"name": "XCF_B", "kind": "apple_xcframework_import", "deps": [], "attrs": {{"bundle": "Vendor/ModuleB.xcframework", "platform": "ios", "sdk_variant": "simulator", "arch": "arm64"}}}},
+]
+module_targets = {{
+    _xcode_product_dependency_key("ModuleA"): "XCF_A",
+    _xcode_product_dependency_key("ModuleB"): "XCF_B",
+}}
+_xcode_attach_xcframework_module_dependencies(specs, module_targets)
+result = repr([specs[1]["deps"], specs[2]["deps"]])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["./XCF_B"], []]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_lowers_swift_package_name_setting() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+result = repr(_xcode_swift_language_flags({{"SWIFT_VERSION": "5.0", "SWIFT_PACKAGE_NAME": "PrimaryFeature"}}))
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["-swift-version", "5", "-package-name", "PrimaryFeature"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_lowers_dead_code_stripping_setting() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+result = repr([
+    _xcode_linkopts({{"OTHER_LDFLAGS": "-ObjC", "DEAD_CODE_STRIPPING": "YES"}}, {{}}),
+    _xcode_linkopts({{"OTHER_LDFLAGS": "-ObjC"}}, {{}}),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["-Xlinker", "-ObjC", "-Xlinker", "-dead_strip"], ["-Xlinker", "-ObjC"]]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_lowers_swift_include_paths_setting() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+settings = {{
+    "OTHER_SWIFT_FLAGS": "-DX",
+    "SWIFT_INCLUDE_PATHS": ["$(inherited)", "$(SRCROOT)/../Vendor/Lib.xcframework/ios-arm64"],
+}}
+result = repr(_xcode_swift_flags(settings, {{"SRCROOT": "Modules/App"}}))
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["-DX", "-I", "Modules/App/../Vendor/Lib.xcframework/ios-arm64"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_skips_platform_filtered_build_files() {
+    let prelude = xcode_prelude_source();
+    let objects = serde_json::json!({
+        "APPKIT": {"isa": "PBXFileReference", "name": "AppKit.framework", "path": "System/Library/Frameworks/AppKit.framework", "sourceTree": "DEVELOPER_DIR"},
+        "UIKIT": {"isa": "PBXFileReference", "name": "UIKit.framework", "path": "System/Library/Frameworks/UIKit.framework", "sourceTree": "SDKROOT"},
+        "APPKIT_BUILD": {"isa": "PBXBuildFile", "fileRef": "APPKIT", "platformFilters": ["macos"]},
+        "UIKIT_BUILD": {"isa": "PBXBuildFile", "fileRef": "UIKIT"},
+        "FRAMEWORKS": {"isa": "PBXFrameworksBuildPhase", "files": ["APPKIT_BUILD", "UIKIT_BUILD"]},
+        "TARGET": {"isa": "PBXNativeTarget", "buildPhases": ["FRAMEWORKS"]},
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+objects = json_decode({objects:?})
+ios = _xcode_classic_phase_files({{}}, objects, objects["TARGET"], {{}}, "ios")["frameworks"]
+macos = _xcode_classic_phase_files({{}}, objects, objects["TARGET"], {{}}, "macos")["frameworks"]
+result = repr([ios, macos])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["UIKit"], ["AppKit", "UIKit"]]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_classifies_tbd_frameworks_phase_files_as_sdk_dylibs() {
+    let prelude = xcode_prelude_source();
+    let objects = serde_json::json!({
+        "UIKIT": {"isa": "PBXFileReference", "name": "UIKit.framework", "path": "System/Library/Frameworks/UIKit.framework", "sourceTree": "SDKROOT"},
+        "RESOLV": {"isa": "PBXFileReference", "name": "libresolv.tbd", "path": "Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/usr/lib/libresolv.tbd", "sourceTree": "DEVELOPER_DIR"},
+        "UIKIT_BUILD": {"isa": "PBXBuildFile", "fileRef": "UIKIT"},
+        "RESOLV_BUILD": {"isa": "PBXBuildFile", "fileRef": "RESOLV"},
+        "FRAMEWORKS": {"isa": "PBXFrameworksBuildPhase", "files": ["UIKIT_BUILD", "RESOLV_BUILD"]},
+        "TARGET": {"isa": "PBXNativeTarget", "buildPhases": ["FRAMEWORKS"]},
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+objects = json_decode({objects:?})
+files = _xcode_classic_phase_files({{}}, objects, objects["TARGET"], {{}})
+result = repr([files["frameworks"], files["sdk_dylibs"]])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["UIKit"], ["resolv"]]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_treats_staticlib_mach_o_framework_as_static() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+result = repr([
+    _xcode_framework_is_static({{"MACH_O_TYPE": "staticlib"}}, "com.apple.product-type.framework"),
+    _xcode_framework_is_static({{}}, "com.apple.product-type.framework"),
+    _xcode_framework_is_static({{}}, "com.apple.product-type.framework.static"),
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r"[True, False, True]"
+    );
+}
+
+#[test]
+fn prelude_xcode_parses_swiftinterface_imports() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+text = "\n".join([
+    "// swift-interface-format-version: 1.0",
+    "// swift-module-flags: -target arm64-apple-ios14.0-simulator -module-name TensorFlowLite",
+    "import Foundation",
+    "@_exported import TensorFlowLiteC",
+    "@preconcurrency @_implementationOnly import SecretCore",
+    "import struct SwiftShims.Detail",
+    "import Swift",
+    "public class Interpreter {{}}",
+])
+result = repr(_xcode_swiftinterface_imports(text))
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["Foundation", "TensorFlowLiteC", "SecretCore", "SwiftShims", "Swift"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_recovers_imports_from_interface_only_xcframework() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "/workspace"
+
+def host_path_exists(path):
+    return True
+
+def host_file_exists(path):
+    return True
+
+def host_arch():
+    return "arm64"
+
+def host_which(name):
+    return "/usr/bin/" + name
+
+def host_command(argv, env = None, cwd = None, merge_stderr = None):
+    tool = argv[0].split("/")[-1]
+    if tool == "plutil":
+        return '{{"AvailableLibraries": [{{"LibraryIdentifier": "ios-arm64_x86_64-simulator", "SupportedPlatform": "ios", "SupportedPlatformVariant": "simulator", "SupportedArchitectures": ["arm64", "x86_64"]}}]}}'
+    if tool == "find":
+        if argv[-1] == "*.swiftmodule":
+            return ""
+        return argv[2] + "/TensorFlowLite.framework/Modules/TensorFlowLite.swiftmodule/arm64.swiftinterface\n"
+    if tool == "sh":
+        return "// swift-module-flags: -module-name TensorFlowLite\nimport Foundation\n@_exported import TensorFlowLiteC\n"
+    fail("unexpected host command: " + str(argv))
+
+spec = {{"name": "XCF_TFL", "kind": "apple_xcframework_import", "deps": [], "attrs": {{"bundle": "Vendor/TensorFlowLite.xcframework", "platform": "ios", "sdk_variant": "simulator", "arch": "arm64"}}}}
+module_files = _xcode_xcframework_selected_swiftmodules(spec)
+result = repr(_xcode_xcframework_serialized_imports(spec, module_files))
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["Foundation", "TensorFlowLiteC"]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_probe_parses_aggregated_missing_module_list() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+output = "<stdin>:1:8: error: missing required modules: 'Alpha', 'Beta', 'Gamma', 'Delta'\n  | note\n<stdin>:1:8: error: missing required module 'Extra'\n"
+result = repr(_xcode_probe_missing_modules(output))
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["Alpha", "Beta", "Gamma", "Delta", "Extra"]"#
     );
 }
 

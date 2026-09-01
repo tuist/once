@@ -315,9 +315,11 @@ fn restore_legacy_file(rel: &str, abs: &Path, mut blob: impl Read) -> Result<()>
             source,
         })?;
     }
-    let mut file = std::fs::File::create(abs).map_err(|source| Error::RestoreOutput {
-        path: rel.to_string(),
-        source,
+    let mut file = crate::file_blob::create_replacing_readonly(abs).map_err(|source| {
+        Error::RestoreOutput {
+            path: rel.to_string(),
+            source,
+        }
     })?;
     std::io::copy(&mut blob, &mut file).map_err(|source| Error::RestoreOutput {
         path: rel.to_string(),
