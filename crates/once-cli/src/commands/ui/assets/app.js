@@ -499,7 +499,10 @@ function graphPage(snapshot) {
       const visibleNodes = filteredGraphNodes(graph)
       const filtersActive = graphView.query.trim() || graphView.kind !== "all" || graphView.scope !== "all"
       return `<section data-part="graph-filter-controls" aria-label="Graph filters">
-        <noora-text-input data-graph-search type="search" name="graph-search" placeholder="Filter graph" value="${escape(graphView.query)}"></noora-text-input>
+        <noora-text-input data-graph-search input-type="search" name="graph-search" placeholder="Filter graph" value="${escape(graphView.query)}">
+          <noora-icon slot="prefix" name="search"></noora-icon>
+          <noora-shortcut-key slot="suffix" size="small">⌘K</noora-shortcut-key>
+        </noora-text-input>
         <noora-dropdown data-graph-kind label="${escape(graphView.kind === "all" ? "All target kinds" : graphKindLabel(graphView.kind))}" secondary-text="Target kind:">
           ${graphKindOptions(graph)}
         </noora-dropdown>
