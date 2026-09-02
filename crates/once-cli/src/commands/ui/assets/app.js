@@ -311,8 +311,8 @@ function navItem(page, label, icon, selected) {
 
 function shell(content) {
   const crumb = run
-    ? `<noora-breadcrumb-item>${escape(run.workspace)}</noora-breadcrumb-item>
-       <noora-breadcrumb-item>${escape(run.target)}</noora-breadcrumb-item>`
+    ? `<noora-breadcrumb-item>Workspace: ${escape(run.workspace)}</noora-breadcrumb-item>
+       <noora-breadcrumb-item>${operationLabel(run)} ${escape(buildLabel(run))}</noora-breadcrumb-item>`
     : ""
   return `<div data-part="runs-shell">
     <header data-part="runs-header">
@@ -320,7 +320,7 @@ function shell(content) {
         <noora-icon name="package"></noora-icon><span>Once</span>
       </a>
       <noora-breadcrumbs data-part="runs-breadcrumbs" style-variant="slash">
-        <noora-breadcrumb-item href="${routePath("overview")}" icon="stack_2" data-route="overview">Runs</noora-breadcrumb-item>
+        <noora-breadcrumb-item href="${routePath("overview")}" icon="stack_2" data-route="overview">Run report</noora-breadcrumb-item>
         ${crumb}
       </noora-breadcrumbs>
       <div data-part="runs-header-actions">
