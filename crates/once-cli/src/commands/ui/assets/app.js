@@ -336,9 +336,6 @@ function shell(content) {
 
 function titlebar(snapshot) {
   return `<header data-part="run-titlebar">
-    <div data-part="run-eyebrow">
-      <span>${escape(snapshot.workspace)}</span><span data-part="run-eyebrow-separator">/</span><span>Once ${escape(snapshot.operation || "build")}</span>
-    </div>
     <div data-part="run-heading">
       <h1>${operationLabel(snapshot)} ${escape(buildLabel(snapshot))}</h1>
       <noora-badge appearance="light-fill" color="${badgeColor(snapshot.status)}">${statusLabel(snapshot.status)}</noora-badge>

@@ -106,19 +106,6 @@ code {
   gap: 12px;
 }
 
-[data-part="run-eyebrow"] {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: #62666e;
-  font-size: 13px;
-  line-height: 18px;
-}
-
-[data-part="run-eyebrow-separator"] {
-  color: #9a9da4;
-}
-
 [data-part="run-heading"] {
   display: flex;
   align-items: center;
