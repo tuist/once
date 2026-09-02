@@ -1,12 +1,16 @@
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use console::Style;
 use once_cas::{TuistAuth, TuistAuthPrompt};
 use once_core::Xdg;
 
 use crate::cache_provider::{self, ResolvedCacheProviderConfig};
 use crate::cli::Output;
+
+fn unsupported_auth_provider(provider: &str) -> anyhow::Error {
+    anyhow::anyhow!("cache provider `{provider}` does not support authentication")
+}
 
 pub async fn login(
     workspace: &Path,
@@ -16,9 +20,7 @@ pub async fn login(
     output: Output,
 ) -> Result<()> {
     match cache_provider::resolve_auth_provider(workspace, xdg, provider)? {
-        ResolvedCacheProviderConfig::Local => {
-            bail!("cache provider `{provider}` does not support authentication")
-        }
+        ResolvedCacheProviderConfig::Local => Err(unsupported_auth_provider(provider)),
         ResolvedCacheProviderConfig::Tuist(config) => {
             let provider_name = config.provider_name.clone();
             let provider_name_for_prompt = provider_name.clone();
@@ -47,9 +49,7 @@ pub async fn login(
 
 pub async fn logout(workspace: &Path, xdg: &Xdg, provider: &str, output: Output) -> Result<()> {
     match cache_provider::resolve_auth_provider(workspace, xdg, provider)? {
-        ResolvedCacheProviderConfig::Local => {
-            bail!("cache provider `{provider}` does not support authentication")
-        }
+        ResolvedCacheProviderConfig::Local => Err(unsupported_auth_provider(provider)),
         ResolvedCacheProviderConfig::Tuist(config) => {
             let provider_name = config.provider_name.clone();
             let credentials_root = cache_provider::credentials_root(xdg);
