@@ -67,7 +67,7 @@ struct OutputRecord {
 
 #[derive(Clone, Serialize)]
 pub(super) struct BuildGraph {
-    declared_target_count: usize,
+    target_count: usize,
     resolved_target_count: usize,
     nodes: Vec<BuildGraphNode>,
 }
@@ -79,7 +79,6 @@ struct BuildGraphNode {
     package: String,
     kind: String,
     deps: Vec<String>,
-    grouped_dependency_count: usize,
     build_target: bool,
 }
 
@@ -264,14 +263,6 @@ impl RunOperation {
 
 impl BuildGraph {
     fn load(workspace: &Path, target_id: &str, configuration: &BuildConfiguration) -> Option<Self> {
-        let declared =
-            match once_frontend::load_workspace_with_configuration(workspace, configuration) {
-                Ok(targets) => targets,
-                Err(error) => {
-                    tracing::debug!(error = %error, "could not load Once build targets for Runs");
-                    return None;
-                }
-            };
         let resolved = match once_frontend::load_graph_workspace_with_configuration(
             workspace,
             configuration,
@@ -282,10 +273,6 @@ impl BuildGraph {
                 return None;
             }
         };
-        let declared_ids = declared
-            .iter()
-            .map(once_frontend::Target::id)
-            .collect::<BTreeSet<_>>();
         let resolved_by_id = resolved
             .iter()
             .map(|target| (target.label.id.as_str(), target))
@@ -297,27 +284,19 @@ impl BuildGraph {
         }
         let nodes = reachable
             .iter()
-            .filter(|id| declared_ids.contains(id.as_str()))
             .filter_map(|id| {
                 let target = resolved_by_id.get(id.as_str())?;
                 let deps = target
                     .dependency_ids()
                     .filter(|dependency| reachable.contains(*dependency))
-                    .filter(|dependency| declared_ids.contains(*dependency))
                     .cloned()
                     .collect::<Vec<_>>();
-                let grouped_dependency_count = target
-                    .dependency_ids()
-                    .filter(|dependency| reachable.contains(*dependency))
-                    .filter(|dependency| !declared_ids.contains(*dependency))
-                    .count();
                 Some(BuildGraphNode {
                     id: target.label.id.clone(),
                     name: target.label.name.clone(),
                     package: target.label.package.clone(),
                     kind: target.kind.clone(),
                     deps,
-                    grouped_dependency_count,
                     build_target: target.label.id == target_id,
                 })
             })
@@ -326,7 +305,7 @@ impl BuildGraph {
             return None;
         }
         Some(Self {
-            declared_target_count: nodes.len(),
+            target_count: nodes.len(),
             resolved_target_count: reachable.len(),
             nodes,
         })
@@ -409,9 +388,15 @@ fn milliseconds(duration: Duration) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
-    use super::{RunContext, RunOperation, UiServer};
+    use once_frontend::BuildConfiguration;
+    use tempfile::TempDir;
+
+    use super::{BuildGraph, RunContext, RunOperation, UiServer};
 
     #[tokio::test]
     async fn publishes_build_updates_to_the_local_server() {
@@ -444,5 +429,71 @@ mod tests {
         assert_eq!(body["cache"], "hit");
         assert_eq!(body["operation"], "build");
         assert_eq!(body["logs"][0]["text"], "Starting build\n");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn includes_reachable_resolved_targets_for_native_swift_packages() {
+        let workspace = TempDir::new().unwrap();
+        fs::create_dir_all(workspace.path().join("Sources/CModule/include")).unwrap();
+        fs::create_dir_all(workspace.path().join("Sources/App")).unwrap();
+        fs::write(
+            workspace.path().join("Package.swift"),
+            r#"// swift-tools-version: 6.0
+import PackageDescription
+
+let package = Package(
+    name: "CModuleImport",
+    products: [.library(name: "CModuleImport", targets: ["App"])],
+    targets: [
+        .target(name: "CModule"),
+        .target(name: "App", dependencies: ["CModule"]),
+    ]
+)
+"#,
+        )
+        .unwrap();
+        fs::write(
+            workspace.path().join("Sources/CModule/module.c"),
+            "int answer(void) { return 42; }\n",
+        )
+        .unwrap();
+        fs::write(
+            workspace.path().join("Sources/CModule/include/module.h"),
+            "int answer(void);\n",
+        )
+        .unwrap();
+        fs::write(
+            workspace
+                .path()
+                .join("Sources/CModule/include/module.modulemap"),
+            "module CModule { header \"module.h\" export * }\n",
+        )
+        .unwrap();
+        fs::write(
+            workspace.path().join("Sources/App/App.swift"),
+            "import CModule\npublic let value = answer()\n",
+        )
+        .unwrap();
+
+        let graph = BuildGraph::load(
+            workspace.path(),
+            "swift_package",
+            &BuildConfiguration::default(),
+        )
+        .expect("native Swift package graph");
+
+        assert_eq!(graph.target_count, 3);
+        assert_eq!(graph.resolved_target_count, 3);
+        assert!(graph
+            .nodes
+            .iter()
+            .any(|node| { node.id == "SwiftPackage_CModuleImport_CModule" && !node.build_target }));
+        let app = graph
+            .nodes
+            .iter()
+            .find(|node| node.id == "SwiftPackage_CModuleImport_App")
+            .expect("app target");
+        assert_eq!(app.deps, vec!["SwiftPackage_CModuleImport_CModule"]);
     }
 }

@@ -96,13 +96,6 @@ class OnceWorkspaceGraph extends HTMLElement {
             },
           },
           {
-            selector: "node.aggregate",
-            style: {
-              "border-style": "dashed",
-              color: "#5a5e65",
-            },
-          },
-          {
             selector: "node.build-target",
             style: {
               "border-color": "#202124",
@@ -171,7 +164,6 @@ class OnceWorkspaceGraph extends HTMLElement {
       group: "nodes",
       data: {id: node.id, label: this.label(node)},
       classes: [
-        node.grouped_dependency_count > 0 && "aggregate",
         node.build_target && "build-target",
       ].filter(Boolean).join(" "),
     }))
@@ -192,9 +184,6 @@ class OnceWorkspaceGraph extends HTMLElement {
       ? "External packages"
       : node.name.replaceAll("_", "-")
     if (node.build_target) return `${name}\nBuild target\n${node.package || node.id}`
-    if (node.grouped_dependency_count > 0) {
-      return `${name}\n${node.grouped_dependency_count} resolved packages`
-    }
     return name
   }
 
@@ -522,7 +511,7 @@ function graphPage(snapshot) {
         <noora-button data-graph-clear variant="secondary" size="medium"${filtersActive ? "" : " disabled"}>Clear filters</noora-button>
       </section>
       <div data-part="graph-toolbar">
-        <div data-part="graph-summary"><noora-badge appearance="light-fill" color="primary">${visibleNodes.length} of ${graph.declared_target_count} targets shown</noora-badge></div>
+        <div data-part="graph-summary"><noora-badge appearance="light-fill" color="primary">${visibleNodes.length} of ${graph.target_count} targets shown</noora-badge></div>
         <span data-part="graph-source">${graph.resolved_target_count} resolved targets loaded by Once</span>
       </div>
       <div data-part="build-graph"><once-workspace-graph id="workspace-graph"></once-workspace-graph></div>`
