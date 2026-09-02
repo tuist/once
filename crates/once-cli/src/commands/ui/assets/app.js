@@ -260,11 +260,11 @@ function cacheLabel(snapshot) {
 }
 
 function cacheDetail(snapshot) {
-  if (snapshot.cache === "hit") return "Restored from the action cache"
-  if (snapshot.cache === "miss") return "Executed locally"
+  if (snapshot.cache === "hit") return "From action cache"
+  if (snapshot.cache === "miss") return "Ran locally"
   return snapshot.status === "failed"
-    ? "Build stopped before the cache decision"
-    : "Awaiting a cache decision"
+    ? "No cache result"
+    : "Awaiting cache result"
 }
 
 function duration(snapshot) {
@@ -356,7 +356,7 @@ function runMetric(title, description, value, detail) {
     <div data-part="header">
       <div data-part="title"><span data-part="label">${escape(title)}</span></div>
       <noora-tooltip size="large" title="${escape(title)}" description="${escape(description)}">
-        <noora-icon slot="trigger" name="alert_circle"></noora-icon>
+        <span slot="trigger" data-part="tooltip-icon"><noora-icon name="alert_circle"></noora-icon></span>
       </noora-tooltip>
     </div>
     <span data-part="value">${escape(value)}</span>
@@ -389,7 +389,7 @@ function runMetrics(snapshot) {
       resolvedTargetCount ?? "Loading",
       resolvedTargetCount == null
         ? "Waiting for the target graph"
-        : `${resolvedTargetCount} targets in this run`,
+        : `${resolvedTargetCount} ${resolvedTargetCount === 1 ? "target" : "targets"} in this run`,
     ),
   ]
   if (snapshot.operation === "test") {
@@ -414,7 +414,9 @@ function runMetrics(snapshot) {
 function overview(snapshot) {
   return `<section data-part="run-page">
     ${titlebar(snapshot)}
-    <section data-part="widgets" aria-label="Run analytics">${runMetrics(snapshot)}</section>
+    <noora-card data-part="run-analytics-card" icon="chart_arcs" title="Run analytics">
+      <section data-part="widgets" aria-label="Run analytics">${runMetrics(snapshot)}</section>
+    </noora-card>
     <section data-part="run-details">
       <noora-card icon="info_circle" title="Run details">
         <div data-part="build-metadata-grid">
@@ -559,7 +561,7 @@ function testWidget(title, description, value) {
     <div data-part="header">
       <div data-part="title"><span data-part="label">${title}</span></div>
       <noora-tooltip size="large" title="${title}" description="${description}">
-        <noora-icon slot="trigger" name="alert_circle"></noora-icon>
+        <span slot="trigger" data-part="tooltip-icon"><noora-icon name="alert_circle"></noora-icon></span>
       </noora-tooltip>
     </div>
     <span data-part="value">${value}</span>
