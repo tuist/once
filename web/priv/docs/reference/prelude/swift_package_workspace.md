@@ -10,6 +10,9 @@ tests into the existing Apple target kinds. The package manifest remains
 authoritative for products, target dependencies, source layout, compiler
 settings, resources, and platform constraints.
 
+Executable products are linked into Apple application bundles, so their
+compiled executable is a declared build output alongside the bundle metadata.
+
 Once discovers a workspace automatically from `Package.swift`. A repository
 without `once.toml` can therefore query and build its first-party package
 targets directly. Discovery skips generated package-manager state such as

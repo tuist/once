@@ -362,6 +362,9 @@ impl SourceDigestCache {
         expected: Digest,
     ) -> bool {
         if self.known_changes().output_is_untouched(relative) {
+            if workspace.join(relative).symlink_metadata().is_err() {
+                return false;
+            }
             return self
                 .inner
                 .output_entries

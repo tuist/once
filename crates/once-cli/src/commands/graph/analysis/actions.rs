@@ -121,7 +121,6 @@ impl DeclaredActionsState {
                     path.clone(),
                     AvailableInput {
                         blob_digest: *digest,
-                        producer_action_digest: outcome.digest,
                         same_target: true,
                         materialized: outcome.cache_state != EvidenceCacheState::Hit,
                     },
@@ -2159,11 +2158,7 @@ fn compose_input_fingerprint_with_available(
     sorted_inputs.dedup();
     for input in &sorted_inputs {
         if let Some(available) = resolve_available_input(available_inputs, input) {
-            let digest = if available.same_target {
-                &available.blob_digest
-            } else {
-                &available.producer_action_digest
-            };
+            let digest = &available.blob_digest;
             let category = if available.same_target {
                 "generated-input"
             } else {
@@ -3207,7 +3202,6 @@ mod tests {
             dependency_path.to_string(),
             AvailableInput {
                 blob_digest: dependency_blob,
-                producer_action_digest: Digest::of_bytes(b"dependency action"),
                 same_target: false,
                 materialized: false,
             },
@@ -3307,7 +3301,6 @@ mod tests {
             dependency_path.to_string(),
             AvailableInput {
                 blob_digest: dependency_blob,
-                producer_action_digest: Digest::of_bytes(b"dependency action"),
                 same_target: false,
                 materialized: false,
             },
@@ -3359,7 +3352,6 @@ mod tests {
             dependency_path.to_string(),
             AvailableInput {
                 blob_digest: dependency_blob,
-                producer_action_digest: Digest::of_bytes(b"dependency action"),
                 same_target: false,
                 materialized: true,
             },
@@ -4078,13 +4070,11 @@ mod tests {
             toolchain_identity: None,
             identifier: None,
         };
-        let producer_action_digest = Digest::of_bytes(b"same producer action");
         let available = |content| {
             BTreeMap::from([(
                 input.to_string(),
                 AvailableInput {
                     blob_digest: Digest::of_bytes(content),
-                    producer_action_digest,
                     same_target: true,
                     materialized: false,
                 },
@@ -4114,7 +4104,7 @@ mod tests {
     }
 
     #[test]
-    fn dependency_generated_input_uses_its_action_digest() {
+    fn dependency_generated_input_uses_its_content_digest() {
         let workspace = tempfile::tempdir().unwrap();
         let input = ".once/out/dependency.txt";
         let declared = DeclaredAction {
@@ -4138,13 +4128,11 @@ mod tests {
             toolchain_identity: None,
             identifier: None,
         };
-        let producer_action_digest = Digest::of_bytes(b"same producer action");
-        let available = |content| {
+        let available = |_producer: &[u8], content: &[u8]| {
             BTreeMap::from([(
                 input.to_string(),
                 AvailableInput {
                     blob_digest: Digest::of_bytes(content),
-                    producer_action_digest,
                     same_target: false,
                     materialized: false,
                 },
@@ -4156,7 +4144,7 @@ mod tests {
             &declared,
             module_digest(),
             &[],
-            &available(b"first remote blob"),
+            &available(b"first producer action", b"stable module"),
             None,
         )
         .unwrap();
@@ -4165,12 +4153,23 @@ mod tests {
             &declared,
             module_digest(),
             &[],
-            &available(b"second remote blob"),
+            &available(b"second producer action", b"stable module"),
+            None,
+        )
+        .unwrap();
+
+        let third = compose_input_digest_with_available(
+            workspace.path(),
+            &declared,
+            module_digest(),
+            &[],
+            &available(b"second producer action", b"changed module"),
             None,
         )
         .unwrap();
 
         assert_eq!(first, second);
+        assert_ne!(first, third);
     }
 
     #[test]

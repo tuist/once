@@ -178,6 +178,28 @@ fn a_changed_output_visits_it_again() {
         .is_none());
 }
 
+#[test]
+fn a_missing_recorded_action_output_visits_it_again() {
+    let workspace = TempDir::new().unwrap();
+    let target = target("apps/tool", "tool");
+    let mut built = outcome(&[".once/out/tool/tool"]);
+    built.result.outputs.insert(
+        ".once/out/tool/tool".to_string(),
+        Digest::of_bytes(b"tool output"),
+    );
+    let reopened = round_trip(&workspace, |outcomes| {
+        outcomes.record(
+            &target,
+            "key".to_string(),
+            &observations("apps/tool", &["src/*.rs"]),
+            &inputs(&[]),
+            &built,
+        );
+    });
+
+    assert!(reopened.reuse(&target, "key", &changed(&[], &[])).is_none());
+}
+
 /// The name folds in the target definition and its dependencies' outcomes, so a
 /// dependency that rebuilt gives everything above it a different name.
 #[test]

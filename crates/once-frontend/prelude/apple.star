@@ -18,6 +18,7 @@
 #
 # The impl returns a provider dict. Conventional keys downstream target kinds read:
 #   "swiftmodule_dir" -> directory holding the .swiftmodule (added to -I by consumers)
+#   "transitive_swiftmodule_inputs" -> exact module artifacts consumed by compilers
 #   "archive"         -> workspace-relative path to the .a archive
 
 # Apple-specific helpers implemented in starlark on top of the generic
@@ -85,8 +86,20 @@ def _apple_triple(platform, minimum_os, sdk_variant, arch, mac_catalyst):
 def _apple_swiftmodule_triple(platform, sdk_variant, arch, mac_catalyst):
     return _apple_triple(platform, "", sdk_variant, arch, mac_catalyst)
 
+def _apple_swift_module_sidecars(swiftmodule):
+    suffix = ".swiftmodule"
+    if not _ends_with(swiftmodule, suffix):
+        fail("Swift module output must end with `.swiftmodule`: " + swiftmodule)
+    stem = swiftmodule[:len(swiftmodule) - len(suffix)]
+    return [
+        stem + ".abi.json",
+    ]
+
 def _developer_env(xcode_developer_dir):
-    env = {}
+    # Swift's standard-library hashing is randomly seeded unless this is set.
+    # Keeping the seed stable prevents that process-local random value leaking
+    # into emitted compiler artifacts, which makes cached outputs reusable.
+    env = {"SWIFT_DETERMINISTIC_HASHING": "1"}
     if xcode_developer_dir:
         env["DEVELOPER_DIR"] = xcode_developer_dir
     return env
@@ -529,7 +542,7 @@ def _apple_framework_compile_files(bundle):
     binary = path + "/" + module_name if path and module_name else ""
     out = []
     for file in bundle.get("files") or []:
-        is_interface = "/Headers/" in file or "/Modules/" in file
+        is_interface = "/Headers/" in file
         is_module_file = file.endswith(".modulemap") or file.endswith(".swiftmodule") or file.endswith(".swiftinterface") or file.endswith(".swiftdoc")
         if file == binary or is_interface or is_module_file:
             out.append(file)
@@ -645,6 +658,32 @@ def _apple_collect_resource_bundles(deps, own_bundles = []):
                 seen[path] = True
                 out.append(bundle)
     return out
+
+def _apple_stage_framework_headers(headers, framework_root, compile_framework_root, module_name):
+    if not headers:
+        return []
+    framework_headers = framework_root + "/Headers"
+    compile_framework_headers = compile_framework_root + "/Headers"
+    staged_headers = []
+    for header in headers:
+        header_name = _basename(header)
+        framework_header = framework_headers + "/" + header_name
+        compile_framework_header = compile_framework_headers + "/" + header_name
+        copy_path(
+            header,
+            framework_header,
+            inputs = [header],
+            identifier = "stage_framework_header_" + module_name + "_" + header_name,
+        )
+        copy_path(
+            header,
+            compile_framework_header,
+            inputs = [header],
+            identifier = "stage_unextended_framework_header_" + module_name + "_" + header_name,
+        )
+        staged_headers.append(framework_header)
+        staged_headers.append(compile_framework_header)
+    return staged_headers
 
 def _apple_framework_bundle_paths(bundles):
     return [bundle["path"] for bundle in bundles]
@@ -1306,6 +1345,7 @@ def _apple_library_impl(ctx):
         for dir in dep.get("transitive_swiftmodule_dirs") or []:
             if dir != ctx["build_dir"] and dir not in compile_swiftmodule_dirs:
                 compile_swiftmodule_dirs.append(dir)
+    compile_swiftmodule_inputs = _apple_collect_swiftmodule_inputs(deps)
 
     # Compile-visible header dirs: direct deps' exported headers'
     # parent directories. Used as `-I` flags for both clang and
@@ -1406,8 +1446,6 @@ def _apple_library_impl(ctx):
             compile_modulemap_path = declare_output("Unextended/" + module_name + ".framework/Modules/module.modulemap")
             compile_framework_root = _parent_dir(_parent_dir(compile_modulemap_path))
             generated_framework_search_dir = _parent_dir(compile_framework_root)
-            prepare_path(generated_framework_root, kind = "remove", identifier = "clean_framework_module_" + module_name)
-            prepare_path(compile_framework_root, kind = "remove", identifier = "clean_unextended_framework_module_" + module_name)
             copy_path(
                 authored_modulemap,
                 compile_modulemap_path,
@@ -1418,23 +1456,12 @@ def _apple_library_impl(ctx):
             if len(swift_srcs) > 0 and not is_universal:
                 consumer_modulemap_contents = consumer_modulemap_contents.rstrip() + "\nmodule " + module_name + ".Swift {\n    header \"" + module_name + "-Swift.h\"\n    requires objc\n    export *\n}\n"
             write_path(modulemap_path, consumer_modulemap_contents)
-            for header in _unique(own_exported_headers + authored_modulemap_headers):
-                staged_header = generated_framework_root + "/Headers/" + _basename(header)
-                copy_path(
-                    header,
-                    staged_header,
-                    inputs = [header],
-                    identifier = "stage_framework_header_" + module_name + "_" + _basename(header),
-                )
-                staged_headers.append(staged_header)
-                compile_staged_header = compile_framework_root + "/Headers/" + _basename(header)
-                copy_path(
-                    header,
-                    compile_staged_header,
-                    inputs = [header],
-                    identifier = "stage_unextended_framework_header_" + module_name + "_" + _basename(header),
-                )
-                staged_headers.append(compile_staged_header)
+            staged_headers.extend(_apple_stage_framework_headers(
+                _unique(own_exported_headers + authored_modulemap_headers),
+                generated_framework_root,
+                compile_framework_root,
+                module_name,
+            ))
         else:
             # Keep one canonical path for an authored non-framework map. Clang
             # resolves relative header entries from the map's own directory and
@@ -1456,25 +1483,12 @@ def _apple_library_impl(ctx):
             compile_modulemap_path = declare_output("Unextended/" + module_name + ".framework/Modules/module.modulemap")
             compile_framework_root = _parent_dir(_parent_dir(compile_modulemap_path))
             generated_framework_search_dir = _parent_dir(compile_framework_root)
-            prepare_path(generated_framework_root, kind = "remove", identifier = "clean_framework_module_" + module_name)
-            prepare_path(compile_framework_root, kind = "remove", identifier = "clean_unextended_framework_module_" + module_name)
-            for header in own_exported_headers:
-                staged_header = framework_root + "/Headers/" + _basename(header)
-                copy_path(
-                    header,
-                    staged_header,
-                    inputs = [header],
-                    identifier = "stage_framework_header_" + module_name + "_" + _basename(header),
-                )
-                staged_headers.append(staged_header)
-                compile_staged_header = compile_framework_root + "/Headers/" + _basename(header)
-                copy_path(
-                    header,
-                    compile_staged_header,
-                    inputs = [header],
-                    identifier = "stage_unextended_framework_header_" + module_name + "_" + _basename(header),
-                )
-                staged_headers.append(compile_staged_header)
+            staged_headers.extend(_apple_stage_framework_headers(
+                own_exported_headers,
+                framework_root,
+                compile_framework_root,
+                module_name,
+            ))
         else:
             modulemap_path = declare_output("underlying.modulemap" if len(swift_srcs) > 0 and not is_universal else "module.modulemap")
             compile_modulemap_path = modulemap_path
@@ -1640,6 +1654,7 @@ def _apple_library_impl(ctx):
     # action combines them.
     swift_only = len(objc_srcs) == 0 and len(c_srcs) == 0 and len(cxx_srcs) == 0 and len(assembly_srcs) == 0
     per_arch_archives = []
+    swiftmodule_outputs = []
     swift_objc_header_holder = [""]
 
     def _compile_for_arch(arch):
@@ -1653,6 +1668,9 @@ def _apple_library_impl(ctx):
         else:
             swiftmodule = declare_output(module_name + ".swiftmodule") if len(swift_srcs) > 0 else ""
             swiftdoc = declare_output(module_name + ".swiftdoc") if len(swift_srcs) > 0 else ""
+        swift_module_sidecars = _apple_swift_module_sidecars(swiftmodule) if swiftmodule else []
+        if swiftmodule:
+            swiftmodule_outputs.append(swiftmodule)
         swift_objc_header = declare_output((module_name + ".framework/Headers/" + module_name + arch_suffix + "-Swift.h") if generated_framework_module else (("Headers/" + module_name + "/" + module_name + arch_suffix + "-Swift.h") if (staged_headers_dir or swift_interop_modulemap) else (module_name + arch_suffix + "-Swift.h"))) if len(swift_srcs) > 0 else ""
         swift_objc_header_holder[0] = swift_objc_header
 
@@ -1666,6 +1684,7 @@ def _apple_library_impl(ctx):
                 module_name,
                 "-target",
                 triple,
+                "-avoid-emit-module-source-info",
             ]
             # Mixed-language targets compile Objective-C against Swift's
             # generated compatibility header. In library parsing mode Swift
@@ -1768,6 +1787,9 @@ def _apple_library_impl(ctx):
             for plugin_input in _apple_swift_plugin_inputs(plugin_dylibs, plugin_executables):
                 if plugin_input not in swift_inputs:
                     swift_inputs.append(plugin_input)
+            for swiftmodule_input in _apple_swiftmodule_inputs_for_arch(compile_swiftmodule_inputs, arch):
+                if swiftmodule_input not in swift_inputs:
+                    swift_inputs.append(swiftmodule_input)
             for file in compile_framework_files:
                 if file not in swift_inputs:
                     swift_inputs.append(file)
@@ -1817,7 +1839,7 @@ def _apple_library_impl(ctx):
             for src in swift_srcs:
                 swift_compile_argv.append(src)
             swift_compile_inputs = list(swift_inputs) + ([swift_output_file_map] if swift_output_file_map else [])
-            swift_compile_outputs = [swiftmodule, swiftdoc, swift_objc_header] + swift_objects
+            swift_compile_outputs = [swiftmodule, swiftdoc, swift_objc_header] + swift_module_sidecars + swift_objects
             obsolete_modulemaps = [
                 ctx["build_dir"] + "/module.modulemap",
                 ctx["build_dir"] + "/swift.modulemap",
@@ -2037,6 +2059,12 @@ def _apple_library_impl(ctx):
     for arch in archs:
         per_arch_archives.append(_compile_for_arch(arch))
 
+    transitive_swiftmodule_inputs = _collect_transitive(
+        exported_deps_records,
+        "transitive_swiftmodule_inputs",
+        swiftmodule_outputs,
+    )
+
     # --- lipo merge --------------------------------------------------
     # For universal builds, combine the per-arch archives into the
     # final fat archive. Single-arch builds skip this entirely; the
@@ -2111,6 +2139,7 @@ def _apple_library_impl(ctx):
         "modulemap": (swift_submodulemap if swift_submodule_replaces_modulemap else modulemap_path) or swift_interop_modulemap,
         "hmap": hmap_path,
         "transitive_swiftmodule_dirs": transitive_swiftmodule_dirs,
+        "transitive_swiftmodule_inputs": transitive_swiftmodule_inputs,
         "transitive_exported_headers": transitive_exported_headers,
         "transitive_generated_headers": transitive_generated_headers,
         "transitive_framework_search_dirs": transitive_framework_search_dirs,
@@ -2132,6 +2161,50 @@ def _apple_library_impl(ctx):
         "transitive_framework_bundles": transitive_framework_bundles,
         "transitive_frameworks": _apple_framework_bundle_paths(transitive_framework_bundles),
         "transitive_resource_bundles": transitive_resource_bundles,
+    }
+
+def _apple_system_module_impl(ctx):
+    attrs = _resolve_attrs(ctx, ctx["attr"], ctx["label"]["id"], ["modulemap"])
+    modulemap = _package_relative(ctx, attrs["modulemap"])
+    headers = [_package_relative(ctx, header) for header in (attrs.get("headers") or [])]
+    header_dirs = [_parent_dir(modulemap)]
+    for directory in attrs.get("header_dirs") or []:
+        directory = _package_relative(ctx, directory)
+        if directory and directory not in header_dirs:
+            header_dirs.append(directory)
+    return {
+        "label_id": ctx["label"]["id"],
+        "swiftmodule_dir": "",
+        "archive": "",
+        "objc_header": "",
+        "alwayslink": False,
+        "exported_headers": headers,
+        "exported_header_dirs": header_dirs,
+        "modulemap": modulemap,
+        "hmap": "",
+        "transitive_swiftmodule_dirs": [],
+        "transitive_swiftmodule_inputs": [],
+        "transitive_exported_headers": headers,
+        "transitive_generated_headers": [],
+        "transitive_framework_search_dirs": [],
+        "transitive_framework_files": [],
+        "transitive_vfs_overlays": [],
+        "transitive_exported_header_dirs": header_dirs,
+        "transitive_modulemaps": [modulemap],
+        "transitive_hmaps": [],
+        "transitive_archives": [],
+        "transitive_alwayslink_archives": [],
+        "transitive_sdk_frameworks": [],
+        "transitive_weak_sdk_frameworks": [],
+        "transitive_sdk_dylibs": attrs.get("sdk_dylibs") or [],
+        "transitive_linkopts": attrs.get("linkopts") or [],
+        "transitive_plugin_dylibs": [],
+        "transitive_plugin_executables": [],
+        "transitive_defines": [],
+        "transitive_link_framework_bundles": [],
+        "transitive_framework_bundles": [],
+        "transitive_frameworks": [],
+        "transitive_resource_bundles": [],
     }
 
 _APPLE_PROFILE_RUNTIME_SUFFIXES = {
@@ -2267,6 +2340,7 @@ def _apple_xcframework_import_impl(ctx):
             "framework_module_name": module_name,
             "framework_files": files,
             "transitive_swiftmodule_dirs": _collect_transitive(deps, "transitive_swiftmodule_dirs", []),
+            "transitive_swiftmodule_inputs": _collect_transitive(deps, "transitive_swiftmodule_inputs", [path for path in files if path.endswith(".swiftmodule")]),
             "transitive_exported_header_dirs": _collect_transitive(deps, "transitive_exported_header_dirs", [headers_dir] if headers_dir else []),
             "transitive_modulemaps": _collect_transitive(deps, "transitive_modulemaps", modulemaps),
             "transitive_archives": [binary] if linkage == "static" else [],
@@ -2290,6 +2364,7 @@ def _apple_xcframework_import_impl(ctx):
         "framework_module_name": module_name,
         "framework_files": files,
         "transitive_swiftmodule_dirs": _collect_transitive(deps, "transitive_swiftmodule_dirs", []),
+        "transitive_swiftmodule_inputs": _collect_transitive(deps, "transitive_swiftmodule_inputs", [path for path in files if path.endswith(".swiftmodule")]),
         "transitive_exported_header_dirs": _collect_transitive(deps, "transitive_exported_header_dirs", []),
         "transitive_modulemaps": _collect_transitive(deps, "transitive_modulemaps", []),
         "transitive_archives": [binary] if linkage == "static" else [],
@@ -2324,6 +2399,8 @@ def _swift_macro_impl(ctx):
 
     plugin_executable = declare_output(module_name + "-tool")
     plugin_swiftmodule = declare_output(module_name + ".swiftmodule")
+    plugin_swiftdoc = declare_output(module_name + ".swiftdoc")
+    plugin_module_sidecars = _apple_swift_module_sidecars(plugin_swiftmodule)
 
     deps = _apple_native_deps(ctx)
     _validate_apple_native_deps(deps, ctx["label"]["id"])
@@ -2343,6 +2420,7 @@ def _swift_macro_impl(ctx):
         plugin_dylibs,
         plugin_executables,
     ) = _collect_dep_compile_inputs(deps, ctx["build_dir"])
+    dep_swiftmodule_inputs = _apple_collect_swiftmodule_inputs(deps)
 
     swift_argv = list(swiftc["argv"]) + [
         "-emit-executable",
@@ -2351,6 +2429,7 @@ def _swift_macro_impl(ctx):
         module_name,
         "-emit-module-path",
         plugin_swiftmodule,
+        "-avoid-emit-module-source-info",
         "-target",
         triple,
         "-parse-as-library",
@@ -2398,6 +2477,9 @@ def _swift_macro_impl(ctx):
     for hmap in dep_hmaps:
         if hmap not in swift_inputs:
             swift_inputs.append(hmap)
+    for swiftmodule_input in _apple_swiftmodule_inputs_for_arch(dep_swiftmodule_inputs, host_arch()):
+        if swiftmodule_input not in swift_inputs:
+            swift_inputs.append(swiftmodule_input)
     for file in dep_framework_files:
         if file not in swift_inputs:
             swift_inputs.append(file)
@@ -2414,7 +2496,7 @@ def _swift_macro_impl(ctx):
     run_action(
         argv = swift_argv,
         inputs = swift_inputs,
-        outputs = [plugin_executable, plugin_swiftmodule],
+        outputs = [plugin_executable, plugin_swiftmodule, plugin_swiftdoc] + plugin_module_sidecars,
         env = swiftc["env"],
         toolchain_identity = swiftc["identity"],
         identifier = "swift_macro_compile_" + module_name,
@@ -2870,6 +2952,24 @@ def _apple_swift_plugin_inputs(plugin_dylibs, plugin_executables):
             inputs.append(path)
     return inputs
 
+def _apple_collect_swiftmodule_inputs(deps):
+    inputs = []
+    for dep in deps:
+        for input in dep.get("transitive_swiftmodule_inputs") or []:
+            if input and input not in inputs:
+                inputs.append(input)
+    return inputs
+
+def _apple_swiftmodule_inputs_for_arch(inputs, arch):
+    selected = []
+    for input in inputs:
+        if ".swiftmodule/" in input:
+            module_file = _basename(input)
+            if module_file != arch + ".swiftmodule" and not module_file.startswith(arch + "-"):
+                continue
+        selected.append(input)
+    return selected
+
 def _collect_dep_compile_inputs(deps, build_dir):
     """Aggregate compile-visible inputs from dep providers.
 
@@ -3016,6 +3116,7 @@ def _apple_mixed_framework_impl(ctx):
     dylib = declare_output(framework_dir + "/" + product_name)
     info_plist = declare_output(framework_dir + "/Info.plist")
     framework_files = [dylib, info_plist]
+    framework_swiftmodules = []
 
     swiftc = _resolve_swiftc(platform, sdk_variant, xcode_developer_dir)
     triple = _apple_triple(platform, target_sdk_version, sdk_variant, host_arch(), attrs.get("mac_catalyst") or False)
@@ -3108,6 +3209,7 @@ def _apple_mixed_framework_impl(ctx):
             copy_path(swiftmodule_source, swiftmodule, inputs = [swiftmodule_source], identifier = "apple_framework_swiftmodule_" + module_name + "_" + arch)
             copy_path(swiftdoc_source, swiftdoc, inputs = [swiftdoc_source], identifier = "apple_framework_swiftdoc_" + module_name + "_" + arch)
             framework_files.extend([swiftmodule, swiftdoc])
+            framework_swiftmodules.append(swiftmodule)
 
     headers = list(library.get("exported_headers") or [])
     if library.get("objc_header"):
@@ -3209,6 +3311,7 @@ def _apple_mixed_framework_impl(ctx):
         "framework_files": framework_files,
         "swiftmodule_dir": framework_path + "/Modules",
         "transitive_swiftmodule_dirs": transitive_swiftmodule_dirs,
+        "transitive_swiftmodule_inputs": _collect_transitive([library], "transitive_swiftmodule_inputs", framework_swiftmodules),
         "transitive_exported_header_dirs": _unique(dep_header_dirs + (library.get("transitive_exported_header_dirs") or [])),
         "transitive_exported_headers": library.get("transitive_exported_headers") or [],
         "transitive_generated_headers": library.get("transitive_generated_headers") or [],
@@ -3277,6 +3380,7 @@ def _apple_framework_impl(ctx):
     module_triple = _apple_swiftmodule_triple(platform, sdk_variant, arch, False)
     swiftmodule = declare_output(module_dir + "/" + module_triple + ".swiftmodule")
     swiftdoc = declare_output(module_dir + "/" + module_triple + ".swiftdoc")
+    swift_module_sidecars = _apple_swift_module_sidecars(swiftmodule)
     modulemap = declare_output(framework_dir + "/Modules/module.modulemap")
     info_plist = declare_output(framework_dir + "/Info.plist")
 
@@ -3298,6 +3402,7 @@ def _apple_framework_impl(ctx):
         plugin_dylibs,
         plugin_executables,
     ) = _collect_dep_compile_inputs(deps, ctx["build_dir"])
+    dep_swiftmodule_inputs = _apple_collect_swiftmodule_inputs(deps)
     alwayslink_archives = _apple_collect_alwayslink_archives(deps)
     runtime_framework_bundles = _apple_collect_runtime_framework_bundles(deps)
 
@@ -3308,6 +3413,7 @@ def _apple_framework_impl(ctx):
         module_name,
         "-emit-module-path",
         swiftmodule,
+        "-avoid-emit-module-source-info",
         "-target",
         triple,
         "-parse-as-library",
@@ -3360,6 +3466,9 @@ def _apple_framework_impl(ctx):
     for ar in dep_archives:
         if ar not in swift_inputs:
             swift_inputs.append(ar)
+    for swiftmodule_input in _apple_swiftmodule_inputs_for_arch(dep_swiftmodule_inputs, arch):
+        if swiftmodule_input not in swift_inputs:
+            swift_inputs.append(swiftmodule_input)
     for f in dep_framework_files:
         if f not in swift_inputs:
             swift_inputs.append(f)
@@ -3379,7 +3488,7 @@ def _apple_framework_impl(ctx):
     run_action(
         argv = swift_argv,
         inputs = swift_inputs,
-        outputs = [dylib, swiftmodule, swiftdoc],
+        outputs = [dylib, swiftmodule, swiftdoc] + swift_module_sidecars,
         env = swiftc["env"],
         toolchain_identity = swiftc["identity"],
         identifier = "apple_framework_compile_" + module_name,
@@ -3410,7 +3519,7 @@ def _apple_framework_impl(ctx):
     cs_stamp = declare_output(framework_dir + "/_CodeSignature/CodeResources")
     run_action(
         argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", ctx["build_dir"] + "/" + framework_dir],
-        inputs = [dylib, info_plist, modulemap, swiftmodule],
+        inputs = [dylib, info_plist, modulemap, swiftmodule] + swift_module_sidecars,
         outputs = [dylib, cs_stamp],
         env = codesign["env"],
         toolchain_identity = codesign["identity"],
@@ -3426,7 +3535,7 @@ def _apple_framework_impl(ctx):
     transitive_plugin_dylibs = _collect_transitive(deps, "transitive_plugin_dylibs", plugin_dylibs)
     transitive_plugin_executables = _collect_transitive(deps, "transitive_plugin_executables", plugin_executables)
 
-    framework_files = [dylib, swiftmodule, swiftdoc, modulemap, info_plist, cs_stamp]
+    framework_files = [dylib, swiftmodule, swiftdoc] + swift_module_sidecars + [modulemap, info_plist, cs_stamp]
     own_framework_bundle = _apple_framework_bundle(
         ctx["build_dir"] + "/" + framework_dir,
         module_name,
@@ -3444,6 +3553,7 @@ def _apple_framework_impl(ctx):
         "framework_files": framework_files,
         "swiftmodule_dir": ctx["build_dir"] + "/" + framework_dir + "/Modules",
         "transitive_swiftmodule_dirs": transitive_swiftmodule_dirs,
+        "transitive_swiftmodule_inputs": _collect_transitive(deps, "transitive_swiftmodule_inputs", [swiftmodule]),
         "transitive_archives": [],
         "absorbed_static_archives": absorbed_static_archives,
         "transitive_framework_search_dirs": framework_search_dirs,
@@ -3766,6 +3876,7 @@ def _apple_application_impl(ctx):
     emits_swift_module = enable_testing or len(objc_srcs) > 0
     swiftmodule = declare_output(product_name + ".swiftmodule") if emits_swift_module else ""
     swiftdoc = declare_output(product_name + ".swiftdoc") if emits_swift_module else ""
+    swift_module_sidecars = _apple_swift_module_sidecars(swiftmodule) if emits_swift_module else []
     swift_objc_header = declare_output(module_name + "-Swift.h") if len(objc_srcs) > 0 else ""
 
     # Asset catalogs: generate the type-safe `ImageResource`/`ColorResource`
@@ -3912,6 +4023,7 @@ def _apple_application_impl(ctx):
         plugin_dylibs,
         plugin_executables,
     ) = _collect_dep_compile_inputs(deps, ctx["build_dir"])
+    compile_swiftmodule_inputs = _apple_collect_swiftmodule_inputs(deps)
     alwayslink_archives = _apple_collect_alwayslink_archives(deps)
     runtime_framework_bundles = _apple_collect_runtime_framework_bundles(deps)
     has_main_source = False
@@ -4036,6 +4148,9 @@ def _apple_application_impl(ctx):
     for ar in dep_archives:
         if ar not in swift_inputs:
             swift_inputs.append(ar)
+    for swiftmodule_input in _apple_swiftmodule_inputs_for_arch(compile_swiftmodule_inputs, arch):
+        if swiftmodule_input not in swift_inputs:
+            swift_inputs.append(swiftmodule_input)
     for f in dep_framework_files:
         if f not in swift_inputs:
             swift_inputs.append(f)
@@ -4066,6 +4181,7 @@ def _apple_application_impl(ctx):
             "-emit-module",
             "-emit-module-path",
             swiftmodule,
+            "-avoid-emit-module-source-info",
         ]
         if enable_testing:
             module_argv.append("-enable-testing")
@@ -4117,6 +4233,9 @@ def _apple_application_impl(ctx):
         for hmap in dep_hmaps:
             if hmap not in module_inputs:
                 module_inputs.append(hmap)
+        for swiftmodule_input in _apple_swiftmodule_inputs_for_arch(compile_swiftmodule_inputs, arch):
+            if swiftmodule_input not in module_inputs:
+                module_inputs.append(swiftmodule_input)
         for header in private_header_files:
             if header not in module_inputs:
                 module_inputs.append(header)
@@ -4132,7 +4251,7 @@ def _apple_application_impl(ctx):
         run_action(
             argv = module_argv,
             inputs = module_inputs,
-            outputs = [swiftmodule, swiftdoc] + ([swift_objc_header] if swift_objc_header else []),
+            outputs = [swiftmodule, swiftdoc] + swift_module_sidecars + ([swift_objc_header] if swift_objc_header else []),
             env = swiftc["env"],
             toolchain_identity = swiftc["identity"],
             identifier = "apple_application_module_" + product_name,
@@ -4343,12 +4462,17 @@ def _apple_application_impl(ctx):
     )
 
     transitive_swiftmodule_dirs = []
+    transitive_swiftmodule_inputs = []
     if enable_testing:
         transitive_swiftmodule_dirs.append(ctx["build_dir"])
+        transitive_swiftmodule_inputs.append(swiftmodule)
         for dep in deps:
             for d in dep.get("transitive_swiftmodule_dirs") or []:
                 if d and d not in transitive_swiftmodule_dirs:
                     transitive_swiftmodule_dirs.append(d)
+            for swiftmodule_input in dep.get("transitive_swiftmodule_inputs") or []:
+                if swiftmodule_input and swiftmodule_input not in transitive_swiftmodule_inputs:
+                    transitive_swiftmodule_inputs.append(swiftmodule_input)
     transitive_exported_header_dirs = _unique(private_header_dirs + compile_header_dirs)
     transitive_generated_headers = []
     for dep in deps:
@@ -4372,6 +4496,7 @@ def _apple_application_impl(ctx):
         "product_name": product_name,
         "swiftmodule_dir": ctx["build_dir"] if enable_testing else "",
         "transitive_swiftmodule_dirs": transitive_swiftmodule_dirs,
+        "transitive_swiftmodule_inputs": transitive_swiftmodule_inputs,
         "transitive_exported_header_dirs": transitive_exported_header_dirs,
         "transitive_modulemaps": dep_modulemaps,
         "transitive_hmaps": dep_hmaps,
@@ -4744,6 +4869,7 @@ def _apple_test_bundle_impl(ctx):
         plugin_dylibs,
         plugin_executables,
     ) = _collect_dep_compile_inputs(deps, ctx["build_dir"])
+    compile_swiftmodule_inputs = _apple_collect_swiftmodule_inputs(deps)
     dep_archives = [archive for archive in dep_archives if archive not in host_link_archives]
     alwayslink_archives = _apple_collect_alwayslink_archives(deps)
     runtime_framework_bundles = _apple_collect_runtime_framework_bundles(deps)
@@ -4892,6 +5018,9 @@ def _apple_test_bundle_impl(ctx):
     for ar in dep_archives:
         if ar not in swift_inputs:
             swift_inputs.append(ar)
+    for swiftmodule_input in _apple_swiftmodule_inputs_for_arch(compile_swiftmodule_inputs, arch):
+        if swiftmodule_input not in swift_inputs:
+            swift_inputs.append(swiftmodule_input)
     for f in dep_framework_files:
         if f not in swift_inputs:
             swift_inputs.append(f)
@@ -5227,13 +5356,18 @@ mkdir -p "$HOME"
 log={log}
 results={results}
 native_results={native_results}
+status_file={status_file}
 : > "$native_results"
-set +e
+: > "$status_file"
 (
+  set +e
+  (
 {runner_command}
-) > "$log" 2>&1
-status=$?
-set -e
+  )
+  status=$?
+  printf '%s\\n' "$status" > "$status_file"
+) 2>&1 | tee "$log" >/dev/null
+status=$(cat "$status_file")
 cp "$log" "$native_results"
 {cases_script}
 if [ "$status" -eq 0 ]; then run_status=passed; failed=0; passed=$total; else run_status=failed; failed=1; passed=0; fi
@@ -5248,6 +5382,7 @@ exit "$status"
             log = _shell_literal(log),
             results = _shell_literal(results),
             native_results = _shell_literal(native_results),
+            status_file = _shell_literal(test_dir + "/runner-status"),
             runner_command = runner_command,
             cases_script = _apple_test_cases_script(swift_srcs, cases_file, ctx["label"]["id"], runner_type, selectors),
             target = ctx["label"]["id"],
@@ -5730,6 +5865,7 @@ def _swift_package_dependencies_impl(ctx):
         "modulemap": "",
         "hmap": "",
         "transitive_swiftmodule_dirs": [module_dir],
+        "transitive_swiftmodule_inputs": [module_dir],
         "transitive_exported_headers": [],
         "transitive_exported_header_dirs": [],
         "transitive_modulemaps": [],
@@ -5961,6 +6097,28 @@ apple_library = target_kind(
             "apple-library-with-objc",
             name = "Apple library with mixed Swift and Objective-C",
             use_when = "Your library exposes Swift APIs that call into an existing Objective-C codebase through a bridging header.",
+        ),
+    ],
+)
+
+apple_system_module = target_kind(
+    docs = "Exposes an authored Clang system module map and its link requirements to Apple consumers without compiling an archive.",
+    impl = _apple_system_module_impl,
+    attrs = [
+        attr("modulemap", "string", required = True, docs = "Workspace-relative authored Clang module map", configurable = False),
+        attr("headers", "list<string>", default = "[]", docs = "Headers referenced by the module map and tracked as compiler inputs"),
+        attr("header_dirs", "list<string>", default = "[]", docs = "Additional header search directories exported to dependent targets"),
+        attr("sdk_dylibs", "list<string>", default = "[]", docs = "System libraries linked by dependent Apple binaries"),
+        attr("linkopts", "list<string>", default = "[]", docs = "Additional linker flags propagated to dependent Apple binaries"),
+    ],
+    providers = ["apple_linkable", "apple_module"],
+    capabilities = [capability("build", ["default", "modulemap"])],
+    examples = [
+        example(
+            "apple-system-module-minimal",
+            name = "Minimal Apple system module",
+            use_when = "You want to expose a Clang module map and its system-library linkage to an Apple target without compiling a wrapper archive.",
+            platforms = ["macos"],
         ),
     ],
 )

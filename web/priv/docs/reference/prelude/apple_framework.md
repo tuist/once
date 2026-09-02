@@ -96,6 +96,7 @@ Swift symbols.
 | `framework_module_name` | string | Module name used by direct consumers |
 | `framework_files` | list&lt;string&gt; | Framework outputs tracked by the action graph |
 | `transitive_swiftmodule_dirs` | list&lt;string&gt; | Dependency Swift module search directories required by consumers; the framework's own module is found through its framework search path |
+| `transitive_swiftmodule_inputs` | list&lt;string&gt; | Exact module artifacts available to downstream compiler actions |
 | `transitive_exported_header_dirs` | list&lt;string&gt; | Dependency header search directories required to import this framework's module |
 | `transitive_modulemaps` | list&lt;string&gt; | Dependency Clang module maps required to import this framework's module |
 | `transitive_hmaps` | list&lt;string&gt; | Dependency header maps required to import this framework's module |

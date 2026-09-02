@@ -1,0 +1,18 @@
+[[target]]
+name = "ExampleSystem"
+kind = "apple_system_module"
+srcs = ["System/module.modulemap", "System/Example.h"]
+
+[target.attrs]
+modulemap = "System/module.modulemap"
+headers = ["System/Example.h"]
+
+[[target]]
+name = "Consumer"
+kind = "apple_library"
+srcs = ["Sources/Consumer.swift"]
+deps = ["./ExampleSystem"]
+
+[target.attrs]
+platform = "macos"
+minimum_os = "13.0"

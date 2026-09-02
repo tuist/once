@@ -196,7 +196,7 @@ defmodule OnceSiteWeb.Docs.Sidebar do
               ),
               target_group(
                 "Apple",
-                ~w(apple_library swift_macro apple_framework apple_application
+                ~w(apple_library apple_system_module swift_macro apple_framework apple_application
                 apple_resource_bundle apple_thinned_package apple_test_bundle
                 apple_xcframework_import swift_package_workspace swift_package_dependencies swift_package_pin)
               ),
