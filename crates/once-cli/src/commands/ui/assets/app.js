@@ -795,6 +795,27 @@ function bindTestControls() {
   })
 }
 
+function focusGraphSearch() {
+  const search = app.querySelector("[data-graph-search]")
+  if (!search) return false
+  search.focus()
+  search.shadowRoot?.querySelector("input")?.focus()
+  return true
+}
+
+function handleKeyboardShortcut(event) {
+  const usesGraphShortcut =
+    route() === "graph" &&
+    !event.isComposing &&
+    !event.altKey &&
+    !event.shiftKey &&
+    (event.metaKey || event.ctrlKey) &&
+    event.key.toLowerCase() === "k"
+  if (!usesGraphShortcut) return
+  event.preventDefault()
+  focusGraphSearch()
+}
+
 function applyProgressUpdate(previous) {
   if (route() !== "progress" || !previous || previous.run_id !== run.run_id) return false
   if (previous.status !== run.status || Boolean(previous.graph) !== Boolean(run.graph)) return false
@@ -854,6 +875,7 @@ function connect() {
 
 document.addEventListener("click", navigate)
 window.addEventListener("popstate", render)
+window.addEventListener("keydown", handleKeyboardShortcut)
 render()
 void loadInitialState()
 connect()
