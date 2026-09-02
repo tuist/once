@@ -283,6 +283,10 @@ function operationLabel(snapshot) {
   return snapshot.operation === "test" ? "Test" : "Build"
 }
 
+function pageTitle(snapshot) {
+  return snapshot ? `${operationLabel(snapshot)} ${buildLabel(snapshot)} · Once Runs` : "Once Runs"
+}
+
 function time(value) {
   return new Intl.DateTimeFormat(undefined, {
     hour: "2-digit",
@@ -666,6 +670,7 @@ function empty() {
 function render() {
   const currentRoute = route()
   const content = run ? (currentRoute === "progress" ? progress(run) : currentRoute === "tests" ? testResults(run) : overview(run)) : empty()
+  document.title = pageTitle(run)
   app.innerHTML = shell(content)
   const graph = app.querySelector("#workspace-graph")
   if (graph && run?.graph) graph.graphData = run.graph
