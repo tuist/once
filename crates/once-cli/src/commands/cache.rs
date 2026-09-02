@@ -25,6 +25,8 @@ struct CacheEntry {
 struct CacheStats {
     blobs: CacheEntry,
     actions: CacheEntry,
+    used_bytes: u64,
+    cap_bytes: u64,
 }
 
 #[derive(Serialize)]
@@ -104,8 +106,9 @@ impl InputSpec {
     }
 }
 
-pub async fn print_stats(cache: &CacheProvider, output: Output) -> Result<()> {
+pub async fn print_stats(cache: &CacheProvider, cap_bytes: u64, output: Output) -> Result<()> {
     let s = cache.stats().await?;
+    let used_bytes = s.blob_bytes.saturating_add(s.action_bytes);
     let stats = CacheStats {
         blobs: CacheEntry {
             count: s.blob_count,
@@ -115,12 +118,27 @@ pub async fn print_stats(cache: &CacheProvider, output: Output) -> Result<()> {
             count: s.action_count,
             bytes: s.action_bytes,
         },
+        used_bytes,
+        cap_bytes,
     };
     let body = match output.format {
-        Format::Human => format!(
-            "blobs:   {} ({} bytes)\nactions: {} ({} bytes)\n",
-            s.blob_count, s.blob_bytes, s.action_count, s.action_bytes,
-        ),
+        Format::Human => {
+            let percent = if cap_bytes == 0 {
+                0
+            } else {
+                // Scale to a whole-percent integer without pulling in a float
+                // rounding rule; saturating multiply is fine because used <= cap
+                // is not guaranteed and the display is informational.
+                used_bytes
+                    .saturating_mul(100)
+                    .checked_div(cap_bytes)
+                    .unwrap_or(0)
+            };
+            format!(
+                "blobs:   {} ({} bytes)\nactions: {} ({} bytes)\nused:    {used_bytes} / {cap_bytes} bytes ({percent}% of cap)\n",
+                s.blob_count, s.blob_bytes, s.action_count, s.action_bytes,
+            )
+        }
         Format::Json | Format::Toon => render::structured(output.format, &stats)?,
     };
     let mut out = tokio::io::stdout();
@@ -154,7 +172,17 @@ pub async fn gc(cache: &CacheProvider, max_size: u64, dry_run: bool, output: Out
     write_stdout(body.as_bytes()).await
 }
 
-pub async fn put_blob(cache: &CacheProvider, path: Option<&Path>, output: Output) -> Result<()> {
+pub async fn put_blob(
+    cache: &CacheProvider,
+    path: Option<&Path>,
+    cap_bytes: u64,
+    output: Output,
+) -> Result<()> {
+    // Evict *before* the put so the freshly-written blob is never in the
+    // eviction candidate set. Otherwise a `cache blob put` into an
+    // already-over-cap store could report a digest that has already been
+    // reclaimed by the same command.
+    log_eviction(cache.maybe_evict_over_cap(cap_bytes).await?);
     let reader = open_blob_input(path).await?;
     let digest = cache.put_stream(reader).await?;
     let record = BlobPutRecord { digest };
@@ -163,6 +191,20 @@ pub async fn put_blob(cache: &CacheProvider, path: Option<&Path>, output: Output
         Format::Json | Format::Toon => render::structured(output.format, &record)?,
     };
     write_stdout(body.as_bytes()).await
+}
+
+// Auto-eviction runs silently; the user's put succeeds either way. Log the
+// reclaimed bytes at info level so operators inspecting the session log can
+// see what happened, without polluting stderr for a successful put.
+fn log_eviction(report: Option<once_cas::GcReport>) {
+    if let Some(report) = report {
+        tracing::info!(
+            removed = report.removed,
+            bytes_before = report.bytes_before,
+            bytes_after = report.bytes_after,
+            "cache auto-evicted over cap"
+        );
+    }
 }
 
 async fn open_blob_input(path: Option<&Path>) -> Result<Pin<Box<dyn AsyncRead + Send + Unpin>>> {
@@ -292,8 +334,12 @@ pub async fn put_action(
     stdout: Option<Digest>,
     stderr: Option<Digest>,
     outputs: Vec<(String, Digest)>,
+    cap_bytes: u64,
     output: Output,
 ) -> Result<()> {
+    // Evict *before* the put so the fresh action result is not eligible
+    // for eviction on the same command. See put_blob for the reasoning.
+    log_eviction(cache.maybe_evict_over_cap(cap_bytes).await?);
     let action = resolve_action_digest(action, &inputs).await?;
     let result = ActionResult {
         exit_code,

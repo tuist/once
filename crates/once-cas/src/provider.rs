@@ -227,6 +227,27 @@ impl CacheProvider {
             Self::Tuist(cache) => cache.local().gc(max_bytes, dry_run).await,
         }
     }
+
+    /// Run GC only when the local tier is over its cap, evicting down
+    /// to `cap_bytes * 4 / 5` for hysteresis so the next `put` does not
+    /// immediately trip the check again. Returns `None` when the store
+    /// is already within budget.
+    ///
+    /// Cheap enough to call after each `put`: it only walks the store
+    /// when it actually needs to reclaim.
+    pub async fn maybe_evict_over_cap(&self, cap_bytes: u64) -> Result<Option<GcReport>> {
+        if cap_bytes == 0 {
+            return Ok(None);
+        }
+        let stats = self.stats().await?;
+        let used = stats.blob_bytes.saturating_add(stats.action_bytes);
+        if used <= cap_bytes {
+            return Ok(None);
+        }
+        let target = cap_bytes.saturating_mul(4) / 5;
+        let report = self.gc(target, false).await?;
+        Ok(Some(report))
+    }
 }
 
 #[cfg(test)]
@@ -318,5 +339,48 @@ mod tests {
         provider.put_blob(b"bb").await.unwrap();
         let stats = provider.stats().await.unwrap();
         assert_eq!(stats.blob_count, 2);
+    }
+
+    #[tokio::test]
+    async fn maybe_evict_over_cap_is_a_noop_when_under_budget() {
+        let tmp = TempDir::new().unwrap();
+        let provider = CacheProvider::open_local(tmp.path());
+        provider.put_blob(b"small").await.unwrap();
+        let report = provider.maybe_evict_over_cap(1_000_000).await.unwrap();
+        assert!(
+            report.is_none(),
+            "expected no eviction when under cap, got {report:?}"
+        );
+        let stats = provider.stats().await.unwrap();
+        assert_eq!(stats.blob_count, 1);
+    }
+
+    #[tokio::test]
+    async fn maybe_evict_over_cap_reclaims_when_over_budget() {
+        let tmp = TempDir::new().unwrap();
+        let provider = CacheProvider::open_local(tmp.path());
+        // Four blobs of ~100 bytes each; force a tight cap so eviction fires
+        // and the 80% hysteresis target lets some entries survive.
+        for i in 0..4 {
+            let payload = vec![i; 128];
+            provider.put_blob(&payload).await.unwrap();
+        }
+        let before = provider.stats().await.unwrap();
+        let report = provider
+            .maybe_evict_over_cap(before.blob_bytes / 2)
+            .await
+            .unwrap()
+            .expect("eviction should fire when over cap");
+        assert!(report.bytes_after <= report.bytes_before);
+        assert!(report.removed >= 1, "expected at least one entry removed");
+    }
+
+    #[tokio::test]
+    async fn maybe_evict_over_cap_skips_when_cap_is_zero() {
+        let tmp = TempDir::new().unwrap();
+        let provider = CacheProvider::open_local(tmp.path());
+        provider.put_blob(b"payload").await.unwrap();
+        let report = provider.maybe_evict_over_cap(0).await.unwrap();
+        assert!(report.is_none());
     }
 }
