@@ -504,89 +504,19 @@ function logMatches(entry, query) {
 function outputEntry(entry) {
   return `<article data-part="run-log-entry">
     <time data-part="run-log-timestamp">${time(entry.at_ms)}</time>
-    <div data-part="run-log-content">
-      <noora-badge appearance="light-fill" color="${entry.stream === "stderr" ? "destructive" : "secondary"}">${logLabel(entry)}</noora-badge>
-      <pre data-part="run-log-output"><code>${escape(entry.text)}</code></pre>
-    </div>
+    <pre data-part="run-log-output" data-stream="${escape(entry.stream)}"><code>${escape(entry.text)}</code></pre>
   </article>`
 }
 
-function timelineLane(entry) {
-  if (entry.stream === "stderr") return "Error output"
-  if (entry.stream === "stdout") return "Output"
-  return "Build update"
-}
-
-function timelineColor(entry) {
-  if (entry.stream === "stderr") return "var:noora-chart-destructive"
-  if (entry.stream === "stdout") return "var:noora-chart-secondary"
-  return "var:noora-chart-primary"
-}
-
-function timelineOptions(snapshot) {
-  const entries = snapshot.logs || []
-  const startedAt = Number(snapshot.started_at_ms) || Date.now()
-  const finishedAt = snapshot.duration_ms == null
-    ? Math.max(startedAt, ...entries.map((entry) => entry.at_ms || startedAt))
-    : startedAt + Number(snapshot.duration_ms)
-  const firstEntryAt = Math.min(startedAt, ...entries.map((entry) => entry.at_ms || startedAt))
-  const lastEntryAt = Math.max(finishedAt, ...entries.map((entry) => entry.at_ms || finishedAt))
-  const padding = Math.max(1000, Math.round((lastEntryAt - firstEntryAt) * 0.05))
-  return {
-    animation: false,
-    grid: {top: 16, right: 28, bottom: 28, left: 88},
-    tooltip: {
-      trigger: "item",
-      formatter: (item) => `${item.marker}${item.data.label}<br>${time(item.data.value[0])}`,
-    },
-    xAxis: {
-      type: "time",
-      min: firstEntryAt - padding,
-      max: lastEntryAt + padding,
-      axisLabel: {formatter: (value) => time(value)},
-      axisLine: {lineStyle: {color: "var:noora-chart-lines"}},
-      splitLine: {lineStyle: {color: "var:noora-chart-lines"}},
-    },
-    yAxis: {
-      type: "category",
-      data: ["Run", "Output", "Error output", "Build update"],
-      axisLine: {show: false},
-      axisTick: {show: false},
-      axisLabel: {color: "var:noora-surface-label-secondary"},
-    },
-    series: [
-      {
-        name: "Run",
-        type: "line",
-        data: [[startedAt, "Run"], [finishedAt, "Run"]],
-        showSymbol: false,
-        lineStyle: {color: "var:noora-chart-primary", width: 3},
-        silent: true,
-      },
-      {
-        name: "Output",
-        type: "scatter",
-        symbolSize: 10,
-        data: entries.map((entry) => ({
-          value: [entry.at_ms, timelineLane(entry)],
-          label: logLabel(entry),
-          itemStyle: {color: timelineColor(entry)},
-        })),
-      },
-    ],
-  }
-}
-
-function updateTimeline() {
-  const chart = app.querySelector("[data-run-timeline]")
-  if (!chart || !run) return
-  customElements.whenDefined("noora-chart").then(() => {
-    if (chart.isConnected) chart.options = timelineOptions(run)
-  })
+function outputLines(snapshot) {
+  return (snapshot.logs || []).flatMap((entry) => entry.text
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((text) => ({...entry, text})))
 }
 
 function outputEntries(snapshot) {
-  const logs = snapshot.logs || []
+  const logs = outputLines(snapshot)
   if (!logs.length) return `<p data-part="run-message">Waiting for the build to produce output.</p>`
   const query = logView.query.trim()
   const entries = logs.filter((entry) => logMatches(entry, query))
@@ -639,18 +569,8 @@ function graphPage(snapshot) {
 }
 
 function progress(snapshot) {
-  const operation = operationLabel(snapshot)
   return `<section data-part="run-page">
     ${titlebar(snapshot)}
-    <section data-part="run-timeline" aria-label="Run timeline">
-      <noora-card icon="chart_arcs" title="Timeline">
-        <div data-part="run-timeline-summary">
-          <span>${snapshot.logs?.length || 0} output updates across this run</span>
-          <span>${duration(snapshot)}</span>
-        </div>
-        <noora-chart data-run-timeline hide-legend aria-label="${operation} timeline"></noora-chart>
-      </noora-card>
-    </section>
     <section data-part="run-output" aria-label="Build activity">
       <noora-card icon="devices_code" title="Logs">
         <div data-part="run-output-toolbar">
@@ -864,7 +784,6 @@ function render() {
     graph.filters = graphView
     graph.graphData = run.graph
   }
-  updateTimeline()
   bindGraphControls()
   bindLogControls()
   bindTestControls()
@@ -951,7 +870,6 @@ function applyProgressUpdate(previous) {
   if (previous.status !== run.status || Boolean(previous.graph) !== Boolean(run.graph)) return false
   if (!app.querySelector('[data-part="run-log-list"]')) return false
   refreshLogEntries()
-  updateTimeline()
   return true
 }
 

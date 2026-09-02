@@ -219,7 +219,6 @@ code {
 
 [data-part="run-workspace"],
 [data-part="run-output"],
-[data-part="run-timeline"],
 [data-part="run-details"],
 [data-part="test-analytics-card"],
 [data-part="test-results-card"] {
@@ -237,28 +236,6 @@ code {
 
 [data-part="run-output-toolbar"] noora-text-input {
   width: 320px;
-}
-
-[data-part="run-timeline"] noora-card {
-  display: block;
-  width: 100%;
-}
-
-[data-part="run-timeline-summary"] {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 12px;
-  color: #686c74;
-  font-size: 13px;
-  line-height: 18px;
-}
-
-[data-run-timeline] {
-  display: block;
-  width: 100%;
-  height: 190px;
 }
 
 [data-part="run-output-status"] {
@@ -399,7 +376,7 @@ once-workspace-graph {
   display: grid;
   grid-template-columns: 76px minmax(0, 1fr);
   gap: 16px;
-  padding: 14px 16px;
+  padding: 8px 16px;
   border-bottom: 1px solid #e6e7e9;
 }
 
@@ -416,17 +393,18 @@ once-workspace-graph {
   white-space: nowrap;
 }
 
-[data-part="run-log-content"] {
-  min-width: 0;
-}
-
 [data-part="run-log-output"] {
-  margin: 8px 0 0;
+  min-width: 0;
+  margin: 0;
+  overflow-x: auto;
   color: #303239;
   font-size: 12px;
-  line-height: 18px;
-  white-space: pre-wrap;
-  word-break: break-word;
+  line-height: 20px;
+  white-space: pre;
+}
+
+[data-part="run-log-output"][data-stream="stderr"] {
+  color: #c3364f;
 }
 
 [data-part="run-message"] {
@@ -626,12 +604,6 @@ once-workspace-graph {
 
   [data-part="run-output-toolbar"] noora-text-input {
     width: 100%;
-  }
-
-  [data-part="run-timeline-summary"] {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 4px;
   }
 
   [data-part="test-controls"] noora-text-input {
