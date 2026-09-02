@@ -532,20 +532,26 @@ fn milliseconds(duration: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use std::{
-        fs,
         sync::atomic::Ordering,
         time::{SystemTime, UNIX_EPOCH},
     };
 
     use once_core::{ActionOutputObserver, ActionOutputStream};
-    use once_frontend::BuildConfiguration;
-    use tempfile::TempDir;
     use tokio::sync::mpsc;
 
     use super::{
-        append_output, BuildGraph, OutputMessage, OutputObserver, RunContext, RunOperation,
-        RunSnapshot, RunStore, UiServer, OUTPUT_BYTE_LIMIT,
+        append_output, OutputMessage, OutputObserver, RunContext, RunOperation, RunSnapshot,
+        RunStore, UiServer, OUTPUT_BYTE_LIMIT,
     };
+
+    #[cfg(target_os = "macos")]
+    use super::BuildGraph;
+    #[cfg(target_os = "macos")]
+    use once_frontend::BuildConfiguration;
+    #[cfg(target_os = "macos")]
+    use std::fs;
+    #[cfg(target_os = "macos")]
+    use tempfile::TempDir;
 
     fn running_snapshot() -> RunSnapshot {
         RunSnapshot {
