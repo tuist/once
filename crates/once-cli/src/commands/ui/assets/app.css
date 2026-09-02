@@ -71,7 +71,7 @@ code {
   flex: 0 0 240px;
   border-right: 1px solid #dedfe3;
   background: #ffffff;
-  padding: 20px 12px;
+  padding: var(--noora-spacing-5) 12px;
 }
 
 [data-part="runs-sidebar"] noora-sidebar {
