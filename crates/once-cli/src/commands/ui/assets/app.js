@@ -352,16 +352,17 @@ function titlebar(snapshot) {
 }
 
 function runMetric(title, description, value, detail) {
-  return `<section data-part="run-metric-card">
-    <div data-part="run-metric">
-      <div data-part="run-metric-header">
-        <span data-part="run-metric-title">${title}</span>
-        <noora-tooltip size="large" title="${title}" description="${description}">
-          <noora-icon slot="trigger" name="alert_circle"></noora-icon>
-        </noora-tooltip>
-      </div>
-      <strong data-part="run-metric-value">${escape(value)}</strong>
-      <span data-part="run-metric-detail">${escape(detail)}</span>
+  return `<section class="noora-card__section tuist-widget" data-part="widget">
+    <div data-part="header">
+      <div data-part="title"><span data-part="label">${escape(title)}</span></div>
+      <noora-tooltip size="large" title="${escape(title)}" description="${escape(description)}">
+        <noora-icon slot="trigger" name="alert_circle"></noora-icon>
+      </noora-tooltip>
+    </div>
+    <span data-part="value">${escape(value)}</span>
+    <div data-part="trend">
+      <noora-badge appearance="light-fill" color="neutral">Current</noora-badge>
+      <span data-part="label">${escape(detail)}</span>
     </div>
   </section>`
 }
@@ -413,7 +414,7 @@ function runMetrics(snapshot) {
 function overview(snapshot) {
   return `<section data-part="run-page">
     ${titlebar(snapshot)}
-    <section data-part="run-metrics" aria-label="Run analytics">${runMetrics(snapshot)}</section>
+    <section data-part="widgets" aria-label="Run analytics">${runMetrics(snapshot)}</section>
     <section data-part="run-details">
       <noora-card icon="info_circle" title="Run details">
         <div data-part="build-metadata-grid">

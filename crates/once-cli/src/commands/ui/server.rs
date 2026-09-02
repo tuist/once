@@ -259,6 +259,8 @@ mod tests {
         assert!(page.contains("finished"));
         assert!(page.contains("Cache decision"));
         assert!(page.contains("Resolved targets"));
+        assert!(page.contains("noora-card__section tuist-widget"));
+        assert!(page.contains(">Current<"));
         assert!(page.contains("<style>"));
         assert!(!page.contains("/assets/app.js"));
         assert!(!page.contains("/assets/app.css"));
