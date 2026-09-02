@@ -4,8 +4,9 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::{
-    load_infrastructure_config, CacheProviderConfig, Error, InfrastructureProviderConfig,
-    NamedCacheProviderConfig, Result, TuistCacheProviderConfig, DEFAULT_TUIST_URL,
+    load_infrastructure_config, CacheProviderConfig, CacheProviderError, Error,
+    InfrastructureProviderConfig, NamedCacheProviderConfig, Result, TuistCacheProviderConfig,
+    DEFAULT_TUIST_URL,
 };
 
 mod tuist_swift;
@@ -76,17 +77,14 @@ fn resolve_provider_config(
                 return resolve_named_workspace_provider(binding, provider.clone());
             }
             let mut config = load_user_config(user_config_path)?;
-            let provider =
-                take_named_user_provider(&mut config, &binding.name).ok_or_else(|| {
-                    Error::Eval {
-                        path: user_config_path.display().to_string(),
-                        message: format!(
-                            "infrastructure `{}` was not found in {}",
-                            binding.name,
-                            user_config_path.display()
-                        ),
-                    }
-                })?;
+            let provider = take_named_user_provider(&mut config, &binding.name).ok_or_else(
+                || Error::CacheProvider {
+                    path: user_config_path.display().to_string(),
+                    kind: CacheProviderError::InfrastructureNotFound {
+                        name: binding.name.clone(),
+                    },
+                },
+            )?;
             Ok(resolve_named_provider(binding, provider))
         }
     }
@@ -104,15 +102,14 @@ fn resolve_default_provider(user_config_path: &Path) -> Result<ResolvedCacheProv
     let Some(binding) = binding else {
         return Ok(ResolvedCacheProviderConfig::Local);
     };
-    let provider =
-        take_named_user_provider(&mut config, &binding.name).ok_or_else(|| Error::Eval {
+    let provider = take_named_user_provider(&mut config, &binding.name).ok_or_else(|| {
+        Error::CacheProvider {
             path: user_config_path.display().to_string(),
-            message: format!(
-                "infrastructure `{}` was not found in {}",
-                binding.name,
-                user_config_path.display()
-            ),
-        })?;
+            kind: CacheProviderError::InfrastructureNotFound {
+                name: binding.name.clone(),
+            },
+        }
+    })?;
     Ok(resolve_named_provider(binding.into_named(), provider))
 }
 
@@ -154,9 +151,9 @@ fn resolve_named_workspace_provider(
         InfrastructureProviderConfig::Local => Ok(ResolvedCacheProviderConfig::Local),
         InfrastructureProviderConfig::Microsandbox(_)
         | InfrastructureProviderConfig::E2b(_)
-        | InfrastructureProviderConfig::Daytona(_) => Err(Error::Eval {
+        | InfrastructureProviderConfig::Daytona(_) => Err(Error::CacheProvider {
             path: name.clone(),
-            message: format!("infrastructure `{name}` provides execution but not shared caching"),
+            kind: CacheProviderError::ExecutionProviderNotCacheable { name: name.clone() },
         }),
         InfrastructureProviderConfig::Tuist(config) => Ok(ResolvedCacheProviderConfig::Tuist(
             ResolvedTuistCacheProviderConfig {
@@ -188,13 +185,13 @@ fn resolve_tuist_workspace_config(
     else {
         return Ok(None);
     };
-    let (account, project) = split_full_handle(&config.full_handle).ok_or_else(|| Error::Eval {
-        path: workspace.display().to_string(),
-        message: format!(
-            "Tuist project handle `{}` must have the form `account/project`",
-            config.full_handle
-        ),
-    })?;
+    let (account, project) =
+        split_full_handle(&config.full_handle).ok_or_else(|| Error::CacheProvider {
+            path: workspace.display().to_string(),
+            kind: CacheProviderError::TuistHandleShape {
+                raw: config.full_handle.clone(),
+            },
+        })?;
     Ok(Some(ResolvedTuistCacheProviderConfig {
         provider_name: "tuist".to_string(),
         url: config.url.unwrap_or_else(|| DEFAULT_TUIST_URL.to_string()),

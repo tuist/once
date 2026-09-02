@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
-use crate::error::{Error, Result};
+use crate::error::{Error, NativeProjectError, Result};
 use crate::graph::GraphTarget;
 use crate::target::{AttrValue, Target};
 use serde::Serialize;
@@ -155,21 +155,12 @@ pub fn native_project_seed_target(root: &Path, name: &str, package: &str) -> Res
         .native_projects
         .into_iter()
         .find(|schema| schema.name == name)
-        .ok_or_else(|| Error::Eval {
-            path: crate::modules::COMBINED_MODULE_PATH.to_string(),
-            message: format!("unknown native project `{name}`"),
-        })?;
+        .ok_or_else(|| unknown_native_project(name))?;
     let matched = catalog
         .matches
         .into_iter()
         .find(|matched| matched.native_project == name && matched.package == package)
-        .ok_or_else(|| Error::Eval {
-            path: name.to_string(),
-            message: format!(
-                "native project `{name}` does not match package `{}`",
-                if package.is_empty() { "." } else { package }
-            ),
-        })?;
+        .ok_or_else(|| native_project_package_mismatch(name, package))?;
     Ok(seed_target(&schema, package, &matched.markers))
 }
 
@@ -187,20 +178,11 @@ pub fn preview_native_project(
     let schema = native_projects
         .into_iter()
         .find(|schema| schema.name == name)
-        .ok_or_else(|| Error::Eval {
-            path: crate::modules::COMBINED_MODULE_PATH.to_string(),
-            message: format!("unknown native project `{name}`"),
-        })?;
+        .ok_or_else(|| unknown_native_project(name))?;
     let selected_match = matches
         .into_iter()
         .find(|matched| matched.native_project == name && matched.package == package)
-        .ok_or_else(|| Error::Eval {
-            path: name.to_string(),
-            message: format!(
-                "native project `{name}` does not match package `{}`",
-                if package.is_empty() { "." } else { package }
-            ),
-        })?;
+        .ok_or_else(|| native_project_package_mismatch(name, package))?;
     let seed = seed_target(&schema, package, &selected_match.markers);
     let targets = crate::graph::load_graph_workspace_with_targets_and_schemas(
         root,
@@ -496,6 +478,29 @@ fn native_project_error(path: &str, message: impl Into<String>) -> Error {
     Error::Eval {
         path: path.to_string(),
         message: message.into(),
+    }
+}
+
+fn unknown_native_project(name: &str) -> Error {
+    Error::NativeProject {
+        path: crate::modules::COMBINED_MODULE_PATH.to_string(),
+        kind: NativeProjectError::Unknown {
+            name: name.to_string(),
+        },
+    }
+}
+
+fn native_project_package_mismatch(name: &str, package: &str) -> Error {
+    Error::NativeProject {
+        path: name.to_string(),
+        kind: NativeProjectError::PackageMismatch {
+            name: name.to_string(),
+            package: if package.is_empty() {
+                ".".to_string()
+            } else {
+                package.to_string()
+            },
+        },
     }
 }
 

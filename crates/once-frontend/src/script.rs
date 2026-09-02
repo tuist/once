@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, ScriptHeaderError};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScriptAnnotations {
@@ -23,9 +23,9 @@ pub fn parse_script_annotations(path: &Path, display_name: &str) -> Result<Scrip
         source,
     })?;
     let mut lines = content.lines();
-    let shebang = lines.next().ok_or_else(|| Error::Eval {
+    let shebang = lines.next().ok_or_else(|| Error::ScriptHeader {
         path: display_name.to_string(),
-        message: format!("script {} is empty", path.display()),
+        kind: ScriptHeaderError::Empty,
     })?;
     let (runtime, runtime_args) = parse_shebang(shebang, display_name, path)?;
     let mut annotations = ScriptAnnotations {
@@ -61,21 +61,18 @@ pub fn script_has_once_directives(path: &Path) -> Result<bool> {
         .any(|line| annotation_payload(line.trim()).is_some()))
 }
 
-fn parse_shebang(line: &str, display_name: &str, path: &Path) -> Result<(String, Vec<String>)> {
+fn parse_shebang(line: &str, display_name: &str, _path: &Path) -> Result<(String, Vec<String>)> {
     let Some(raw) = line.strip_prefix("#!") else {
-        return Err(Error::Eval {
+        return Err(Error::ScriptHeader {
             path: display_name.to_string(),
-            message: format!(
-                "script {} must start with a shebang so Once knows how to run it",
-                path.display()
-            ),
+            kind: ScriptHeaderError::MissingShebang,
         });
     };
     let mut parts = raw.split_whitespace();
     let Some(first) = parts.next() else {
-        return Err(Error::Eval {
+        return Err(Error::ScriptHeader {
             path: display_name.to_string(),
-            message: format!("script {} has an empty shebang", path.display()),
+            kind: ScriptHeaderError::EmptyShebang,
         });
     };
 
@@ -93,12 +90,9 @@ fn parse_shebang(line: &str, display_name: &str, path: &Path) -> Result<(String,
             }
         }
         let Some(runtime) = runtime else {
-            return Err(Error::Eval {
+            return Err(Error::ScriptHeader {
                 path: display_name.to_string(),
-                message: format!(
-                    "script {} shebang must name a runtime after env",
-                    path.display()
-                ),
+                kind: ScriptHeaderError::MissingRuntime,
             });
         };
         return Ok(parse_once_exec_shebang(runtime, runtime_args));
@@ -199,30 +193,38 @@ fn parse_annotation_line(
         annotations.output_symlinks = Some(parse_quoted(raw, "output-symlinks", display_name)?);
         return Ok(());
     }
-    Err(Error::Eval {
+    Err(Error::ScriptHeader {
         path: display_name.to_string(),
-        message: format!("unknown once directive `{line}`"),
+        kind: ScriptHeaderError::UnknownDirective {
+            directive: line.to_string(),
+        },
     })
 }
 
 fn parse_quoted(raw: &str, name: &str, display_name: &str) -> Result<String> {
     let raw = raw.trim();
     let Some(rest) = raw.strip_prefix('"') else {
-        return Err(Error::Eval {
+        return Err(Error::ScriptHeader {
             path: display_name.to_string(),
-            message: format!("Once {name} expects a quoted string"),
+            kind: ScriptHeaderError::DirectiveExpectedQuote {
+                directive: name.to_string(),
+            },
         });
     };
     let Some(end) = rest.find('"') else {
-        return Err(Error::Eval {
+        return Err(Error::ScriptHeader {
             path: display_name.to_string(),
-            message: format!("Once {name} is missing a closing quote"),
+            kind: ScriptHeaderError::DirectiveMissingClosingQuote {
+                directive: name.to_string(),
+            },
         });
     };
     if !rest[end + 1..].trim().is_empty() {
-        return Err(Error::Eval {
+        return Err(Error::ScriptHeader {
             path: display_name.to_string(),
-            message: format!("Once {name} only accepts one quoted string"),
+            kind: ScriptHeaderError::DirectiveExtraArgument {
+                directive: name.to_string(),
+            },
         });
     }
     Ok(rest[..end].to_string())
@@ -404,5 +406,73 @@ echo hi
         let err = parse_script_annotations(&path, "bad.sh").unwrap_err();
         assert!(err.to_string().contains("unknown once directive"));
         assert!(script_has_once_directives(&path).unwrap());
+    }
+
+    #[test]
+    fn unknown_directive_error_carries_the_typed_directive_name() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("bad.sh");
+        fs::write(
+            &path,
+            r#"#!/bin/sh
+# once wibble "thing"
+echo hi
+"#,
+        )
+        .unwrap();
+
+        let err = parse_script_annotations(&path, "bad.sh").unwrap_err();
+        match err {
+            Error::ScriptHeader {
+                kind: ScriptHeaderError::UnknownDirective { directive },
+                ..
+            } => {
+                assert!(
+                    directive.starts_with("wibble"),
+                    "directive did not carry the offending token: {directive:?}"
+                );
+            }
+            other => panic!("expected ScriptHeader::UnknownDirective, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_script_surfaces_typed_variant() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("empty.sh");
+        fs::write(&path, "").unwrap();
+
+        let err = parse_script_annotations(&path, "empty.sh").unwrap_err();
+        assert!(matches!(
+            err,
+            Error::ScriptHeader {
+                kind: ScriptHeaderError::Empty,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn unknown_directive_message_lists_the_accepted_directives() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("bad.sh");
+        fs::write(
+            &path,
+            r#"#!/bin/sh
+# once wibble "thing"
+echo hi
+"#,
+        )
+        .unwrap();
+
+        let err = parse_script_annotations(&path, "bad.sh")
+            .unwrap_err()
+            .to_string();
+        for accepted in ["input", "needs", "fingerprint", "output", "env", "cwd"] {
+            assert!(
+                err.contains(accepted),
+                "message should hint at accepted directive `{accepted}`:\n{err}"
+            );
+        }
     }
 }

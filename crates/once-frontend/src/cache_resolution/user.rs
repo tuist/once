@@ -3,7 +3,7 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use crate::{Error, NamedCacheProviderConfig, Result};
+use crate::{CacheProviderError, Error, NamedCacheProviderConfig, Result};
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -103,9 +103,9 @@ pub(super) fn maybe_load_user_config(path: &Path) -> Result<Option<UserConfig>> 
 fn normalize_binding(binding: &mut UserCacheProviderBinding, path: &Path) -> Result<()> {
     binding.name = binding.name.trim().to_string();
     if binding.name.is_empty() {
-        return Err(Error::Eval {
+        return Err(Error::CacheProvider {
             path: path.display().to_string(),
-            message: "user cache configuration has an empty infrastructure name".to_string(),
+            kind: CacheProviderError::EmptyInfrastructureName,
         });
     }
     binding.account = non_empty(binding.account.take());
