@@ -7,6 +7,7 @@ use once_cas::{ActionResult, CacheProvider};
 use sha2::Digest as ShaDigest;
 use tokio::io::AsyncWriteExt;
 
+use crate::stream::ActionOutputObserver;
 use crate::{
     archive, contract, local, outputs, remote, Action, CopyPathMode, Error, OutputSymlinkMode,
     PreparePathMode, Result, SandboxMode, WorkspacePath,
@@ -18,6 +19,25 @@ pub(crate) async fn run(
     cache: &CacheProvider,
     stream_to_parent: bool,
     validate_contract: bool,
+) -> Result<ActionResult> {
+    run_observed(
+        action,
+        workspace_root,
+        cache,
+        stream_to_parent,
+        validate_contract,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn run_observed(
+    action: &Action,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+    stream_to_parent: bool,
+    validate_contract: bool,
+    observer: Option<&dyn ActionOutputObserver>,
 ) -> Result<ActionResult> {
     if let Action::RunCommand {
         outputs,
@@ -31,6 +51,7 @@ pub(crate) async fn run(
             cache,
             stream_to_parent,
             validate_contract,
+            observer,
         ))
         .await?;
         let completed = action.accepts_exit_code(result.exit_code);
@@ -424,6 +445,7 @@ async fn execute_command(
     cache: &CacheProvider,
     stream_to_parent: bool,
     validate_contract: bool,
+    observer: Option<&dyn ActionOutputObserver>,
 ) -> Result<ActionResult> {
     let Action::RunCommand {
         argv,
@@ -490,15 +512,26 @@ async fn execute_command(
                 workspace_root,
                 cache,
                 stream_to_parent,
+                observer,
             )
             .await
         }
-        (None, true, SandboxMode::Off) => {
-            local::execute_command_streaming(invocation, workspace_root, cache).await
-        }
-        (None, false, SandboxMode::Off) => {
-            local::execute_command(invocation, workspace_root, cache).await
-        }
+        (None, _, SandboxMode::Off) => match observer {
+            Some(observer) => {
+                local::execute_command_observed(
+                    invocation,
+                    workspace_root,
+                    cache,
+                    stream_to_parent,
+                    observer,
+                )
+                .await
+            }
+            None if stream_to_parent => {
+                local::execute_command_streaming(invocation, workspace_root, cache).await
+            }
+            None => local::execute_command(invocation, workspace_root, cache).await,
+        },
     }
 }
 
@@ -526,9 +559,19 @@ async fn execute_sandboxed_command(
     workspace_root: &Path,
     cache: &CacheProvider,
     stream_to_parent: bool,
+    observer: Option<&dyn ActionOutputObserver>,
 ) -> Result<ActionResult> {
     let sandbox = prepare_input_sandbox(action, &policy, invocation.cwd, workspace_root).await?;
-    let result = if stream_to_parent {
+    let result = if let Some(observer) = observer {
+        local::execute_command_observed(
+            invocation,
+            &sandbox.execroot,
+            cache,
+            stream_to_parent,
+            observer,
+        )
+        .await
+    } else if stream_to_parent {
         local::execute_command_streaming(invocation, &sandbox.execroot, cache).await
     } else {
         local::execute_command(invocation, &sandbox.execroot, cache).await

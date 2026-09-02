@@ -1,0 +1,552 @@
+:root {
+  color: #202124;
+  background: #ffffff;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: #ffffff;
+}
+
+code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+[data-part="runs-shell"] {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+[data-part="runs-header"] {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-height: 72px;
+  border-bottom: 1px solid #dedfe3;
+  background: #fbfbfc;
+  padding: 0 24px;
+}
+
+[data-part="runs-brand"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: #202124;
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1;
+  text-decoration: none;
+}
+
+[data-part="runs-brand"] noora-icon {
+  color: #6d3df5;
+}
+
+[data-part="runs-breadcrumbs"] {
+  margin-left: 18px;
+}
+
+[data-part="runs-header-actions"] {
+  margin-left: auto;
+}
+
+[data-part="runs-layout"] {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+[data-part="runs-sidebar"] {
+  flex: 0 0 240px;
+  border-right: 1px solid #dedfe3;
+  background: #ffffff;
+  padding: 20px 12px;
+}
+
+[data-part="runs-sidebar"] noora-sidebar {
+  display: block;
+  width: 100%;
+}
+
+[data-part="runs-content"] {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  background: #ffffff;
+}
+
+[data-part="run-page"],
+[data-part="run-empty"] {
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 28px 36px 48px;
+}
+
+[data-part="run-page"] {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+[data-part="run-empty"] {
+  max-width: 760px;
+  padding-top: 56px;
+}
+
+[data-part="run-titlebar"] {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+[data-part="run-eyebrow"] {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #62666e;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+[data-part="run-eyebrow-separator"] {
+  color: #9a9da4;
+}
+
+[data-part="run-heading"] {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+[data-part="run-heading"] h1 {
+  margin: 0;
+  color: #202124;
+  font-size: 24px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 30px;
+}
+
+[data-part="run-command"] {
+  margin: 0;
+  color: #3e4147;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+[data-part="run-command"] code {
+  overflow-wrap: anywhere;
+}
+
+[data-part="run-stats"] noora-card,
+[data-part="run-workspace"] noora-card,
+[data-part="run-output"] noora-card,
+[data-part="run-details"] noora-card {
+  display: block;
+  width: 100%;
+}
+
+[data-part="run-widgets"] {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 28px;
+}
+
+[data-part="run-widget"] {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+[data-part="run-widget-title"],
+[data-part="build-metadata-title"] {
+  color: #686c74;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+}
+
+[data-part="run-widget"] strong {
+  color: #202124;
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 26px;
+}
+
+[data-part="run-widget"] > span:not([data-part="run-widget-title"]),
+[data-part="run-widget"] > code {
+  min-width: 0;
+  overflow: hidden;
+  color: #4c5057;
+  font-size: 13px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-part="run-widget"] > code {
+  color: #303239;
+}
+
+[data-part="run-workspace"],
+[data-part="run-output"],
+[data-part="run-details"],
+[data-part="test-analytics-card"],
+[data-part="test-results-card"] {
+  width: 100%;
+}
+
+[data-part="graph-toolbar"],
+[data-part="run-output-toolbar"] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+[data-part="graph-source"],
+[data-part="run-output-limit"] {
+  color: #686c74;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+[data-part="build-graph"] {
+  min-height: 540px;
+  overflow: hidden;
+  border: 1px solid #d8dadd;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+once-workspace-graph {
+  display: block;
+  position: relative;
+  width: 100%;
+  height: 540px;
+}
+
+[data-part="cytoscape-graph"] {
+  position: absolute;
+  inset: 0;
+}
+
+[data-part="graph-controls"] {
+  position: absolute;
+  z-index: 1;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 8px;
+}
+
+[data-part="graph-fallback"] {
+  padding: 24px;
+  color: #686c74;
+  font-size: 14px;
+}
+
+[data-part="graph-fallback"] p {
+  margin: 0 0 12px;
+}
+
+[data-part="graph-fallback"] ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+[data-part="graph-fallback"] li {
+  border: 1px solid #d8dadd;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+[data-part="build-metadata-grid"] {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 24px 28px;
+}
+
+[data-part="build-metadata"] {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+
+[data-part="build-metadata"][data-wide] {
+  grid-column: span 4;
+}
+
+[data-part="build-metadata"] > span:not([data-part="build-metadata-title"]),
+[data-part="build-metadata"] code {
+  color: #303239;
+  font-size: 14px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+[data-part="run-log-list"] {
+  display: flex;
+  max-height: 520px;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+[data-part="run-log-entry"] {
+  border: 1px solid #d8dadd;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 12px;
+}
+
+[data-part="run-log-entry-header"] {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 24px;
+}
+
+[data-part="run-log-entry-header"] time {
+  margin-left: auto;
+  color: #686c74;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+[data-part="run-log-output"] {
+  margin: 10px 0 0;
+  color: #303239;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+[data-part="run-message"] {
+  margin: 0;
+  color: #686c74;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+[data-part="test-analytics-card"],
+[data-part="test-results-card"] {
+  display: block;
+  width: 100%;
+}
+
+[data-part="test-analytics-card"]::part(card) {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--noora-spacing-4);
+}
+
+[data-part="test-analytics-card"]::part(header) {
+  grid-column: 1 / -1;
+}
+
+[data-part="test-widget"] {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+[data-part="test-widget"] > [data-part="header"] {
+  min-width: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--noora-spacing-3);
+}
+
+[data-part="test-widget"] [data-part="title"] {
+  display: flex;
+  flex-grow: 1;
+  flex-direction: row;
+  gap: var(--noora-spacing-3);
+  color: var(--noora-surface-label-primary);
+  font: var(--noora-font-weight-medium) var(--noora-font-body-small);
+}
+
+[data-part="test-widget"] noora-tooltip {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  color: var(--noora-surface-label-secondary);
+}
+
+[data-part="test-widget"] noora-tooltip noora-icon {
+  width: 16px;
+  height: 16px;
+}
+
+[data-part="test-widget"] > [data-part="value"] {
+  color: var(--noora-surface-label-primary);
+  font: var(--noora-font-weight-medium) var(--noora-font-heading-xlarge);
+}
+
+[data-part="test-results-tabs"] {
+  display: block;
+}
+
+[data-part="test-controls"] {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+}
+
+[data-part="test-controls"] noora-text-input {
+  flex: 1;
+  min-width: 220px;
+}
+
+[data-part="test-controls"] noora-dropdown {
+  flex: 0 0 auto;
+}
+
+[data-part="test-active-filters"] {
+  display: flex;
+  gap: 8px;
+}
+
+[data-part="test-cases-section"] {
+  gap: var(--noora-spacing-8);
+}
+
+[data-part="test-cases-section"] noora-table {
+  display: block;
+  width: 100%;
+}
+
+[data-part="test-table-empty-state"] {
+  display: flex;
+  min-height: 148px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #686c74;
+  text-align: center;
+}
+
+[data-part="test-table-empty-state"] noora-icon {
+  --noora-icon-size: 24px;
+  margin-bottom: 4px;
+  color: #52565c;
+}
+
+[data-part="test-table-empty-state"] strong {
+  color: #202124;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+[data-part="test-table-empty-state"] span {
+  font-size: 13px;
+  line-height: 18px;
+}
+
+@media (max-width: 1040px) {
+  [data-part="runs-shell"] {
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+
+  [data-part="runs-layout"] {
+    flex-direction: column;
+  }
+
+  [data-part="runs-sidebar"] {
+    flex-basis: auto;
+    border-right: 0;
+    border-bottom: 1px solid #dedfe3;
+    padding: 12px;
+  }
+
+  [data-part="runs-content"] {
+    overflow: visible;
+  }
+
+  [data-part="run-widgets"],
+  [data-part="build-metadata-grid"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  [data-part="test-analytics-card"]::part(card) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  [data-part="test-widget"] {
+    min-width: 0;
+  }
+
+  [data-part="build-metadata"][data-wide] {
+    grid-column: span 2;
+  }
+}
+
+@media (max-width: 620px) {
+  [data-part="runs-header"] {
+    min-height: 60px;
+    padding: 0 16px;
+  }
+
+  [data-part="runs-breadcrumbs"] {
+    display: none;
+  }
+
+  [data-part="run-page"],
+  [data-part="run-empty"] {
+    padding: 24px 16px 36px;
+  }
+
+  [data-part="run-widgets"],
+  [data-part="build-metadata-grid"] {
+    grid-template-columns: 1fr;
+  }
+
+  [data-part="test-analytics-card"]::part(card) {
+    grid-template-columns: 1fr;
+  }
+
+  [data-part="test-controls"] {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  [data-part="test-controls"] noora-text-input {
+    width: 100%;
+  }
+
+  [data-part="build-metadata"][data-wide] {
+    grid-column: span 1;
+  }
+
+  [data-part="build-graph"],
+  once-workspace-graph {
+    min-height: 420px;
+    height: 420px;
+  }
+}

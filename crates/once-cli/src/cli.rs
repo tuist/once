@@ -198,6 +198,14 @@ pub enum Cmd {
         #[usage(long, value_name = "KEY=VALUE")]
         config: Vec<String>,
 
+        /// Start the local Runs interface for this Once build.
+        ///
+        /// Once serves the client interface from this process. The page
+        /// receives the build target, dependency graph, cache decision,
+        /// duration, action digest, and output as the build progresses.
+        #[usage(long)]
+        ui: bool,
+
         /// Target id, such as `services/api/Api` or `./Api`.
         target: Option<String>,
     },
@@ -282,6 +290,10 @@ pub enum Cmd {
         /// Override the workspace build configuration. See `once build --config`.
         #[usage(long, value_name = "KEY=VALUE")]
         config: Vec<String>,
+
+        /// Start the local Runs interface for this Once test run.
+        #[usage(long)]
+        ui: bool,
 
         /// Maximum number of test batches to execute concurrently.
         /// Defaults to the host's available parallelism for an affected plan.

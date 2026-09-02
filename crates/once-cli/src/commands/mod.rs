@@ -19,5 +19,6 @@ pub mod surface;
 pub mod swift;
 pub mod test_schedule;
 pub mod toolchain;
+pub mod ui;
 pub mod util;
 pub mod xcodebuild;

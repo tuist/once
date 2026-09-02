@@ -35,6 +35,7 @@ pub async fn run(
         SandboxMode::Off,
         resource_limits,
         &resolved,
+        false,
     )
     .await
 }

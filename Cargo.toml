@@ -24,6 +24,7 @@ once-frontend = { version = "0.0.0", path = "crates/once-frontend" }
 once-host-tree = { version = "0.0.0", path = "crates/once-host-tree" }
 
 anyhow = "1"
+axum = "0.8"
 bazel-remote-apis = "0.27"
 base64 = "0.22"
 blake3 = "1"

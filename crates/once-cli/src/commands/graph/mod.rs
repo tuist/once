@@ -17,6 +17,7 @@ pub use contract::{validate_action_contracts, ActionContractValidation};
 
 use std::path::Path;
 use std::process::ExitCode;
+use std::time::Instant;
 
 use anyhow::{anyhow, Context, Result};
 use once_cas::{CacheProvider, Digest};
@@ -84,7 +85,44 @@ pub async fn build(
     sandbox: SandboxMode,
     resource_limits: ResourceLimits,
     resolved: &configuration::ResolvedConfiguration,
+    ui: bool,
 ) -> Result<ExitCode> {
+    let started_at = Instant::now();
+    let ui_server = if ui {
+        Some(crate::commands::ui::UiServer::start().await?)
+    } else {
+        None
+    };
+    let publisher = ui_server
+        .as_ref()
+        .map(crate::commands::ui::UiServer::publisher);
+    let run_context = if ui {
+        let workspace = workspace.to_path_buf();
+        let target = target_id.to_string();
+        let configuration = resolved.configuration.clone();
+        Some(
+            tokio::task::spawn_blocking(move || {
+                crate::commands::ui::RunContext::build(&workspace, target, &configuration)
+            })
+            .await
+            .context("preparing the Runs build graph")?,
+        )
+    } else {
+        None
+    };
+    if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
+        publisher.started(run_context).await;
+        publisher
+            .progress(run_context, "Preparing the Once build graph…\n")
+            .await;
+    }
+    if let Some(ui_server) = &ui_server {
+        eprintln!("Runs interface: {}", ui_server.url());
+    }
+    let live_output = publisher
+        .as_ref()
+        .zip(run_context.as_ref())
+        .map(|(publisher, run_context)| publisher.live_output(run_context));
     let xdg = once_core::Xdg::from_env();
     let stored_receipt =
         build_receipt::read(workspace, target_id, sandbox, &resolved.path_suffix).await;
@@ -107,19 +145,127 @@ pub async fn build(
     )
     .await
     {
+        if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
+            publisher
+                .progress(run_context, "Reused the previous Once build result.\n")
+                .await;
+            publisher
+                .finished(
+                    run_context,
+                    &record.action_digest,
+                    started_at
+                        .elapsed()
+                        .as_millis()
+                        .try_into()
+                        .unwrap_or(u64::MAX),
+                    &record.cache,
+                    0,
+                    None,
+                )
+                .await;
+        }
         write_record(output, &record).await?;
+        write_runs_report(workspace, ui_server.as_ref()).await;
         return Ok(ExitCode::SUCCESS);
     }
     let changes = analysis::known_changes(initial_snapshot.as_ref(), digest_position.as_ref());
-    let mut session = analysis::BuildSession::load_workspace_with_configuration(
+    let mut session = match analysis::BuildSession::load_workspace_with_configuration(
         workspace, cache, sandbox, resolved, &changes,
     )
-    .await?
-    .with_resource_limits(resource_limits);
+    .await
+    {
+        Ok(session) => {
+            let session = session.with_resource_limits(resource_limits);
+            match &live_output {
+                Some(live_output) => session.with_output_observer(live_output.observer()),
+                None => session,
+            }
+        }
+        Err(error) => {
+            if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
+                publisher
+                    .progress(run_context, &format!("Build setup failed: {error}\n"))
+                    .await;
+                publisher
+                    .failed(
+                        run_context,
+                        started_at
+                            .elapsed()
+                            .as_millis()
+                            .try_into()
+                            .unwrap_or(u64::MAX),
+                    )
+                    .await;
+            }
+            write_runs_report(workspace, ui_server.as_ref()).await;
+            return Err(error);
+        }
+    };
+    if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
+        publisher
+            .progress(
+                run_context,
+                "Analysing the Once targets and starting actions…\n",
+            )
+            .await;
+    }
     session.with_known_changes(changes);
     let session = session;
-    let target = session.target(target_id)?;
-    let record = build_target(workspace, cache, target, &session, sandbox).await?;
+    let target = match session.target(target_id) {
+        Ok(target) => target,
+        Err(error) => {
+            if let Some(live_output) = &live_output {
+                live_output.flush().await;
+            }
+            if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
+                publisher
+                    .progress(run_context, &format!("Build setup failed: {error}\n"))
+                    .await;
+                publisher
+                    .failed(
+                        run_context,
+                        started_at
+                            .elapsed()
+                            .as_millis()
+                            .try_into()
+                            .unwrap_or(u64::MAX),
+                    )
+                    .await;
+            }
+            write_runs_report(workspace, ui_server.as_ref()).await;
+            return Err(error);
+        }
+    };
+    let record = match build_target(workspace, cache, target, &session, sandbox).await {
+        Ok(record) => {
+            if let Some(live_output) = &live_output {
+                live_output.flush().await;
+            }
+            record
+        }
+        Err(error) => {
+            if let Some(live_output) = &live_output {
+                live_output.flush().await;
+            }
+            if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
+                publisher
+                    .progress(run_context, &format!("Build failed: {error}\n"))
+                    .await;
+                publisher
+                    .failed(
+                        run_context,
+                        started_at
+                            .elapsed()
+                            .as_millis()
+                            .try_into()
+                            .unwrap_or(u64::MAX),
+                    )
+                    .await;
+            }
+            write_runs_report(workspace, ui_server.as_ref()).await;
+            return Err(error);
+        }
+    };
     record_capability_run(workspace, &record).await;
     // An uncacheable build (any declared action with `cacheable = false`, which
     // several target kinds such as Dockerfile, Go, and Android use) must run on
@@ -127,7 +273,24 @@ pub async fn build(
     // so the fast path can never skip its mandatory work.
     if record.cache_state == EvidenceCacheState::Bypass {
         build_receipt::clear(workspace, target_id, sandbox, &resolved.path_suffix).await;
+        if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
+            publisher
+                .finished(
+                    run_context,
+                    &record.action_digest,
+                    started_at
+                        .elapsed()
+                        .as_millis()
+                        .try_into()
+                        .unwrap_or(u64::MAX),
+                    &record.cache,
+                    record.result.exit_code,
+                    None,
+                )
+                .await;
+        }
         write_record(output, &record).await?;
+        write_runs_report(workspace, ui_server.as_ref()).await;
         return Ok(ExitCode::SUCCESS);
     }
     // Where the journal stands, not where it will stand once the platform has
@@ -175,8 +338,36 @@ pub async fn build(
             .await;
         }
     }
+    if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
+        publisher
+            .finished(
+                run_context,
+                &record.action_digest,
+                started_at
+                    .elapsed()
+                    .as_millis()
+                    .try_into()
+                    .unwrap_or(u64::MAX),
+                &record.cache,
+                record.result.exit_code,
+                None,
+            )
+            .await;
+    }
     write_record(output, &record).await?;
+    write_runs_report(workspace, ui_server.as_ref()).await;
     Ok(ExitCode::SUCCESS)
+}
+
+async fn write_runs_report(workspace: &Path, ui_server: Option<&crate::commands::ui::UiServer>) {
+    let Some(ui_server) = ui_server else {
+        return;
+    };
+    match ui_server.write_static_site(workspace).await {
+        Ok(Some(report)) => eprintln!("Runs report: {}", report.display()),
+        Ok(None) => {}
+        Err(error) => tracing::warn!(error = %error, "could not write the static Runs report"),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -246,6 +437,7 @@ pub async fn test(
     sandbox: SandboxMode,
     resource_limits: ResourceLimits,
     resolved: &configuration::ResolvedConfiguration,
+    ui: bool,
 ) -> Result<ExitCode> {
     test_with_filters(
         workspace,
@@ -257,6 +449,7 @@ pub async fn test(
         None,
         resource_limits,
         resolved,
+        ui,
     )
     .await
 }
@@ -272,15 +465,74 @@ pub async fn test_with_filters(
     test_batch_id: Option<&str>,
     resource_limits: ResourceLimits,
     resolved: &configuration::ResolvedConfiguration,
+    ui: bool,
 ) -> Result<ExitCode> {
     if let Some(batch_id) = test_batch_id {
         if Digest::from_hex(batch_id).is_none() {
             anyhow::bail!("invalid internal test batch identifier");
         }
     }
-    let graph =
-        once_frontend::load_graph_workspace_with_configuration(workspace, &resolved.configuration)
-            .context("loading graph")?;
+    let started_at = Instant::now();
+    let ui_server = if ui {
+        Some(crate::commands::ui::UiServer::start().await?)
+    } else {
+        None
+    };
+    let publisher = ui_server
+        .as_ref()
+        .map(crate::commands::ui::UiServer::publisher);
+    let run_context = if ui {
+        let workspace = workspace.to_path_buf();
+        let target = target_id.to_string();
+        let configuration = resolved.configuration.clone();
+        Some(
+            tokio::task::spawn_blocking(move || {
+                crate::commands::ui::RunContext::test(&workspace, target, &configuration)
+            })
+            .await
+            .context("preparing the Runs test graph")?,
+        )
+    } else {
+        None
+    };
+    if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
+        publisher.started(run_context).await;
+        publisher
+            .progress(run_context, "Preparing the Once test run…\n")
+            .await;
+    }
+    if let Some(ui_server) = &ui_server {
+        eprintln!("Runs interface: {}", ui_server.url());
+    }
+    let live_output = publisher
+        .as_ref()
+        .zip(run_context.as_ref())
+        .map(|(publisher, run_context)| publisher.live_output(run_context));
+    let graph = match once_frontend::load_graph_workspace_with_configuration(
+        workspace,
+        &resolved.configuration,
+    ) {
+        Ok(graph) => graph,
+        Err(error) => {
+            if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
+                publisher
+                    .progress(run_context, &format!("Test setup failed: {error}\n"))
+                    .await;
+                publisher
+                    .failed(
+                        run_context,
+                        started_at
+                            .elapsed()
+                            .as_millis()
+                            .try_into()
+                            .unwrap_or(u64::MAX),
+                    )
+                    .await;
+            }
+            write_runs_report(workspace, ui_server.as_ref()).await;
+            return Err(error).context("loading graph");
+        }
+    };
     if !test_filters.is_empty() {
         let manifest =
             crate::commands::query::test_manifest_record_with_graph(workspace, target_id, &graph)?;
@@ -302,6 +554,15 @@ pub async fn test_with_filters(
     )
     .await?
     .with_resource_limits(resource_limits);
+    let session = match &live_output {
+        Some(live_output) => session.with_output_observer(live_output.observer()),
+        None => session,
+    };
+    if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
+        publisher
+            .progress(run_context, "Running the selected Once test target…\n")
+            .await;
+    }
     let target = session.target(target_id)?;
     let test_capability = ensure_capability(target, "test")?;
     if !test_capability.requires_outputs.is_empty()
@@ -348,13 +609,56 @@ pub async fn test_with_filters(
     } else {
         run_target_capability(workspace, cache, target, "test", sandbox).await?
     };
+    if let Some(live_output) = &live_output {
+        live_output.flush().await;
+    }
     record_capability_run(workspace, &record).await;
     if test_filters.is_empty() {
         crate::commands::query::refresh_test_manifest_for_target(workspace, target)
             .context("persisting test manifest")?;
     }
+    let test_results =
+        load_test_results_for_runs(workspace, target_id, record.test_results.as_deref());
+    if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
+        publisher
+            .finished(
+                run_context,
+                &record.action_digest,
+                started_at
+                    .elapsed()
+                    .as_millis()
+                    .try_into()
+                    .unwrap_or(u64::MAX),
+                &record.cache,
+                record.result.exit_code,
+                test_results,
+            )
+            .await;
+    }
     write_record(output, &record).await?;
+    write_runs_report(workspace, ui_server.as_ref()).await;
     Ok(ExitCode::SUCCESS)
+}
+
+fn load_test_results_for_runs(
+    workspace: &Path,
+    target_id: &str,
+    result_path: Option<&str>,
+) -> Option<serde_json::Value> {
+    let result = match result_path {
+        Some(result_path) => crate::commands::query::test_results_value_at(
+            workspace,
+            target_id,
+            Some(result_path),
+            &[],
+        ),
+        None => crate::commands::query::test_results_value(workspace, target_id),
+    };
+    result
+        .inspect_err(|error| {
+            tracing::debug!(error = %error, target = target_id, "could not load test results for Runs");
+        })
+        .ok()
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -14,10 +14,11 @@ use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{
     resolve_execution_argv, resolve_execution_env, validate_action_contract_with_options,
     workspace_mise_command, workspace_prepared_tool_env, workspace_tool_env_with_executables,
-    Action, ActionContractOptions, ArchiveEntry, ArchiveEntryKind, ArchiveFormat, CopyPathMode,
-    EvidenceCacheState, EvidenceRecord, EvidenceSubject, FilesystemOperation, InputDigestBuilder,
-    InputFingerprintComponent, InputFingerprintManifest, NetworkPolicy, OutputSymlinkMode,
-    PreparePathMode, ResourcePool, ResourceRequest, SandboxMode, WorkspacePath,
+    Action, ActionContractOptions, ActionOutputObserver, ArchiveEntry, ArchiveEntryKind,
+    ArchiveFormat, CopyPathMode, EvidenceCacheState, EvidenceRecord, EvidenceSubject,
+    FilesystemOperation, InputDigestBuilder, InputFingerprintComponent, InputFingerprintManifest,
+    NetworkPolicy, OutputSymlinkMode, PreparePathMode, ResourcePool, ResourceRequest, SandboxMode,
+    WorkspacePath,
 };
 use once_frontend::analysis::{
     AnalysisResult, DeclaredAction, DeclaredActionOperation, DeclaredArchiveEntryKind,
@@ -49,6 +50,7 @@ struct DeclaredActionRun<'a> {
     record_success_evidence: bool,
     sandbox: SandboxMode,
     resources: &'a Arc<ResourcePool>,
+    output_observer: Option<&'a dyn ActionOutputObserver>,
 }
 
 struct DeclaredActionOutcome {
@@ -191,6 +193,7 @@ struct DeclaredActionContext<'a> {
     input_fingerprint: InputFingerprintManifest,
     record_success_evidence: bool,
     resources: &'a Arc<ResourcePool>,
+    output_observer: Option<&'a dyn ActionOutputObserver>,
 }
 
 struct DeclaredActionFailure<'a> {
@@ -383,6 +386,7 @@ pub(super) fn run_declared_actions<'a>(
     source_digest_cache: Option<&'a SourceDigestCache>,
     sandbox: SandboxMode,
     resources: &'a Arc<ResourcePool>,
+    output_observer: Option<&'a dyn ActionOutputObserver>,
 ) -> Pin<Box<dyn Future<Output = Result<BuildOutcome>> + Send + 'a>> {
     Box::pin(async move {
         let AnalysisResult {
@@ -421,6 +425,7 @@ pub(super) fn run_declared_actions<'a>(
                 record_success_evidence,
                 sandbox,
                 resources,
+                output_observer,
             }))
             .await;
             let outcome = match outcome {
@@ -648,11 +653,16 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         record_success_evidence,
         sandbox,
         resources,
+        output_observer,
     } = run;
     let identifier_for_error = declared
         .identifier
         .clone()
         .unwrap_or_else(|| "<anonymous>".to_string());
+    if let Some(observer) = output_observer {
+        let message = format!("\n$ {target_id} ({identifier_for_error})\n");
+        observer.observe(once_core::ActionOutputStream::Stdout, message.as_bytes());
+    }
     let cacheable = declared.cacheable;
     tracing::trace!(
         target = %target_id,
@@ -692,6 +702,7 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         input_fingerprint: prepared.input_fingerprint,
         record_success_evidence,
         resources,
+        output_observer,
     };
 
     if cacheable {
@@ -949,14 +960,25 @@ async fn execute_declared_cache_miss(
                 context.index, context.target_id, context.identifier
             )
         })?;
-    let result = once_core::run_uncached(action, context.workspace, context.cache, false)
-        .await
-        .with_context(|| {
-            format!(
-                "executing action {} for {} ({})",
-                context.index, context.target_id, context.identifier
+    let result = match context.output_observer {
+        Some(observer) => {
+            once_core::run_uncached_observed(
+                action,
+                context.workspace,
+                context.cache,
+                false,
+                observer,
             )
-        })?;
+            .await
+        }
+        None => once_core::run_uncached(action, context.workspace, context.cache, false).await,
+    }
+    .with_context(|| {
+        format!(
+            "executing action {} for {} ({})",
+            context.index, context.target_id, context.identifier
+        )
+    })?;
     let action_digest = action.digest();
     if result.exit_code == 0 {
         context
@@ -3097,6 +3119,7 @@ mod tests {
             None,
             SandboxMode::default(),
             test_resources(),
+            None,
         )
         .await
         .unwrap();
@@ -3223,6 +3246,7 @@ mod tests {
             Some(&source_digest_cache),
             SandboxMode::default(),
             test_resources(),
+            None,
         )
         .await
         .unwrap();
@@ -3264,6 +3288,7 @@ mod tests {
             Some(&source_digest_cache),
             SandboxMode::default(),
             test_resources(),
+            None,
         )
         .await
         .unwrap();
@@ -3327,6 +3352,7 @@ mod tests {
             None,
             SandboxMode::default(),
             test_resources(),
+            None,
         )
         .await
         .unwrap();
@@ -3378,6 +3404,7 @@ mod tests {
             None,
             SandboxMode::default(),
             test_resources(),
+            None,
         )
         .await
         .unwrap();
@@ -3414,6 +3441,7 @@ mod tests {
             None,
             SandboxMode::default(),
             test_resources(),
+            None,
         )
         .await
         .unwrap();
@@ -3435,6 +3463,7 @@ mod tests {
             None,
             SandboxMode::default(),
             test_resources(),
+            None,
         )
         .await
         .unwrap();
@@ -3457,6 +3486,7 @@ mod tests {
             None,
             SandboxMode::default(),
             test_resources(),
+            None,
         )
         .await
         .unwrap();
@@ -3631,6 +3661,7 @@ mod tests {
             None,
             SandboxMode::default(),
             test_resources(),
+            None,
         )
         .await
         .unwrap();
@@ -3754,6 +3785,7 @@ mod tests {
             None,
             SandboxMode::default(),
             test_resources(),
+            None,
         )
         .await
         .unwrap();
@@ -3772,6 +3804,7 @@ mod tests {
             None,
             SandboxMode::default(),
             test_resources(),
+            None,
         )
         .await
         .unwrap();
