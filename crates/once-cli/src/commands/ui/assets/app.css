@@ -32,10 +32,9 @@ code {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  min-height: 72px;
   border-bottom: 1px solid #dedfe3;
   background: #fbfbfc;
-  padding: 0 24px;
+  padding: var(--noora-spacing-6);
 }
 
 [data-part="runs-brand"] {
@@ -71,7 +70,7 @@ code {
   flex: 0 0 240px;
   border-right: 1px solid #dedfe3;
   background: #ffffff;
-  padding: var(--noora-spacing-5) 12px;
+  padding: 0 12px;
 }
 
 [data-part="runs-sidebar"] noora-sidebar {
@@ -203,6 +202,12 @@ code {
   --noora-icon-size: 16px;
   width: 100%;
   height: 100%;
+}
+
+.tuist-widget noora-tooltip::part(content),
+[data-part="test-widget"] noora-tooltip::part(content) {
+  display: flex;
+  align-items: flex-start;
 }
 
 .tuist-widget [data-part="value"] {

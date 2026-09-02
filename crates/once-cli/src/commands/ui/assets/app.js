@@ -357,6 +357,7 @@ function runMetric(title, description, value, detail) {
       <div data-part="title"><span data-part="label">${escape(title)}</span></div>
       <noora-tooltip size="large" title="${escape(title)}" description="${escape(description)}">
         <span slot="trigger" data-part="tooltip-icon"><noora-icon name="alert_circle"></noora-icon></span>
+        <noora-icon slot="icon" name="info_circle"></noora-icon>
       </noora-tooltip>
     </div>
     <span data-part="value">${escape(value)}</span>
@@ -562,6 +563,7 @@ function testWidget(title, description, value) {
       <div data-part="title"><span data-part="label">${title}</span></div>
       <noora-tooltip size="large" title="${title}" description="${description}">
         <span slot="trigger" data-part="tooltip-icon"><noora-icon name="alert_circle"></noora-icon></span>
+        <noora-icon slot="icon" name="info_circle"></noora-icon>
       </noora-tooltip>
     </div>
     <span data-part="value">${value}</span>
