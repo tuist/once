@@ -69,6 +69,40 @@ SH
     ' "$WORKSPACE/consumer-evidence.json" >/dev/null
   }
 
+  restore_swift_artifacts_from_cache() {
+    copy_native_package
+
+    once swift -- build >/dev/null
+    find "$WORKSPACE/.once/out" -type f -print | sort > "$WORKSPACE/first-artifacts"
+    swift_library_evidence > "$WORKSPACE/first-evidence.json"
+    clear_swift_build_outputs
+
+    once swift -- build >/dev/null
+    find "$WORKSPACE/.once/out" -type f -print | sort > "$WORKSPACE/second-artifacts"
+    swift_library_evidence > "$WORKSPACE/second-evidence.json"
+
+    printf '\npublic func cacheProbe() {}\n' >> "$WORKSPACE/Sources/OnceNativeSwiftPackage/Greeting.swift"
+    clear_swift_build_outputs
+    once swift -- build >/dev/null
+    swift_library_evidence > "$WORKSPACE/third-evidence.json"
+
+    verify_swift_cache_evidence
+  }
+
+  reuse_consumer_when_module_is_unchanged() {
+    copy_native_package
+
+    once swift -- build >/dev/null
+    swift_dependency_evidence > "$WORKSPACE/dependency-before-evidence.json"
+    perl -0pi -e 's/"one"/"two"/' "$WORKSPACE/Sources/OnceNativeDependency/Dependency.swift"
+    clear_swift_build_outputs
+    once swift -- build >/dev/null
+    swift_dependency_evidence > "$WORKSPACE/dependency-after-evidence.json"
+    swift_consumer_evidence > "$WORKSPACE/consumer-evidence.json"
+
+    verify_consumer_reuses_unchanged_module
+  }
+
   It 'passes unsupported invocations through without a Once trailer'
     install_system_swift
 
@@ -108,23 +142,8 @@ SH
 
   It 'restores every declared artifact and invalidates only changed Swift actions'
     Skip if 'Apple Swift toolchain unavailable on this host' swift_package_tools_unavailable
-    copy_native_package
 
-    once swift -- build >/dev/null
-    find "$WORKSPACE/.once/out" -type f -print | sort > "$WORKSPACE/first-artifacts"
-    swift_library_evidence > "$WORKSPACE/first-evidence.json"
-    clear_swift_build_outputs
-
-    once swift -- build >/dev/null
-    find "$WORKSPACE/.once/out" -type f -print | sort > "$WORKSPACE/second-artifacts"
-    swift_library_evidence > "$WORKSPACE/second-evidence.json"
-
-    printf '\npublic func cacheProbe() {}\n' >> "$WORKSPACE/Sources/OnceNativeSwiftPackage/Greeting.swift"
-    clear_swift_build_outputs
-    once swift -- build >/dev/null
-    swift_library_evidence > "$WORKSPACE/third-evidence.json"
-
-    When call verify_swift_cache_evidence
+    When call restore_swift_artifacts_from_cache
     The status should be success
     The path "$WORKSPACE/.once/out/SwiftPackage_OnceNativeSwiftPackage_OnceNativeSwiftPackage/OnceNativeSwiftPackage.a" should be file
     The path "$WORKSPACE/.once/out/SwiftPackage_OnceNativeSwiftPackage_OnceNativeSwiftPackage/OnceNativeSwiftPackage.abi.json" should be file
@@ -132,17 +151,8 @@ SH
 
   It 'reuses a consumer when a dependency implementation preserves its module'
     Skip if 'Apple Swift toolchain unavailable on this host' swift_package_tools_unavailable
-    copy_native_package
 
-    once swift -- build >/dev/null
-    swift_dependency_evidence > "$WORKSPACE/dependency-before-evidence.json"
-    perl -0pi -e 's/"one"/"two"/' "$WORKSPACE/Sources/OnceNativeDependency/Dependency.swift"
-    clear_swift_build_outputs
-    once swift -- build >/dev/null
-    swift_dependency_evidence > "$WORKSPACE/dependency-after-evidence.json"
-    swift_consumer_evidence > "$WORKSPACE/consumer-evidence.json"
-
-    When call verify_consumer_reuses_unchanged_module
+    When call reuse_consumer_when_module_is_unchanged
     The status should be success
   End
 End
