@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use once_core::{ActionOutputObserver, ActionOutputStream};
@@ -96,6 +97,8 @@ pub struct LiveOutput {
 
 struct OutputObserver {
     sender: mpsc::Sender<OutputMessage>,
+    dropped_output: AtomicBool,
+    decoder: Mutex<OutputDecoder>,
 }
 
 enum OutputMessage {
@@ -103,7 +106,100 @@ enum OutputMessage {
         stream: ActionOutputStream,
         text: String,
     },
-    Flush(oneshot::Sender<()>),
+    Flush {
+        done: oneshot::Sender<()>,
+        dropped_output: bool,
+    },
+}
+
+#[derive(Default)]
+struct OutputDecoder {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+impl OutputObserver {
+    fn new(sender: mpsc::Sender<OutputMessage>) -> Self {
+        Self {
+            sender,
+            dropped_output: AtomicBool::new(false),
+            decoder: Mutex::new(OutputDecoder::default()),
+        }
+    }
+
+    fn queue(&self, stream: ActionOutputStream, text: String) {
+        if text.is_empty() {
+            return;
+        }
+        if matches!(
+            self.sender.try_send(OutputMessage::Chunk { stream, text }),
+            Err(mpsc::error::TrySendError::Full(_))
+        ) {
+            self.dropped_output.store(true, Ordering::Release);
+        }
+    }
+
+    fn flush_decoder(&self) {
+        let pending = self
+            .decoder
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .finish();
+        for (stream, text) in pending {
+            self.queue(stream, text);
+        }
+    }
+
+    fn take_dropped_output(&self) -> bool {
+        self.dropped_output.swap(false, Ordering::AcqRel)
+    }
+}
+
+impl OutputDecoder {
+    fn append(&mut self, stream: ActionOutputStream, bytes: &[u8]) -> Option<String> {
+        let buffered = match stream {
+            ActionOutputStream::Stdout => &mut self.stdout,
+            ActionOutputStream::Stderr => &mut self.stderr,
+        };
+        buffered.extend_from_slice(bytes);
+        let text = match std::str::from_utf8(buffered) {
+            Ok(text) => {
+                let text = text.to_string();
+                buffered.clear();
+                text
+            }
+            Err(error) if error.error_len().is_none() => {
+                let valid_up_to = error.valid_up_to();
+                if valid_up_to == 0 {
+                    return None;
+                }
+                let remainder = buffered.split_off(valid_up_to);
+                let text = std::str::from_utf8(buffered)
+                    .map(str::to_string)
+                    .unwrap_or_default();
+                *buffered = remainder;
+                text
+            }
+            Err(_) => {
+                let text = String::from_utf8_lossy(buffered).into_owned();
+                buffered.clear();
+                text
+            }
+        };
+        Some(text)
+    }
+
+    fn finish(&mut self) -> Vec<(ActionOutputStream, String)> {
+        [
+            (ActionOutputStream::Stdout, std::mem::take(&mut self.stdout)),
+            (ActionOutputStream::Stderr, std::mem::take(&mut self.stderr)),
+        ]
+        .into_iter()
+        .filter_map(|(stream, bytes)| {
+            (!bytes.is_empty()).then(|| (stream, String::from_utf8_lossy(&bytes).into_owned()))
+        })
+        .collect()
+    }
 }
 
 impl ActionOutputObserver for OutputObserver {
@@ -111,10 +207,14 @@ impl ActionOutputObserver for OutputObserver {
         if bytes.is_empty() {
             return;
         }
-        let _ = self.sender.try_send(OutputMessage::Chunk {
-            stream,
-            text: String::from_utf8_lossy(bytes).into_owned(),
-        });
+        let text = self
+            .decoder
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .append(stream, bytes);
+        if let Some(text) = text {
+            self.queue(stream, text);
+        }
     }
 }
 
@@ -124,6 +224,7 @@ impl Publisher {
         Self { store }
     }
 
+    #[allow(clippy::unused_async)]
     pub async fn started(&self, context: &RunContext) {
         self.store.replace(RunSnapshot {
             run_id: context.run_id.clone(),
@@ -147,6 +248,7 @@ impl Publisher {
         });
     }
 
+    #[allow(clippy::unused_async)]
     pub async fn finished(
         &self,
         _context: &RunContext,
@@ -171,6 +273,7 @@ impl Publisher {
         });
     }
 
+    #[allow(clippy::unused_async)]
     pub async fn failed(&self, _context: &RunContext, duration_ms: u64) {
         self.store.update(|run| {
             run.status = "failed".to_string();
@@ -189,17 +292,24 @@ impl Publisher {
                     OutputMessage::Chunk { stream, text } => {
                         append_output(&store, output_stream_name(stream), text);
                     }
-                    OutputMessage::Flush(done) => {
+                    OutputMessage::Flush {
+                        done,
+                        dropped_output,
+                    } => {
+                        if dropped_output {
+                            mark_output_truncated(&store);
+                        }
                         let _ = done.send(());
                     }
                 }
             }
         });
         LiveOutput {
-            observer: Arc::new(OutputObserver { sender }),
+            observer: Arc::new(OutputObserver::new(sender)),
         }
     }
 
+    #[allow(clippy::unused_async)]
     pub async fn progress(&self, _context: &RunContext, message: &str) {
         append_output(&self.store, "notice", message.to_string());
     }
@@ -212,11 +322,16 @@ impl LiveOutput {
     }
 
     pub async fn flush(&self) {
+        self.observer.flush_decoder();
+        let dropped_output = self.observer.take_dropped_output();
         let (done, waiting) = oneshot::channel();
         if self
             .observer
             .sender
-            .send(OutputMessage::Flush(done))
+            .send(OutputMessage::Flush {
+                done,
+                dropped_output,
+            })
             .await
             .is_ok()
         {
@@ -387,6 +502,10 @@ fn append_output(store: &RunStore, stream: &str, text: String) {
     });
 }
 
+fn mark_output_truncated(store: &RunStore) {
+    store.update(|run| run.output_truncated = true);
+}
+
 fn truncate_to_byte_limit(mut value: String, limit: usize) -> String {
     if value.len() <= limit {
         return value;
@@ -414,13 +533,86 @@ fn milliseconds(duration: Duration) -> u64 {
 mod tests {
     use std::{
         fs,
+        sync::atomic::Ordering,
         time::{SystemTime, UNIX_EPOCH},
     };
 
+    use once_core::{ActionOutputObserver, ActionOutputStream};
     use once_frontend::BuildConfiguration;
     use tempfile::TempDir;
+    use tokio::sync::mpsc;
 
-    use super::{BuildGraph, RunContext, RunOperation, UiServer};
+    use super::{
+        append_output, BuildGraph, OutputMessage, OutputObserver, RunContext, RunOperation,
+        RunSnapshot, RunStore, UiServer, OUTPUT_BYTE_LIMIT,
+    };
+
+    fn running_snapshot() -> RunSnapshot {
+        RunSnapshot {
+            run_id: "run-1".to_string(),
+            action_digest: "pending".to_string(),
+            workspace: "once".to_string(),
+            target: "target".to_string(),
+            display_target: "target".to_string(),
+            operation: "build".to_string(),
+            command: "once build target".to_string(),
+            status: "running".to_string(),
+            started_at_ms: 0,
+            duration_ms: None,
+            cache: None,
+            exit_code: None,
+            graph: None,
+            test_results: None,
+            logs: Vec::new(),
+            output_truncated: false,
+            static_report_path: None,
+            output_byte_count: 0,
+        }
+    }
+
+    #[test]
+    fn retains_split_utf8_output() {
+        let (sender, mut receiver) = mpsc::channel(1);
+        let observer = OutputObserver::new(sender);
+
+        observer.observe(ActionOutputStream::Stdout, &[0xe2, 0x80]);
+        assert!(receiver.try_recv().is_err());
+        observer.observe(ActionOutputStream::Stdout, &[0xa6]);
+
+        match receiver.try_recv().unwrap() {
+            OutputMessage::Chunk { stream, text } => {
+                assert_eq!(stream, ActionOutputStream::Stdout);
+                assert_eq!(text, "…");
+            }
+            OutputMessage::Flush { .. } => panic!("expected output chunk"),
+        }
+    }
+
+    #[test]
+    fn marks_dropped_output_when_the_channel_is_full() {
+        let (sender, _receiver) = mpsc::channel(1);
+        let observer = OutputObserver::new(sender);
+
+        observer.observe(ActionOutputStream::Stdout, b"first");
+        observer.observe(ActionOutputStream::Stdout, b"second");
+
+        assert!(observer.dropped_output.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn truncates_retained_output_at_a_character_boundary() {
+        let store = RunStore::new();
+        store.replace(running_snapshot());
+
+        append_output(&store, "stdout", "é".repeat(OUTPUT_BYTE_LIMIT));
+        append_output(&store, "stdout", "next".to_string());
+
+        let run = store.latest().unwrap();
+        assert_eq!(run.logs.len(), 1);
+        assert_eq!(run.logs[0].text, "next");
+        assert_eq!(run.output_byte_count, "next".len());
+        assert!(run.output_truncated);
+    }
 
     #[tokio::test]
     async fn publishes_build_updates_to_the_local_server() {

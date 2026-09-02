@@ -77,6 +77,7 @@ pub struct GraphRunOptions {
     pub arguments: Vec<String>,
 }
 
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub async fn build(
     workspace: &Path,
     cache: &CacheProvider,
@@ -93,6 +94,9 @@ pub async fn build(
     } else {
         None
     };
+    if let Some(ui_server) = &ui_server {
+        eprintln!("Runs interface: {}", ui_server.url());
+    }
     let publisher = ui_server
         .as_ref()
         .map(crate::commands::ui::UiServer::publisher);
@@ -115,9 +119,6 @@ pub async fn build(
         publisher
             .progress(run_context, "Preparing the Once build graph…\n")
             .await;
-    }
-    if let Some(ui_server) = &ui_server {
-        eprintln!("Runs interface: {}", ui_server.url());
     }
     let live_output = publisher
         .as_ref()
@@ -429,6 +430,7 @@ pub async fn lint(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn test(
     workspace: &Path,
     cache: &CacheProvider,
@@ -454,7 +456,7 @@ pub async fn test(
     .await
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub async fn test_with_filters(
     workspace: &Path,
     cache: &CacheProvider,
@@ -478,6 +480,9 @@ pub async fn test_with_filters(
     } else {
         None
     };
+    if let Some(ui_server) = &ui_server {
+        eprintln!("Runs interface: {}", ui_server.url());
+    }
     let publisher = ui_server
         .as_ref()
         .map(crate::commands::ui::UiServer::publisher);
@@ -500,9 +505,6 @@ pub async fn test_with_filters(
         publisher
             .progress(run_context, "Preparing the Once test run…\n")
             .await;
-    }
-    if let Some(ui_server) = &ui_server {
-        eprintln!("Runs interface: {}", ui_server.url());
     }
     let live_output = publisher
         .as_ref()

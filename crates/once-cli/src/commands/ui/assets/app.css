@@ -132,6 +132,17 @@ code {
   overflow-wrap: anywhere;
 }
 
+[data-part="run-report-path"] {
+  margin: 0;
+  color: #686c74;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+[data-part="run-report-path"] code {
+  overflow-wrap: anywhere;
+}
+
 [data-part="run-workspace"] noora-card,
 [data-part="run-output"] noora-card,
 [data-part="run-details"] noora-card {

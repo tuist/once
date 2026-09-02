@@ -1179,6 +1179,7 @@ fn analyze_with_memo(
     Ok(analysis)
 }
 
+#[allow(clippy::too_many_lines)]
 async fn build_one(
     context: BuildContext,
     target: Arc<GraphTarget>,

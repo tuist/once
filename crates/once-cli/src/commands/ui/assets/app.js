@@ -362,11 +362,6 @@ function routePath(page) {
   return staticRun ? `#${page}` : `/runs/${page}`
 }
 
-function staticReportUrl(path) {
-  const encodedPath = path.split("/").map(encodeURIComponent).join("/")
-  return `file://${encodedPath}`
-}
-
 function navItem(page, label, icon, selected) {
   return `<noora-sidebar-item href="${routePath(page)}" data-route="${page}" icon="${icon}"${selected ? " selected" : ""}>${label}</noora-sidebar-item>`
 }
@@ -404,6 +399,7 @@ function titlebar(snapshot) {
       <noora-badge appearance="light-fill" color="${badgeColor(snapshot.status)}">${statusLabel(snapshot.status)}</noora-badge>
     </div>
     <p data-part="run-command"><code>${escape(snapshot.command)}</code></p>
+    ${snapshot.static_report_path ? `<p data-part="run-report-path">Report saved at <code>${escape(snapshot.static_report_path)}</code></p>` : ""}
   </header>`
 }
 
@@ -867,15 +863,13 @@ function handleKeyboardShortcut(event) {
 
 function applyProgressUpdate(previous) {
   if (route() !== "progress" || !previous || previous.run_id !== run.run_id) return false
-  if (previous.status !== run.status || Boolean(previous.graph) !== Boolean(run.graph)) return false
+  if (
+    previous.status !== run.status
+    || Boolean(previous.graph) !== Boolean(run.graph)
+    || previous.static_report_path !== run.static_report_path
+  ) return false
   if (!app.querySelector('[data-part="run-log-list"]')) return false
   refreshLogEntries()
-  return true
-}
-
-function openStaticReport(previous) {
-  if (staticRun || !run?.static_report_path || previous?.static_report_path === run.static_report_path) return false
-  window.location.replace(staticReportUrl(run.static_report_path))
   return true
 }
 
@@ -902,7 +896,6 @@ async function loadInitialState() {
   } catch (error) {
     console.error("Could not load the current Once build", error)
   }
-  if (openStaticReport(null)) return
   render()
 }
 
@@ -913,7 +906,6 @@ function connect() {
     try {
       const previous = run
       run = JSON.parse(event.data)
-      if (openStaticReport(previous)) return
       if (!applyProgressUpdate(previous)) render()
     } catch (error) {
       console.error("Could not apply a Once build update", error)

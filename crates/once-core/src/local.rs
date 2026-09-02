@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use once_cas::{ActionResult, CacheProvider, Digest};
 use tokio::io::AsyncRead;
-use tokio::process::Command;
+use tokio::process::{ChildStderr, ChildStdout, Command};
 use tracing::debug;
 
 use crate::stream::{self, ActionOutputObserver, Destination};
@@ -198,6 +198,43 @@ pub(crate) async fn execute_command_observed(
     .await
 }
 
+async fn capture_pipes(
+    capture: Capture<'_>,
+    cache: &CacheProvider,
+    stdout_pipe: Option<ChildStdout>,
+    stderr_pipe: Option<ChildStderr>,
+) -> Result<(Option<Digest>, Option<Digest>)> {
+    match capture {
+        Capture::Cached => tokio::try_join!(
+            capture_stream(cache, stdout_pipe),
+            capture_stream(cache, stderr_pipe)
+        ),
+        Capture::Streaming => tokio::try_join!(
+            capture_stream_streaming(stdout_pipe, Destination::Stdout, cache),
+            capture_stream_streaming(stderr_pipe, Destination::Stderr, cache)
+        ),
+        Capture::Observed {
+            stream_to_parent,
+            observer,
+        } => tokio::try_join!(
+            capture_stream_observed(
+                stdout_pipe,
+                Destination::Stdout,
+                cache,
+                stream_to_parent,
+                observer
+            ),
+            capture_stream_observed(
+                stderr_pipe,
+                Destination::Stderr,
+                cache,
+                stream_to_parent,
+                observer
+            )
+        ),
+    }
+}
+
 /// Spawn one child under the workspace and collect its result.
 ///
 /// The cached and streaming paths differ only in how the two pipes are
@@ -268,35 +305,8 @@ async fn spawn_and_capture(
     let stderr_pipe = child.stderr.take();
 
     let work = Box::pin(async {
-        let (stdout, stderr) = match capture {
-            Capture::Cached => tokio::try_join!(
-                capture_stream(cache, stdout_pipe),
-                capture_stream(cache, stderr_pipe)
-            )?,
-            Capture::Streaming => tokio::try_join!(
-                capture_stream_streaming(stdout_pipe, Destination::Stdout, cache),
-                capture_stream_streaming(stderr_pipe, Destination::Stderr, cache)
-            )?,
-            Capture::Observed {
-                stream_to_parent,
-                observer,
-            } => tokio::try_join!(
-                capture_stream_observed(
-                    stdout_pipe,
-                    Destination::Stdout,
-                    cache,
-                    stream_to_parent,
-                    observer
-                ),
-                capture_stream_observed(
-                    stderr_pipe,
-                    Destination::Stderr,
-                    cache,
-                    stream_to_parent,
-                    observer
-                )
-            )?,
-        };
+        let (stdout, stderr) =
+            Box::pin(capture_pipes(capture, cache, stdout_pipe, stderr_pipe)).await?;
         let status = child.wait().await.map_err(|source| Error::Wait {
             program: program.clone(),
             source,

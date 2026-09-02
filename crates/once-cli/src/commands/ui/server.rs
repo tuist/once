@@ -24,7 +24,7 @@ pub(super) struct RunStore {
 }
 
 impl RunStore {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let (updates, _) = watch::channel(None);
         Self {
             snapshot: Arc::new(Mutex::new(None)),
@@ -36,26 +36,30 @@ impl RunStore {
         let mut snapshot = self
             .snapshot
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *snapshot = Some(run);
-        self.updates.send_replace(snapshot.clone());
+        if self.updates.receiver_count() > 0 {
+            self.updates.send_replace(snapshot.clone());
+        }
     }
 
     pub(super) fn update(&self, change: impl FnOnce(&mut RunSnapshot)) {
         let mut snapshot = self
             .snapshot
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(run) = snapshot.as_mut() {
             change(run);
-            self.updates.send_replace(snapshot.clone());
+            if self.updates.receiver_count() > 0 {
+                self.updates.send_replace(snapshot.clone());
+            }
         }
     }
 
-    fn latest(&self) -> Option<RunSnapshot> {
+    pub(super) fn latest(&self) -> Option<RunSnapshot> {
         self.snapshot
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
     }
 
@@ -117,10 +121,14 @@ impl UiServer {
         let directory = workspace.join(".once").join("runs").join(&run.run_id);
         std::fs::create_dir_all(&directory).context("creating the static Runs site")?;
         let report = directory.join("index.html");
-        std::fs::write(&report, static_html(&run)).context("writing the static Runs page")?;
         self.store.update(|run| {
             run.static_report_path = Some(report.to_string_lossy().into_owned());
         });
+        let run = self
+            .store
+            .latest()
+            .expect("the Runs snapshot exists while writing its static report");
+        std::fs::write(&report, static_html(&run)).context("writing the static Runs page")?;
         sleep(Duration::from_millis(250)).await;
         Ok(Some(report))
     }
