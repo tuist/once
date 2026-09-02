@@ -218,6 +218,16 @@ async fn run_command(
         }
         Cmd::Edit { cmd } => run_edit_command(workspace, output, cmd).await,
         Cmd::Native { cmd } => run_native_command(workspace, output, cmd).await,
+        Cmd::Compatibility { argv } => {
+            Box::pin(commands::compatibility::run(
+                workspace,
+                xdg,
+                output,
+                resource_limits.clone(),
+                argv,
+            ))
+            .await
+        }
         Cmd::Runtime { cmd } => run_runtime_command(workspace, output, cmd).await,
         Cmd::Mcp {
             workspace: workspace_override,
