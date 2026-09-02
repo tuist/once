@@ -1361,6 +1361,11 @@ def _apple_library_impl(ctx):
         for m in dep.get("transitive_modulemaps") or []:
             if m not in dep_modulemaps:
                 dep_modulemaps.append(m)
+    compile_modulemap_dirs = []
+    for modulemap in dep_modulemaps:
+        modulemap_dir = _parent_dir(modulemap)
+        if modulemap_dir and modulemap_dir not in compile_modulemap_dirs:
+            compile_modulemap_dirs.append(modulemap_dir)
     dep_hmaps = []
     for dep in deps:
         for h in dep.get("transitive_hmaps") or []:
@@ -1711,6 +1716,8 @@ def _apple_library_impl(ctx):
                 _apple_append_weak_framework(swift_base_argv, framework)
             for dep_dir in compile_swiftmodule_dirs:
                 swift_base_argv.extend(["-I", dep_dir])
+            for modulemap_dir in compile_modulemap_dirs:
+                swift_base_argv.extend(["-I", modulemap_dir])
             for framework_dir in compile_framework_search_dirs:
                 swift_base_argv.extend(["-F", framework_dir])
             _apple_disable_static_framework_autolinking(swift_base_argv, compile_framework_bundles)

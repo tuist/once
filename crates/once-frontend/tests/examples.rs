@@ -505,6 +505,65 @@ let package = Package(
 }
 
 #[cfg(target_os = "macos")]
+#[test]
+fn swift_package_workspace_preserves_root_c_target_modulemaps() {
+    let tmp = TempDir::new().expect("tempdir");
+    fs::create_dir_all(tmp.path().join("Sources/CModule/include"))
+        .expect("C module include directory");
+    fs::create_dir_all(tmp.path().join("Sources/App")).expect("app source directory");
+    fs::write(
+        tmp.path().join("Package.swift"),
+        r#"// swift-tools-version: 6.0
+import PackageDescription
+
+let package = Package(
+    name: "CModuleImport",
+    products: [.library(name: "CModuleImport", targets: ["App"])],
+    targets: [
+        .target(name: "CModule"),
+        .target(name: "App", dependencies: ["CModule"]),
+    ]
+)
+"#,
+    )
+    .expect("package manifest");
+    fs::write(
+        tmp.path().join("Sources/CModule/module.c"),
+        "int answer(void) { return 42; }\n",
+    )
+    .expect("C source");
+    fs::write(
+        tmp.path().join("Sources/CModule/include/module.h"),
+        "int answer(void);\n",
+    )
+    .expect("C header");
+    fs::write(
+        tmp.path().join("Sources/CModule/include/module.modulemap"),
+        "module CModule { header \"module.h\" export * }\n",
+    )
+    .expect("C module map");
+    fs::write(
+        tmp.path().join("Sources/App/App.swift"),
+        "import CModule\npublic let value = answer()\n",
+    )
+    .expect("app source");
+
+    let graph = once_frontend::load_graph_workspace(tmp.path())
+        .expect("Swift package workspace with a C module loads");
+    let c_module = graph
+        .iter()
+        .find(|target| target.label.id == "SwiftPackage_CModuleImport_CModule")
+        .expect("C module target");
+
+    assert_eq!(
+        c_module.attrs.get("modulemap"),
+        Some(&AttrValue::String(
+            "Sources/CModule/include/module.modulemap".to_string()
+        ))
+    );
+}
+
+#[cfg(target_os = "macos")]
 fn run_git(directory: &Path, args: &[&str]) {
     let status = Command::new("git")
         .args(args)
