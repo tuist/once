@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use once_core::{ActionOutputObserver, ActionOutputStream};
-use once_frontend::BuildConfiguration;
+use once_frontend::{AttrValue, BuildConfiguration};
 use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
 
@@ -25,6 +25,7 @@ pub struct RunContext {
     run_id: String,
     workspace: String,
     target: String,
+    display_target: String,
     operation: RunOperation,
     started_at_ms: u64,
     graph: Option<BuildGraph>,
@@ -42,6 +43,7 @@ struct RunSnapshot {
     action_digest: String,
     workspace: String,
     target: String,
+    display_target: String,
     operation: String,
     command: String,
     status: String,
@@ -70,6 +72,8 @@ pub(super) struct BuildGraph {
     target_count: usize,
     resolved_target_count: usize,
     nodes: Vec<BuildGraphNode>,
+    #[serde(skip)]
+    display_target: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -126,6 +130,7 @@ impl Publisher {
             action_digest: "pending".to_string(),
             workspace: context.workspace.clone(),
             target: context.target.clone(),
+            display_target: context.display_target.clone(),
             operation: context.operation.label().to_string(),
             command: command_label(context.operation, &context.target),
             status: "running".to_string(),
@@ -237,11 +242,17 @@ impl RunContext {
         configuration: &BuildConfiguration,
         operation: RunOperation,
     ) -> Self {
+        let graph = BuildGraph::load(workspace, &target, configuration);
+        let display_target = graph
+            .as_ref()
+            .and_then(BuildGraph::display_target)
+            .unwrap_or_else(|| target.clone());
         Self {
             run_id: uuid::Uuid::now_v7().to_string(),
             workspace: workspace_label(workspace),
-            graph: BuildGraph::load(workspace, &target, configuration),
+            graph,
             target,
+            display_target,
             operation,
             started_at_ms: milliseconds(
                 SystemTime::now()
@@ -273,6 +284,14 @@ impl BuildGraph {
                 return None;
             }
         };
+        let display_target = resolved
+            .iter()
+            .find(|target| target.label.id == target_id)
+            .filter(|target| target.kind == "swift_package_workspace")
+            .and_then(|target| match target.attrs.get("package_name") {
+                Some(AttrValue::String(name)) if !name.is_empty() => Some(name.clone()),
+                _ => None,
+            });
         let resolved_by_id = resolved
             .iter()
             .map(|target| (target.label.id.as_str(), target))
@@ -308,7 +327,12 @@ impl BuildGraph {
             target_count: nodes.len(),
             resolved_target_count: reachable.len(),
             nodes,
+            display_target,
         })
+    }
+
+    fn display_target(&self) -> Option<String> {
+        self.display_target.clone()
     }
 }
 
@@ -406,6 +430,7 @@ mod tests {
             run_id: "run-1".to_string(),
             workspace: "once".to_string(),
             target: "crates/once-cli/once".to_string(),
+            display_target: "once".to_string(),
             operation: RunOperation::Build,
             started_at_ms: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -485,6 +510,7 @@ let package = Package(
 
         assert_eq!(graph.target_count, 3);
         assert_eq!(graph.resolved_target_count, 3);
+        assert_eq!(graph.display_target(), Some("CModuleImport".to_string()));
         assert!(graph
             .nodes
             .iter()

@@ -235,6 +235,7 @@ mod tests {
             action_digest: "digest".to_string(),
             workspace: "workspace".to_string(),
             target: "target".to_string(),
+            display_target: "target".to_string(),
             operation: "build".to_string(),
             command: "once build target".to_string(),
             status: "completed".to_string(),

@@ -278,8 +278,27 @@ function cacheDetail(snapshot) {
     : "Awaiting cache result"
 }
 
+function formatDuration(milliseconds) {
+  const duration = Math.max(0, Math.trunc(milliseconds))
+  if (duration < 1000) return `${duration}ms`
+
+  if (duration < 60_000) {
+    return `${Math.round((duration / 1000) * 10) / 10}s`
+  }
+
+  const totalSeconds = Math.round(duration / 1000)
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  return [
+    hours > 0 ? `${hours}h` : "",
+    minutes > 0 ? `${minutes}m` : "",
+    seconds > 0 ? `${seconds}s` : "",
+  ].filter(Boolean).join(" ")
+}
+
 function duration(snapshot) {
-  return snapshot.duration_ms == null ? "Running" : `${snapshot.duration_ms} ms`
+  return snapshot.duration_ms == null ? "Running" : formatDuration(snapshot.duration_ms)
 }
 
 function exitLabel(snapshot) {
@@ -287,7 +306,7 @@ function exitLabel(snapshot) {
 }
 
 function buildLabel(snapshot) {
-  return (snapshot.target || snapshot.action_digest || "run").split("/").filter(Boolean).at(-1)
+  return (snapshot.display_target || snapshot.target || snapshot.action_digest || "run").split("/").filter(Boolean).at(-1)
 }
 
 function operationLabel(snapshot) {
