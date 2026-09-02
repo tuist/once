@@ -52,10 +52,6 @@ code {
   color: #6d3df5;
 }
 
-[data-part="runs-breadcrumbs"] {
-  margin-left: 18px;
-}
-
 [data-part="runs-header-actions"] {
   margin-left: auto;
 }
@@ -536,10 +532,6 @@ once-workspace-graph {
   [data-part="runs-header"] {
     min-height: 60px;
     padding: 0 16px;
-  }
-
-  [data-part="runs-breadcrumbs"] {
-    display: none;
   }
 
   [data-part="run-page"],

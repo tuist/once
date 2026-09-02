@@ -262,8 +262,6 @@ mod tests {
         assert!(page.contains("Resolved targets"));
         assert!(page.contains("document.title"));
         assert!(page.contains("Once Runs"));
-        assert!(page.contains("Run report"));
-        assert!(page.contains("Workspace:"));
         assert!(page.contains("noora-card__section tuist-widget"));
         assert!(page.contains("slot=\"icon\""));
         assert!(page.contains(">Current<"));
