@@ -40,8 +40,7 @@ use crate::render;
 
 const MAX_SCRIPT_GLOB_MATCHES: usize = 1_000;
 
-const SCRIPT_EXEC_USAGE: &str =
-    "`once exec --script` expects `<runtime> <script> [args...]`";
+const SCRIPT_EXEC_USAGE: &str = "`once exec --script` expects `<runtime> <script> [args...]`";
 
 #[derive(Serialize)]
 struct ExecTrailer<'a> {

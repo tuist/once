@@ -11,6 +11,7 @@ mod reference;
 mod render;
 
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::io::Write;
 use std::process::ExitCode;
 
@@ -109,7 +110,9 @@ fn format_human_error(verbose: u8, error: &anyhow::Error) -> String {
     // context frames from innermost to outermost so the most specific
     // operation reads closest to the root cause.
     for frame in chain.iter().rev().skip(1) {
-        out.push_str(&format!("  while {frame}\n"));
+        // Writing directly into the String avoids an intermediate allocation
+        // (clippy::format_push_string); the write is infallible on a String.
+        let _ = writeln!(out, "  while {frame}");
     }
     out
 }

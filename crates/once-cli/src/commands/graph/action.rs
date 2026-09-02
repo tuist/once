@@ -137,7 +137,7 @@ fn output_root(target: &GraphTarget, capability: &str) -> Result<String> {
         "build" => Ok(build_root(target)),
         "run" => Ok(format!("{}/run", build_root(target))),
         "test" => Ok(format!("{}/test", build_root(target))),
-        other => return Err(unsupported_capability(other)),
+        other => Err(unsupported_capability(other)),
     }
 }
 

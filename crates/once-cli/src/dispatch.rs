@@ -696,9 +696,7 @@ async fn run_cache_command(
         }
         Some(cli::CacheCmd::Gc { max_size, dry_run }) => {
             let cache = crate::cache_provider::resolve(workspace, xdg)?;
-            let cap = max_size
-                .map(|size| size.bytes())
-                .unwrap_or(cli::DEFAULT_CACHE_SIZE_CAP_BYTES);
+            let cap = max_size.map_or(cli::DEFAULT_CACHE_SIZE_CAP_BYTES, cli::CacheSize::bytes);
             commands::cache::gc(&cache, cap, dry_run, output)
                 .await
                 .map(|()| ExitCode::SUCCESS)

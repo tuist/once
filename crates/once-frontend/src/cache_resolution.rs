@@ -77,14 +77,15 @@ fn resolve_provider_config(
                 return resolve_named_workspace_provider(binding, provider.clone());
             }
             let mut config = load_user_config(user_config_path)?;
-            let provider = take_named_user_provider(&mut config, &binding.name).ok_or_else(
-                || Error::CacheProvider {
-                    path: user_config_path.display().to_string(),
-                    kind: CacheProviderError::InfrastructureNotFound {
-                        name: binding.name.clone(),
-                    },
-                },
-            )?;
+            let provider =
+                take_named_user_provider(&mut config, &binding.name).ok_or_else(|| {
+                    Error::CacheProvider {
+                        path: user_config_path.display().to_string(),
+                        kind: CacheProviderError::InfrastructureNotFound {
+                            name: binding.name.clone(),
+                        },
+                    }
+                })?;
             Ok(resolve_named_provider(binding, provider))
         }
     }

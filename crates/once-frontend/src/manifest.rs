@@ -469,12 +469,14 @@ fn select_dep_value_for_tokens<'a>(
             return Ok(value);
         }
     }
-    branches.get("default").ok_or_else(|| Error::ManifestSchema {
-        path: display_name.to_string(),
-        kind: ManifestSchemaError::DepsSelectNoMatch {
-            target: target_name.to_string(),
-        },
-    })
+    branches
+        .get("default")
+        .ok_or_else(|| Error::ManifestSchema {
+            path: display_name.to_string(),
+            kind: ManifestSchemaError::DepsSelectNoMatch {
+                target: target_name.to_string(),
+            },
+        })
 }
 
 fn select_tokens_for(os: &str, arch: &str) -> Vec<String> {

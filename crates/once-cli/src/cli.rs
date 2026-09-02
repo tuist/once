@@ -17,7 +17,7 @@ mod toolchain;
 pub use auth::AuthCmd;
 pub(crate) use cache::OutputDigest;
 pub use cache::{CacheActionCmd, CacheBlobCmd, CacheCmd};
-pub(crate) use cache::DEFAULT_CACHE_SIZE_CAP_BYTES;
+pub(crate) use cache::{CacheSize, DEFAULT_CACHE_SIZE_CAP_BYTES};
 pub use edit::EditCmd;
 pub use native::NativeCmd;
 pub use query::QueryCmd;

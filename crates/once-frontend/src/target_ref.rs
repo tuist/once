@@ -17,9 +17,7 @@ pub enum TargetIdError {
     BazelSyntax { raw: String, suggestion: String },
     #[error("target reference `{raw}` must not contain `:`; use `{suggestion}`")]
     Colon { raw: String, suggestion: String },
-    #[error(
-        "target reference `{raw}` must be relative to the project root; use `{suggestion}`"
-    )]
+    #[error("target reference `{raw}` must be relative to the project root; use `{suggestion}`")]
     Absolute { raw: String, suggestion: String },
     #[error("target reference `{0}` must not escape the project root")]
     EscapesRoot(String),

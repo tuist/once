@@ -31,7 +31,10 @@ pub enum Error {
     #[error("evaluation error in {path}:\n{message}")]
     Eval { path: String, message: String },
     #[error("{path}: {kind}")]
-    ScriptHeader { path: String, kind: ScriptHeaderError },
+    ScriptHeader {
+        path: String,
+        kind: ScriptHeaderError,
+    },
     #[error("{path}: {kind}")]
     ManifestSchema {
         path: String,
@@ -164,9 +167,7 @@ pub enum CacheProviderError {
 pub enum NativeProjectError {
     #[error("unknown native project `{name}`")]
     Unknown { name: String },
-    #[error(
-        "native project `{name}` does not match package `{package}`"
-    )]
+    #[error("native project `{name}` does not match package `{package}`")]
     PackageMismatch { name: String, package: String },
 }
 
