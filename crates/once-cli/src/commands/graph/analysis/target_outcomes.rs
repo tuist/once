@@ -81,6 +81,7 @@ struct Stored {
 
 /// Outcomes remembered for one capability of one workspace.
 pub(super) struct TargetOutcomes {
+    workspace: PathBuf,
     path: PathBuf,
     /// What the file held when this invocation started, or empty when there was
     /// nothing usable to read.
@@ -120,6 +121,7 @@ impl TargetOutcomes {
             .map(|stored| stored.targets)
             .unwrap_or_default();
         Self {
+            workspace: workspace.to_path_buf(),
             path,
             stored,
             learned: std::sync::Mutex::new(BTreeMap::new()),
@@ -155,6 +157,15 @@ impl TargetOutcomes {
         }
         if touches_any_of(outputs, &record.outputs) {
             tracing::trace!(target = %target.label.id, "an output of this target moved");
+            return None;
+        }
+        if record
+            .result
+            .outputs
+            .keys()
+            .any(|output| self.workspace.join(output).symlink_metadata().is_err())
+        {
+            tracing::trace!(target = %target.label.id, "a recorded action output is missing");
             return None;
         }
         tracing::trace!(target = %target.label.id, "reused a recorded target outcome");

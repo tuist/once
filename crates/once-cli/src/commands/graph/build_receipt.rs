@@ -103,11 +103,13 @@ pub(super) async fn load(
         Some("host path")
     } else if receipt.executable_fingerprint != executable_fingerprint()? {
         Some("executable")
+    } else if receipt.record.outputs.is_empty() {
+        Some("no declared outputs")
     } else if !receipt
         .record
         .outputs
         .iter()
-        .all(|output| workspace.join(output).exists())
+        .all(|output| workspace.join(output).symlink_metadata().is_ok())
     {
         Some("output")
     } else {
@@ -470,6 +472,51 @@ mod tests {
         .is_some());
 
         tokio::fs::write(host_tool, b"two").await.unwrap();
+        let receipt = read(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+        )
+        .await;
+        assert!(load(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+            Some(&snapshot),
+            receipt,
+        )
+        .await
+        .is_none());
+    }
+
+    #[tokio::test]
+    async fn receipt_without_declared_outputs_requires_validation() {
+        let temporary = TempDir::new().unwrap();
+        let snapshot = snapshot(3, 5);
+        let environment = BTreeMap::new();
+        let no_host_paths = BTreeSet::new();
+        let source_digests = BTreeMap::new();
+        let mut empty_output_record = record();
+        empty_output_record.outputs.clear();
+        store(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+            test_configuration_digest(),
+            &snapshot,
+            Observations {
+                environment: &environment,
+                host_paths: &no_host_paths,
+                source_digests: &source_digests,
+                produced: &BTreeMap::new(),
+            },
+            &empty_output_record,
+        )
+        .await;
+
         let receipt = read(
             temporary.path(),
             "app",

@@ -1,6 +1,7 @@
+use std::collections::BTreeSet;
 use std::sync::atomic::Ordering;
 
-use super::SourceDigestCache;
+use super::{KnownChanges, SourceDigestCache};
 
 #[test]
 fn unchanged_files_reuse_the_persisted_digest() {
@@ -67,6 +68,25 @@ fn changed_outputs_do_not_reuse_the_recorded_digest() {
     assert!(cache.output_matches(workspace.path(), relative, expected));
 
     std::fs::write(workspace.path().join(relative), "other").unwrap();
+
+    assert!(!cache.output_matches(workspace.path(), relative, expected));
+}
+
+#[test]
+fn removed_outputs_do_not_reuse_watcher_trusted_digests() {
+    let workspace = tempfile::tempdir().unwrap();
+    let relative = ".once/out/library.rlib";
+    std::fs::create_dir_all(workspace.path().join(".once/out")).unwrap();
+    std::fs::write(workspace.path().join(relative), "first").unwrap();
+    let expected = once_cas::Digest::of_bytes(b"encoded output");
+    let cache = SourceDigestCache::open(workspace.path());
+    cache.record_output(workspace.path(), relative, expected);
+    cache.with_known_changes(KnownChanges::Since {
+        sources: BTreeSet::new(),
+        outputs: BTreeSet::new(),
+    });
+
+    std::fs::remove_file(workspace.path().join(relative)).unwrap();
 
     assert!(!cache.output_matches(workspace.path(), relative, expected));
 }

@@ -145,7 +145,6 @@ pub(super) struct BuildOutcome {
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub(super) struct AvailableInput {
     pub blob_digest: Digest,
-    pub producer_action_digest: Digest,
     pub same_target: bool,
     pub materialized: bool,
 }
