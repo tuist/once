@@ -31,6 +31,11 @@ class OnceWorkspaceGraph extends HTMLElement {
     if (this.isConnected) this.renderGraph()
   }
 
+  set filters(filters) {
+    this.graphFilters = filters
+    if (this.isConnected) this.renderGraph()
+  }
+
   async renderGraph() {
     const graphData = this.data
     if (!graphData?.nodes?.length) return
@@ -41,8 +46,13 @@ class OnceWorkspaceGraph extends HTMLElement {
 
     this.graph?.destroy()
     this.graph = undefined
+    const nodes = filteredGraphNodes(graphData, this.graphFilters)
+    if (!nodes.length) {
+      this.renderEmpty()
+      return
+    }
     if (!cytoscape) {
-      this.renderFallback(graphData)
+      this.renderFallback(nodes)
       return
     }
 
@@ -59,7 +69,7 @@ class OnceWorkspaceGraph extends HTMLElement {
     try {
       this.graph = cytoscape({
         container: canvas,
-        elements: this.elements(graphData),
+        elements: this.elements(nodes),
         minZoom: 0.25,
         maxZoom: 2.5,
         wheelSensitivity: 0.16,
@@ -135,7 +145,7 @@ class OnceWorkspaceGraph extends HTMLElement {
       })
     } catch (error) {
       console.error("Could not draw the Once graph", error)
-      this.renderFallback(graphData)
+      this.renderFallback(nodes)
       return
     }
 
@@ -155,9 +165,9 @@ class OnceWorkspaceGraph extends HTMLElement {
     this.graph.fit(undefined, 54)
   }
 
-  elements(graphData) {
-    const nodeIds = new Set(graphData.nodes.map((node) => node.id))
-    const elements = graphData.nodes.map((node) => ({
+  elements(nodes) {
+    const nodeIds = new Set(nodes.map((node) => node.id))
+    const elements = nodes.map((node) => ({
       group: "nodes",
       data: {id: node.id, label: this.label(node)},
       classes: [
@@ -165,7 +175,7 @@ class OnceWorkspaceGraph extends HTMLElement {
         node.build_target && "build-target",
       ].filter(Boolean).join(" "),
     }))
-    for (const node of graphData.nodes) {
+    for (const node of nodes) {
       for (const dependency of node.deps) {
         if (!nodeIds.has(dependency)) continue
         elements.push({
@@ -188,13 +198,20 @@ class OnceWorkspaceGraph extends HTMLElement {
     return name
   }
 
-  renderFallback(graphData) {
+  renderEmpty() {
+    const empty = document.createElement("div")
+    empty.dataset.part = "graph-empty"
+    empty.innerHTML = "<strong>No graph nodes match these filters.</strong><span>Clear or broaden the filters to see more of the build graph.</span>"
+    this.replaceChildren(empty)
+  }
+
+  renderFallback(nodes) {
     const fallback = document.createElement("div")
     fallback.dataset.part = "graph-fallback"
     const message = document.createElement("p")
     message.textContent = "The interactive graph could not be loaded."
     const targets = document.createElement("ul")
-    for (const node of graphData.nodes) {
+    for (const node of nodes) {
       const target = document.createElement("li")
       target.textContent = this.label(node).replaceAll("\n", " · ")
       targets.append(target)
@@ -223,6 +240,11 @@ const testView = {
   sort: "name",
   direction: "asc",
 }
+const graphView = {
+  query: "",
+  kind: "all",
+  scope: "all",
+}
 
 function escape(value) {
   return String(value ?? "")
@@ -238,7 +260,7 @@ function route() {
     ? window.location.hash.slice(1) || "overview"
     : window.location.pathname.split("/").filter(Boolean).at(-1) || "overview"
   if (page === "tests" && run?.operation !== "test") return "overview"
-  return ["overview", "progress", "tests"].includes(page) ? page : "overview"
+  return ["overview", "graph", "progress", "tests"].includes(page) ? page : "overview"
 }
 
 function statusLabel(status) {
@@ -287,6 +309,35 @@ function pageTitle(snapshot) {
   return snapshot ? `${operationLabel(snapshot)} ${buildLabel(snapshot)} · Once Runs` : "Once Runs"
 }
 
+function graphKindLabel(kind) {
+  return String(kind || "Unknown")
+    .split("_")
+    .filter(Boolean)
+    .map((word) => word[0].toUpperCase() + word.slice(1))
+    .join(" ")
+}
+
+function graphScopeLabel(scope) {
+  if (scope === "build-target") return "Build target"
+  if (scope === "dependencies") return "Dependencies"
+  return "All nodes"
+}
+
+function graphNodeMatches(node, filters = graphView) {
+  const query = String(filters?.query || "").trim().toLocaleLowerCase()
+  const matchesQuery = !query || [node.id, node.name, node.package, node.kind]
+    .some((value) => String(value || "").toLocaleLowerCase().includes(query))
+  const matchesKind = !filters?.kind || filters.kind === "all" || node.kind === filters.kind
+  const matchesScope = !filters?.scope || filters.scope === "all"
+    || (filters.scope === "build-target" && node.build_target)
+    || (filters.scope === "dependencies" && !node.build_target)
+  return matchesQuery && matchesKind && matchesScope
+}
+
+function filteredGraphNodes(graph, filters = graphView) {
+  return Array.isArray(graph?.nodes) ? graph.nodes.filter((node) => graphNodeMatches(node, filters)) : []
+}
+
 function time(value) {
   return new Intl.DateTimeFormat(undefined, {
     hour: "2-digit",
@@ -325,6 +376,7 @@ function shell(content) {
       <aside data-part="runs-sidebar">
         <noora-sidebar label="Run navigation">
           ${navItem("overview", "Overview", "dashboard", route() === "overview")}
+          ${navItem("graph", "Graph", "schema", route() === "graph")}
           ${navItem("progress", "Progress", "progress_x", route() === "progress")}
           ${run?.operation === "test" ? navItem("tests", "Test results", "progress_x", route() === "tests") : ""}
         </noora-sidebar>
@@ -443,21 +495,51 @@ function outputEntries(snapshot) {
   </article>`).join("")
 }
 
-function progress(snapshot) {
+function graphKindOptions(graph) {
+  const kinds = [...new Set((graph?.nodes || []).map((node) => node.kind).filter(Boolean))].sort()
+  return `<noora-dropdown-item value="all">All target kinds</noora-dropdown-item>${kinds
+    .map((kind) => `<noora-dropdown-item value="${escape(kind)}">${escape(graphKindLabel(kind))}</noora-dropdown-item>`)
+    .join("")}`
+}
+
+function graphPage(snapshot) {
   const operation = operationLabel(snapshot)
   const graph = snapshot.graph
   const graphBody = graph
-    ? `<div data-part="graph-toolbar">
-        <noora-badge appearance="light-fill" color="primary">${graph.declared_target_count} targets in this build</noora-badge>
+    ? (() => {
+      const visibleNodes = filteredGraphNodes(graph)
+      const filtersActive = graphView.query.trim() || graphView.kind !== "all" || graphView.scope !== "all"
+      return `<section data-part="graph-filter-controls" aria-label="Graph filters">
+        <noora-text-input data-graph-search type="search" name="graph-search" placeholder="Filter graph" value="${escape(graphView.query)}"></noora-text-input>
+        <noora-dropdown data-graph-kind label="${escape(graphView.kind === "all" ? "All target kinds" : graphKindLabel(graphView.kind))}" secondary-text="Target kind:">
+          ${graphKindOptions(graph)}
+        </noora-dropdown>
+        <noora-dropdown data-graph-scope label="${graphScopeLabel(graphView.scope)}" secondary-text="Show:">
+          <noora-dropdown-item value="all">All nodes</noora-dropdown-item>
+          <noora-dropdown-item value="build-target">Build target</noora-dropdown-item>
+          <noora-dropdown-item value="dependencies">Dependencies</noora-dropdown-item>
+        </noora-dropdown>
+        <noora-button data-graph-clear variant="secondary" size="medium"${filtersActive ? "" : " disabled"}>Clear filters</noora-button>
+      </section>
+      <div data-part="graph-toolbar">
+        <div data-part="graph-summary"><noora-badge appearance="light-fill" color="primary">${visibleNodes.length} of ${graph.declared_target_count} targets shown</noora-badge></div>
         <span data-part="graph-source">${graph.resolved_target_count} resolved targets loaded by Once</span>
       </div>
       <div data-part="build-graph"><once-workspace-graph id="workspace-graph"></once-workspace-graph></div>`
+    })()
     : `<p data-part="run-message">Waiting for Once to resolve the build graph.</p>`
   return `<section data-part="run-page">
     ${titlebar(snapshot)}
     <section data-part="run-workspace">
       <noora-card icon="schema" title="${operation} graph">${graphBody}</noora-card>
     </section>
+  </section>`
+}
+
+function progress(snapshot) {
+  const operation = operationLabel(snapshot)
+  return `<section data-part="run-page">
+    ${titlebar(snapshot)}
     <section data-part="run-output" aria-label="Build activity">
       <noora-card icon="devices_code" title="${operation} output">
         <div data-part="run-output-toolbar">
@@ -658,12 +740,37 @@ function empty() {
 
 function render() {
   const currentRoute = route()
-  const content = run ? (currentRoute === "progress" ? progress(run) : currentRoute === "tests" ? testResults(run) : overview(run)) : empty()
+  const content = run ? (currentRoute === "graph" ? graphPage(run) : currentRoute === "progress" ? progress(run) : currentRoute === "tests" ? testResults(run) : overview(run)) : empty()
   document.title = pageTitle(run)
   app.innerHTML = shell(content)
   const graph = app.querySelector("#workspace-graph")
-  if (graph && run?.graph) graph.graphData = run.graph
+  if (graph && run?.graph) {
+    graph.filters = graphView
+    graph.graphData = run.graph
+  }
+  bindGraphControls()
   bindTestControls()
+}
+
+function bindGraphControls() {
+  app.querySelector("[data-graph-search]")?.addEventListener("input", (event) => {
+    graphView.query = event.target.value
+    render()
+  })
+  app.querySelector("[data-graph-kind]")?.addEventListener("noora-select", (event) => {
+    graphView.kind = String(event.detail.value)
+    render()
+  })
+  app.querySelector("[data-graph-scope]")?.addEventListener("noora-select", (event) => {
+    graphView.scope = String(event.detail.value)
+    render()
+  })
+  app.querySelector("[data-graph-clear]")?.addEventListener("click", () => {
+    graphView.query = ""
+    graphView.kind = "all"
+    graphView.scope = "all"
+    render()
+  })
 }
 
 function bindTestControls() {
@@ -706,7 +813,7 @@ function openStaticReport(previous) {
 function navigate(event) {
   const link = event.target.closest("[data-route], noora-sidebar-item")
   const page = link?.getAttribute("data-route")
-  if (page !== "overview" && page !== "progress" && page !== "tests") return
+  if (page !== "overview" && page !== "graph" && page !== "progress" && page !== "tests") return
   if (page === "tests" && run?.operation !== "test") return
   event.preventDefault()
   const destination = routePath(page)

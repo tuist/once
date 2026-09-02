@@ -234,6 +234,22 @@ code {
   margin-bottom: 16px;
 }
 
+[data-part="graph-filter-controls"] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+[data-part="graph-filter-controls"] noora-text-input {
+  width: 280px;
+}
+
+[data-part="graph-filter-controls"] noora-button {
+  margin-bottom: 1px;
+}
+
 [data-part="graph-source"],
 [data-part="run-output-limit"] {
   color: #686c74;
@@ -274,6 +290,24 @@ once-workspace-graph {
   padding: 24px;
   color: #686c74;
   font-size: 14px;
+}
+
+[data-part="graph-empty"] {
+  display: flex;
+  min-height: 100%;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 6px;
+  padding: 24px;
+  color: #686c74;
+  font-size: 14px;
+  text-align: center;
+}
+
+[data-part="graph-empty"] strong {
+  color: #303239;
+  font-weight: 600;
 }
 
 [data-part="graph-fallback"] p {
@@ -537,6 +571,15 @@ once-workspace-graph {
   [data-part="test-controls"] {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  [data-part="graph-filter-controls"] {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  [data-part="graph-filter-controls"] noora-text-input {
+    width: 100%;
   }
 
   [data-part="test-controls"] noora-text-input {

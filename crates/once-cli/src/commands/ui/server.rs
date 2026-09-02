@@ -260,6 +260,8 @@ mod tests {
         assert!(page.contains("Run analytics"));
         assert!(page.contains("Cache decision"));
         assert!(page.contains("Resolved targets"));
+        assert!(page.contains("Graph filters"));
+        assert!(page.contains("Filter graph"));
         assert!(page.contains("document.title"));
         assert!(page.contains("Once Runs"));
         assert!(page.contains("noora-card__section tuist-widget"));
