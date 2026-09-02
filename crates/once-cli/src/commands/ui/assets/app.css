@@ -150,7 +150,6 @@ code {
   overflow-wrap: anywhere;
 }
 
-[data-part="run-stats"] noora-card,
 [data-part="run-workspace"] noora-card,
 [data-part="run-output"] noora-card,
 [data-part="run-details"] noora-card {
@@ -158,21 +157,41 @@ code {
   width: 100%;
 }
 
-[data-part="run-widgets"] {
+[data-part="run-metrics"] {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 28px;
+  gap: 12px;
 }
 
-[data-part="run-widget"] {
+[data-part="run-metric-card"] {
   display: flex;
   min-width: 0;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 10px;
+  min-height: 160px;
+  border: 1px solid #dedfe3;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 24px;
+  box-shadow: 0 1px 2px rgb(32 33 36 / 6%);
 }
 
-[data-part="run-widget-title"],
+[data-part="run-metric"] {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 124px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+[data-part="run-metric-header"] {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+}
+
+[data-part="run-metric-title"],
 [data-part="build-metadata-title"] {
   color: #686c74;
   font-size: 13px;
@@ -180,26 +199,31 @@ code {
   line-height: 18px;
 }
 
-[data-part="run-widget"] strong {
-  color: #202124;
-  font-size: 20px;
-  font-weight: 500;
-  line-height: 26px;
+[data-part="run-metric-header"] noora-tooltip {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
+  color: #686c74;
 }
 
-[data-part="run-widget"] > span:not([data-part="run-widget-title"]),
-[data-part="run-widget"] > code {
+[data-part="run-metric-header"] noora-icon {
+  width: 16px;
+  height: 16px;
+}
+
+[data-part="run-metric-value"] {
+  color: #202124;
+  font-size: 30px;
+  font-weight: 500;
+  line-height: 36px;
+}
+
+[data-part="run-metric-detail"] {
   min-width: 0;
-  overflow: hidden;
   color: #4c5057;
   font-size: 13px;
   line-height: 18px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-[data-part="run-widget"] > code {
-  color: #303239;
 }
 
 [data-part="run-workspace"],
@@ -489,7 +513,7 @@ once-workspace-graph {
     overflow: visible;
   }
 
-  [data-part="run-widgets"],
+  [data-part="run-metrics"],
   [data-part="build-metadata-grid"] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -522,7 +546,7 @@ once-workspace-graph {
     padding: 24px 16px 36px;
   }
 
-  [data-part="run-widgets"],
+  [data-part="run-metrics"],
   [data-part="build-metadata-grid"] {
     grid-template-columns: 1fr;
   }

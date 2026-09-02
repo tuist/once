@@ -351,19 +351,69 @@ function titlebar(snapshot) {
   </header>`
 }
 
+function runMetric(title, description, value, detail) {
+  return `<section data-part="run-metric-card">
+    <div data-part="run-metric">
+      <div data-part="run-metric-header">
+        <span data-part="run-metric-title">${title}</span>
+        <noora-tooltip size="large" title="${title}" description="${description}">
+          <noora-icon slot="trigger" name="alert_circle"></noora-icon>
+        </noora-tooltip>
+      </div>
+      <strong data-part="run-metric-value">${escape(value)}</strong>
+      <span data-part="run-metric-detail">${escape(detail)}</span>
+    </div>
+  </section>`
+}
+
+function runMetrics(snapshot) {
+  const resolvedTargetCount = snapshot.graph?.resolved_target_count
+  const outputCount = Array.isArray(snapshot.logs) ? snapshot.logs.length : 0
+  const metrics = [
+    runMetric(
+      "Cache decision",
+      "Shows whether Once restored the target from the action cache or ran it locally.",
+      cacheLabel(snapshot),
+      cacheDetail(snapshot),
+    ),
+    runMetric(
+      `${operationLabel(snapshot)} duration`,
+      "Measures the complete Once run from startup through the final result.",
+      duration(snapshot),
+      snapshot.status === "running" ? "Measuring the current run" : "Recorded by Once",
+    ),
+    runMetric(
+      "Resolved targets",
+      "Counts the targets Once resolved while preparing this run.",
+      resolvedTargetCount ?? "Loading",
+      resolvedTargetCount == null
+        ? "Waiting for the target graph"
+        : `${resolvedTargetCount} targets in this run`,
+    ),
+  ]
+  if (snapshot.operation === "test") {
+    const testCount = numberValue(snapshot.test_results?.summary?.total)
+    metrics.push(runMetric(
+      "Test cases",
+      "Counts the test cases reported by this test run.",
+      testCount ?? "Pending",
+      testCount == null ? "Waiting for test results" : "Reported by the test runner",
+    ))
+  } else {
+    metrics.push(runMetric(
+      "Output updates",
+      "Counts the recent output updates retained for this run.",
+      outputCount,
+      snapshot.output_truncated ? "Showing the most recent output" : "Captured during this run",
+    ))
+  }
+  return metrics.join("")
+}
+
 function overview(snapshot) {
   return `<section data-part="run-page">
     ${titlebar(snapshot)}
-    <section data-part="run-stats" aria-label="Build overview">
-      <noora-card icon="chart_arcs" title="${operationLabel(snapshot)} overview">
-        <div data-part="run-widgets">
-          <section data-part="run-widget"><span data-part="run-widget-title">Operation</span><strong>once ${escape(snapshot.operation || "build")}</strong><code>${escape(snapshot.target)}</code></section>
-          <section data-part="run-widget"><span data-part="run-widget-title">Status</span><strong>${statusLabel(snapshot.status)}</strong><span>${exitLabel(snapshot)}</span></section>
-          <section data-part="run-widget"><span data-part="run-widget-title">Cache decision</span><strong>${cacheLabel(snapshot)}</strong><span>${cacheDetail(snapshot)}</span></section>
-          <section data-part="run-widget"><span data-part="run-widget-title">Duration</span><strong>${duration(snapshot)}</strong><span>Recorded by Once</span></section>
-        </div>
-      </noora-card>
-    </section>
+    <section data-part="run-metrics" aria-label="Run analytics">${runMetrics(snapshot)}</section>
     <section data-part="run-details">
       <noora-card icon="info_circle" title="Run details">
         <div data-part="build-metadata-grid">
