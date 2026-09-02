@@ -531,6 +531,18 @@ pub enum Cmd {
         argv: Vec<String>,
     },
 
+    /// Accept a Swift Package Manager build or test invocation and use the
+    /// Once graph when its semantics are supported. Other invocations pass
+    /// through to the system Swift executable unchanged. Configure this as a
+    /// mise command wrapper to make ordinary `swift` commands use this
+    /// compatibility surface.
+    #[usage(name = "swift")]
+    PackageCompatibility {
+        /// Arguments supplied by the Swift Package Manager invocation.
+        #[usage(trailing_var_arg = true, value_name = "ARG")]
+        argv: Vec<String>,
+    },
+
     /// Expose Once's graph and memory queries to a coding agent.
     ///
     /// Speaks the Model Context Protocol over standard input and output so a
@@ -565,6 +577,13 @@ pub enum Cmd {
 
     #[usage(name = "__change-tracker", hide = true)]
     ChangeTracker,
+}
+
+/// A compatibility invocation that preserves an established build-tool
+/// command while routing equivalent requests through Once.
+pub(crate) enum CompatibilityInvocation {
+    Xcodebuild(Vec<String>),
+    Swift(Vec<String>),
 }
 
 impl Cli {
@@ -615,6 +634,16 @@ impl Cli {
 }
 
 impl Cmd {
+    pub(crate) fn compatibility(&self) -> Option<CompatibilityInvocation> {
+        match self {
+            Self::Compatibility { argv } => Some(CompatibilityInvocation::Xcodebuild(argv.clone())),
+            Self::PackageCompatibility { argv } => {
+                Some(CompatibilityInvocation::Swift(argv.clone()))
+            }
+            _ => None,
+        }
+    }
+
     pub fn surface_path(&self) -> Vec<&'static str> {
         match self {
             Self::Build { .. } => vec!["build"],
@@ -665,6 +694,7 @@ impl Cmd {
                 path
             }
             Self::Compatibility { .. } => vec!["xcodebuild"],
+            Self::PackageCompatibility { .. } => vec!["swift"],
             Self::Runtime { cmd } => {
                 let mut path = vec!["runtime"];
                 if let Some(cmd) = cmd {
@@ -778,6 +808,16 @@ mod tests {
             panic!("expected compatibility command");
         };
         assert_eq!(argv, ["-showBuildSettings"]);
+    }
+
+    #[test]
+    fn compatibility_accepts_swift_arguments_after_separator() {
+        let cli = parse(&["once", "swift", "--", "build"]);
+
+        let Some(Cmd::PackageCompatibility { argv }) = cli.command else {
+            panic!("expected Swift compatibility command");
+        };
+        assert_eq!(argv, ["build"]);
     }
 
     #[test]

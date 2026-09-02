@@ -714,9 +714,8 @@ printf "spawn_count=%s\n" "$(grep -c "simctl spawn" "$2/xcrun.log")"' sh "$ONCE_
       When call once --format json build apps/ios/DefinesGuard
       # The Swift source has `#if !ONCE_DEFINES_PRESENT #error(...) #endif`,
       # so a successful build is positive evidence that `defines` made it
-      # to the swiftc command line. `emit_dsym` adds `-g`, which manifests
-      # as a populated `.swiftsourceinfo` alongside the archive; we assert
-      # the artifacts exist as the easiest cross-toolchain probe.
+      # to the swiftc command line. The archive and module are the
+      # cross-toolchain probe for debug-info emission.
       The status should be success
       The stdout should include '"target":"apps/ios/DefinesGuard"'
       The stdout should include '"status":"completed"'
@@ -847,7 +846,7 @@ EOF
       The stderr should include 'attribute `platform` is not configurable but uses `select()`'
     End
 
-    It 'invalidates the parent cache slot when a dep source changes'
+    It 'reuses the parent cache slot when a dep source edit preserves its module'
       Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
       copy_apple_library_fixture
 
@@ -856,7 +855,7 @@ EOF
 
       When call once --format json build apps/ios/Greeter
       The status should be success
-      The stdout should include '"cache":"miss"'
+      The stdout should include '"cache":"hit"'
     End
   End
 

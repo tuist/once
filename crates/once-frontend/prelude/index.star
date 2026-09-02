@@ -51,6 +51,7 @@ PRELUDE_TARGET_KINDS = {
         "swift_package_dependencies",
         "swift_package_pin",
         "apple_library",
+        "apple_system_module",
         "apple_resource_bundle",
         "apple_xcframework_import",
         "apple_framework",

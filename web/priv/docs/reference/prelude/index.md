@@ -43,6 +43,8 @@ required analyzer is not built in.
 
 - [`apple_library`](/reference/prelude/apple_library): Swift,
   Objective-C, C, and C++ static library
+- [`apple_system_module`](/reference/prelude/apple_system_module): authored
+  Clang system module map and system-library linkage
 - [`swift_macro`](/reference/prelude/swift_macro): Swift
   compiler-plugin dynamic library loaded by `apple_library` dependencies
 - [`apple_framework`](/reference/prelude/apple_framework): dynamic

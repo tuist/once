@@ -107,10 +107,11 @@ modulemap alone does not.
 
 The action cache key composes the resolved toolchain identity (each
 of swiftc, clang, libtool, and lipo carries its own `xcrun`-resolved
-path, version banner, and any `DEVELOPER_DIR` override), the source
-content digests, and each dep's action digest. A swap of Xcode, a
-source edit, or a transitive dep change invalidates exactly the
-affected cache slots.
+path, version banner, and any `DEVELOPER_DIR` override), source
+content, and declared generated inputs. Imported Swift modules are
+fingerprinted by their artifact content. A private implementation edit
+that preserves a module can therefore reuse downstream compilation,
+while the changed archive still participates in later link actions.
 
 ## Provider record
 
@@ -129,6 +130,7 @@ affected cache slots.
 | `exported_header_dirs` | list&lt;string&gt; | Parent directories of the exported headers, added to `-I` by consumers |
 | `alwayslink` | bool | Hint propagated for force-load |
 | `transitive_swiftmodule_dirs` | list&lt;string&gt; | Module search paths (gated by `exported_deps`) |
+| `transitive_swiftmodule_inputs` | list&lt;string&gt; | Exact architecture-matching module artifacts consumed by downstream compiler actions, propagated through `exported_deps` |
 | `transitive_exported_headers` | list&lt;string&gt; | Header paths from this and exported deps |
 | `transitive_generated_headers` | list&lt;string&gt; | Generated compatibility headers required by downstream compile actions |
 | `transitive_exported_header_dirs` | list&lt;string&gt; | Header search dirs from this and exported deps |

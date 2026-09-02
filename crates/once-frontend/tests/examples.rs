@@ -291,6 +291,220 @@ let package = Package(
 }
 
 #[cfg(target_os = "macos")]
+#[test]
+fn swift_package_workspace_includes_symbolic_link_sources() {
+    use std::os::unix::fs::symlink;
+
+    let tmp = TempDir::new().expect("tempdir");
+    fs::create_dir_all(tmp.path().join("Sources/App")).expect("app source directory");
+    fs::create_dir_all(tmp.path().join("Shared")).expect("shared source directory");
+    fs::write(
+        tmp.path().join("Package.swift"),
+        r#"// swift-tools-version: 6.0
+import PackageDescription
+
+let package = Package(
+    name: "LinkedSource",
+    products: [.library(name: "LinkedSource", targets: ["App"])],
+    targets: [.target(name: "App")]
+)
+"#,
+    )
+    .expect("package manifest");
+    fs::write(
+        tmp.path().join("Shared/Serialization.swift"),
+        "public struct Serialization {}\n",
+    )
+    .expect("shared source");
+    symlink(
+        "../../Shared/Serialization.swift",
+        tmp.path().join("Sources/App/Serialization.swift"),
+    )
+    .expect("symbolic link source");
+
+    let graph = once_frontend::load_graph_workspace(tmp.path())
+        .expect("Swift package workspace with a symbolic-link source loads");
+    let app = graph
+        .iter()
+        .find(|target| target.label.id == "SwiftPackage_LinkedSource_App")
+        .expect("app target");
+    assert!(app
+        .srcs
+        .iter()
+        .any(|source| source == "Sources/App/Serialization.swift"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn swift_package_workspace_respects_declared_source_subdirectories() {
+    let tmp = TempDir::new().expect("tempdir");
+    fs::create_dir_all(tmp.path().join("Sources/Service/Included"))
+        .expect("included source directory");
+    fs::create_dir_all(tmp.path().join("Sources/Service/Excluded"))
+        .expect("excluded source directory");
+    fs::write(
+        tmp.path().join("Package.swift"),
+        r#"// swift-tools-version: 6.0
+import PackageDescription
+
+let package = Package(
+    name: "DeclaredSources",
+    products: [.library(name: "DeclaredSources", targets: ["Service"])],
+    targets: [.target(name: "Service", sources: ["Included"])]
+)
+"#,
+    )
+    .expect("package manifest");
+    fs::write(
+        tmp.path().join("Sources/Service/Included/Included.swift"),
+        "public struct Included {}\n",
+    )
+    .expect("included source");
+    fs::write(
+        tmp.path().join("Sources/Service/Excluded/Excluded.swift"),
+        "public struct Excluded {}\n",
+    )
+    .expect("excluded source");
+
+    let graph = once_frontend::load_graph_workspace(tmp.path())
+        .expect("Swift package workspace with declared source subdirectories loads");
+    let service = graph
+        .iter()
+        .find(|target| target.label.id == "SwiftPackage_DeclaredSources_Service")
+        .expect("service target");
+
+    assert!(service
+        .srcs
+        .iter()
+        .any(|source| source == "Sources/Service/Included/Included.swift"));
+    assert!(!service
+        .srcs
+        .iter()
+        .any(|source| source == "Sources/Service/Excluded/Excluded.swift"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn swift_package_workspace_enables_default_package_traits() {
+    let tmp = TempDir::new().expect("tempdir");
+    fs::create_dir_all(tmp.path().join("Sources/Feature")).expect("feature source directory");
+    fs::write(
+        tmp.path().join("Package.swift"),
+        r#"// swift-tools-version: 6.1
+import PackageDescription
+
+let package = Package(
+    name: "Traits",
+    products: [.library(name: "Traits", targets: ["Feature"])],
+    traits: ["Feature", .default(enabledTraits: ["Feature"])],
+    targets: [.target(name: "Feature")]
+)
+"#,
+    )
+    .expect("package manifest");
+    fs::write(
+        tmp.path().join("Sources/Feature/Feature.swift"),
+        "#if Feature\npublic struct Feature {}\n#endif\n",
+    )
+    .expect("feature source");
+
+    let graph = once_frontend::load_graph_workspace(tmp.path())
+        .expect("Swift package workspace with default traits loads");
+    let feature = graph
+        .iter()
+        .find(|target| target.label.id == "SwiftPackage_Traits_Feature")
+        .expect("feature target");
+
+    assert_eq!(
+        feature.attrs.get("defines"),
+        Some(&AttrValue::List(vec![
+            AttrValue::String("SWIFT_PACKAGE".to_string()),
+            AttrValue::String("DEBUG".to_string()),
+            AttrValue::String("Feature".to_string()),
+        ]))
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn swift_package_workspace_lowers_executable_products_to_applications() {
+    let tmp = TempDir::new().expect("tempdir");
+    fs::create_dir_all(tmp.path().join("Sources/Tool")).expect("tool source directory");
+    fs::write(
+        tmp.path().join("Package.swift"),
+        r#"// swift-tools-version: 6.0
+import PackageDescription
+
+let package = Package(
+    name: "CommandLine",
+    products: [.executable(name: "Tool", targets: ["Tool"])],
+    targets: [.executableTarget(name: "Tool")]
+)
+"#,
+    )
+    .expect("package manifest");
+    fs::write(
+        tmp.path().join("Sources/Tool/main.swift"),
+        "print(\"hello\")\n",
+    )
+    .expect("tool source");
+
+    let graph = once_frontend::load_graph_workspace(tmp.path())
+        .expect("Swift package workspace with an executable product loads");
+    let tool = graph
+        .iter()
+        .find(|target| target.label.id == "SwiftPackage_CommandLine_Tool")
+        .expect("tool target");
+
+    assert_eq!(tool.kind, "apple_application");
+    assert_eq!(
+        tool.attrs.get("bundle_id"),
+        Some(&AttrValue::String(
+            "dev.once.swift-package.commandline.tool".to_string()
+        ))
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn swift_package_workspace_links_the_cxx_runtime_for_cxx_targets() {
+    let tmp = TempDir::new().expect("tempdir");
+    fs::create_dir_all(tmp.path().join("Sources/Cxx")).expect("C++ source directory");
+    fs::write(
+        tmp.path().join("Package.swift"),
+        r#"// swift-tools-version: 6.0
+import PackageDescription
+
+let package = Package(
+    name: "CxxRuntime",
+    products: [.library(name: "CxxRuntime", targets: ["Cxx"])],
+    targets: [.target(name: "Cxx")]
+)
+"#,
+    )
+    .expect("package manifest");
+    fs::write(
+        tmp.path().join("Sources/Cxx/library.cpp"),
+        "int answer() { return 42; }\n",
+    )
+    .expect("C++ source");
+
+    let graph = once_frontend::load_graph_workspace(tmp.path())
+        .expect("Swift package workspace with a C++ target loads");
+    let cxx = graph
+        .iter()
+        .find(|target| target.label.id == "SwiftPackage_CxxRuntime_Cxx")
+        .expect("C++ target");
+
+    assert_eq!(
+        cxx.attrs.get("linkopts"),
+        Some(&AttrValue::List(vec![AttrValue::String(
+            "-lc++".to_string()
+        )]))
+    );
+}
+
+#[cfg(target_os = "macos")]
 fn run_git(directory: &Path, args: &[&str]) {
     let status = Command::new("git")
         .args(args)

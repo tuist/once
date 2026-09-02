@@ -76,6 +76,16 @@ async fn run_command(
     resource_limits: &ResourceLimits,
     command: Cmd,
 ) -> Result<ExitCode> {
+    if let Some(invocation) = command.compatibility() {
+        return Box::pin(commands::compatibility::run(
+            workspace,
+            xdg,
+            output,
+            resource_limits.clone(),
+            invocation,
+        ))
+        .await;
+    }
     match command {
         Cmd::Auth { cmd } => run_auth_command(workspace, xdg, output, cmd).await,
         Cmd::Build {
@@ -218,16 +228,6 @@ async fn run_command(
         }
         Cmd::Edit { cmd } => run_edit_command(workspace, output, cmd).await,
         Cmd::Native { cmd } => run_native_command(workspace, output, cmd).await,
-        Cmd::Compatibility { argv } => {
-            Box::pin(commands::compatibility::run(
-                workspace,
-                xdg,
-                output,
-                resource_limits.clone(),
-                argv,
-            ))
-            .await
-        }
         Cmd::Runtime { cmd } => run_runtime_command(workspace, output, cmd).await,
         Cmd::Mcp {
             workspace: workspace_override,
@@ -243,6 +243,9 @@ async fn run_command(
         }
         Cmd::Reference { out } => crate::reference::generate(&out),
         Cmd::ChangeTracker => commands::change_tracker::serve(workspace, xdg).await,
+        Cmd::Compatibility { .. } | Cmd::PackageCompatibility { .. } => {
+            unreachable!("compatibility commands are routed before command dispatch")
+        }
     }
 }
 

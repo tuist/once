@@ -9131,7 +9131,7 @@ fn apple_library_swift_compile_emits_module_and_objects_in_one_action() {
 
     assert!(source.contains("identifier = \"swift_module_compile_"));
     assert!(source.contains(
-        "swift_compile_outputs = [swiftmodule, swiftdoc, swift_objc_header] + swift_objects"
+        "swift_compile_outputs = [swiftmodule, swiftdoc, swift_objc_header] + swift_module_sidecars + swift_objects"
     ));
     assert!(source.contains("identifier = \"libtool_swift_archive_"));
     assert!(source.contains("-output-file-map"));
@@ -13040,6 +13040,10 @@ result = repr([
         out.contains("\"DEVELOPER_DIR\": \"/opt/Xcode/Developer\""),
         "{out}"
     );
+    assert!(
+        out.contains("\"SWIFT_DETERMINISTIC_HASHING\": \"1\""),
+        "{out}"
+    );
     assert!(out.contains("True"), "identity prefix should match: {out}");
 }
 
@@ -13102,7 +13106,7 @@ def host_which(name):
     fail("unexpected host_which: " + name)
 
 def host_command(argv, env = None, merge_stderr = None):
-    if argv == ["/usr/bin/xcrun", "--find", "codesign"] and env == {{"DEVELOPER_DIR": "/opt/Xcode/Developer"}}:
+    if argv == ["/usr/bin/xcrun", "--find", "codesign"] and env == {{"DEVELOPER_DIR": "/opt/Xcode/Developer", "SWIFT_DETERMINISTIC_HASHING": "1"}}:
         return "/usr/bin/codesign\n"
     fail("unexpected host_command: " + str(argv) + " env=" + str(env))
 
@@ -13162,8 +13166,10 @@ result = repr([
         "{out}"
     );
     assert!(out.contains("iPhoneSimulator.sdk"), "{out}");
-    // No developer dir was configured, so the action env stays empty.
-    assert!(out.contains("{}"), "{out}");
+    assert!(
+        out.contains("\"SWIFT_DETERMINISTIC_HASHING\": \"1\""),
+        "{out}"
+    );
 }
 
 /// The SDK and platform path maps that direct mode relies on must
@@ -13301,8 +13307,8 @@ result = repr([
         "{out}"
     );
     assert!(
-        out.contains("{}"),
-        "no developer dir means an empty action env: {out}"
+        out.contains("\"SWIFT_DETERMINISTIC_HASHING\": \"1\""),
+        "{out}"
     );
 }
 
@@ -13378,8 +13384,8 @@ result = repr([
         "{out}"
     );
     assert!(
-        out.contains("{}"),
-        "no developer dir means an empty action env: {out}"
+        out.contains("\"SWIFT_DETERMINISTIC_HASHING\": \"1\""),
+        "{out}"
     );
 }
 
@@ -13457,13 +13463,113 @@ result = repr(provider["archive"])
             "first argument should be a resolved toolchain executable: {:?}",
             action.argv
         );
+        if action.argv[0] == swiftc {
+            assert!(action
+                .argv
+                .iter()
+                .any(|argument| argument == "-avoid-emit-module-source-info"));
+            assert!(!action
+                .outputs
+                .iter()
+                .any(|output| output.ends_with(".swiftsourceinfo")));
+        }
         // The action env carries DEVELOPER_DIR through to the tool so
         // it can find ancillary resources next to swiftc.
         assert_eq!(
             action.env.get("DEVELOPER_DIR").map(String::as_str),
             Some("/opt/Xcode/Developer"),
         );
+        assert_eq!(
+            action
+                .env
+                .get("SWIFT_DETERMINISTIC_HASHING")
+                .map(String::as_str),
+            Some("1"),
+        );
     }
+}
+
+#[test]
+fn prelude_apple_library_fingerprints_imported_swiftmodule_content() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let package_dir = workspace.path().join("ios/Consumer/Sources");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        package_dir.join("Consumer.swift"),
+        "import Dependency\npublic func useDependency() {}\n",
+    )
+    .unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    fail("host_which must not be called in direct mode")
+
+def host_command(argv, env = None, merge_stderr = None):
+    if "--version" in argv:
+        return "Swift version 6.0\n"
+    fail("unexpected host_command: " + str(argv))
+
+dependency = {{
+    "label_id": "ios/Dependency/Dependency",
+    "transitive_swiftmodule_dirs": [".once/out/ios/Dependency/Dependency"],
+    "transitive_swiftmodule_inputs": [".once/out/ios/Dependency/Dependency/Dependency.swiftmodule"],
+}}
+ctx = {{
+    "label": {{
+        "package": "ios/Consumer",
+        "name": "Consumer",
+        "id": "ios/Consumer/Consumer",
+    }},
+    "attr": {{
+        "platform": "ios",
+        "sdk_variant": "simulator",
+        "xcode_developer_dir": "/opt/Xcode/Developer",
+        "exported_deps": ["ios/Dependency/Dependency"],
+    }},
+    "deps": [dependency],
+    "srcs": ["Sources/**/*.swift"],
+    "build_dir": ".once/out/ios/Consumer/Consumer",
+    "capability": "build",
+}}
+provider = _apple_library_impl(ctx)
+result = repr(provider)
+"#
+    );
+    let store = store_for(workspace.path(), "ios/Consumer");
+    let (store, provider) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    let provider = provider.unwrap();
+    let imported_module = ".once/out/ios/Dependency/Dependency/Dependency.swiftmodule";
+    let own_module = ".once/out/ios/Consumer/Consumer.swiftmodule";
+    let compiler = action_by_identifier(&store, "swift_module_compile_Consumer");
+
+    assert!(compiler.inputs.contains(&imported_module.to_string()));
+    assert!(compiler
+        .argv
+        .windows(2)
+        .any(|args| args == ["-I", ".once/out/ios/Dependency/Dependency"]));
+    assert!(provider.contains(imported_module), "{provider}");
+    assert!(provider.contains(own_module), "{provider}");
+}
+
+#[test]
+fn prelude_apple_selects_the_matching_universal_swiftmodule() {
+    let prelude = apple_prelude_source();
+    let source = format!(
+        r#"{prelude}
+result = repr(_apple_swiftmodule_inputs_for_arch([
+    ".once/out/Static/Static.swiftmodule",
+    ".once/out/Universal/Universal.swiftmodule/arm64.swiftmodule",
+    ".once/out/Universal/Universal.swiftmodule/x86_64.swiftmodule",
+    ".once/out/Framework/Framework.framework/Modules/Framework.swiftmodule/arm64-apple-macos.swiftmodule",
+    ".once/out/Framework/Framework.framework/Modules/Framework.swiftmodule/x86_64-apple-macos.swiftmodule",
+], "arm64"))
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[".once/out/Static/Static.swiftmodule", ".once/out/Universal/Universal.swiftmodule/arm64.swiftmodule", ".once/out/Framework/Framework.framework/Modules/Framework.swiftmodule/arm64-apple-macos.swiftmodule"]"#
+    );
 }
 
 #[test]
@@ -13659,18 +13765,34 @@ result = repr(provider)
         "{provider}"
     );
     assert!(provider.contains(r#""transitive_framework_search_dirs": [".once/out/Logging"]"#));
-    assert!(store.actions.iter().any(|action| {
-        action
-            .identifier
-            .as_deref()
-            .is_some_and(|identifier| identifier == "clean_framework_module_Logging")
+    let staged_headers =
+        action_by_identifier(&store, "stage_framework_header_Logging_Logging-umbrella.h");
+    assert!(staged_headers.cacheable);
+    assert_eq!(
+        staged_headers.outputs,
+        [".once/out/Logging/Logging.framework/Headers/Logging-umbrella.h"]
+    );
+    assert!(matches!(
+        staged_headers.operation,
+        Some(DeclaredActionOperation::CopyPath {
+            mode: DeclaredCopyPathMode::File,
+            ..
+        })
+    ));
+    let staged_compile_headers = action_by_identifier(
+        &store,
+        "stage_unextended_framework_header_Logging_Logging-umbrella.h",
+    );
+    assert!(staged_compile_headers.cacheable);
+    assert_eq!(
+        staged_compile_headers.outputs,
+        [".once/out/Logging/Unextended/Logging.framework/Headers/Logging-umbrella.h"]
+    );
+    assert!(!store.actions.iter().any(|action| {
+        action.outputs == [".once/out/Logging/Logging.framework/Headers"]
+            || action.outputs == [".once/out/Logging/Unextended/Logging.framework/Headers"]
     }));
-    assert!(store.actions.iter().any(|action| {
-        action
-            .identifier
-            .as_deref()
-            .is_some_and(|identifier| identifier == "clean_unextended_framework_module_Logging")
-    }));
+    assert!(store.actions.iter().all(|action| action.cacheable));
     let compiler = action_by_identifier(&store, "swift_module_compile_Logging");
     assert!(compiler
         .argv
@@ -14759,18 +14881,21 @@ infos = [
     }},
 ]
 graph = _xcode_local_swift_package_specs({{"label": {{"package": ""}}}}, infos, "ios", "17.0", "simulator")
+release = _xcode_local_swift_package_specs({{"label": {{"package": ""}}}}, infos, "ios", "17.0", "simulator", configuration = "Release")
 result = repr([
     graph["specs"][0]["kind"],
     graph["specs"][0]["deps"],
     graph["specs"][1]["attrs"]["platform"],
     graph["specs"][2]["name"],
     graph["specs"][2]["attrs"]["platform"],
+    "DEBUG" in graph["specs"][0]["attrs"]["swift_flags"],
+    "DEBUG" in release["specs"][0]["attrs"]["swift_flags"],
 ])
 "#
     );
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
-        r#"["swift_macro", ["./SwiftPackage_SyntaxPackage_SyntaxSupport_MacroHost"], "ios", "SwiftPackage_SyntaxPackage_SyntaxSupport_MacroHost", "macos"]"#
+        r#"["swift_macro", ["./SwiftPackage_SyntaxPackage_SyntaxSupport_MacroHost"], "ios", "SwiftPackage_SyntaxPackage_SyntaxSupport_MacroHost", "macos", True, False]"#
     );
 }
 
@@ -15114,6 +15239,7 @@ ctx = {{
     "deps": [{{
         "label_id": "Support",
         "transitive_swiftmodule_dirs": [".once/out/Support"],
+        "transitive_swiftmodule_inputs": ["Cache/Support.xcframework/ios-arm64-simulator/Support.framework/Modules/Support.swiftmodule/arm64-apple-ios-simulator.swiftmodule"],
         "transitive_archives": ["Cache/Support.xcframework/ios-arm64-simulator/Support.framework/Support"],
         "transitive_link_framework_bundles": [support],
         "transitive_framework_bundles": [],
@@ -15132,6 +15258,7 @@ result = repr([
     provider["transitive_sdk_frameworks"],
     provider["transitive_linkopts"],
     provider["transitive_swiftmodule_dirs"],
+    provider["transitive_swiftmodule_inputs"],
     provider["transitive_framework_search_dirs"],
     provider["transitive_framework_files"],
 ])
@@ -15139,7 +15266,7 @@ result = repr([
     );
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
-        r#"[["Primary.xcframework/ios-arm64-simulator/Primary.framework/Primary"], ["Primary", "Support"], [], [], [], [".once/out/Support"], [], []]"#
+        r#"[["Primary.xcframework/ios-arm64-simulator/Primary.framework/Primary"], ["Primary", "Support"], [], [], [], [".once/out/Support"], ["Primary.xcframework/ios-arm64-simulator/Primary.framework/Modules/Primary.swiftmodule/arm64-apple-ios-simulator.swiftmodule", "Cache/Support.xcframework/ios-arm64-simulator/Support.framework/Modules/Support.swiftmodule/arm64-apple-ios-simulator.swiftmodule"], [], []]"#
     );
 }
 
@@ -15462,6 +15589,27 @@ result = repr([
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
         r#"[["DEBUG", "FEATURE_X"], ["DEBUG=1", "MY_FLAG=2", "APP_GROUP=group.dev.once.App"]]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_orders_swift_package_default_traits() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+package = {{
+    "info": {{
+        "traits": [
+            {{"name": "default", "enabledTraits": ["FoundationNetworking", "Clocks", "Foundation", "Clocks"]}},
+        ],
+    }},
+}}
+result = repr(_xcode_swift_package_default_traits(package))
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["Clocks", "Foundation", "FoundationNetworking"]"#
     );
 }
 

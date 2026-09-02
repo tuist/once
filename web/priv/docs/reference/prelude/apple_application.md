@@ -73,10 +73,11 @@ bundle and the outer application are signed.
 ## Providers
 
 The target emits `apple_application` and `apple_bundle`. Hosted test bundles
-also receive the application's transitive Swift module directories, header
-search directories, generated compatibility headers, framework inputs, and
-virtual file-system overlays. This keeps an application's bridging-header
-environment intact when the test compiler imports its testable module.
+also receive the application's transitive Swift module directories and exact
+module artifacts, header search directories, generated compatibility headers,
+framework inputs, and virtual file-system overlays. This keeps an application's
+bridging-header environment intact when the test compiler imports its testable
+module.
 The application provider also exposes its executable so a hosted test bundle
 can use it as the linker's bundle loader.
 

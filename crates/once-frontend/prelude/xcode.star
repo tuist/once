@@ -1654,17 +1654,36 @@ def _xcode_swift_package_target_sources(package_path, target):
     target_path = _xcode_swift_package_target_path(target)
     root = package_path + "/" if package_path else ""
     excluded = target.get("exclude") or []
-    patterns = [root + target_path + "/**/*"]
-    paths = glob(patterns)
+    declared_sources = target.get("sources") or []
+    source_paths = [target_path]
+    if declared_sources:
+        source_paths = [_xcode_join(target_path, source) for source in declared_sources]
+    paths = []
+    for source_path in source_paths:
+        candidate = root + source_path
+        paths.extend(glob([candidate, candidate + "/**/*"]))
     if package_path.startswith(".once/"):
-        absolute = _xcode_abs(root + target_path)
-        if host_path_exists(absolute):
-            paths = [_xcode_workspace_relative(path) for path in host_command([host_which("find"), absolute, "-type", "f"]).split("\n") if path]
+        paths = []
+        for source_path in source_paths:
+            absolute = _xcode_abs(root + source_path)
+            if not host_path_exists(absolute):
+                continue
+            if _xcode_host_directory_exists(absolute):
+                paths.extend([_xcode_workspace_relative(path) for path in host_command([host_which("find"), "-L", absolute, "-type", "f"]).split("\n") if path])
+            else:
+                paths.append(_xcode_workspace_relative(absolute))
     result = []
     for path in paths:
         if not _xcode_swift_package_target_path_is_excluded(root, target_path, excluded, path) and not _xcode_is_documentation_path(path) and _xcode_is_source(path):
             result.append(path)
     return _unique(result)
+
+def _xcode_swift_package_requires_cxx_runtime(sources):
+    for source in sources:
+        for extension in [".cc", ".cpp", ".cxx", ".c++", ".mm"]:
+            if _ends_with(source, extension):
+                return True
+    return False
 
 def _xcode_is_documentation_path(path):
     # Swift package documentation catalogs frequently contain illustrative
@@ -1692,6 +1711,39 @@ def _xcode_swift_package_target_modulemap(package_path, target):
     public_headers_path = _xcode_join(package_path + "/" + target_path, target.get("publicHeadersPath") or "include")
     candidate = public_headers_path + "/module.modulemap"
     return candidate if host_file_exists(_xcode_abs(candidate)) else ""
+
+def _xcode_swift_package_system_modulemap(package_path, target):
+    target_path = _xcode_swift_package_target_path(target)
+    root = package_path + "/" if package_path else ""
+    candidate = root + target_path + "/module.modulemap"
+    return candidate if host_file_exists(_xcode_abs(candidate)) else ""
+
+def _xcode_swift_package_system_module_headers(package_path, target):
+    target_path = _xcode_swift_package_target_path(target)
+    root = package_path + "/" if package_path else ""
+    target_root = root + target_path
+    absolute = _xcode_abs(target_root)
+    if package_path.startswith(".once/"):
+        paths = [_xcode_workspace_relative(path) for path in host_command([host_which("find"), "-L", absolute, "-type", "f", "-name", "*.h"]).split("\n") if path]
+    else:
+        paths = glob([target_root + "/**/*.h"])
+    return _unique(paths)
+
+def _xcode_swift_package_system_module_libraries(modulemap):
+    if not modulemap or not host_file_exists(_xcode_abs(modulemap)):
+        return []
+    libraries = []
+    for raw_line in host_file_read(_xcode_abs(modulemap)).split("\n"):
+        line = raw_line.strip()
+        if not line.startswith("link "):
+            continue
+        opening = line.find('"')
+        closing = line.find('"', opening + 1) if opening >= 0 else -1
+        if closing > opening:
+            library = line[opening + 1:closing]
+            if library and library not in libraries:
+                libraries.append(library)
+    return libraries
 
 def _xcode_swift_package_include_dirs(package_path, target):
     target_path = _xcode_swift_package_target_path(target)
@@ -1818,14 +1870,18 @@ extension Bundle {
         "outputs": [output],
     })
 
-def _xcode_package_condition_allows(condition, platform):
+def _xcode_package_condition_allows(condition, platform, enabled_traits = []):
     names = (condition or {}).get("platformNames") or []
-    if not names:
-        return True
-    wanted = "macos" if platform == "macosx" else platform
-    return wanted.lower() in [name.lower() for name in names]
+    if names:
+        wanted = "macos" if platform == "macosx" else platform
+        if wanted.lower() not in [name.lower() for name in names]:
+            return False
+    for trait in (condition or {}).get("traits") or []:
+        if trait not in enabled_traits:
+            return False
+    return True
 
-def _xcode_swift_package_dependencies(target, identity, target_ids, product_ids, platform, lazy_products = {}, lazy_dependency = ""):
+def _xcode_swift_package_dependencies(target, identity, target_ids, product_ids, platform, enabled_traits = [], lazy_products = {}, lazy_dependency = ""):
     deps = []
     for dependency in target.get("dependencies") or []:
         for key in ["byName", "product", "target"]:
@@ -1836,7 +1892,7 @@ def _xcode_swift_package_dependencies(target, identity, target_ids, product_ids,
             for value in values[1:]:
                 if type(value) == "dict" and value.get("platformNames"):
                     condition = value
-            if not _xcode_package_condition_allows(condition, platform):
+            if not _xcode_package_condition_allows(condition, platform, enabled_traits):
                 continue
             package_identity = identity
             if key == "product" and len(values) > 1 and type(values[1]) == "string" and values[1]:
@@ -1896,12 +1952,12 @@ def _xcode_swift_package_name_flags(package):
         return []
     return ["-package-name", package["info"].get("name") or package["identity"]]
 
-def _xcode_swift_package_target_flags(target, platform, default_language_mode):
+def _xcode_swift_package_target_flags(target, platform, default_language_mode, enabled_traits = []):
     swift_flags = []
     clang_flags = []
     swift_language_mode = default_language_mode
     for setting in target.get("settings") or []:
-        if not _xcode_package_condition_allows(setting.get("condition") or {}, platform):
+        if not _xcode_package_condition_allows(setting.get("condition") or {}, platform, enabled_traits):
             continue
         kind = setting.get("kind") or {}
         flags = (kind.get("unsafeFlags") or {}).get("_0") or []
@@ -1932,7 +1988,19 @@ def _xcode_swift_package_target_flags(target, platform, default_language_mode):
         "language_mode": swift_language_mode,
     }
 
-def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, sdk_variant, lazy_products = {}, lazy_dependency = "", target_prefix = "SwiftPackage"):
+def _xcode_swift_package_default_traits(package):
+    for trait in package["info"].get("traits") or []:
+        if (trait.get("name") or "") == "default":
+            return sorted(_unique(trait.get("enabledTraits") or []))
+    return []
+
+def _xcode_swift_package_trait_flags(traits):
+    flags = []
+    for trait in traits:
+        flags.extend(["-D", trait])
+    return flags
+
+def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, sdk_variant, configuration = "Debug", lazy_products = {}, lazy_dependency = "", target_prefix = "SwiftPackage"):
     # Lower source package targets as ordinary Apple libraries. Products group
     # one or more targets, so consumers receive the complete product closure.
     target_ids = {}
@@ -1975,17 +2043,37 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
                 host_product_ids[product_name] = host_product_id
 
     specs = []
+    debug_defines = ["DEBUG"] if configuration.lower() == "debug" else []
     for package in package_infos:
         identity = package["identity"]
         package_path = package["path"]
+        package_traits = _xcode_swift_package_default_traits(package)
         package_minimum_os = _xcode_swift_package_minimum_os(package, platform, minimum_os)
         package_host_minimum_os = _xcode_swift_package_minimum_os(package, "macos", "13.0")
         for target in package["info"].get("targets") or []:
             target_type = target.get("type") or ""
             name = target.get("name") or ""
-            if not name or target_type not in ["regular", "library", "test", "executable", "binary", "macro"]:
+            if not name or target_type not in ["regular", "library", "test", "executable", "binary", "macro", "system"]:
                 continue
             target_id = target_ids[identity + "\x1f" + name]
+            if target_type == "system":
+                modulemap = _xcode_swift_package_system_modulemap(package_path, target)
+                if not modulemap:
+                    fail("Swift package system target `" + identity + "/" + name + "` has no module.modulemap")
+                dependencies = _xcode_swift_package_dependencies(target, identity, target_ids, product_ids, platform, package_traits, lazy_products, lazy_dependency)
+                headers = _xcode_swift_package_system_module_headers(package_path, target)
+                specs.append({
+                    "name": target_id,
+                    "kind": "apple_system_module",
+                    "deps": dependencies,
+                    "srcs": [modulemap] + headers,
+                    "attrs": {
+                        "modulemap": modulemap,
+                        "headers": headers,
+                        "sdk_dylibs": _xcode_swift_package_system_module_libraries(modulemap),
+                    },
+                })
+                continue
             if target_type == "binary":
                 artifact = _xcode_swift_package_binary_artifact(ctx, package_path, target_id, target)
                 if artifact != None:
@@ -2024,8 +2112,8 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
             uses_swift_testing = any(["import Testing" in host_file_read(_xcode_abs(source)) for source in sources if source.endswith(".swift")])
             uses_xctest = any(["import XCTest" in host_file_read(_xcode_abs(source)) for source in sources if source.endswith(".swift")])
             if target_type == "macro":
-                flags = _xcode_swift_package_target_flags(target, "macos", default_language_mode)
-                dependencies = _xcode_swift_package_dependencies(target, identity, host_target_ids, host_product_ids, "macos", lazy_products, lazy_dependency)
+                flags = _xcode_swift_package_target_flags(target, "macos", default_language_mode, package_traits)
+                dependencies = _xcode_swift_package_dependencies(target, identity, host_target_ids, host_product_ids, "macos", package_traits, lazy_products, lazy_dependency)
                 specs.append({
                     "name": target_id,
                     "kind": "swift_macro",
@@ -2034,7 +2122,7 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
                     "attrs": {
                         "minimum_os": package_host_minimum_os,
                         "module_name": name,
-                        "swift_flags": ["-D", "SWIFT_PACKAGE"] + _xcode_swift_package_name_flags(package) + ["-swift-version", flags["language_mode"]] + flags["swift"],
+                        "swift_flags": ["-D", "SWIFT_PACKAGE"] + _xcode_swift_package_trait_flags(debug_defines + package_traits) + _xcode_swift_package_name_flags(package) + ["-swift-version", flags["language_mode"]] + flags["swift"],
                     },
                 })
                 continue
@@ -2058,14 +2146,14 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
             for variant in variants:
                 variant_id = variant["id"]
                 variant_platform = variant["platform"]
-                flags = _xcode_swift_package_target_flags(target, variant_platform, default_language_mode)
+                flags = _xcode_swift_package_target_flags(target, variant_platform, default_language_mode, package_traits)
                 prebuild_actions = []
                 core_data = _xcode_datamodel_sources(ctx, _xcode_swift_package_target_datamodels(package_path, target), name, "", variant_id)
                 prebuild_actions.extend(core_data["actions"])
                 resource_accessor = _xcode_swift_package_resource_accessor(package, target, variant_id, any([source.endswith(".swift") for source in sources]))
                 if resource_accessor:
                     prebuild_actions.append(resource_accessor)
-                dependencies = _xcode_swift_package_dependencies(target, identity, variant["target_ids"], variant["product_ids"], variant_platform, lazy_products, lazy_dependency)
+                dependencies = _xcode_swift_package_dependencies(target, identity, variant["target_ids"], variant["product_ids"], variant_platform, package_traits, lazy_products, lazy_dependency)
                 resource_paths = _xcode_swift_package_resource_paths(package_path, target)
                 structured_resource_paths = _xcode_swift_package_structured_resource_paths(package_path, target)
                 resource_bundle_name = _xcode_swift_package_resource_bundle_name(package, target) if resource_paths else ""
@@ -2073,7 +2161,7 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
                     "platform": variant_platform,
                     "minimum_os": variant["minimum_os"],
                     "sdk_variant": variant["sdk_variant"],
-                    "defines": ["SWIFT_PACKAGE"],
+                    "defines": ["SWIFT_PACKAGE"] + debug_defines + package_traits,
                     "swift_flags": _xcode_swift_package_name_flags(package) + ["-swift-version", flags["language_mode"]] + flags["swift"],
                     "clang_flags": ["-std=c++17"] + flags["clang"],
                     "exported_header_dirs": _xcode_swift_package_include_dirs(package_path, target),
@@ -2083,10 +2171,16 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
                     "structured_resources": structured_resource_paths,
                     "swift_testing": uses_swift_testing,
                 }
+                if _xcode_swift_package_requires_cxx_runtime(sources):
+                    attrs["linkopts"] = ["-lc++"]
                 spec_kind = "apple_library"
                 if target_type == "test":
                     spec_kind = "apple_test_bundle"
                     attrs["product_name"] = name
+                elif target_type == "executable":
+                    spec_kind = "apple_application"
+                    attrs["product_name"] = name
+                    attrs["bundle_id"] = "dev.once.swift-package." + identity.lower() + "." + name.lower()
                 else:
                     attrs["module_name"] = name
                     attrs["exported_deps"] = dependencies
@@ -3379,6 +3473,7 @@ def _xcode_workspace_resolver(ctx):
             package_platform,
             package_minimum_os,
             ctx["attr"].get("sdk_variant") or "simulator",
+            configuration,
             target_prefix = "XcodePackage_" + _xcode_sanitized_target_name(ctx["label"]["id"]),
         )
         xcframework_specs = _xcode_workspace_xcframework_specs(ctx, package_platform, ctx["attr"].get("sdk_variant") or "simulator")

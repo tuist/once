@@ -16,6 +16,7 @@ pub mod query;
 pub mod run;
 pub mod runtime;
 pub mod surface;
+pub mod swift;
 pub mod test_schedule;
 pub mod toolchain;
 pub mod util;

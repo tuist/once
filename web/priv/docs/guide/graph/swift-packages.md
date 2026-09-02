@@ -37,6 +37,44 @@ only when it should be reviewed in `once.toml`:
 once native init swift_package
 ```
 
+## Keep Swift Package Manager Commands
+
+Once can sit behind the `swift` command for one native [Swift Package
+Manager](https://www.swift.org/documentation/package-manager/) package. Add
+this mise wrapper, then run `mise reshim` and activate mise in the shell that
+starts the build:
+
+```toml
+[wrappers.swift]
+command = "once"
+args = ["swift", "--"]
+```
+
+Once routes the default debug build and test forms into the native graph:
+
+```sh
+swift build
+swift test
+```
+
+`swift build` builds the package seed and its resolved products. `swift test`
+runs each first-party test bundle once through Once, excluding test targets
+that belong to resolved dependencies. `-q` or `--quiet`,
+`-c debug` or `--configuration debug`, and `--package-path .` are also
+supported.
+
+For troubleshooting without mise, call the compatibility surface directly and
+put the separator before the Swift Package Manager arguments:
+
+```sh
+once swift -- test
+```
+
+Every other request, including release builds, filters, package subcommands,
+plugins, and a package path outside the current directory, invokes the system
+`swift` executable with its original arguments and exit status. This preserves
+Swift Package Manager behavior until the request has an exact Once equivalent.
+
 For locked source-control dependencies, native package lowering materializes
 the pinned sources during graph loading, then compiles them directly through
 Once's Apple target kinds. See
