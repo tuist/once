@@ -234,6 +234,9 @@ const graphView = {
   kind: "all",
   scope: "all",
 }
+const logView = {
+  query: "",
+}
 
 function escape(value) {
   return String(value ?? "")
@@ -491,16 +494,104 @@ function logLabel(entry) {
   return "Build update"
 }
 
+function logMatches(entry, query) {
+  return !query || [entry.stream, logLabel(entry), entry.text]
+    .join("\n")
+    .toLowerCase()
+    .includes(query.toLowerCase())
+}
+
+function outputEntry(entry) {
+  return `<article data-part="run-log-entry">
+    <time data-part="run-log-timestamp">${time(entry.at_ms)}</time>
+    <div data-part="run-log-content">
+      <noora-badge appearance="light-fill" color="${entry.stream === "stderr" ? "destructive" : "secondary"}">${logLabel(entry)}</noora-badge>
+      <pre data-part="run-log-output"><code>${escape(entry.text)}</code></pre>
+    </div>
+  </article>`
+}
+
+function timelineLane(entry) {
+  if (entry.stream === "stderr") return "Error output"
+  if (entry.stream === "stdout") return "Output"
+  return "Build update"
+}
+
+function timelineColor(entry) {
+  if (entry.stream === "stderr") return "var:noora-chart-destructive"
+  if (entry.stream === "stdout") return "var:noora-chart-secondary"
+  return "var:noora-chart-primary"
+}
+
+function timelineOptions(snapshot) {
+  const entries = snapshot.logs || []
+  const startedAt = Number(snapshot.started_at_ms) || Date.now()
+  const finishedAt = snapshot.duration_ms == null
+    ? Math.max(startedAt, ...entries.map((entry) => entry.at_ms || startedAt))
+    : startedAt + Number(snapshot.duration_ms)
+  const firstEntryAt = Math.min(startedAt, ...entries.map((entry) => entry.at_ms || startedAt))
+  const lastEntryAt = Math.max(finishedAt, ...entries.map((entry) => entry.at_ms || finishedAt))
+  const padding = Math.max(1000, Math.round((lastEntryAt - firstEntryAt) * 0.05))
+  return {
+    animation: false,
+    grid: {top: 16, right: 28, bottom: 28, left: 88},
+    tooltip: {
+      trigger: "item",
+      formatter: (item) => `${item.marker}${item.data.label}<br>${time(item.data.value[0])}`,
+    },
+    xAxis: {
+      type: "time",
+      min: firstEntryAt - padding,
+      max: lastEntryAt + padding,
+      axisLabel: {formatter: (value) => time(value)},
+      axisLine: {lineStyle: {color: "var:noora-chart-lines"}},
+      splitLine: {lineStyle: {color: "var:noora-chart-lines"}},
+    },
+    yAxis: {
+      type: "category",
+      data: ["Run", "Output", "Error output", "Build update"],
+      axisLine: {show: false},
+      axisTick: {show: false},
+      axisLabel: {color: "var:noora-surface-label-secondary"},
+    },
+    series: [
+      {
+        name: "Run",
+        type: "line",
+        data: [[startedAt, "Run"], [finishedAt, "Run"]],
+        showSymbol: false,
+        lineStyle: {color: "var:noora-chart-primary", width: 3},
+        silent: true,
+      },
+      {
+        name: "Output",
+        type: "scatter",
+        symbolSize: 10,
+        data: entries.map((entry) => ({
+          value: [entry.at_ms, timelineLane(entry)],
+          label: logLabel(entry),
+          itemStyle: {color: timelineColor(entry)},
+        })),
+      },
+    ],
+  }
+}
+
+function updateTimeline() {
+  const chart = app.querySelector("[data-run-timeline]")
+  if (!chart || !run) return
+  customElements.whenDefined("noora-chart").then(() => {
+    if (chart.isConnected) chart.options = timelineOptions(run)
+  })
+}
+
 function outputEntries(snapshot) {
   const logs = snapshot.logs || []
   if (!logs.length) return `<p data-part="run-message">Waiting for the build to produce output.</p>`
-  return logs.map((entry) => `<article data-part="run-log-entry">
-    <div data-part="run-log-entry-header">
-      <noora-badge appearance="light-fill" color="${entry.stream === "stderr" ? "destructive" : "secondary"}">${logLabel(entry)}</noora-badge>
-      <time>${time(entry.at_ms)}</time>
-    </div>
-    <pre data-part="run-log-output"><code>${escape(entry.text)}</code></pre>
-  </article>`).join("")
+  const query = logView.query.trim()
+  const entries = logs.filter((entry) => logMatches(entry, query))
+  if (!entries.length) return `<p data-part="run-message">No output matches “${escape(query)}”.</p>`
+  return entries.map(outputEntry).join("")
 }
 
 function graphKindOptions(graph) {
@@ -551,11 +642,25 @@ function progress(snapshot) {
   const operation = operationLabel(snapshot)
   return `<section data-part="run-page">
     ${titlebar(snapshot)}
+    <section data-part="run-timeline" aria-label="Run timeline">
+      <noora-card icon="chart_arcs" title="Timeline">
+        <div data-part="run-timeline-summary">
+          <span>${snapshot.logs?.length || 0} output updates across this run</span>
+          <span>${duration(snapshot)}</span>
+        </div>
+        <noora-chart data-run-timeline hide-legend aria-label="${operation} timeline"></noora-chart>
+      </noora-card>
+    </section>
     <section data-part="run-output" aria-label="Build activity">
-      <noora-card icon="devices_code" title="${operation} output">
+      <noora-card icon="devices_code" title="Logs">
         <div data-part="run-output-toolbar">
+          <noora-text-input data-log-search input-type="search" name="log-search" placeholder="Filter output" value="${escape(logView.query)}">
+            <noora-icon slot="prefix" name="search"></noora-icon>
+          </noora-text-input>
+          <div data-part="run-output-status">
           <noora-badge appearance="light-fill" color="${badgeColor(snapshot.status)}">${snapshot.status === "running" ? "Live" : "Recorded"}</noora-badge>
           <span data-part="run-output-limit">${snapshot.output_truncated ? "Showing the most recent output" : "Updates from the running build"}</span>
+          </div>
         </div>
         <div data-part="run-log-list" aria-live="polite">${outputEntries(snapshot)}</div>
       </noora-card>
@@ -759,7 +864,9 @@ function render() {
     graph.filters = graphView
     graph.graphData = run.graph
   }
+  updateTimeline()
   bindGraphControls()
+  bindLogControls()
   bindTestControls()
 }
 
@@ -782,6 +889,18 @@ function bindGraphControls() {
     graphView.scope = "all"
     render()
   })
+}
+
+function bindLogControls() {
+  app.querySelector("[data-log-search]")?.addEventListener("input", (event) => {
+    logView.query = event.target.value
+    refreshLogEntries()
+  })
+}
+
+function refreshLogEntries() {
+  const output = app.querySelector('[data-part="run-log-list"]')
+  if (output && run) output.innerHTML = outputEntries(run)
 }
 
 function bindTestControls() {
@@ -830,9 +949,9 @@ function handleKeyboardShortcut(event) {
 function applyProgressUpdate(previous) {
   if (route() !== "progress" || !previous || previous.run_id !== run.run_id) return false
   if (previous.status !== run.status || Boolean(previous.graph) !== Boolean(run.graph)) return false
-  const output = app.querySelector('[data-part="run-log-list"]')
-  if (!output) return false
-  output.innerHTML = outputEntries(run)
+  if (!app.querySelector('[data-part="run-log-list"]')) return false
+  refreshLogEntries()
+  updateTimeline()
   return true
 }
 
