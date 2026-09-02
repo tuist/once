@@ -366,7 +366,7 @@ once-workspace-graph {
 
 [data-part="run-log-list"] {
   max-height: 520px;
-  overflow-y: auto;
+  overflow: auto;
   border: 1px solid #d8dadd;
   border-radius: 8px;
   background: #ffffff;
@@ -374,14 +374,11 @@ once-workspace-graph {
 
 [data-part="run-log-entry"] {
   display: grid;
-  grid-template-columns: 76px minmax(0, 1fr);
+  grid-template-columns: 76px max-content;
   gap: 16px;
-  padding: 8px 16px;
-  border-bottom: 1px solid #e6e7e9;
-}
-
-[data-part="run-log-entry"]:last-child {
-  border-bottom: 0;
+  width: max-content;
+  min-width: 100%;
+  padding: 4px 16px;
 }
 
 [data-part="run-log-timestamp"] {
@@ -394,9 +391,7 @@ once-workspace-graph {
 }
 
 [data-part="run-log-output"] {
-  min-width: 0;
   margin: 0;
-  overflow-x: auto;
   color: #303239;
   font-size: 12px;
   line-height: 20px;
