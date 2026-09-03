@@ -2152,6 +2152,35 @@ def _rust_test_impl(ctx):
     if target and target != host_triple:
         fail(ctx["label"]["id"] + ": rust_test execution supports the host target only; remove `target` or run the cross-compiled test binary with a platform runner")
 
+    # Cargo places a test binary at `target/<profile>/deps/<name>` with its
+    # sibling package binaries at `target/<profile>/<name>`. Integration tests
+    # commonly walk up from `env::current_exe()` to find the binary they
+    # exercise (`parent(current_exe)/../<name>`), so a native path that keeps
+    # the test binary alongside its outputs breaks those tests. Stage the test
+    # under `deps/` and stage each declared bin_exe next to it so the
+    # cargo-shaped `env::current_exe()` walk lands on the real binary.
+    staged_test_binary = declare_output(_rust_declared_output(ctx, "deps/" + _basename(provider["test_binary"])))
+    copy_path(
+        provider["test_binary"],
+        staged_test_binary,
+        inputs = [provider["test_binary"]],
+        identifier = _rust_action_identifier(ctx, "test-stage"),
+    )
+    staged_bin_exe_paths = []
+    for dep in _rust_bin_exe_deps(ctx):
+        binary = dep.get("binary")
+        name = dep.get("binary_name") or dep.get("crate_name")
+        if not binary or not name:
+            continue
+        staged = declare_output(_rust_declared_output(ctx, name + _rust_output_extension("bin", "")))
+        copy_path(
+            binary,
+            staged,
+            inputs = [binary],
+            identifier = _rust_action_identifier(ctx, "test-bin-stage:" + name),
+        )
+        staged_bin_exe_paths.append(staged)
+
     runner_source = declare_output("test/OnceRustTestRunner.rs")
     runner = declare_output("test/once-rust-test-runner" + _rust_output_extension("bin", ""))
     runner_rustc, runner_identity, runner_host_triple = _rustc_toolchain("")
@@ -2169,14 +2198,15 @@ def _rust_test_impl(ctx):
     run_action(
         argv = [
             execution_path(runner),
-            execution_path(provider["test_binary"]),
+            execution_path(staged_test_binary),
             execution_path(results),
             execution_path(log),
             execution_path(native_results),
             ctx["label"]["id"],
         ] + _rust_attr(ctx, "args", []) + _rust_test_filter_args(ctx),
         inputs = _unique(
-            [runner, provider["test_binary"]] +
+            [runner, staged_test_binary] +
+            staged_bin_exe_paths +
             _rust_bin_exe_inputs(ctx) +
             _rust_test_package_inputs(ctx) +
             (provider.get("transitive_data") or [])
@@ -3136,7 +3166,16 @@ def _cargo_workspace_target_kind(target):
         return ""
     if "proc-macro" in kinds or "proc-macro" in crate_types:
         return "proc_macro"
-    if "test" in kinds or "bench" in kinds:
+    # Cargo benches use the nightly-only libtest bench harness by default. A
+    # benchmark crate typically opens with `#![feature(test)]`, which the
+    # stable compiler rejects. `cargo test` on stable simply does not build
+    # benches, so lowering them as rust_test targets makes `once cargo -- test`
+    # fail on projects that plain `cargo test` handles cleanly (ripgrep is the
+    # canonical example). Skip them until Once grows a dedicated bench
+    # capability.
+    if "bench" in kinds:
+        return ""
+    if "test" in kinds:
         return "test"
     if "lib" in kinds or any([crate_type in ["lib", "rlib", "staticlib", "cdylib", "dylib"] for crate_type in crate_types]):
         return "library"

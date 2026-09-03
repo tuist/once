@@ -568,6 +568,17 @@ pub enum Cmd {
         argv: Vec<String>,
     },
 
+    /// Accept a Cargo build or test invocation and use the Once graph when its
+    /// semantics are supported. Other invocations pass through to the system
+    /// Cargo executable unchanged. Configure this as a mise command wrapper to
+    /// make ordinary `cargo` commands use this compatibility surface.
+    #[usage(name = "cargo")]
+    CrateCompatibility {
+        /// Arguments supplied by the Cargo invocation.
+        #[usage(trailing_var_arg = true, value_name = "ARG")]
+        argv: Vec<String>,
+    },
+
     /// Expose Once's graph and memory queries to a coding agent.
     ///
     /// Speaks the Model Context Protocol over standard input and output so a
@@ -610,6 +621,7 @@ pub(crate) enum CompatibilityInvocation {
     Xcodebuild(Vec<String>),
     Swift(Vec<String>),
     Bazel(Vec<String>),
+    Cargo(Vec<String>),
 }
 
 impl Cli {
@@ -667,6 +679,7 @@ impl Cmd {
                 Some(CompatibilityInvocation::Swift(argv.clone()))
             }
             Self::BazelCompatibility { argv } => Some(CompatibilityInvocation::Bazel(argv.clone())),
+            Self::CrateCompatibility { argv } => Some(CompatibilityInvocation::Cargo(argv.clone())),
             _ => None,
         }
     }
@@ -723,6 +736,7 @@ impl Cmd {
             Self::Compatibility { .. } => vec!["xcodebuild"],
             Self::PackageCompatibility { .. } => vec!["swift"],
             Self::BazelCompatibility { .. } => vec!["bazel"],
+            Self::CrateCompatibility { .. } => vec!["cargo"],
             Self::Runtime { cmd } => {
                 let mut path = vec!["runtime"];
                 if let Some(cmd) = cmd {
@@ -844,6 +858,16 @@ mod tests {
 
         let Some(Cmd::PackageCompatibility { argv }) = cli.command else {
             panic!("expected Swift compatibility command");
+        };
+        assert_eq!(argv, ["build"]);
+    }
+
+    #[test]
+    fn compatibility_accepts_cargo_arguments_after_separator() {
+        let cli = parse(&["once", "cargo", "--", "build"]);
+
+        let Some(Cmd::CrateCompatibility { argv }) = cli.command else {
+            panic!("expected Cargo compatibility command");
         };
         assert_eq!(argv, ["build"]);
     }

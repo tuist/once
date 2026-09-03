@@ -2204,6 +2204,13 @@ fn collect_glob_matches(
         // would stay valid, and the source would silently never enter the
         // build. Record the absent target as an observed host path so its
         // appearance invalidates what was built without it.
+        //
+        // A symlink whose canonical target already exists but lives outside
+        // the workspace is treated the same way: skip it and record the
+        // observation, so a hybrid project (a Cargo workspace that also runs
+        // Bazel, for instance, leaving `bazel-*` convenience symlinks that
+        // point into the Bazel output tree) loads cleanly instead of failing
+        // the whole graph.
         let canonical = match std::fs::canonicalize(path) {
             Ok(canonical) => canonical,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -2215,15 +2222,17 @@ fn collect_glob_matches(
                     .context(format!("canonicalizing `{}`", path.display())))
             }
         };
-        canonical
-            .strip_prefix(canonical_workspace)
-            .with_context(|| {
-                format!(
-                    "glob result `{}` is outside the workspace `{}`",
-                    canonical.display(),
-                    canonical_workspace.display()
-                )
-            })?;
+        if canonical.strip_prefix(canonical_workspace).is_err() {
+            if metadata.file_type().is_symlink() {
+                observe_absent_link_target(path);
+                continue;
+            }
+            return Err(anyhow!(
+                "glob result `{}` is outside the workspace `{}`",
+                canonical.display(),
+                canonical_workspace.display()
+            ));
+        }
         if !ws_rel.is_empty() {
             out.push(ws_rel);
         }

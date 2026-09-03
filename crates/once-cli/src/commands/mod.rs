@@ -5,6 +5,7 @@
 pub mod auth;
 pub mod bazel;
 pub mod cache;
+pub mod cargo;
 pub mod change_tracker;
 pub mod compatibility;
 pub mod edit;
