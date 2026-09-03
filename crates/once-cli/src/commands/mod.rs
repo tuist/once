@@ -8,6 +8,7 @@ pub mod cargo;
 pub mod change_tracker;
 pub mod compatibility;
 pub mod edit;
+#[cfg(feature = "events-ingest")]
 pub mod events;
 pub mod evidence;
 pub mod exec;

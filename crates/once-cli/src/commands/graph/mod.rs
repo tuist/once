@@ -114,10 +114,13 @@ pub async fn build(
     } else {
         None
     };
-    // Optional live event ingest to a Tuist endpoint. Enabled by
-    // ONCE_EVENTS_ENDPOINT; failures are logged and never abort the
+    // Optional live event ingest to a compatible ingest server. Enabled
+    // by ONCE_EVENTS_ENDPOINT; failures are logged and never abort the
     // run. Subscribing before publisher.started() ensures RunStarted
-    // is captured.
+    // is captured. Gated behind the `events-ingest` cargo feature so
+    // that self-hosted graph builds of the CLI do not require the
+    // once-events-client crate.
+    #[cfg(feature = "events-ingest")]
     let mut event_client = if let (Some(server), Some(context)) = (&ui_server, &run_context) {
         match crate::commands::events::try_start(server, context.run_id_string()).await {
             Ok(handle) => handle,
@@ -376,6 +379,7 @@ pub async fn build(
             .await;
     }
     write_record(output, &record).await?;
+    #[cfg(feature = "events-ingest")]
     if let Some(handle) = event_client.take() {
         handle
             .shutdown_with_timeout(std::time::Duration::from_secs(3))
