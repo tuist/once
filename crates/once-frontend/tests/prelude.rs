@@ -14679,6 +14679,80 @@ result = repr([[info["identity"], info["path"]] for info in infos])
 }
 
 #[test]
+fn prelude_xcode_uses_swiftpm_resolved_system_target_path() {
+    let prelude = xcode_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let target = workspace
+        .path()
+        .join("Packages/SystemPath/Source/LibNative");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(
+        target.join("module.modulemap"),
+        "module LibNative { header \"libnative.h\" export * }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        target.join("libnative.h"),
+        "void libnative_fixture(void);\n",
+    )
+    .unwrap();
+
+    let dumped = serde_json::json!({
+        "name": "SystemPath",
+        "products": [],
+        "targets": [{
+            "name": "LibNative",
+            "type": "system",
+            "dependencies": [],
+            "exclude": [],
+            "settings": [],
+        }],
+    })
+    .to_string();
+    let described = serde_json::json!({
+        "name": "SystemPath",
+        "targets": [{
+            "name": "LibNative",
+            "path": "Source/LibNative",
+            "type": "system-target",
+        }],
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    return "/usr/bin/" + name
+
+def host_command(argv, env = None, cwd = None, merge_stderr = None):
+    if argv == ["/usr/bin/xcrun", "--find", "swift"]:
+        return "/usr/bin/swift\n"
+    if "dump-package" in argv:
+        return {dumped:?}
+    if "describe" in argv:
+        if "--disable-automatic-resolution" not in argv:
+            fail("package description must remain offline")
+        return {described:?}
+    fail("unexpected host command: " + str(argv))
+
+info = _xcode_swift_package_info({{}}, "Packages/SystemPath", "system-path")
+graph = _xcode_local_swift_package_specs({{}}, [info], "macos", "13.0", "simulator")
+spec = graph["specs"][0]
+result = repr([
+    info["info"]["targets"][0]["path"],
+    spec["attrs"]["modulemap"],
+    spec["attrs"]["headers"],
+])
+"#
+    );
+    let store = store_for(workspace.path(), "");
+    let (_store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    assert_eq!(
+        result.unwrap(),
+        r#"["Source/LibNative", "Packages/SystemPath/Source/LibNative/module.modulemap", ["Packages/SystemPath/Source/LibNative/libnative.h"]]"#
+    );
+}
+
+#[test]
 fn prelude_xcode_reconciles_local_package_products_into_native_targets() {
     let prelude = xcode_prelude_source();
     let source = format!(
