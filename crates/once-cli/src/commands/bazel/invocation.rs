@@ -44,7 +44,7 @@ impl Invocation {
     }
 
     /// Resolve the Once target id that stands for the requested Bazel label.
-    /// The bazel_workspace resolver emits every rule as a bazel_target and
+    /// The `bazel_workspace` resolver emits every rule as a `bazel_target` and
     /// records the original label on `bazel_label`; this is the reverse
     /// lookup that keeps the wrapper honest about what it will build.
     pub(super) fn target(&self, graph: &[GraphTarget]) -> Option<String> {
