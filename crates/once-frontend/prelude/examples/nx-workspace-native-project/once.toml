@@ -1,0 +1,7 @@
+[[target]]
+name = "nx"
+kind = "nx_workspace"
+srcs = ["nx.json", "package.json"]
+
+[target.attrs]
+resolver_inputs = ["nx.json", "package.json", "**/project.json", "**/package.json"]
