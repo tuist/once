@@ -90,7 +90,7 @@ defmodule OnceSiteWeb.Docs.Sidebar do
           %Item{label: "Go", slug: "/docs/guide/graph/go", icon: "go"},
           %Item{label: "Rust", slug: "/docs/guide/graph/rust", icon: "rust"},
           %Item{label: "Zig", slug: "/docs/guide/graph/zig", icon: "zig"},
-          %Item{label: "Nx", slug: "/docs/guide/graph/nx"},
+          %Item{label: "Nx", slug: "/docs/guide/graph/nx", icon: "nx"},
           %Item{
             label: "React Native",
             slug: "/docs/guide/graph/react-native",
