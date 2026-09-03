@@ -454,19 +454,23 @@ def _bazel_emit_symlink_tree_action(ctx, action, index, shadow_rel):
     # SymlinkTree / RunfilesTree materialise a directory whose entries mirror
     # the action's declared inputs. Each input path becomes a symlink under
     # the output directory, joined by the input's exec-root-relative path so
-    # the tree matches what Bazel would build.
+    # the tree matches what Bazel would build. Runfiles trees can list tens
+    # of thousands of entries, well past the OS `ARG_MAX` limit for a single
+    # `sh -c` invocation, so the shell script goes to a file that the action
+    # then runs.
     destination = action["outputs"][0]
-    lines = ["mkdir -p " + _shell_quote(destination)]
+    script_path = shadow_rel + "/.once/bazel-tree-scripts/" + str(index) + ".sh"
+    lines = ["#!/bin/sh", "set -e", "mkdir -p " + _shell_quote(destination)]
     for input_path in action["inputs"]:
-        parent = _parent_dir(input_path)
-        if parent:
-            lines.append("mkdir -p " + _shell_quote(destination + "/" + parent))
-        lines.append(
-            "ln -sfn " + _shell_quote("../" * (len([p for p in destination.split("/") if p]) + len([p for p in parent.split("/") if p])) + input_path) +
-            " " + _shell_quote(destination + "/" + input_path),
-        )
+        entry = destination + "/" + input_path
+        parent = _parent_dir(entry)
+        if parent and parent != destination:
+            lines.append("mkdir -p " + _shell_quote(parent))
+        target = _bazel_relative_target(input_path, entry)
+        lines.append("ln -sfn " + _shell_quote(target) + " " + _shell_quote(entry))
+    write_path(script_path, "\n".join(lines) + "\n")
     run_action(
-        argv = ["/bin/sh", "-c", " && ".join(lines)],
+        argv = ["/bin/sh", script_path],
         inputs = [],
         outputs = [],
         cwd = shadow_rel,
