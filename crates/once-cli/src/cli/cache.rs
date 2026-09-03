@@ -4,6 +4,12 @@ use std::str::FromStr;
 use once_cas::Digest;
 use usage::Subcommands;
 
+/// Default size cap used when `--max-size` is not passed. 20 GB is
+/// large enough that a healthy dev loop does not hit it, small enough
+/// that a runaway build cannot fill a 256 GB SSD before the user
+/// notices.
+pub(crate) const DEFAULT_CACHE_SIZE_CAP_BYTES: u64 = 20 * 1_000_000_000;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CacheSize(u64);
 
@@ -52,17 +58,17 @@ pub enum CacheCmd {
     /// Reclaim local cache space down to a size budget.
     ///
     /// Removes the oldest blobs and action results until the local
-    /// store fits within `--max-size`. Safe to run at any time: an
-    /// action whose outputs get evicted simply re-executes on its next
-    /// build. Only the local tier is collected; a remote cache is never
-    /// touched.
+    /// store fits within `--max-size`, defaulting to 20 GB when the
+    /// flag is omitted. Safe to run at any time: an action whose
+    /// outputs get evicted simply re-executes on its next build. Only
+    /// the local tier is collected; a remote cache is never touched.
     Gc {
         /// Maximum local cache size to keep. Plain bytes or a human
         /// suffix: `500MB`, `2GiB`, `750k`. Decimal suffixes (KB/MB/GB/
         /// TB) are powers of 1000; binary suffixes (KiB/MiB/GiB/TiB) are
-        /// powers of 1024.
+        /// powers of 1024. Defaults to 20 GB when omitted.
         #[usage(long = "max-size", value_name = "SIZE")]
-        max_size: CacheSize,
+        max_size: Option<CacheSize>,
 
         /// Report what would be reclaimed without deleting anything.
         #[usage(long)]

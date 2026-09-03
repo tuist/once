@@ -1,0 +1,65 @@
+name: bench
+
+on:
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/**'
+      - 'benchmarks/**'
+      - 'mise.toml'
+      - '.github/workflows/bench.yml'
+  push:
+    branches: [main]
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_NET_RETRY: "10"
+  RUSTUP_MAX_RETRIES: "10"
+
+jobs:
+  warm-loop:
+    name: warm-loop (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
+        with:
+          experimental: true
+          cache: true
+      - if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: bench
+          cache-on-failure: true
+          cache-bin: false
+      - name: build once
+        run: mise exec -- cargo build --release --package once-cli
+      - name: trust bench fixture mise configs
+        # The bench fixture and the repo root both ship a `mise.toml`.
+        # Once runs each fixture action through a sandboxed mise subprocess
+        # that does not inherit the workflow's `MISE_TRUSTED_CONFIG_PATHS`,
+        # so trust has to be persisted to disk before the timed run starts.
+        run: |
+          mise trust --yes mise.toml
+          mise trust --yes benchmarks/cache-comparison/once/mise.toml
+      - name: warm-loop bench
+        run: benchmarks/warm-loop/run.sh
+      - name: upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: warm-loop-${{ matrix.os }}
+          path: benchmarks/warm-loop/results/
+          if-no-files-found: warn

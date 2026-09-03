@@ -14,6 +14,10 @@ use once_core::{
 use once_frontend::GraphTarget;
 use serde::Serialize;
 
+fn unsupported_capability(capability: &str) -> anyhow::Error {
+    anyhow::anyhow!("unsupported graph capability `{capability}`")
+}
+
 #[derive(Debug, Serialize)]
 struct GraphActionManifest<'a> {
     target: &'a str,
@@ -78,7 +82,7 @@ pub(super) fn output_paths(target: &GraphTarget, capability: &str) -> Result<Vec
         "build" => build_root(target),
         "run" => format!("{}/run", build_root(target)),
         "test" => format!("{}/test", build_root(target)),
-        other => anyhow::bail!("unsupported graph capability `{other}`"),
+        other => return Err(unsupported_capability(other)),
     };
     Ok(vec![WorkspacePath::try_from(path.as_str()).with_context(
         || format!("invalid graph output path `{path}`"),
@@ -133,7 +137,7 @@ fn output_root(target: &GraphTarget, capability: &str) -> Result<String> {
         "build" => Ok(build_root(target)),
         "run" => Ok(format!("{}/run", build_root(target))),
         "test" => Ok(format!("{}/test", build_root(target))),
-        other => anyhow::bail!("unsupported graph capability `{other}`"),
+        other => Err(unsupported_capability(other)),
     }
 }
 

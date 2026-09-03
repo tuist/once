@@ -40,6 +40,8 @@ use crate::render;
 
 const MAX_SCRIPT_GLOB_MATCHES: usize = 1_000;
 
+const SCRIPT_EXEC_USAGE: &str = "`once exec --script` expects `<runtime> <script> [args...]`";
+
 #[derive(Serialize)]
 struct ExecTrailer<'a> {
     action_digest: String,
@@ -1008,10 +1010,10 @@ fn parse_script_exec_argv<'a>(
     argv: &'a [String],
 ) -> Result<(String, &'a [String], &'a str, Vec<String>)> {
     let Some((runtime, rest)) = argv.split_first() else {
-        anyhow::bail!("`once exec --script` expects `<runtime> <script> [args...]`");
+        anyhow::bail!(SCRIPT_EXEC_USAGE);
     };
     if rest.is_empty() {
-        anyhow::bail!("`once exec --script` expects `<runtime> <script> [args...]`");
+        anyhow::bail!(SCRIPT_EXEC_USAGE);
     }
     let mut script_idx = None;
     let mut candidate_error = None;

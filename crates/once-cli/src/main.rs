@@ -11,6 +11,7 @@ mod reference;
 mod render;
 
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::io::Write;
 use std::process::ExitCode;
 
@@ -35,6 +36,7 @@ async fn main() -> ExitCode {
     }
     let command = cli.surface_path().join(" ");
     let format = cli.format;
+    let verbose = cli.verbose;
     let logging = logging::init(cli.verbose);
     let session_id = logging.session_id();
     let log_path = log_path(&logging);
@@ -61,15 +63,18 @@ async fn main() -> ExitCode {
         }
         Err(e) => {
             tracing::error!(session_id = %session_id, error = %e, "session failed");
-            write_dispatch_error(format, &e);
+            write_dispatch_error(format, verbose, &e);
             ExitCode::from(2)
         }
     }
 }
 
-fn write_dispatch_error(format: cli::Format, error: &anyhow::Error) {
+fn write_dispatch_error(format: cli::Format, verbose: u8, error: &anyhow::Error) {
     if format == cli::Format::Human {
-        eprintln!("once: {error:#}");
+        let body = format_human_error(verbose, error);
+        if let Err(write_error) = std::io::stderr().write_all(body.as_bytes()) {
+            tracing::error!(error = %write_error, "failed to write human error");
+        }
         return;
     }
     // Errors always go to stderr, whatever the format, so stdout carries only a
@@ -78,6 +83,38 @@ fn write_dispatch_error(format: cli::Format, error: &anyhow::Error) {
     if let Err(write_error) = std::io::stderr().write_all(body.as_bytes()) {
         tracing::error!(error = %write_error, "failed to write structured error");
     }
+}
+
+// Collapse the anyhow `Caused by:` chain into a compact frame: the root
+// cause first (that is what the user needs to read), then one `while`
+// line per intermediate context frame, outermost last. Every context
+// message is preserved because dropping middle frames throws away the
+// specific-most piece of information the user needs (a "resolving
+// script path `foo.sh`" middle frame is more actionable than the "root
+// cause: No such file or directory" alone). `-v` swaps in the classic
+// `Caused by:` layout for the rare deep chain the compact frame makes
+// harder to skim.
+fn format_human_error(verbose: u8, error: &anyhow::Error) -> String {
+    if verbose >= 1 {
+        // Debug on anyhow::Error prints the multi-line `Caused by:` chain,
+        // which is easier to scan than the single-line alternate form when
+        // the chain has more than a couple of links.
+        return format!("once: {error:?}\n");
+    }
+    let chain: Vec<_> = error.chain().collect();
+    let root = chain
+        .last()
+        .expect("anyhow error chains always have at least one element");
+    let mut out = format!("once: {root}\n");
+    // Skip the terminal cause (already on the primary line) and walk
+    // context frames from innermost to outermost so the most specific
+    // operation reads closest to the root cause.
+    for frame in chain.iter().rev().skip(1) {
+        // Writing directly into the String avoids an intermediate allocation
+        // (clippy::format_push_string); the write is infallible on a String.
+        let _ = writeln!(out, "  while {frame}");
+    }
+    out
 }
 
 fn structured_dispatch_error(format: cli::Format, error: &anyhow::Error) -> String {
@@ -179,6 +216,61 @@ fn log_path(logging: &logging::Logging) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn human_frame_shows_only_the_root_cause_when_there_is_no_context() {
+        let error = anyhow::anyhow!("target `foo` not found");
+        let out = format_human_error(0, &error);
+        assert_eq!(out, "once: target `foo` not found\n");
+    }
+
+    #[test]
+    fn human_frame_collapses_a_context_chain_to_root_plus_operation() {
+        let error: anyhow::Error = std::io::Error::from(std::io::ErrorKind::NotFound).into();
+        let error = error
+            .context("reading script file")
+            .context("parsing once headers for `foo.sh`");
+        let out = format_human_error(0, &error);
+        // Frames walk innermost-to-outermost after the root cause so the
+        // most specific operation reads closest to the primary line.
+        assert_eq!(
+            out,
+            "once: entity not found\n  \
+             while reading script file\n  \
+             while parsing once headers for `foo.sh`\n"
+        );
+    }
+
+    #[test]
+    fn human_frame_preserves_every_context_frame_in_the_chain() {
+        let error = anyhow::anyhow!("No such file or directory")
+            .context("resolving script path `foo.sh`")
+            .context("executing action");
+        let out = format_human_error(0, &error);
+        assert_eq!(
+            out,
+            "once: No such file or directory\n  \
+             while resolving script path `foo.sh`\n  \
+             while executing action\n"
+        );
+    }
+
+    #[test]
+    fn human_frame_expands_to_the_full_chain_under_verbose() {
+        let error = anyhow::anyhow!("root").context("middle").context("outer");
+        let out = format_human_error(1, &error);
+        assert!(out.contains("Caused by:"), "expected full chain in:\n{out}");
+        assert!(out.contains("outer"));
+        assert!(out.contains("middle"));
+        assert!(out.contains("root"));
+    }
+
+    #[test]
+    fn human_frame_prints_a_single_while_line_for_a_one_context_chain() {
+        let error = anyhow::anyhow!("root").context("outer");
+        let out = format_human_error(0, &error);
+        assert_eq!(out, "once: root\n  while outer\n");
+    }
 
     #[test]
     fn structured_dispatch_errors_have_a_stable_envelope() {

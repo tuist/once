@@ -707,24 +707,28 @@ async fn run_cache_command(
     match command {
         Some(cli::CacheCmd::Stats) => {
             let cache = crate::cache_provider::resolve(workspace, xdg)?;
-            commands::cache::print_stats(&cache, output)
+            commands::cache::print_stats(&cache, cli::DEFAULT_CACHE_SIZE_CAP_BYTES, output)
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }
         Some(cli::CacheCmd::Gc { max_size, dry_run }) => {
             let cache = crate::cache_provider::resolve(workspace, xdg)?;
-            commands::cache::gc(&cache, max_size.bytes(), dry_run, output)
+            let cap = max_size.map_or(cli::DEFAULT_CACHE_SIZE_CAP_BYTES, cli::CacheSize::bytes);
+            commands::cache::gc(&cache, cap, dry_run, output)
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }
         Some(cli::CacheCmd::Blob { cmd }) => {
             let cache = crate::cache_provider::resolve(workspace, xdg)?;
             match cmd {
-                Some(cli::CacheBlobCmd::Put { path }) => {
-                    commands::cache::put_blob(&cache, path.as_deref(), output)
-                        .await
-                        .map(|()| ExitCode::SUCCESS)
-                }
+                Some(cli::CacheBlobCmd::Put { path }) => commands::cache::put_blob(
+                    &cache,
+                    path.as_deref(),
+                    cli::DEFAULT_CACHE_SIZE_CAP_BYTES,
+                    output,
+                )
+                .await
+                .map(|()| ExitCode::SUCCESS),
                 Some(cli::CacheBlobCmd::Get {
                     digest,
                     output: output_path,
@@ -763,6 +767,7 @@ async fn run_cache_command(
                         .into_iter()
                         .map(cli::OutputDigest::into_inner)
                         .collect(),
+                    cli::DEFAULT_CACHE_SIZE_CAP_BYTES,
                     output,
                 )
                 .await

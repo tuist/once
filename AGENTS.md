@@ -21,6 +21,13 @@ inside each module file. Cross-module integration tests go under
 
 ## Manifest Files
 
+Once has one configuration family: workspace and package `once.toml`
+files plus in-source script `# once` headers. Do not add a new
+Once-owned dotfile, a parallel config format, or a second layer that
+overrides `once.toml`. Ecosystem manifests that Once reads
+cooperatively (such as `Cargo.toml` and `Package.swift`) are not Once
+configuration and are unaffected by this rule.
+
 - Per-package manifests are named `once.toml`.
 - The `.once/` directory at the workspace root is cache and runtime
   state, not a manifest. It is gitignored.
@@ -124,6 +131,20 @@ The built-in Apple target kinds and their portable starter examples are the
 reference implementation. Treat their module-owned examples, schema
 metadata, validation, and MCP/CLI discovery shape as the template when
 wiring a new toolchain.
+
+## Target Names And Paths
+
+Do not invent a path-like target grammar. When a target can be
+identified by a native package name (a Cargo crate, a SwiftPM product,
+an Xcode scheme, an npm workspace) or by a filesystem path relative to
+the workspace, use that. Reserve any Once-specific selector for cases
+where native naming genuinely cannot express the intent, and mirror
+filesystem path semantics rather than a parallel notation.
+
+Where a name must be typed, auto-discover where possible. When
+discovery fails, the error message must include the exact corrected
+syntax and a shortlist of nearby valid targets. A "target not found"
+error that only echoes what the user typed is a bug.
 
 ## Resource Budgeting
 

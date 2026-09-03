@@ -39,7 +39,9 @@ pub use cache_provider::{
 pub use cache_resolution::{
     resolve_cache_provider, ResolvedCacheProviderConfig, ResolvedTuistCacheProviderConfig,
 };
-pub use error::{Error, Result};
+pub use error::{
+    CacheProviderError, Error, ManifestSchemaError, NativeProjectError, Result, ScriptHeaderError,
+};
 pub use examples::{load_example_bundle, load_target_kind_example};
 pub use graph::{
     built_in_target_kind_schema, built_in_target_kind_schemas, built_in_target_kind_schemas_result,

@@ -15,16 +15,37 @@ pub enum TargetIdError {
     InvalidName(String),
     #[error("target reference `{raw}` uses Bazel label syntax; use `{suggestion}`")]
     BazelSyntax { raw: String, suggestion: String },
-    #[error("target reference `{0}` must not contain `:`")]
-    Colon(String),
-    #[error("target reference `{0}` must be relative to the project root")]
-    Absolute(String),
+    #[error("target reference `{raw}` must not contain `:`; use `{suggestion}`")]
+    Colon { raw: String, suggestion: String },
+    #[error("target reference `{raw}` must be relative to the project root; use `{suggestion}`")]
+    Absolute { raw: String, suggestion: String },
     #[error("target reference `{0}` must not escape the project root")]
     EscapesRoot(String),
-    #[error("target reference `{0}` contains an empty path segment")]
-    EmptySegment(String),
+    #[error("target reference `{raw}` contains an empty path segment; use `{suggestion}`")]
+    EmptySegment { raw: String, suggestion: String },
     #[error("current directory `{cwd}` is outside project root `{root}`")]
     CurrentDirOutsideProject { cwd: String, root: String },
+}
+
+/// Derive a corrected target reference from a malformed one. Follows the
+/// AGENTS.md "no invented path grammar" rule: strip Bazel-style prefixes
+/// and separators, collapse empty segments, drop redundant `.` segments,
+/// and drop `..` segments (which would only push the suggestion back
+/// through the `EscapesRoot` failure path). Falls back to a placeholder
+/// when nothing survives so the message never shows empty backticks.
+fn cleanup_suggestion(raw: &str) -> String {
+    let cleaned = raw
+        .trim_matches('/')
+        .split('/')
+        .flat_map(|segment| segment.split([':', '\\']))
+        .filter(|segment| !segment.is_empty() && *segment != "." && *segment != "..")
+        .collect::<Vec<_>>()
+        .join("/");
+    if cleaned.is_empty() {
+        "target-name".to_string()
+    } else {
+        cleaned
+    }
 }
 
 pub fn target_id(package: &str, name: &str) -> String {
@@ -86,10 +107,16 @@ fn validate_raw(raw: &str) -> Result<(), TargetIdError> {
         });
     }
     if raw.contains(':') {
-        return Err(TargetIdError::Colon(raw.to_string()));
+        return Err(TargetIdError::Colon {
+            raw: raw.to_string(),
+            suggestion: cleanup_suggestion(raw),
+        });
     }
     if raw.starts_with('/') {
-        return Err(TargetIdError::Absolute(raw.to_string()));
+        return Err(TargetIdError::Absolute {
+            raw: raw.to_string(),
+            suggestion: cleanup_suggestion(raw),
+        });
     }
     Ok(())
 }
@@ -111,7 +138,12 @@ fn normalize_from(base: &[String], raw: &str) -> Result<String, TargetIdError> {
     let mut out = base.to_vec();
     for segment in raw.split('/') {
         match segment {
-            "" => return Err(TargetIdError::EmptySegment(raw.to_string())),
+            "" => {
+                return Err(TargetIdError::EmptySegment {
+                    raw: raw.to_string(),
+                    suggestion: cleanup_suggestion(raw),
+                });
+            }
             "." => {}
             ".." => {
                 out.pop()
@@ -131,7 +163,10 @@ fn normalize_from(base: &[String], raw: &str) -> Result<String, TargetIdError> {
 
 fn validate_segment(raw: &str, segment: &str) -> Result<(), TargetIdError> {
     if segment.contains(['\\', ':']) {
-        return Err(TargetIdError::Colon(raw.to_string()));
+        return Err(TargetIdError::Colon {
+            raw: raw.to_string(),
+            suggestion: cleanup_suggestion(raw),
+        });
     }
     Ok(())
 }
@@ -239,5 +274,64 @@ mod tests {
             normalize_manifest_target("apps/ios", "../shared/Logging").unwrap(),
             "apps/shared/Logging"
         );
+    }
+
+    #[test]
+    fn absolute_reference_error_suggests_the_relative_form() {
+        let err = normalize_manifest_target("", "/apps/ios/AppKit").unwrap_err();
+        assert_eq!(
+            err,
+            TargetIdError::Absolute {
+                raw: "/apps/ios/AppKit".to_string(),
+                suggestion: "apps/ios/AppKit".to_string(),
+            }
+        );
+        assert!(err.to_string().contains("use `apps/ios/AppKit`"));
+    }
+
+    #[test]
+    fn colon_reference_error_suggests_the_slash_form() {
+        let err = normalize_manifest_target("", "apps/ios:AppKit").unwrap_err();
+        assert_eq!(
+            err,
+            TargetIdError::Colon {
+                raw: "apps/ios:AppKit".to_string(),
+                suggestion: "apps/ios/AppKit".to_string(),
+            }
+        );
+        assert!(err.to_string().contains("use `apps/ios/AppKit`"));
+    }
+
+    #[test]
+    fn empty_segment_error_suggests_the_collapsed_form() {
+        let err = normalize_manifest_target("", "apps//ios/AppKit").unwrap_err();
+        assert_eq!(
+            err,
+            TargetIdError::EmptySegment {
+                raw: "apps//ios/AppKit".to_string(),
+                suggestion: "apps/ios/AppKit".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn cleanup_suggestion_falls_back_when_nothing_survives() {
+        assert_eq!(cleanup_suggestion("/"), "target-name");
+        assert_eq!(cleanup_suggestion(":::"), "target-name");
+        assert_eq!(cleanup_suggestion("///"), "target-name");
+    }
+
+    #[test]
+    fn cleanup_suggestion_strips_backslash_separators() {
+        assert_eq!(cleanup_suggestion("foo\\bar"), "foo/bar");
+        assert_eq!(cleanup_suggestion("apps\\ios\\App"), "apps/ios/App");
+    }
+
+    #[test]
+    fn cleanup_suggestion_drops_parent_traversal_segments() {
+        // `../foo` would still escape the workspace root, so the suggestion
+        // must not carry `..` through.
+        assert_eq!(cleanup_suggestion("/../foo"), "foo");
+        assert_eq!(cleanup_suggestion("../../apps/ios"), "apps/ios");
     }
 }

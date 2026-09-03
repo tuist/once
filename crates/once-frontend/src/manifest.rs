@@ -6,7 +6,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::cache_provider::{CacheProviderToml, InfrastructureProviderToml, InfrastructureToml};
-use crate::error::{Error, Result};
+use crate::error::{Error, ManifestSchemaError, Result};
 use crate::target::{AttrValue, Target};
 use crate::target_ref::{normalize_manifest_target, validate_target_name};
 use crate::TOML_BUILD_FILE_NAME;
@@ -81,11 +81,9 @@ impl BuildConfiguration {
             .arch
             .unwrap_or_else(|| std::env::consts::ARCH.to_string());
         if os.trim().is_empty() || arch.trim().is_empty() {
-            return Err(Error::Eval {
+            return Err(Error::ManifestSchema {
                 path: TOML_BUILD_FILE_NAME.to_string(),
-                message:
-                    "workspace configuration operating system and architecture must be non-empty"
-                        .to_string(),
+                kind: ManifestSchemaError::ConfigurationPlatformEmpty,
             });
         }
         if configuration
@@ -93,9 +91,9 @@ impl BuildConfiguration {
             .iter()
             .any(|token| token.trim().is_empty())
         {
-            return Err(Error::Eval {
+            return Err(Error::ManifestSchema {
                 path: TOML_BUILD_FILE_NAME.to_string(),
-                message: "workspace configuration tokens must be non-empty".to_string(),
+                kind: ManifestSchemaError::ConfigurationTokenEmpty,
             });
         }
         Ok(Self::new(&os, &arch, configuration.tokens))
@@ -217,9 +215,9 @@ pub(crate) fn load_toml_with_configuration(
         message: source.to_string(),
     })?;
     if (manifest.modules.is_some() || manifest.rules.is_some()) && !package.is_empty() {
-        return Err(Error::Eval {
+        return Err(Error::ManifestSchema {
             path: display_name.to_string(),
-            message: "module paths are only loaded from the root once.toml".to_string(),
+            kind: ManifestSchemaError::ModulePathsInPackage,
         });
     }
     manifest
@@ -279,9 +277,9 @@ pub(crate) fn load_module_paths_toml_str(path: &str, src: &str) -> Result<Vec<St
         message: source.to_string(),
     })?;
     match (manifest.modules, manifest.rules) {
-        (Some(_), Some(_)) => Err(Error::Eval {
+        (Some(_), Some(_)) => Err(Error::ManifestSchema {
             path: path.to_string(),
-            message: "use either [modules] or [rules], not both".to_string(),
+            kind: ManifestSchemaError::ModulesAndRulesBothSet,
         }),
         (Some(modules), None) | (None, Some(modules)) => Ok(modules.paths),
         (None, None) => Ok(Vec::new()),
@@ -322,20 +320,23 @@ impl TargetToml {
         configuration: &BuildConfiguration,
     ) -> Result<Target> {
         if self.name.is_empty() {
-            return Err(Error::Eval {
+            return Err(Error::ManifestSchema {
                 path: display_name.to_string(),
-                message: "target name is required".to_string(),
+                kind: ManifestSchemaError::TargetNameMissing,
             });
         }
         if self.kind.is_empty() {
-            return Err(Error::Eval {
+            return Err(Error::ManifestSchema {
                 path: display_name.to_string(),
-                message: format!("target `{}` kind is required", self.name),
+                kind: ManifestSchemaError::TargetKindMissing {
+                    target: self.name.clone(),
+                },
             });
         }
-        validate_target_name(&self.name).map_err(|source| Error::Eval {
+        validate_target_name(&self.name).map_err(|source| Error::TargetNameInvalid {
             path: display_name.to_string(),
-            message: source.to_string(),
+            target: self.name.clone(),
+            source,
         })?;
         let deps = deps_from_toml(
             display_name,
@@ -385,11 +386,11 @@ fn dependency_edges_from_toml(
     let mut edges = BTreeMap::new();
     for (name, value) in values {
         if name == "deps" {
-            return Err(Error::Eval {
+            return Err(Error::ManifestSchema {
                 path: display_name.to_string(),
-                message: format!(
-                    "target `{target_name}` dependency role `deps` must use the top-level `deps` field"
-                ),
+                kind: ManifestSchemaError::DepsRoleReserved {
+                    target: target_name.to_string(),
+                },
             });
         }
         let dependencies = deps_from_toml(
@@ -417,22 +418,27 @@ fn deps_from_toml(
     let selected =
         select_dep_value_for_tokens(display_name, target_name, value, &configuration.tokens)?;
     let toml::Value::Array(deps) = selected else {
-        return Err(Error::Eval {
+        return Err(Error::ManifestSchema {
             path: display_name.to_string(),
-            message: format!("target `{target_name}` deps must be an array or select table"),
+            kind: ManifestSchemaError::DepsWrongShape {
+                target: target_name.to_string(),
+            },
         });
     };
     deps.iter()
         .map(|dep| {
             let Some(dep) = dep.as_str() else {
-                return Err(Error::Eval {
+                return Err(Error::ManifestSchema {
                     path: display_name.to_string(),
-                    message: format!("target `{target_name}` deps entries must be strings"),
+                    kind: ManifestSchemaError::DepsEntryNotString {
+                        target: target_name.to_string(),
+                    },
                 });
             };
-            normalize_manifest_target(package, dep).map_err(|source| Error::Eval {
+            normalize_manifest_target(package, dep).map_err(|source| Error::DepReference {
                 path: display_name.to_string(),
-                message: source.to_string(),
+                target: target_name.to_string(),
+                source,
             })
         })
         .collect()
@@ -451,9 +457,11 @@ fn select_dep_value_for_tokens<'a>(
         return Ok(value);
     }
     let Some(toml::Value::Table(branches)) = table.get("select") else {
-        return Err(Error::Eval {
+        return Err(Error::ManifestSchema {
             path: display_name.to_string(),
-            message: format!("target `{target_name}` deps select must be a table"),
+            kind: ManifestSchemaError::DepsSelectWrongShape {
+                target: target_name.to_string(),
+            },
         });
     };
     for token in tokens {
@@ -461,12 +469,14 @@ fn select_dep_value_for_tokens<'a>(
             return Ok(value);
         }
     }
-    branches.get("default").ok_or_else(|| Error::Eval {
-        path: display_name.to_string(),
-        message: format!(
-            "target `{target_name}` deps select has no matching branch and no default"
-        ),
-    })
+    branches
+        .get("default")
+        .ok_or_else(|| Error::ManifestSchema {
+            path: display_name.to_string(),
+            kind: ManifestSchemaError::DepsSelectNoMatch {
+                target: target_name.to_string(),
+            },
+        })
 }
 
 fn select_tokens_for(os: &str, arch: &str) -> Vec<String> {
