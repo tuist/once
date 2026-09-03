@@ -31,7 +31,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{
-    EvidenceCacheState, InputFingerprintManifest, ResourceLimits, ResourcePool, SandboxMode,
+    ActionOutputObserver, EvidenceCacheState, InputFingerprintManifest, ResourceLimits,
+    ResourcePool, SandboxMode,
 };
 use once_frontend::analysis::{
     AnalysisEngine, AnalysisOptions, CachedToolCommand, CommandPolicy, UnchangedWorkspace,
@@ -188,6 +189,7 @@ pub(super) struct BuildSession {
     changes: Arc<KnownChanges>,
     target_outcomes: Arc<TargetOutcomes>,
     sandbox: SandboxMode,
+    output_observer: Option<Arc<dyn ActionOutputObserver>>,
 }
 
 struct Resolution {
@@ -340,11 +342,20 @@ impl BuildSession {
                 recorded_digest_position(workspace).as_ref(),
             )),
             sandbox,
+            output_observer: None,
         }
     }
 
     pub(super) fn with_resource_limits(mut self, limits: ResourceLimits) -> Self {
         self.resources = Arc::new(ResourcePool::new(limits));
+        self
+    }
+
+    pub(super) fn with_output_observer(
+        mut self,
+        output_observer: Arc<dyn ActionOutputObserver>,
+    ) -> Self {
+        self.output_observer = Some(output_observer);
         self
     }
 
@@ -491,6 +502,7 @@ impl BuildSession {
                 Some(&self.source_digest_cache),
                 self.sandbox,
                 &self.resources,
+                self.output_observer.as_deref(),
             )
             .await
             .with_context(|| format!("executing {capability} for {}", target.label.id))?;
@@ -716,6 +728,7 @@ impl BuildSession {
             target_outcomes: Arc::clone(&self.target_outcomes),
             sandbox: self.sandbox,
             resources: Arc::clone(&self.resources),
+            output_observer: self.output_observer.clone(),
         }
     }
 
@@ -1096,6 +1109,7 @@ struct BuildContext {
     pub target_outcomes: Arc<TargetOutcomes>,
     pub sandbox: SandboxMode,
     pub resources: Arc<ResourcePool>,
+    pub output_observer: Option<Arc<dyn ActionOutputObserver>>,
 }
 
 /// Analyse one target, reusing a stored analysis when its recorded answers
@@ -1165,6 +1179,7 @@ fn analyze_with_memo(
     Ok(analysis)
 }
 
+#[allow(clippy::too_many_lines)]
 async fn build_one(
     context: BuildContext,
     target: Arc<GraphTarget>,
@@ -1183,6 +1198,7 @@ async fn build_one(
         target_outcomes,
         sandbox,
         resources,
+        output_observer,
     } = context;
     let DependencyInputs {
         providers,
@@ -1267,6 +1283,7 @@ async fn build_one(
         Some(&source_digest_cache),
         sandbox,
         &resources,
+        output_observer.as_deref(),
     )
     .await?;
     if let Some(key) = analysis_key

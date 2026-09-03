@@ -16,10 +16,12 @@ once-core = { workspace = true, features = ["remote-microsandbox"] }
 once-frontend.workspace = true
 
 anyhow.workspace = true
+axum.workspace = true
 blake3.workspace = true
 usage.workspace = true
 console.workspace = true
 glob.workspace = true
+futures.workspace = true
 notify.workspace = true
 reqwest.workspace = true
 serde.workspace = true

@@ -6,10 +6,10 @@ use std::time::Duration;
 
 use once_cas::{ActionResult, CacheProvider, Digest};
 use tokio::io::AsyncRead;
-use tokio::process::Command;
+use tokio::process::{ChildStderr, ChildStdout, Command};
 use tracing::debug;
 
-use crate::stream::{self, Destination};
+use crate::stream::{self, ActionOutputObserver, Destination};
 use crate::{
     resolve_execution_argv, resolve_execution_env, Error, NetworkPolicy, Result, WorkspacePath,
 };
@@ -43,13 +43,18 @@ pub(crate) struct Invocation<'a> {
 }
 
 /// How a child's stdout and stderr are consumed.
-#[derive(Clone, Copy, Debug)]
-enum Capture {
+#[derive(Clone, Copy)]
+enum Capture<'a> {
     /// Drain each pipe into the CAS and nowhere else.
     Cached,
     /// Mirror each pipe to this process's own stdout/stderr while
     /// capturing it into the CAS.
     Streaming,
+    /// Report each chunk to a caller while retaining it in the CAS.
+    Observed {
+        stream_to_parent: bool,
+        observer: &'a dyn ActionOutputObserver,
+    },
 }
 
 fn open_redirect_file(path: &WorkspacePath, workspace_root: &Path) -> Result<std::fs::File> {
@@ -124,6 +129,28 @@ async fn capture_stream_streaming<R: AsyncRead + Unpin>(
     }
 }
 
+async fn capture_stream_observed<R: AsyncRead + Unpin>(
+    pipe: Option<R>,
+    destination: Destination,
+    cache: &CacheProvider,
+    stream_to_parent: bool,
+    observer: &dyn ActionOutputObserver,
+) -> Result<Option<Digest>> {
+    match pipe {
+        Some(pipe) => Ok(Some(
+            stream::to_cache_with_observer(
+                pipe,
+                destination,
+                cache,
+                stream_to_parent,
+                Some(observer),
+            )
+            .await?,
+        )),
+        None => Ok(None),
+    }
+}
+
 pub(crate) async fn execute_command(
     invocation: Invocation<'_>,
     workspace_root: &Path,
@@ -152,6 +179,62 @@ pub(crate) async fn execute_command_streaming(
     .await
 }
 
+pub(crate) async fn execute_command_observed(
+    invocation: Invocation<'_>,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+    stream_to_parent: bool,
+    observer: &dyn ActionOutputObserver,
+) -> Result<ActionResult> {
+    Box::pin(spawn_and_capture(
+        invocation,
+        workspace_root,
+        cache,
+        Capture::Observed {
+            stream_to_parent,
+            observer,
+        },
+    ))
+    .await
+}
+
+async fn capture_pipes(
+    capture: Capture<'_>,
+    cache: &CacheProvider,
+    stdout_pipe: Option<ChildStdout>,
+    stderr_pipe: Option<ChildStderr>,
+) -> Result<(Option<Digest>, Option<Digest>)> {
+    match capture {
+        Capture::Cached => tokio::try_join!(
+            capture_stream(cache, stdout_pipe),
+            capture_stream(cache, stderr_pipe)
+        ),
+        Capture::Streaming => tokio::try_join!(
+            capture_stream_streaming(stdout_pipe, Destination::Stdout, cache),
+            capture_stream_streaming(stderr_pipe, Destination::Stderr, cache)
+        ),
+        Capture::Observed {
+            stream_to_parent,
+            observer,
+        } => tokio::try_join!(
+            capture_stream_observed(
+                stdout_pipe,
+                Destination::Stdout,
+                cache,
+                stream_to_parent,
+                observer
+            ),
+            capture_stream_observed(
+                stderr_pipe,
+                Destination::Stderr,
+                cache,
+                stream_to_parent,
+                observer
+            )
+        ),
+    }
+}
+
 /// Spawn one child under the workspace and collect its result.
 ///
 /// The cached and streaming paths differ only in how the two pipes are
@@ -161,7 +244,7 @@ async fn spawn_and_capture(
     invocation: Invocation<'_>,
     workspace_root: &Path,
     cache: &CacheProvider,
-    capture: Capture,
+    capture: Capture<'_>,
 ) -> Result<ActionResult> {
     let Invocation {
         argv,
@@ -211,7 +294,6 @@ async fn spawn_and_capture(
         env_count = env.len(),
         cwd = %command_cwd.display(),
         timeout_ms,
-        ?capture,
         "spawning local command"
     );
 
@@ -223,16 +305,8 @@ async fn spawn_and_capture(
     let stderr_pipe = child.stderr.take();
 
     let work = Box::pin(async {
-        let (stdout, stderr) = match capture {
-            Capture::Cached => tokio::try_join!(
-                capture_stream(cache, stdout_pipe),
-                capture_stream(cache, stderr_pipe)
-            )?,
-            Capture::Streaming => tokio::try_join!(
-                capture_stream_streaming(stdout_pipe, Destination::Stdout, cache),
-                capture_stream_streaming(stderr_pipe, Destination::Stderr, cache)
-            )?,
-        };
+        let (stdout, stderr) =
+            Box::pin(capture_pipes(capture, cache, stdout_pipe, stderr_pipe)).await?;
         let status = child.wait().await.map_err(|source| Error::Wait {
             program: program.clone(),
             source,

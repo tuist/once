@@ -92,6 +92,7 @@ async fn run_command(
             target,
             sandbox,
             config,
+            ui,
         } => {
             let resolved = commands::graph::resolve_invocation_configuration(workspace, &config)?;
             dispatch_build(
@@ -102,6 +103,7 @@ async fn run_command(
                 sandbox,
                 resource_limits,
                 resolved,
+                ui,
             )
             .await
         }
@@ -195,6 +197,7 @@ async fn run_command(
             target,
             sandbox,
             config,
+            ui,
             jobs,
             all,
             changed_paths,
@@ -210,6 +213,7 @@ async fn run_command(
                     output,
                     target,
                     sandbox,
+                    ui,
                     jobs,
                     all,
                     changed_paths,
@@ -296,6 +300,7 @@ async fn dispatch_build(
     sandbox: SandboxMode,
     resource_limits: &ResourceLimits,
     resolved: commands::graph::ResolvedConfiguration,
+    ui: bool,
 ) -> Result<ExitCode> {
     let target = resolve_required_target(workspace, target)?;
     let cache = crate::cache_provider::resolve(workspace, xdg)?;
@@ -307,6 +312,7 @@ async fn dispatch_build(
         sandbox,
         resource_limits.clone(),
         &resolved,
+        ui,
     ))
     .await
 }
@@ -341,6 +347,7 @@ struct TestDispatchArgs {
     output: Output,
     target: Option<String>,
     sandbox: SandboxMode,
+    ui: bool,
     jobs: Option<usize>,
     all: bool,
     changed_paths: Vec<String>,
@@ -365,6 +372,7 @@ async fn dispatch_test(workspace: &Path, xdg: &Xdg, args: TestDispatchArgs) -> R
             args.test_batch_id.as_deref(),
             args.resource_limits,
             &args.resolved,
+            false,
         ))
         .await;
     }
@@ -380,8 +388,14 @@ async fn dispatch_test(workspace: &Path, xdg: &Xdg, args: TestDispatchArgs) -> R
             args.sandbox,
             args.resource_limits,
             &args.resolved,
+            args.ui,
         ))
         .await;
+    }
+    if args.ui {
+        anyhow::bail!(
+            "the Runs interface currently supports a single test target; omit --all, --changed-path, --jobs, and --test-unit"
+        );
     }
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
     let plan = match args.target {

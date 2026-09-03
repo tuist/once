@@ -1708,7 +1708,8 @@ def _xcode_swift_package_target_headers(package_path, target):
 
 def _xcode_swift_package_target_modulemap(package_path, target):
     target_path = _xcode_swift_package_target_path(target)
-    public_headers_path = _xcode_join(package_path + "/" + target_path, target.get("publicHeadersPath") or "include")
+    root = package_path + "/" if package_path else ""
+    public_headers_path = _xcode_join(root + target_path, target.get("publicHeadersPath") or "include")
     candidate = public_headers_path + "/module.modulemap"
     return candidate if host_file_exists(_xcode_abs(candidate)) else ""
 

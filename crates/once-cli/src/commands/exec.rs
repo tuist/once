@@ -50,6 +50,10 @@ struct ExecTrailer<'a> {
 /// Inputs to [`exec`], grouped so the function signature stays
 /// readable as the verb gains options. Owned types: the call site
 /// builds these from the command-line parser and hands them over.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the command-line flags model independent operation settings"
+)]
 pub struct ExecArgs {
     pub sandbox: SandboxMode,
     pub script: bool,

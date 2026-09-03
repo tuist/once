@@ -3,6 +3,21 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::{Error, Result};
 
+/// The stream that produced a chunk of action output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActionOutputStream {
+    Stdout,
+    Stderr,
+}
+
+/// Receives output as an action produces it.
+///
+/// Observers are called from the task draining an action's output pipe. They
+/// must return promptly and must not retain unbounded output in memory.
+pub trait ActionOutputObserver: Send + Sync {
+    fn observe(&self, stream: ActionOutputStream, bytes: &[u8]);
+}
+
 /// Bounded pipe size for connecting producers to CAS streaming writes.
 /// This keeps subprocess output memory bounded while letting the CAS
 /// reader apply backpressure.
@@ -14,14 +29,38 @@ pub(crate) enum Destination {
     Stderr,
 }
 
+impl From<Destination> for ActionOutputStream {
+    fn from(value: Destination) -> Self {
+        match value {
+            Destination::Stdout => Self::Stdout,
+            Destination::Stderr => Self::Stderr,
+        }
+    }
+}
+
 /// Forwards a stream to the CAS and optionally mirrors it to stdout or
 /// stderr. Parent write failures fail the whole operation; any scratch
 /// data left by a cancelled CAS write is ignored by future cache reads.
 pub(crate) async fn to_cache<R>(
+    reader: R,
+    destination: Destination,
+    cache: &CacheProvider,
+    stream_to_parent: bool,
+) -> Result<Digest>
+where
+    R: AsyncRead + Unpin,
+{
+    to_cache_with_observer(reader, destination, cache, stream_to_parent, None).await
+}
+
+/// Forwards a stream to the CAS, optionally mirrors it to the parent, and
+/// reports each received chunk to an observer.
+pub(crate) async fn to_cache_with_observer<R>(
     mut reader: R,
     destination: Destination,
     cache: &CacheProvider,
     stream_to_parent: bool,
+    observer: Option<&dyn ActionOutputObserver>,
 ) -> Result<Digest>
 where
     R: AsyncRead + Unpin,
@@ -38,6 +77,9 @@ where
                 break;
             }
             write_parent(&buf[..n], destination, stream_to_parent).await?;
+            if let Some(observer) = observer {
+                observer.observe(destination.into(), &buf[..n]);
+            }
             write_pipe(&mut pipe_writer, &buf[..n]).await?;
         }
         shutdown_pipe(&mut pipe_writer).await

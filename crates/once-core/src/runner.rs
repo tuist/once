@@ -11,6 +11,7 @@ use std::sync::Arc;
 use once_cas::{ActionResult, CacheProvider, Cas, Digest};
 use tracing::{debug, instrument, warn};
 
+use crate::stream::ActionOutputObserver;
 use crate::{execute, outputs, Action, ResourceLimits, ResourcePool, Result};
 
 /// Whether a result came from cache or fresh execution.
@@ -239,6 +240,28 @@ pub async fn run_uncached(
         cache,
         stream_to_parent,
         false,
+    ))
+    .await
+}
+
+/// Execute one action without the action cache and receive its output as it is
+/// produced. The observer is best suited to interfaces that report a running
+/// action, while the result continues to retain the complete streams in the
+/// configured cache.
+pub async fn run_uncached_observed(
+    action: &Action,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+    stream_to_parent: bool,
+    observer: &dyn ActionOutputObserver,
+) -> Result<ActionResult> {
+    Box::pin(execute::run_observed(
+        action,
+        workspace_root,
+        cache,
+        stream_to_parent,
+        false,
+        Some(observer),
     ))
     .await
 }

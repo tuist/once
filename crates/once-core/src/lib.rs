@@ -75,10 +75,11 @@ pub use plan::{BuiltPlan, NodeInfo, Plan, PlanError, PlanNode, PlanOutcome};
 pub use reproducibility::{verify_reproducible, ReproducibilityDifference, ReproducibilityReport};
 pub use resources::{ResourceLimits, ResourcePool, ResourceRequest};
 pub use runner::{
-    materialize_outputs, run, run_uncached, run_uncached_contract, run_with_cache,
-    run_with_cache_streaming, CacheState, Outcome, RunOpts, Runner,
+    materialize_outputs, run, run_uncached, run_uncached_contract, run_uncached_observed,
+    run_with_cache, run_with_cache_streaming, CacheState, Outcome, RunOpts, Runner,
 };
 pub use store::WorkspaceStore;
+pub use stream::{ActionOutputObserver, ActionOutputStream};
 pub use test_manifest::{TestManifest, TestSharding, TestUnit, TEST_MANIFEST_SCHEMA};
 pub use test_plan::{
     SelectedTest, TestBatch, TestPlan, TestSelectionPolicy, TestSelectionReport, TEST_PLAN_SCHEMA,

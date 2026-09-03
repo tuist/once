@@ -27,7 +27,7 @@ pub async fn run(
     };
     let resolved = crate::commands::graph::resolve_invocation_configuration(workspace, &[])?;
     let cache = crate::cache_provider::resolve(workspace, xdg)?;
-    crate::commands::graph::build(
+    Box::pin(crate::commands::graph::build(
         workspace,
         &cache,
         Output::new(output.format, output.quiet || invocation.quiet),
@@ -35,6 +35,7 @@ pub async fn run(
         SandboxMode::Off,
         resource_limits,
         &resolved,
-    )
+        false,
+    ))
     .await
 }

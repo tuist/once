@@ -33,7 +33,7 @@ pub async fn run(
     let cache = crate::cache_provider::resolve(workspace, xdg)?;
     match invocation.command {
         invocation::Command::Build => {
-            crate::commands::graph::build(
+            Box::pin(crate::commands::graph::build(
                 workspace,
                 &cache,
                 output,
@@ -41,11 +41,12 @@ pub async fn run(
                 SandboxMode::Off,
                 resource_limits,
                 &resolved,
-            )
+                false,
+            ))
             .await
         }
         invocation::Command::Test if package.test_targets.is_empty() => {
-            crate::commands::graph::build(
+            Box::pin(crate::commands::graph::build(
                 workspace,
                 &cache,
                 output,
@@ -53,7 +54,8 @@ pub async fn run(
                 SandboxMode::Off,
                 resource_limits,
                 &resolved,
-            )
+                false,
+            ))
             .await
         }
         invocation::Command::Test => {
@@ -66,6 +68,7 @@ pub async fn run(
                     SandboxMode::Off,
                     resource_limits.clone(),
                     &resolved,
+                    false,
                 )
                 .await?;
                 if status != ExitCode::SUCCESS {
