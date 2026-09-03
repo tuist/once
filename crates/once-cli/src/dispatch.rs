@@ -249,7 +249,7 @@ async fn run_command(
         Cmd::ChangeTracker => commands::change_tracker::serve(workspace, xdg).await,
         Cmd::Compatibility { .. }
         | Cmd::PackageCompatibility { .. }
-        | Cmd::CargoCompatibility { .. } => {
+        | Cmd::CrateCompatibility { .. } => {
             unreachable!("compatibility commands are routed before command dispatch")
         }
     }

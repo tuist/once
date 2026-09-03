@@ -561,7 +561,7 @@ pub enum Cmd {
     /// Cargo executable unchanged. Configure this as a mise command wrapper to
     /// make ordinary `cargo` commands use this compatibility surface.
     #[usage(name = "cargo")]
-    CargoCompatibility {
+    CrateCompatibility {
         /// Arguments supplied by the Cargo invocation.
         #[usage(trailing_var_arg = true, value_name = "ARG")]
         argv: Vec<String>,
@@ -665,9 +665,7 @@ impl Cmd {
             Self::PackageCompatibility { argv } => {
                 Some(CompatibilityInvocation::Swift(argv.clone()))
             }
-            Self::CargoCompatibility { argv } => {
-                Some(CompatibilityInvocation::Cargo(argv.clone()))
-            }
+            Self::CrateCompatibility { argv } => Some(CompatibilityInvocation::Cargo(argv.clone())),
             _ => None,
         }
     }
@@ -723,7 +721,7 @@ impl Cmd {
             }
             Self::Compatibility { .. } => vec!["xcodebuild"],
             Self::PackageCompatibility { .. } => vec!["swift"],
-            Self::CargoCompatibility { .. } => vec!["cargo"],
+            Self::CrateCompatibility { .. } => vec!["cargo"],
             Self::Runtime { cmd } => {
                 let mut path = vec!["runtime"];
                 if let Some(cmd) = cmd {
@@ -853,7 +851,7 @@ mod tests {
     fn compatibility_accepts_cargo_arguments_after_separator() {
         let cli = parse(&["once", "cargo", "--", "build"]);
 
-        let Some(Cmd::CargoCompatibility { argv }) = cli.command else {
+        let Some(Cmd::CrateCompatibility { argv }) = cli.command else {
             panic!("expected Cargo compatibility command");
         };
         assert_eq!(argv, ["build"]);

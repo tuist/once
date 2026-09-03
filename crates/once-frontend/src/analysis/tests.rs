@@ -1403,12 +1403,8 @@ fn glob_silently_drops_symlink_that_escapes_workspace() {
     std::fs::write(external.path().join("stolen.src"), "").unwrap();
     std::os::unix::fs::symlink(external.path().join("stolen.src"), pkg.join("escape.src")).unwrap();
 
-    let matches = expand_globs(
-        workspace.path(),
-        "apps/ios/AppCore",
-        &["*.src".to_string()],
-    )
-    .unwrap();
+    let matches =
+        expand_globs(workspace.path(), "apps/ios/AppCore", &["*.src".to_string()]).unwrap();
 
     assert_eq!(matches, vec!["apps/ios/AppCore/kept.src".to_string()]);
 }
