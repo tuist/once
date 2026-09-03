@@ -11,7 +11,7 @@ use crate::Xdg;
 
 use super::mise::ToolEnvError;
 
-pub const MANAGED_MISE_VERSION: &str = "2026.7.5";
+pub const MANAGED_MISE_VERSION: &str = "2026.9.1";
 
 static INSTALL_LOCK: Mutex<()> = Mutex::const_new(());
 
@@ -222,28 +222,28 @@ fn current_asset() -> Result<MiseAsset, ToolEnvError> {
 fn asset_for(operating_system: &str, architecture: &str) -> Option<MiseAsset> {
     match (operating_system, architecture) {
         ("linux", "x86_64") => Some(MiseAsset {
-            filename: "mise-v2026.7.5-linux-x64",
-            sha256: "5f7ab76afdf0780d12edeaa67e908094e9ccf7924cfe203e415c1cfb87bbf778",
+            filename: "mise-v2026.9.1-linux-x64",
+            sha256: "c98423c8470d6dc416d9f7036d0646d8ef5ae92ad9186907f8fcc84cbe7db4ea",
         }),
         ("linux", "aarch64") => Some(MiseAsset {
-            filename: "mise-v2026.7.5-linux-arm64",
-            sha256: "41fcf744050bfa27f9871e2151ac6f44b5ce2741424b3d5282b92becc71e6bc4",
+            filename: "mise-v2026.9.1-linux-arm64",
+            sha256: "0ef0a778eaa8599f3e90a8a0979c9fc3f79922cafb5fa6d39f366d974da33bba",
         }),
         ("macos", "x86_64") => Some(MiseAsset {
-            filename: "mise-v2026.7.5-macos-x64",
-            sha256: "62fe1fe9dbc32c6ce1388ee23df4a0862d3d7f40a6820b40c2f1cbab995dc1d4",
+            filename: "mise-v2026.9.1-macos-x64",
+            sha256: "0718a2aa14a96545a287f77a172d700247bb2d33016e5cf29fce1a05e45ac47a",
         }),
         ("macos", "aarch64") => Some(MiseAsset {
-            filename: "mise-v2026.7.5-macos-arm64",
-            sha256: "a456c65907e8334619d77fa152bdcf9023fddc0daa03d47fbe86d032dbf565b0",
+            filename: "mise-v2026.9.1-macos-arm64",
+            sha256: "3cfbe3295dba1a7e43bd02653517a8cc21135ba91f0635b45c98f1ebecc5513f",
         }),
         ("windows", "x86_64") => Some(MiseAsset {
-            filename: "mise-v2026.7.5-windows-x64.exe",
-            sha256: "1840f167ec8b161598e08b8ede769cf9954c0239b25bb7bdf0b326124b548c32",
+            filename: "mise-v2026.9.1-windows-x64.exe",
+            sha256: "86690787f22ccd55034039cb85bae27b5cba375aefbba5c09dd994487e0df554",
         }),
         ("windows", "aarch64") => Some(MiseAsset {
-            filename: "mise-v2026.7.5-windows-arm64.exe",
-            sha256: "27d3279d9d6a994d910561706f5ca99abcd8a03d38ad15b73ff0b5b3e148e4ea",
+            filename: "mise-v2026.9.1-windows-arm64.exe",
+            sha256: "3912a0fa43705992179867797f7058092ba560c97aa0c03202e4c66c58fdfb45",
         }),
         _ => None,
     }
