@@ -184,7 +184,10 @@ mod tests {
 
         assert_eq!(build_binary.target(&graph).as_deref(), Some("bz_kura"));
         assert_eq!(build_library.target(&graph).as_deref(), Some("bz_lib"));
-        assert_eq!(test_test.target(&graph).as_deref(), Some("bz_kura_lib_test"));
+        assert_eq!(
+            test_test.target(&graph).as_deref(),
+            Some("bz_kura_lib_test")
+        );
     }
 
     #[test]
