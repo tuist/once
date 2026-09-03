@@ -21,6 +21,7 @@ PRELUDE_SOURCES = [
     "react_native.star",
     "oci.star",
     "dockerfile.star",
+    "bazel.star",
 ]
 
 PRELUDE_DEPENDENCIES = {
@@ -147,5 +148,11 @@ PRELUDE_TARGET_KINDS = {
     ],
     "dockerfile.star": [
         "dockerfile_image",
+    ],
+    "bazel.star": [
+        "bazel_workspace",
+        "bazel_target",
+        "bazel_test",
+        "bazel_binary",
     ],
 }

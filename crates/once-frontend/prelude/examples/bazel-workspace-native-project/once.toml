@@ -1,0 +1,7 @@
+[[target]]
+name = "bazel"
+kind = "bazel_workspace"
+srcs = ["MODULE.bazel", "BUILD.bazel"]
+
+[target.attrs]
+resolver_inputs = ["MODULE.bazel", "BUILD.bazel"]

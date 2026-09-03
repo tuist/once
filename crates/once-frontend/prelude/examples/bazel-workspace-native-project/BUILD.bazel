@@ -1,0 +1,15 @@
+load(":rules.bzl", "example_binary", "example_test")
+
+genrule(
+    name = "hello",
+    outs = ["hello.txt"],
+    cmd = "echo hello > $@",
+)
+
+example_binary(
+    name = "hello_binary",
+)
+
+example_test(
+    name = "hello_test",
+)
