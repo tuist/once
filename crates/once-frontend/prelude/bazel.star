@@ -459,7 +459,10 @@ def _bazel_emit_symlink_tree_action(ctx, action, index, shadow_rel):
     # `sh -c` invocation, so the shell script goes to a file that the action
     # then runs.
     destination = action["outputs"][0]
-    script_path = shadow_rel + "/.once/bazel-tree-scripts/" + str(index) + ".sh"
+    # write_path expects a workspace-relative path, but the action's `cwd`
+    # is the shadow root, so the argv only carries the tail of the path.
+    script_tail = ".bazel-tree-scripts/" + str(index) + ".sh"
+    script_workspace_path = shadow_rel + "/" + script_tail
     lines = ["#!/bin/sh", "set -e", "mkdir -p " + _shell_quote(destination)]
     for input_path in action["inputs"]:
         entry = destination + "/" + input_path
@@ -468,9 +471,9 @@ def _bazel_emit_symlink_tree_action(ctx, action, index, shadow_rel):
             lines.append("mkdir -p " + _shell_quote(parent))
         target = _bazel_relative_target(input_path, entry)
         lines.append("ln -sfn " + _shell_quote(target) + " " + _shell_quote(entry))
-    write_path(script_path, "\n".join(lines) + "\n")
+    write_path(script_workspace_path, "\n".join(lines) + "\n")
     run_action(
-        argv = ["/bin/sh", script_path],
+        argv = ["/bin/sh", script_tail],
         inputs = [],
         outputs = [],
         cwd = shadow_rel,
