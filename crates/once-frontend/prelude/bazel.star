@@ -409,17 +409,35 @@ def _bazel_emit_spawn_action(ctx, action, index, shadow_rel):
         identifier = ctx["label"]["id"] + ":bazel-action-" + str(index) + ":" + action["mnemonic"],
     )
 
+def _bazel_relative_target(source, destination):
+    # `ln -s <target>` records `<target>` verbatim as the symlink content.
+    # `<target>` is then resolved relative to the symlink's own parent
+    # directory when it is dereferenced, so a shadow-relative source has to
+    # be rewritten to walk from the symlink's parent back to the shadow root
+    # and then down the source path.
+    parent = _parent_dir(destination)
+    depth = 0
+    if parent:
+        for segment in parent.split("/"):
+            if segment and segment != ".":
+                depth = depth + 1
+    prefix = "".join(["../" for _ in range(depth)])
+    return prefix + source
+
 def _bazel_emit_symlink_action(ctx, action, index, shadow_rel):
     # Bazel's Symlink and ExecutableSymlink actions materialise one output as
     # a symlink pointing at their sole input. `ln -sfn` reproduces both
     # variants (the -f -n combination replaces an existing entry and never
-    # dereferences a target directory).
+    # dereferences a target directory). The source is shadow-relative, so
+    # rewrite it to be relative to the symlink's own parent directory or
+    # the resulting symlink dangles when a consumer dereferences it.
     source = action["inputs"][0]
     destination = action["outputs"][0]
     parent = _parent_dir(destination)
     parent_dirs = [shadow_rel + "/" + parent] if parent else []
+    target = _bazel_relative_target(source, destination)
     run_action(
-        argv = ["/bin/sh", "-c", "ln -sfn " + _shell_quote(source) + " " + _shell_quote(destination)],
+        argv = ["/bin/sh", "-c", "ln -sfn " + _shell_quote(target) + " " + _shell_quote(destination)],
         inputs = [],
         outputs = [],
         cwd = shadow_rel,
