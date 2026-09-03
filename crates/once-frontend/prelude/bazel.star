@@ -244,8 +244,47 @@ def _bazel_parse_aquery(text):
             "inputs": inputs,
             "outputs": outputs,
             "env": env,
+            "file_contents": action.get("fileContents"),
         })
     return actions
+
+# Bazel mnemonics that Once can reproduce without invoking `bazel build`.
+# `spawn`  — action has argv in aquery output; Once shells it out directly.
+# `symlink` — action creates one output symlink pointing at its input.
+# `symlink_tree` — action creates a tree of output symlinks mirroring its inputs.
+# `write` — action writes a fixed file whose content aquery exposes via
+#           `--include_file_write_contents`.
+_BAZEL_SYMLINK_MNEMONICS = ["Symlink", "ExecutableSymlink"]
+_BAZEL_SYMLINK_TREE_MNEMONICS = ["SymlinkTree", "RunfilesTree"]
+_BAZEL_WRITE_MNEMONICS = ["FileWrite", "RepoMappingManifest", "SourceSymlinkManifest"]
+
+def _bazel_classify_action(action):
+    if action["arguments"]:
+        return "spawn"
+    mnemonic = action["mnemonic"]
+    if mnemonic in _BAZEL_SYMLINK_MNEMONICS and len(action["inputs"]) == 1 and len(action["outputs"]) == 1:
+        return "symlink"
+    if mnemonic in _BAZEL_SYMLINK_TREE_MNEMONICS and len(action["outputs"]) == 1:
+        return "symlink_tree"
+    if mnemonic in _BAZEL_WRITE_MNEMONICS and action["file_contents"] != None and len(action["outputs"]) == 1:
+        return "write"
+    if mnemonic == "TranslateBuildInfo" and len(action["outputs"]) == 1:
+        # Without `--stamp` the workspace status is empty, so Bazel's
+        # TranslateBuildInfo action writes a header with no key/value macros.
+        # Reproducing an empty file is correct for the unstamped default;
+        # workspaces that require stamped build info fall back to Bazel.
+        return "empty_write"
+    if mnemonic == "Middleman" and len(action["outputs"]) == 1:
+        # A middleman is Bazel's virtual artifact used to group inputs during
+        # scheduling. The artifact itself has no downstream reader, so an
+        # empty placeholder is enough to satisfy Once's action DAG.
+        return "empty_write"
+    if mnemonic == "FileWrite" and len(action["outputs"]) == 1:
+        # Some FileWrite actions have no content in aquery (for example, an
+        # empty `.dwp` debug package on Mach-O). Producing an empty file
+        # matches what Bazel would materialise for these.
+        return "empty_write"
+    return "unsupported"
 
 def _bazel_shadow_dir(ctx):
     # Workspace-relative shadow path; the run_action `cwd` field only accepts
@@ -295,10 +334,27 @@ def _bazel_link_workspace_sources(shadow_abs, workspace_abs):
         "done",
     ])
 
+def _bazel_bazel_flags():
+    # `-module_maps` disables the CppModuleMap actions that Bazel's C++ rules
+    # emit for every target: they generate a Clang modulemap file whose
+    # content Bazel builds in-process and does not expose in aquery output,
+    # so leaving them in forces every C++ target to fall back. Turning the
+    # feature off is safe unless a workspace opts in to Clang header modules
+    # explicitly, which is rare outside Chromium-style repos. Both the
+    # target and host configurations need the toggle for it to cover
+    # transitive `-sys`-style crates whose module maps are otherwise
+    # generated in the exec configuration.
+    return ["--features=-module_maps", "--host_features=-module_maps"]
+
 def _bazel_aquery(ctx, bazel, workspace_abs):
     label = ctx["attr"]["bazel_label"]
+    # `--include_file_write_contents` is what lets Once own the FileWrite,
+    # RepoMappingManifest, and SourceSymlinkManifest actions; without it the
+    # payload aquery would need to emit is redacted and every Bazel target
+    # with a runfiles tree falls back.
+    argv = [bazel, "aquery", "deps(" + label + ")", "--output=jsonproto", "--include_file_write_contents", "--noshow_progress"] + _bazel_bazel_flags()
     text = host_command(
-        [bazel, "aquery", "deps(" + label + ")", "--output=jsonproto", "--noshow_progress"],
+        argv,
         cwd = workspace_abs,
         env = _bazel_env(),
     )
@@ -306,12 +362,13 @@ def _bazel_aquery(ctx, bazel, workspace_abs):
 
 def _bazel_delegate_action(ctx, bazel, capability):
     label = ctx["attr"]["bazel_label"]
+    flags = _bazel_bazel_flags()
     if capability == "build":
-        argv = [bazel, "build", label, "--noshow_progress"]
+        argv = [bazel, "build", label, "--noshow_progress"] + flags
     elif capability == "test":
-        argv = [bazel, "test", label, "--noshow_progress", "--test_output=errors"]
+        argv = [bazel, "test", label, "--noshow_progress", "--test_output=errors"] + flags
     elif capability == "run":
-        argv = [bazel, "run", label, "--noshow_progress", "--"]
+        argv = [bazel, "run", label, "--noshow_progress"] + flags + ["--"]
     else:
         fail(ctx["label"]["id"] + ": bazel target does not support capability `" + capability + "`")
     run_action(
@@ -328,18 +385,171 @@ def _bazel_delegate_action(ctx, bazel, capability):
         identifier = ctx["label"]["id"] + ":bazel-delegate-" + capability,
     )
 
+def _bazel_emit_spawn_action(ctx, action, index, shadow_rel):
+    merged_env = _bazel_env()
+    for key, value in action["env"].items():
+        merged_env[key] = value
+    parent_dirs = _unique([
+        shadow_rel + "/" + _parent_dir(output)
+        for output in action["outputs"]
+        if _parent_dir(output)
+    ])
+    run_action(
+        argv = action["arguments"],
+        inputs = [],
+        outputs = [],
+        cwd = shadow_rel,
+        env = merged_env,
+        sandbox = "off",
+        network = "unrestricted",
+        cacheable = False,
+        inherit_parent_env = True,
+        create_dirs = parent_dirs,
+        toolchain_identity = "once.bazel.action.v1\x00" + action["mnemonic"],
+        identifier = ctx["label"]["id"] + ":bazel-action-" + str(index) + ":" + action["mnemonic"],
+    )
+
+def _bazel_emit_symlink_action(ctx, action, index, shadow_rel):
+    # Bazel's Symlink and ExecutableSymlink actions materialise one output as
+    # a symlink pointing at their sole input. `ln -sfn` reproduces both
+    # variants (the -f -n combination replaces an existing entry and never
+    # dereferences a target directory).
+    source = action["inputs"][0]
+    destination = action["outputs"][0]
+    parent = _parent_dir(destination)
+    parent_dirs = [shadow_rel + "/" + parent] if parent else []
+    run_action(
+        argv = ["/bin/sh", "-c", "ln -sfn " + _shell_quote(source) + " " + _shell_quote(destination)],
+        inputs = [],
+        outputs = [],
+        cwd = shadow_rel,
+        env = _bazel_env(),
+        sandbox = "off",
+        cacheable = False,
+        inherit_parent_env = True,
+        create_dirs = parent_dirs,
+        toolchain_identity = "once.bazel.symlink.v1",
+        identifier = ctx["label"]["id"] + ":bazel-action-" + str(index) + ":" + action["mnemonic"],
+    )
+
+def _bazel_emit_symlink_tree_action(ctx, action, index, shadow_rel):
+    # SymlinkTree / RunfilesTree materialise a directory whose entries mirror
+    # the action's declared inputs. Each input path becomes a symlink under
+    # the output directory, joined by the input's exec-root-relative path so
+    # the tree matches what Bazel would build.
+    destination = action["outputs"][0]
+    lines = ["mkdir -p " + _shell_quote(destination)]
+    for input_path in action["inputs"]:
+        parent = _parent_dir(input_path)
+        if parent:
+            lines.append("mkdir -p " + _shell_quote(destination + "/" + parent))
+        lines.append(
+            "ln -sfn " + _shell_quote("../" * (len([p for p in destination.split("/") if p]) + len([p for p in parent.split("/") if p])) + input_path) +
+            " " + _shell_quote(destination + "/" + input_path),
+        )
+    run_action(
+        argv = ["/bin/sh", "-c", " && ".join(lines)],
+        inputs = [],
+        outputs = [],
+        cwd = shadow_rel,
+        env = _bazel_env(),
+        sandbox = "off",
+        cacheable = False,
+        inherit_parent_env = True,
+        create_dirs = [shadow_rel + "/" + destination],
+        toolchain_identity = "once.bazel.symlink_tree.v1",
+        identifier = ctx["label"]["id"] + ":bazel-action-" + str(index) + ":" + action["mnemonic"],
+    )
+
+def _bazel_emit_write_action(ctx, action, index, shadow_rel):
+    # FileWrite, RepoMappingManifest, and SourceSymlinkManifest emit a fixed
+    # payload aquery exposes via `--include_file_write_contents`.
+    destination = action["outputs"][0]
+    write_path(shadow_rel + "/" + destination, action["file_contents"] or "")
+
+def _bazel_emit_empty_write_action(ctx, action, index, shadow_rel):
+    destination = action["outputs"][0]
+    write_path(shadow_rel + "/" + destination, "")
+
+def _bazel_topological_sort(actions):
+    # aquery emits actions in a depth-first order rooted at the requested
+    # label, which means the top-level target's link action appears before
+    # the compile actions that produce its inputs. Once executes declared
+    # actions in the order they arrive, so we need to hand it a
+    # producer-before-consumer sequence. Build the DAG from output→input
+    # dependencies and Kahn-sort so every producer runs before any consumer.
+    producer_of = {}
+    tree_producers = []
+    for index in range(len(actions)):
+        for output in actions[index]["outputs"]:
+            producer_of[output] = index
+            # A MaterializeIncludeDir (and other tree-artifact producers)
+            # emits a directory. Later actions consume individual files
+            # inside it whose paths are not themselves listed as outputs, so
+            # remember the tree prefix so a consumer can be linked to its
+            # producer by directory ancestry.
+            tree_producers.append((output + "/", index))
+    dependencies = []
+    dependents = []
+    remaining = []
+    for _ in range(len(actions)):
+        dependencies.append({})
+        dependents.append([])
+        remaining.append(0)
+    for index in range(len(actions)):
+        for input_path in actions[index]["inputs"]:
+            producer = producer_of.get(input_path)
+            if producer == None:
+                # Fall through to prefix match for tree-artifact inputs.
+                for tree_prefix, tree_producer in tree_producers:
+                    if input_path.startswith(tree_prefix) and tree_producer != index:
+                        producer = tree_producer
+                        break
+            if producer == None or producer == index:
+                continue
+            if not dependencies[index].get(producer):
+                dependencies[index][producer] = True
+                dependents[producer].append(index)
+                remaining[index] = remaining[index] + 1
+    order = []
+    ready = [index for index in range(len(actions)) if remaining[index] == 0]
+    # Kahn iteration: pop a ready node, emit it, decrement its dependents'
+    # counts. A cycle would leave some nodes with a non-zero count; fall
+    # back to the raw aquery order for those to preserve forward progress.
+    for _ in range(len(actions)):
+        if not ready:
+            break
+        index = ready[0]
+        ready = ready[1:]
+        order.append(index)
+        for dependent in dependents[index]:
+            remaining[dependent] = remaining[dependent] - 1
+            if remaining[dependent] == 0:
+                ready.append(dependent)
+    if len(order) < len(actions):
+        emitted = {index: True for index in order}
+        for index in range(len(actions)):
+            if not emitted.get(index):
+                order.append(index)
+    return order
+
 def _bazel_own_execution_or_fallback(ctx, bazel, workspace_abs, capability):
-    # aquery-based ownership: read the action graph and run each spawn action
-    # from the shadow exec root. If any action in the graph is Bazel-internal
-    # (Symlink, FileWrite, SymlinkTree, RunfilesTree, RepoMappingManifest,
-    # ...), fall back to `bazel <capability>` for the whole target and record
-    # the fallback so the user knows which mnemonics still need native
-    # equivalents. Each new mnemonic Once learns to run natively shrinks the
-    # fallback set.
+    # aquery-based ownership: read the action graph and run every action from
+    # the shadow exec root in a producer-before-consumer order. Spawn actions
+    # execute their aquery argv directly; Symlink, ExecutableSymlink,
+    # SymlinkTree, RunfilesTree, FileWrite, RepoMappingManifest,
+    # SourceSymlinkManifest, TranslateBuildInfo, and Middleman are
+    # reproduced from their aquery-declared inputs, outputs, and (for the
+    # write mnemonics) file contents. Anything else falls back to
+    # `bazel <capability>` for the whole target and is recorded on the
+    # provider so the gap is visible.
     actions = _bazel_aquery(ctx, bazel, workspace_abs)
     unsupported = {}
+    classes = []
     for action in actions:
-        if not action["arguments"]:
+        cls = _bazel_classify_action(action)
+        classes.append(cls)
+        if cls == "unsupported":
             key = action["mnemonic"] or "unknown"
             unsupported[key] = (unsupported.get(key) or 0) + 1
     if unsupported:
@@ -348,34 +558,22 @@ def _bazel_own_execution_or_fallback(ctx, bazel, workspace_abs, capability):
     prep = _bazel_prepare_shadow(ctx, bazel, workspace_abs)
     _bazel_link_workspace_sources(prep["shadow_abs"], workspace_abs)
     shadow_rel = _bazel_shadow_dir(ctx)
-    for index in range(len(actions)):
+    order = _bazel_topological_sort(actions)
+    for index in order:
         action = actions[index]
-        merged_env = _bazel_env()
-        for key, value in action["env"].items():
-            merged_env[key] = value
-        # Bazel pre-creates each output's parent directory before running an
-        # action; the action itself only writes the file, never the parent
-        # tree. Mirror that expectation with `create_dirs` so the wrapped
-        # spawn finds `bazel-out/<config>/bin/...` ready.
-        parent_dirs = _unique([
-            shadow_rel + "/" + _parent_dir(output)
-            for output in action["outputs"]
-            if _parent_dir(output)
-        ])
-        run_action(
-            argv = action["arguments"],
-            inputs = [],
-            outputs = [],
-            cwd = shadow_rel,
-            env = merged_env,
-            sandbox = "off",
-            network = "unrestricted",
-            cacheable = False,
-            inherit_parent_env = True,
-            create_dirs = parent_dirs,
-            toolchain_identity = "once.bazel.action.v1\x00" + action["mnemonic"],
-            identifier = ctx["label"]["id"] + ":bazel-action-" + str(index) + ":" + action["mnemonic"],
-        )
+        cls = classes[index]
+        if cls == "spawn":
+            _bazel_emit_spawn_action(ctx, action, index, shadow_rel)
+        elif cls == "symlink":
+            _bazel_emit_symlink_action(ctx, action, index, shadow_rel)
+        elif cls == "symlink_tree":
+            _bazel_emit_symlink_tree_action(ctx, action, index, shadow_rel)
+        elif cls == "write":
+            _bazel_emit_write_action(ctx, action, index, shadow_rel)
+        elif cls == "empty_write":
+            _bazel_emit_empty_write_action(ctx, action, index, shadow_rel)
+        else:
+            fail(ctx["label"]["id"] + ": internal classification error for action `" + action["mnemonic"] + "`")
     return {"mode": "own", "action_count": len(actions)}
 
 def _bazel_common_impl(ctx, providers):
