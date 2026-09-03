@@ -21,21 +21,12 @@ pub enum RunEvent {
     /// The run has started. Emitted once at the top of a run.
     RunStarted { at_epoch_ms: i64 },
     /// The run has ended. Emitted once as the terminal event.
-    RunCompleted {
-        at_epoch_ms: i64,
-        exit_status: i32,
-    },
+    RunCompleted { at_epoch_ms: i64, exit_status: i32 },
     /// A target has been accepted into the scheduler and is waiting
     /// for its dependencies or a worker.
-    TargetQueued {
-        at_epoch_ms: i64,
-        target_id: String,
-    },
+    TargetQueued { at_epoch_ms: i64, target_id: String },
     /// A target has begun executing.
-    TargetStarted {
-        at_epoch_ms: i64,
-        target_id: String,
-    },
+    TargetStarted { at_epoch_ms: i64, target_id: String },
     /// A target has transitioned into a new phase. See [`Phase`] for
     /// the exclusive ordered lifecycle.
     TargetPhase {

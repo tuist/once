@@ -4,6 +4,17 @@
 //! Once's per-test-case fire-points; other frameworks follow the
 //! same shape.
 //!
+//! The parser is currently plumbing awaiting a caller in the test
+//! command; the `dead_code` allow keeps the module compilable while
+//! that wiring lands.
+
+#![allow(
+    dead_code,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+//!
 //! Cargo's JSON stream is one object per line, of two kinds:
 //!
 //! - `{ "type": "suite", "event": "started", "test_count": N }`
@@ -202,7 +213,8 @@ mod tests {
 
     #[test]
     fn captures_failure_message_on_failed_case() {
-        let input = r#"{"type":"test","event":"failed","name":"m::t","stdout":"boom","exec_time":0.5}"#;
+        let input =
+            r#"{"type":"test","event":"failed","name":"m::t","stdout":"boom","exec_time":0.5}"#;
         let events = collect(input);
         match &events[0] {
             RunEvent::TestCaseCompleted {
@@ -239,8 +251,7 @@ mod tests {
 
     #[test]
     fn failed_suite_summary_is_still_a_completed_event() {
-        let input =
-            r#"{"type":"suite","event":"failed","passed":3,"failed":2,"ignored":1}"#;
+        let input = r#"{"type":"suite","event":"failed","passed":3,"failed":2,"ignored":1}"#;
         let events = collect(input);
         match &events[0] {
             RunEvent::TestSuiteCompleted { totals, .. } => {

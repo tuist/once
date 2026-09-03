@@ -148,19 +148,16 @@ impl EventSession {
         // Compose canonical shape: all gap_advances strictly before seq_from.
         // seq_from is either the first snapshot event's seq or, for a
         // control-only batch, the client's assertion of the next event seq.
-        let (seq_from, events): (u64, Vec<RunEvent>) = if !snapshot.is_empty() {
-            let mut evs = Vec::with_capacity(snapshot.len().min(self.limits.max_events_per_batch));
-            for pending in snapshot
-                .into_iter()
-                .take(self.limits.max_events_per_batch)
-            {
-                evs.push(pending.event);
-            }
-            (evs[0].seq, evs)
-        } else {
+        let (seq_from, events): (u64, Vec<RunEvent>) = if snapshot.is_empty() {
             // Control-only batch: seq_from asserts the client's expected
             // next event seq. That is `next_seq` (nothing minted yet).
             (self.next_seq, Vec::new())
+        } else {
+            let mut evs = Vec::with_capacity(snapshot.len().min(self.limits.max_events_per_batch));
+            for pending in snapshot.into_iter().take(self.limits.max_events_per_batch) {
+                evs.push(pending.event);
+            }
+            (evs[0].seq, evs)
         };
 
         Some(RunEventBatch {
@@ -194,14 +191,15 @@ impl EventSession {
                 }
                 AckAction::StaleDropped
             }
-            LocalDisposition::RejectedInvalid => AckAction::InvalidRejected,
+            LocalDisposition::RejectedInvalid | LocalDisposition::Unspecified => {
+                AckAction::InvalidRejected
+            }
             LocalDisposition::NeedsResync => AckAction::NeedsResync,
-            LocalDisposition::Unspecified => AckAction::InvalidRejected,
         }
     }
 
     /// Apply a `RunEventAck` (from a `GetRunAck` reconnect probe).
-    /// The client aligns its ring and next_seq mirror with the
+    /// The client aligns its ring and `next_seq` mirror with the
     /// server's durable state before sending anything else.
     pub fn handle_get_run_ack(&mut self, ack: &RunEventAck) {
         assert_eq!(ack.run_id, self.run_id, "ack for wrong run_id");
@@ -302,7 +300,11 @@ mod tests {
         s.push_ordinary(started(), 1, 0);
         s.push_ordinary(heartbeat(), 2, 0);
         let batch = s.next_batch().unwrap();
-        let action = s.handle_ack(&ack("r1", batch.events.last().unwrap().seq, AckDisposition::Accepted));
+        let action = s.handle_ack(&ack(
+            "r1",
+            batch.events.last().unwrap().seq,
+            AckDisposition::Accepted,
+        ));
         assert!(matches!(action, AckAction::Continue { .. }));
         assert!(s.is_drained());
         assert_eq!(s.server_expected_next_seq(), 3);

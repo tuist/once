@@ -153,7 +153,7 @@ async fn start_server() -> (Channel, Arc<Mutex<RecordedRun>>) {
             .unwrap();
     });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let channel = Channel::builder(Uri::try_from(format!("http://{}", addr)).unwrap())
+    let channel = Channel::builder(Uri::try_from(format!("http://{addr}")).unwrap())
         .connect()
         .await
         .unwrap();
@@ -173,10 +173,12 @@ async fn capabilities_roundtrip() {
 async fn delivers_run_lifecycle_and_target_events() {
     let (channel, recorded) = start_server().await;
 
-    let mut config = TransportConfig::default();
-    config.run_id = "e2e-run-real".into();
-    config.batch_flush = std::time::Duration::from_millis(15);
-    config.final_drain = std::time::Duration::from_secs(2);
+    let config = TransportConfig {
+        run_id: "e2e-run-real".into(),
+        batch_flush: std::time::Duration::from_millis(15),
+        final_drain: std::time::Duration::from_secs(2),
+        ..TransportConfig::default()
+    };
     let client = EventClient::new(channel, config);
 
     let bus = RunEventBus::new(64);

@@ -64,8 +64,10 @@ pub async fn try_start(
 
     let bus_rx: broadcast::Receiver<once_core::RunEvent> = ui_server.subscribe_events();
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let mut config = TransportConfig::default();
-    config.run_id = run_id;
+    let config = TransportConfig {
+        run_id,
+        ..TransportConfig::default()
+    };
     let client = EventClient::new(channel, config);
     let handle = tokio::spawn(async move { client.run_until_shutdown(bus_rx, shutdown_rx).await });
     Ok(Some(EventClientHandle {

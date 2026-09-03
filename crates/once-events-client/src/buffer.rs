@@ -24,7 +24,10 @@ pub enum RingPushOutcome {
     Accepted,
     /// Buffer was full; the caller must add the dropped sequence
     /// range to its loss intervals.
-    OverflowDropped { first: u64, last: u64 },
+    OverflowDropped {
+        first: u64,
+        last: u64,
+    },
 }
 
 /// Bounded ring holding unacknowledged non-terminal events plus a
@@ -173,7 +176,7 @@ mod tests {
                 assert_eq!(first, 1);
                 assert_eq!(last, 1);
             }
-            other => panic!("expected overflow, got {other:?}"),
+            other @ RingPushOutcome::Accepted => panic!("expected overflow, got {other:?}"),
         }
         assert_eq!(ring.ordinary_len(), 2);
         let seqs: Vec<u64> = ring.snapshot().iter().map(|e| e.seq).collect();
@@ -192,7 +195,7 @@ mod tests {
                     assert!(first <= last);
                     assert!(first >= 1);
                 }
-                other => panic!("expected overflow, got {other:?}"),
+                other @ RingPushOutcome::Accepted => panic!("expected overflow, got {other:?}"),
             }
         }
         let seqs: Vec<u64> = ring.snapshot().iter().map(|e| e.seq).collect();

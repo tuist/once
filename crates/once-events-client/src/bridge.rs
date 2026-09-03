@@ -12,11 +12,11 @@ use once_core::{
 };
 
 use crate::proto::{
-    log_scope::Scope as LogScopeVariant, run_event::Payload, LogChunk, LogScope, Phase as WirePhase,
-    RunCompleted, RunHeartbeat, RunResult as WireRunResult, RunStarted, Stream as WireStream,
-    TargetCompleted, TargetPhase, TargetQueued, TargetResult as WireResult, TargetStarted,
-    TestCaseCompleted, TestCaseResult as WireCaseResult, TestCaseStarted, TestFailure,
-    TestSuiteCompleted, TestSuiteStarted, TestTotals as WireTestTotals,
+    log_scope::Scope as LogScopeVariant, run_event::Payload, LogChunk, LogScope,
+    Phase as WirePhase, RunCompleted, RunHeartbeat, RunResult as WireRunResult, RunStarted,
+    Stream as WireStream, TargetCompleted, TargetPhase, TargetQueued, TargetResult as WireResult,
+    TargetStarted, TestCaseCompleted, TestCaseResult as WireCaseResult, TestCaseStarted,
+    TestFailure, TestSuiteCompleted, TestSuiteStarted, TestTotals as WireTestTotals,
 };
 
 /// Result of translating one internal event.
@@ -41,6 +41,7 @@ pub enum Translated {
 
 /// Translate one internal event into a wire payload plus a
 /// classification the caller uses to route it through the session.
+#[allow(clippy::too_many_lines)]
 pub fn translate(event: CoreEvent, mono_ns: i64) -> Translated {
     match event {
         CoreEvent::RunStarted { at_epoch_ms } => Translated::Ordinary {

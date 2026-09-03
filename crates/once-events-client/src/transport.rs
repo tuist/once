@@ -26,9 +26,7 @@ use tonic::{Request, Streaming};
 
 use crate::bridge::{translate, Translated};
 use crate::proto::run_event_service_client::RunEventServiceClient;
-use crate::proto::{
-    BatchAck, GetServerCapabilitiesRequest, RunEventBatch, ServerCapabilities,
-};
+use crate::proto::{BatchAck, GetServerCapabilitiesRequest, RunEventBatch, ServerCapabilities};
 use crate::session::{AckAction, EventSession, SessionLimits};
 
 /// Configuration for a live transport.
@@ -116,10 +114,7 @@ impl EventClient {
     /// via `bus.subscribe()` before publishing anything, so no
     /// events are missed to a subscribe-after-publish race. See
     /// [`Self::run_with_bus`] for the convenience wrapper.
-    pub async fn run(
-        self,
-        bus_rx: broadcast::Receiver<CoreEvent>,
-    ) -> Result<u64, TransportError> {
+    pub async fn run(self, bus_rx: broadcast::Receiver<CoreEvent>) -> Result<u64, TransportError> {
         self.run_impl(bus_rx, None).await
     }
 
@@ -188,7 +183,7 @@ impl EventClient {
                             run_id: session.run_id().to_string(),
                         }))
                         .await
-                        .map(|r| r.into_inner())
+                        .map(tonic::Response::into_inner)
                     {
                         session.handle_get_run_ack(&ack);
                     }
@@ -218,9 +213,8 @@ impl EventClient {
                 session_should_flush(session, last_flush, self.config.batch_flush);
             if let Some(mut rx) = shutdown.take() {
                 match rx.try_recv() {
-                    Ok(()) => bus_open = false,
                     Err(oneshot::error::TryRecvError::Empty) => shutdown = Some(rx),
-                    Err(oneshot::error::TryRecvError::Closed) => bus_open = false,
+                    Ok(()) | Err(oneshot::error::TryRecvError::Closed) => bus_open = false,
                 }
             }
             tokio::select! {
@@ -263,7 +257,7 @@ impl EventClient {
                         bus_open = false;
                     }
                 },
-                _ = sleep_until_or_immediate(should_flush_now, self.config.batch_flush) => {
+                () = sleep_until_or_immediate(should_flush_now, self.config.batch_flush) => {
                     if let Some(batch) = session.next_batch() {
                         if batch_tx.send(batch).await.is_err() {
                             return Err(TransportError::AckStreamClosed);
@@ -275,7 +269,7 @@ impl EventClient {
                         let deadline = self.config.final_drain;
                         return await_final_ack(&mut ack_stream, session, deadline)
                             .await
-                            .map(|_| last_expected_next_seq);
+                            .map(|()| last_expected_next_seq);
                     }
                 }
             }
@@ -320,13 +314,10 @@ impl EventClient {
             // signal is treated as "no more events, drain."
             if let Some(mut rx) = shutdown.take() {
                 match rx.try_recv() {
-                    Ok(()) => {
-                        bus_open = false;
-                    }
                     Err(oneshot::error::TryRecvError::Empty) => {
                         shutdown = Some(rx);
                     }
-                    Err(oneshot::error::TryRecvError::Closed) => {
+                    Ok(()) | Err(oneshot::error::TryRecvError::Closed) => {
                         bus_open = false;
                     }
                 }
@@ -381,7 +372,7 @@ impl EventClient {
                     }
                 },
                 // Periodic flush.
-                _ = sleep_until_or_immediate(should_flush_now, self.config.batch_flush) => {
+                () = sleep_until_or_immediate(should_flush_now, self.config.batch_flush) => {
                     if let Some(batch) = session.next_batch() {
                         tracing::trace!(
                             batch_id = %batch.batch_id,
@@ -400,7 +391,7 @@ impl EventClient {
                         // Await terminal ack up to the drain deadline.
                         let deadline = self.config.final_drain;
                         return await_final_ack(&mut ack_stream, &mut session, deadline).await
-                            .map(|_| last_expected_next_seq);
+                            .map(|()| last_expected_next_seq);
                     }
                 }
             }
@@ -429,11 +420,7 @@ fn enqueue_event(session: &mut EventSession, event: CoreEvent) {
     }
 }
 
-fn session_should_flush(
-    session: &EventSession,
-    last_flush: Instant,
-    period: Duration,
-) -> bool {
+fn session_should_flush(session: &EventSession, last_flush: Instant, period: Duration) -> bool {
     // Immediate flush if we have any pending state and either the
     // period has elapsed or the session is finalized (drain hurry).
     let has_pending = session.next_seq() > 1 && !session.is_drained();

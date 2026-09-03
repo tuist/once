@@ -21,6 +21,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [build-dependencies]
+protoc-bin-vendored = "3"
 tonic-build = { version = "0.14", default-features = false }
 tonic-prost-build = "0.14"
 
