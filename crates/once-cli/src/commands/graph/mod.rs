@@ -117,7 +117,7 @@ pub async fn build(
     // Optional live event ingest to a compatible ingest server. Enabled
     // by ONCE_EVENTS_ENDPOINT; failures are logged and never abort the
     // run. Subscribing before publisher.started() ensures RunStarted
-    // is captured. Gated behind the `events-ingest` cargo feature so
+    // is captured. Gated behind the `events-ingest` build feature so
     // that self-hosted graph builds of the CLI do not require the
     // once-events-client crate.
     #[cfg(feature = "events-ingest")]
