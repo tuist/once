@@ -26,11 +26,17 @@ when only a subset of the graph should reach Once. The `exclude_packages`
 attribute drops named package prefixes from the default query without
 rewriting it.
 
-Each generated `bazel_target` records the original Bazel label on the
-`bazel_label` attribute and its rule class on `bazel_rule_kind`. The graph
-node name folds `/` and `:` into `_` and adds a `bz_` prefix so the label
-survives Once's target-name grammar; the `once native show bazel` command
-prints the mapping.
+Each rule becomes one of three target kinds so the graph advertises only
+the capabilities the underlying rule actually supports: `_test` rules become
+[`bazel_test`](/reference/prelude/bazel_test) (build + test), `_binary`
+rules become [`bazel_binary`](/reference/prelude/bazel_binary) (build + run),
+and everything else becomes [`bazel_target`](/reference/prelude/bazel_target)
+(build only). Every generated target records the original Bazel label on
+`bazel_label` and its rule class on `bazel_rule_kind`. The graph node name
+folds `/` and `:` into `_` and adds a `bz_` prefix so the label survives
+Once's target-name grammar; two Bazel labels that would collide in that
+mapping are reported as a resolver error instead of silently deduplicated.
+The `once native show bazel` command prints the label-to-name mapping.
 
 ## Attributes
 

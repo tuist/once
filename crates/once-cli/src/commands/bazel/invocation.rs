@@ -51,7 +51,7 @@ impl Invocation {
         let matches = graph
             .iter()
             .filter(|target| {
-                target.kind == "bazel_target"
+                is_bazel_target_kind(&target.kind)
                     && target
                         .attrs
                         .get("bazel_label")
@@ -66,6 +66,10 @@ impl Invocation {
         };
         Some(target.clone())
     }
+}
+
+fn is_bazel_target_kind(kind: &str) -> bool {
+    matches!(kind, "bazel_target" | "bazel_test" | "bazel_binary")
 }
 
 fn required_capability(target: &GraphTarget, command: Command) -> bool {
@@ -165,25 +169,30 @@ mod tests {
     #[test]
     fn resolves_the_bazel_target_that_carries_the_matching_label() {
         let graph = vec![
-            target("bz_kura", "bazel_target", "//:kura", &["build"]),
+            target("bz_kura", "bazel_binary", "//:kura", &["build", "run"]),
             target(
                 "bz_kura_lib_test",
-                "bazel_target",
+                "bazel_test",
                 "//:kura_lib_test",
                 &["build", "test"],
             ),
+            target("bz_lib", "bazel_target", "//:lib", &["build"]),
         ];
-        let build = Invocation::parse(&arguments(&["build", "//:kura"])).unwrap();
-        let test = Invocation::parse(&arguments(&["test", "//:kura_lib_test"])).unwrap();
+        let build_binary = Invocation::parse(&arguments(&["build", "//:kura"])).unwrap();
+        let build_library = Invocation::parse(&arguments(&["build", "//:lib"])).unwrap();
+        let test_test = Invocation::parse(&arguments(&["test", "//:kura_lib_test"])).unwrap();
 
-        assert_eq!(build.target(&graph).as_deref(), Some("bz_kura"));
-        assert_eq!(test.target(&graph).as_deref(), Some("bz_kura_lib_test"));
+        assert_eq!(build_binary.target(&graph).as_deref(), Some("bz_kura"));
+        assert_eq!(build_library.target(&graph).as_deref(), Some("bz_lib"));
+        assert_eq!(test_test.target(&graph).as_deref(), Some("bz_kura_lib_test"));
     }
 
     #[test]
     fn returns_no_target_when_the_capability_is_missing() {
-        let graph = vec![target("bz_kura", "bazel_target", "//:kura", &["build"])];
-        let test = Invocation::parse(&arguments(&["test", "//:kura"])).unwrap();
+        // A non-test rule advertises only `build`, so `bazel test` on it
+        // falls through to the system `bazel` unchanged.
+        let graph = vec![target("bz_lib", "bazel_target", "//:lib", &["build"])];
+        let test = Invocation::parse(&arguments(&["test", "//:lib"])).unwrap();
 
         assert_eq!(test.target(&graph), None);
     }

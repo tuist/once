@@ -147,5 +147,7 @@ PRELUDE_TARGET_KINDS = {
     "bazel.star": [
         "bazel_workspace",
         "bazel_target",
+        "bazel_test",
+        "bazel_binary",
     ],
 }

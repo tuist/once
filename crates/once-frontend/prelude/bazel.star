@@ -88,15 +88,15 @@ def _bazel_query_expression(ctx):
         expression = expression + " except (//" + pattern + "/... union //" + pattern + ":*)"
     return expression
 
-def _bazel_capabilities_for(rule_kind):
-    # Every rule is buildable. Rules whose name ends in `_test` or that are
-    # tagged `test` produce test results; rules ending in `_binary` are runnable.
-    caps = ["build"]
+def _bazel_kind_for_rule(rule_kind):
+    # Every rule is buildable. Only rules whose Bazel class ends in `_test`
+    # get the `test` capability, and only `_binary` rules get `run`, so each
+    # instance advertises exactly what Bazel will accept.
     if _ends_with(rule_kind, "_test"):
-        caps.append("test")
+        return "bazel_test"
     if _ends_with(rule_kind, "_binary"):
-        caps.append("run")
-    return caps
+        return "bazel_binary"
+    return "bazel_target"
 
 def _bazel_workspace_resolver(ctx):
     bazel = _bazel_resolve_executable(ctx)
@@ -114,27 +114,30 @@ def _bazel_workspace_resolver(ctx):
     seen = {}
     for entry in rules:
         name = _bazel_target_name(entry["label"])
-        if seen.get(name):
-            continue
-        seen[name] = True
-        caps = _bazel_capabilities_for(entry["kind"])
+        prior = seen.get(name)
+        if prior != None:
+            # Two distinct Bazel labels sanitise to the same Once name. Fail
+            # loudly rather than silently drop one so a user with such a
+            # workspace sees the conflict and can rename or exclude.
+            fail(ctx["label"]["id"] + ": Bazel labels `" + prior + "` and `" + entry["label"] + "` both map to Once target name `" + name + "`. Use `exclude_packages` on the seed to drop one, or rename the Bazel target.")
+        seen[name] = entry["label"]
+        kind = _bazel_kind_for_rule(entry["kind"])
         targets.append({
             "name": name,
-            "kind": "bazel_target",
+            "kind": kind,
             "deps": [],
             "srcs": [],
             "attrs": {
                 "bazel_label": entry["label"],
                 "bazel_rule_kind": entry["kind"],
                 "bazel": ctx["attr"].get("bazel") or "bazel",
-                "_bazel_capabilities": caps,
                 "_bazel_resolved": True,
             },
         })
-        # Every build-capable target is a root: users can build any of them
+        # Every buildable rule is a root: users can build any of them
         # directly. Tests remain reachable through the `test` capability but do
         # not become build roots automatically, matching cargo_workspace.
-        if "build" in caps and not _ends_with(entry["kind"], "_test"):
+        if kind != "bazel_test":
             roots.append(name)
     return {
         "targets": targets,
@@ -154,12 +157,6 @@ def _bazel_workspace_impl(ctx):
         "targets": ctx["deps"],
     }
 
-def _bazel_target_default_output(ctx, capability):
-    # Bazel manages its own output tree. Once still needs a declared file per
-    # capability so the action's success is observable and idempotent restarts
-    # can prove that the previous invocation completed.
-    return declare_output(capability + ".stamp")
-
 def _bazel_capability_argv(ctx, bazel, capability):
     label = ctx["attr"]["bazel_label"]
     if capability == "build":
@@ -168,26 +165,22 @@ def _bazel_capability_argv(ctx, bazel, capability):
         return [bazel, "test", label, "--noshow_progress", "--test_output=errors"]
     if capability == "run":
         return [bazel, "run", label, "--noshow_progress", "--"]
-    fail(ctx["label"]["id"] + ": bazel_target does not support capability `" + capability + "`")
+    fail(ctx["label"]["id"] + ": bazel target does not support capability `" + capability + "`")
 
-def _bazel_stamp_argv(stamp):
-    return ["/bin/sh", "-c", "printf 'ok\\n' > \"" + execution_path(stamp) + "\""]
-
-def _bazel_target_impl(ctx):
+def _bazel_common_impl(ctx, providers):
     if not ctx["attr"].get("_bazel_resolved"):
-        fail(ctx["label"]["id"] + ": bazel_target must be materialized by a bazel_workspace resolver")
+        fail(ctx["label"]["id"] + ": " + providers[0] + " must be materialized by a bazel_workspace resolver")
     capability = ctx["capability"]
     if capability == "metadata":
         return {
-            "bazel_target": True,
             "label_id": ctx["label"]["id"],
             "bazel_label": ctx["attr"]["bazel_label"],
             "bazel_rule_kind": ctx["attr"]["bazel_rule_kind"],
+            providers[0]: True,
         }
     bazel = _bazel_resolve_executable(ctx)
     workspace_dir = _bazel_workspace_dir(ctx)
     argv = _bazel_capability_argv(ctx, bazel, capability)
-    stamp = _bazel_target_default_output(ctx, capability)
     run_action(
         argv = argv,
         inputs = [],
@@ -201,33 +194,42 @@ def _bazel_target_impl(ctx):
         toolchain_identity = "once.bazel.v1\x00" + bazel,
         identifier = ctx["label"]["id"] + ":bazel-" + capability,
     )
-    # Record the successful invocation with a stamp so Once has an artifact to
-    # attribute to this capability, even though the real outputs stay under
-    # bazel-bin / bazel-out where Bazel manages them.
-    run_action(
-        argv = _bazel_stamp_argv(stamp),
-        inputs = [],
-        outputs = [stamp],
-        depends_on_prior_actions = True,
-        cacheable = False,
-        sandbox = "off",
-        toolchain_identity = "once.bazel.stamp.v1",
-        identifier = ctx["label"]["id"] + ":bazel-" + capability + "-stamp",
-    )
-    result = {
-        "bazel_target": True,
+    return {
         "label_id": ctx["label"]["id"],
         "bazel_label": ctx["attr"]["bazel_label"],
         "bazel_rule_kind": ctx["attr"]["bazel_rule_kind"],
-        "target_kind": "bazel_target",
-        "default_output": stamp,
+        providers[0]: True,
     }
-    if capability == "run":
+
+def _bazel_target_impl(ctx):
+    return _bazel_common_impl(ctx, ["bazel_target"])
+
+def _bazel_test_impl(ctx):
+    return _bazel_common_impl(ctx, ["bazel_test", "bazel_target"])
+
+def _bazel_binary_impl(ctx):
+    result = _bazel_common_impl(ctx, ["bazel_binary", "bazel_target"])
+    if ctx["capability"] == "run":
         result["once_executable"] = True
     return result
 
+_BAZEL_TARGET_ATTRS = [
+    attr("bazel_label", "string", required = True, docs = "Fully qualified Bazel label of the underlying rule, for example `//src:kura`.", configurable = False),
+    attr("bazel_rule_kind", "string", required = True, docs = "Bazel rule class reported by `bazel query --output=label_kind`, for example `rust_binary`.", configurable = False),
+    attr("bazel", "string", default = "\"bazel\"", docs = "Bazel executable name or workspace-relative executable path forwarded from bazel_workspace.", configurable = False),
+    attr("_bazel_resolved", "bool", default = "false", docs = "Resolver-owned marker preventing direct manifest authoring.", configurable = False),
+]
+
+_BAZEL_EXAMPLES = [
+    example(
+        "bazel-workspace-native-project",
+        name = "Bazel native integration seed",
+        use_when = "Use this when a Bazel workspace should expose its rules as Once targets while Bazel remains the executor.",
+    ),
+]
+
 bazel_workspace = target_kind(
-    docs = "Native Bazel workspace seed. Its resolver runs `bazel query` to enumerate every rule in the workspace and materializes each one as a bazel_target that delegates build, test, and run capabilities back to Bazel.",
+    docs = "Native Bazel workspace seed. Its resolver runs `bazel query` to enumerate every rule in the workspace and materializes each one as a bazel_target, bazel_test, or bazel_binary that forwards its capabilities to Bazel.",
     attrs = [
         attr("bazel", "string", default = "\"bazel\"", docs = "Bazel executable name or workspace-relative executable path. Defaults to `bazel`, which resolves through `bazelisk` when installed.", configurable = False),
         attr("query", "string", docs = "Bazel query expression used to enumerate rules. Defaults to `kind(\"rule\", //...)`.", configurable = False),
@@ -241,13 +243,7 @@ bazel_workspace = target_kind(
     providers = ["bazel_workspace"],
     capabilities = [capability("build", [])],
     tools = [_BAZEL_TOOL],
-    examples = [
-        example(
-            "bazel-workspace-native-project",
-            name = "Bazel native integration seed",
-            use_when = "Use this when a Bazel workspace should expose its rules as Once targets while Bazel remains the executor.",
-        ),
-    ],
+    examples = _BAZEL_EXAMPLES,
     source_references = [
         source_reference(
             "Bazel",
@@ -266,29 +262,33 @@ bazel_workspace = target_kind(
 )
 
 bazel_target = target_kind(
-    docs = "Resolver-generated Bazel rule materialized as a Once graph target. Build, test, and run capabilities shell out to Bazel; Once contributes graph enumeration and the invocation surface while Bazel owns compilation, caching, and outputs.",
-    attrs = [
-        attr("bazel_label", "string", required = True, docs = "Fully qualified Bazel label of the underlying rule, for example `//src:kura`.", configurable = False),
-        attr("bazel_rule_kind", "string", required = True, docs = "Bazel rule class reported by `bazel query --output=label_kind`, for example `rust_binary`.", configurable = False),
-        attr("bazel", "string", default = "\"bazel\"", docs = "Bazel executable name or workspace-relative executable path forwarded from bazel_workspace.", configurable = False),
-        attr("_bazel_capabilities", "list<string>", default = "[]", docs = "Resolver-owned capability list derived from the Bazel rule kind.", configurable = False),
-        attr("_bazel_resolved", "bool", default = "false", docs = "Resolver-owned marker preventing direct manifest authoring of bazel_target.", configurable = False),
-    ],
+    docs = "Resolver-generated Bazel rule materialized as a Once graph target. Exposes only the `build` capability; use bazel_test for test rules and bazel_binary for binary rules.",
+    attrs = _BAZEL_TARGET_ATTRS,
     providers = ["bazel_target"],
-    capabilities = [
-        capability("build", ["default"]),
-        capability("test", ["default"]),
-        capability("run", ["default"]),
-    ],
+    capabilities = [capability("build", [])],
     tools = [_BAZEL_TOOL],
-    examples = [
-        example(
-            "bazel-workspace-native-project",
-            name = "Bazel native integration seed",
-            use_when = "Use this when a Bazel workspace should expose its rules as Once targets while Bazel remains the executor.",
-        ),
-    ],
+    examples = _BAZEL_EXAMPLES,
     impl = _bazel_target_impl,
+)
+
+bazel_test = target_kind(
+    docs = "Resolver-generated Bazel test rule (rule class ending in `_test`) materialized as a Once graph target. Exposes `build` and `test` capabilities, both forwarded to Bazel.",
+    attrs = _BAZEL_TARGET_ATTRS,
+    providers = ["bazel_test", "bazel_target"],
+    capabilities = [capability("build", []), capability("test", [])],
+    tools = [_BAZEL_TOOL],
+    examples = _BAZEL_EXAMPLES,
+    impl = _bazel_test_impl,
+)
+
+bazel_binary = target_kind(
+    docs = "Resolver-generated Bazel binary rule (rule class ending in `_binary`) materialized as a Once graph target. Exposes `build` and `run` capabilities, both forwarded to Bazel.",
+    attrs = _BAZEL_TARGET_ATTRS,
+    providers = ["bazel_binary", "bazel_target"],
+    capabilities = [capability("build", []), capability("run", [])],
+    tools = [_BAZEL_TOOL],
+    examples = _BAZEL_EXAMPLES,
+    impl = _bazel_binary_impl,
 )
 
 bazel = native_project(

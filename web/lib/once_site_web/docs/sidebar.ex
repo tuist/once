@@ -202,7 +202,7 @@ defmodule OnceSiteWeb.Docs.Sidebar do
                 apple_xcframework_import swift_package_workspace swift_package_dependencies swift_package_pin)
               ),
               target_group("Core", ~w(archive_download)),
-              target_group("Bazel", ~w(bazel_workspace bazel_target)),
+              target_group("Bazel", ~w(bazel_workspace bazel_target bazel_test bazel_binary)),
               target_group("Xcode", ~w(xcode_workspace)),
               target_group("Android", ~w(android_resource android_library android_local_test
                 android_instrumentation_test android_binary)),
