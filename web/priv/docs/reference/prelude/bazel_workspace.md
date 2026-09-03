@@ -6,14 +6,22 @@ Native [Bazel](https://bazel.build) workspace seed.
 
 `bazel_workspace` reads the Bazel graph through
 [`bazel query`](https://bazel.build/query/language) and materializes every
-rule the query returns as a `bazel_target` graph node. In this first
-integration Bazel executes each rule so the workspace stays buildable from
-day one; the direction of travel is to lower specific rule kinds into Once's
-own target kinds (for example rules_rs `rust_binary` into Once's
-[`rust_binary`](/reference/prelude/rust_binary)) so Once compiles them
-directly, the way [`swift_package_workspace`](/reference/prelude/swift_package_workspace)
-does for Apple targets. Rules that Once does not yet lower keep delegating
-to Bazel.
+rule the query returns as a `bazel_target` graph node. When a graph target
+is built, Once reads Bazel's action graph for that target through
+[`bazel aquery`](https://bazel.build/query/aquery) and runs every action
+itself from a shadow execution root under
+`<workspace>/.once/bazel-shadow/<target>/`. Bazel supplies the analysis
+phase (target loading, toolchain resolution, external repository download
+via `bazel fetch`, the action graph); Once supplies the execution phase.
+`bazel build` is not invoked in the ownership path.
+
+Some Bazel actions are implemented inside Bazel itself and have no argv in
+`aquery` output (`Symlink`, `FileWrite`, `RunfilesTree`, `SymlinkTree`,
+`RepoMappingManifest`). When a target's action graph contains any such
+action, Once falls back to `bazel <capability>` for that target so it still
+builds; the target's provider records which mnemonics forced the fallback
+so users can see the gap. Each mnemonic Once learns to run natively shrinks
+the fallback set until every Bazel rule executes through Once.
 
 Once discovers a Bazel workspace automatically from `MODULE.bazel`. A
 repository without `once.toml` can therefore query and build its rules with

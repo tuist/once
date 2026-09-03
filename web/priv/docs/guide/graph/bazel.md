@@ -5,14 +5,16 @@ next: false
 
 # Bazel
 
-Once reads a [Bazel](https://bazel.build) workspace through `bazel query` and
-exposes every rule as a Once target. In this first integration Bazel
-executes each rule so the workspace stays buildable from day one; the
-direction of travel is to lower specific rule kinds into Once's own target
-kinds so Once compiles them directly. That is the same path
-[Swift packages](/docs/guide/graph/swift-packages) took: read the manifest
-with the native tool, then let Once own compilation. Rules Once has not
-lowered yet keep delegating to Bazel.
+Once reads a [Bazel](https://bazel.build) workspace through `bazel query`,
+exposes every rule as a Once target, and runs each target's actions
+itself. Bazel handles analysis (target loading, toolchain resolution,
+external repository download via `bazel fetch`, the action graph via
+`bazel aquery`); Once handles execution, from a shadow execution root
+under `<workspace>/.once/bazel-shadow/<target>/`. `bazel build` is only
+invoked as a fallback when a target's action graph contains a
+Bazel-internal action that has no argv in `aquery` output (`Symlink`,
+`FileWrite`, `RunfilesTree`, `SymlinkTree`, `RepoMappingManifest`). Each
+such mnemonic Once learns to run natively shrinks the fallback set.
 
 ## Start From A Native Workspace
 

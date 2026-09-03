@@ -12,20 +12,23 @@ rule whose class does not end in `_test` or `_binary`. Direct authoring of
 so the `bazel_label` and `bazel_rule_kind` attributes stay tied to real
 Bazel state.
 
-In this first integration the `build` capability delegates execution to
-Bazel. Rule kinds that Once learns to compile directly (rules_rs targets to
-Once's [`rust_library`](/reference/prelude/rust_library), rules_cc targets to
-[`c_library`](/reference/prelude/c_library), and so on) will emit those
-native kinds from the resolver instead. Rules Once has not lowered yet keep
-using this delegating target kind.
+`bazel_target` reads the action graph for its label through
+`bazel aquery` and runs every action itself from
+`<workspace>/.once/bazel-shadow/<target>/`. Bazel does the analysis phase
+(target loading, toolchain resolution, external repository download via
+`bazel fetch`); Once does the execution phase. `bazel build` is not
+invoked in the ownership path.
 
-`bazel_target` calls `bazel build <label>` and inherits the caller's
-environment (`PATH`, `HOME`, `SSL_CERT_FILE`, and other network- and
-toolchain-related variables) so Bazel can reach its repository cache and
-remote resources. The action is not cached at Once's level; Bazel manages
-its own action cache, and layering another cache above it would double-count.
+Actions inherit the caller's environment (`PATH`, `HOME`, `SSL_CERT_FILE`,
+and other toolchain-related variables). When the action graph contains any
+Bazel-internal action (`Symlink`, `FileWrite`, `RunfilesTree`,
+`SymlinkTree`, `RepoMappingManifest` — actions with no argv in `aquery`
+output), Once falls back to `bazel build <label>` for that target and
+records the unsupported mnemonics on the target's provider.
 
-Real outputs live under `bazel-bin` and `bazel-out` where Bazel keeps them.
+Ownership-mode outputs land under `<workspace>/.once/bazel-shadow/<target>/bazel-out/`.
+Fallback-mode outputs land under Bazel's `bazel-bin` and `bazel-out` as
+usual.
 
 ## Attributes
 

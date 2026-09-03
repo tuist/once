@@ -157,15 +157,226 @@ def _bazel_workspace_impl(ctx):
         "targets": ctx["deps"],
     }
 
-def _bazel_capability_argv(ctx, bazel, capability):
+# --- aquery-based execution (Once owns the actions) -------------------------
+#
+# The impls below read Bazel's action graph via `bazel aquery --output=jsonproto`
+# and emit one Once `run_action` per spawn action. The action's cwd is a shadow
+# exec root under `.once/bazel-shadow/<target>/` that Once populates itself:
+#   .once/bazel-shadow/<target>/
+#     external -> $OUTPUT_BASE/external            (Bazel's external repos)
+#     bazel-out/                                    (populated as Once runs actions)
+#     <every workspace file> -> <workspace>/<file> (symlinks to sources)
+# Bazel supplies analysis and the external-repo download; Once runs every action
+# from that shadow. Fully non-spawn action classes (Symlink, FileWrite,
+# RunfilesTree, SymlinkTree, RepoMappingManifest) are Bazel-internal and have
+# no argv, so any target whose action graph contains them falls back to
+# `bazel build|test|run` for that capability with a diagnostic so the user knows
+# what to expect. Follow-up work implements those mnemonics as native Once
+# primitives; each one is small in isolation.
+
+def _bazel_path_of_pf(pf_by_id, pf_id):
+    segments = []
+    cursor = pf_id
+    # Bazel's tree is bounded by the workspace depth; 4096 is a hard ceiling to
+    # keep the loop terminating even for an unexpected cycle.
+    for _ in range(4096):
+        if not cursor:
+            break
+        pf = pf_by_id.get(cursor)
+        if pf == None:
+            break
+        segments.insert(0, pf.get("label") or "")
+        cursor = pf.get("parentId") or 0
+    return "/".join(segments)
+
+def _bazel_path_of_artifact(pf_by_id, art_by_id, art_id):
+    art = art_by_id.get(art_id)
+    if art == None:
+        return ""
+    return _bazel_path_of_pf(pf_by_id, art.get("pathFragmentId") or 0)
+
+def _bazel_expand_depset(depset_by_id, ds_id, seen, out):
+    if seen.get(ds_id):
+        return
+    seen[ds_id] = True
+    ds = depset_by_id.get(ds_id)
+    if ds == None:
+        return
+    for aid in ds.get("directArtifactIds") or []:
+        out[aid] = True
+    for tid in ds.get("transitiveDepSetIds") or []:
+        _bazel_expand_depset(depset_by_id, tid, seen, out)
+
+def _bazel_parse_aquery(text):
+    doc = json_decode(text)
+    pf_by_id = {}
+    for pf in doc.get("pathFragments") or []:
+        pf_by_id[pf.get("id")] = pf
+    art_by_id = {}
+    for art in doc.get("artifacts") or []:
+        art_by_id[art.get("id")] = art
+    depset_by_id = {}
+    for ds in doc.get("depSetOfFiles") or []:
+        depset_by_id[ds.get("id")] = ds
+    actions = []
+    for action in doc.get("actions") or []:
+        input_ids = {}
+        for ds_id in action.get("inputDepSetIds") or []:
+            _bazel_expand_depset(depset_by_id, ds_id, {}, input_ids)
+        inputs = []
+        for aid in input_ids.keys():
+            path = _bazel_path_of_artifact(pf_by_id, art_by_id, aid)
+            if path:
+                inputs.append(path)
+        outputs = []
+        for aid in action.get("outputIds") or []:
+            path = _bazel_path_of_artifact(pf_by_id, art_by_id, aid)
+            if path:
+                outputs.append(path)
+        env = {}
+        for ev in action.get("environmentVariables") or []:
+            key = ev.get("key")
+            if key:
+                env[key] = ev.get("value") or ""
+        actions.append({
+            "mnemonic": action.get("mnemonic") or "",
+            "arguments": action.get("arguments") or [],
+            "inputs": inputs,
+            "outputs": outputs,
+            "env": env,
+        })
+    return actions
+
+def _bazel_shadow_dir(ctx):
+    # Workspace-relative shadow path; the run_action `cwd` field only accepts
+    # workspace-relative values. Under it lives the exec-root layout Bazel
+    # would set up itself: `external` symlinked into the Bazel output base and
+    # a fresh `bazel-out` directory that our actions populate.
+    return ".once/bazel-shadow/" + ctx["label"]["id"]
+
+def _bazel_prepare_shadow(ctx, bazel, workspace_abs):
+    # Ask Bazel to fetch the target's external repositories. This does not
+    # execute the target's actions; it only populates `$OUTPUT_BASE/external`
+    # with the same content Bazel would materialize during a real build.
+    label = ctx["attr"]["bazel_label"]
+    host_command(
+        [bazel, "fetch", label, "--noshow_progress"],
+        cwd = workspace_abs,
+        env = _bazel_env(),
+    )
+    output_base = host_command(
+        [bazel, "info", "output_base"],
+        cwd = workspace_abs,
+        env = _bazel_env(),
+    ).strip()
+    shadow_abs = workspace_abs + "/" + _bazel_shadow_dir(ctx)
+    # Rebuild the shadow deterministically on each analysis pass so an old
+    # layout cannot survive across queries: remove, then materialize.
+    host_command(["/bin/sh", "-c",
+        "rm -rf " + _shell_quote(shadow_abs) +
+        " && mkdir -p " + _shell_quote(shadow_abs + "/bazel-out") +
+        " && ln -sfn " + _shell_quote(output_base + "/external") + " " + _shell_quote(shadow_abs + "/external"),
+    ])
+    return {
+        "output_base": output_base,
+        "shadow_abs": shadow_abs,
+    }
+
+def _bazel_link_workspace_sources(shadow_abs, workspace_abs):
+    # Symlink every workspace entry into the shadow root so relative paths in
+    # aquery argv resolve to real sources. `.once` is skipped so the shadow
+    # cannot recurse into itself, and hidden git state is skipped to keep the
+    # shadow small.
+    host_command(["/bin/sh", "-c",
+        "for entry in \"" + workspace_abs + "\"/*; do " +
+        "  name=$(basename \"$entry\");" +
+        "  case \"$name\" in .once|bazel-bin|bazel-out|bazel-testlogs|external) continue ;; esac;" +
+        "  ln -sfn \"$entry\" \"" + shadow_abs + "/$name\";" +
+        "done",
+    ])
+
+def _bazel_aquery(ctx, bazel, workspace_abs):
+    label = ctx["attr"]["bazel_label"]
+    text = host_command(
+        [bazel, "aquery", "deps(" + label + ")", "--output=jsonproto", "--noshow_progress"],
+        cwd = workspace_abs,
+        env = _bazel_env(),
+    )
+    return _bazel_parse_aquery(text)
+
+def _bazel_delegate_action(ctx, bazel, capability):
     label = ctx["attr"]["bazel_label"]
     if capability == "build":
-        return [bazel, "build", label, "--noshow_progress"]
-    if capability == "test":
-        return [bazel, "test", label, "--noshow_progress", "--test_output=errors"]
-    if capability == "run":
-        return [bazel, "run", label, "--noshow_progress", "--"]
-    fail(ctx["label"]["id"] + ": bazel target does not support capability `" + capability + "`")
+        argv = [bazel, "build", label, "--noshow_progress"]
+    elif capability == "test":
+        argv = [bazel, "test", label, "--noshow_progress", "--test_output=errors"]
+    elif capability == "run":
+        argv = [bazel, "run", label, "--noshow_progress", "--"]
+    else:
+        fail(ctx["label"]["id"] + ": bazel target does not support capability `" + capability + "`")
+    run_action(
+        argv = argv,
+        inputs = [],
+        outputs = [],
+        cwd = _bazel_workspace_dir(ctx),
+        env = _bazel_env(),
+        sandbox = "off",
+        network = "unrestricted",
+        cacheable = False,
+        inherit_parent_env = True,
+        toolchain_identity = "once.bazel.delegate.v1\x00" + bazel,
+        identifier = ctx["label"]["id"] + ":bazel-delegate-" + capability,
+    )
+
+def _bazel_own_execution_or_fallback(ctx, bazel, workspace_abs, capability):
+    # aquery-based ownership: read the action graph and run each spawn action
+    # from the shadow exec root. If any action in the graph is Bazel-internal
+    # (Symlink, FileWrite, SymlinkTree, RunfilesTree, RepoMappingManifest,
+    # ...), fall back to `bazel <capability>` for the whole target and record
+    # the fallback so the user knows which mnemonics still need native
+    # equivalents. Each new mnemonic Once learns to run natively shrinks the
+    # fallback set.
+    actions = _bazel_aquery(ctx, bazel, workspace_abs)
+    unsupported = {}
+    for action in actions:
+        if not action["arguments"]:
+            key = action["mnemonic"] or "unknown"
+            unsupported[key] = (unsupported.get(key) or 0) + 1
+    if unsupported:
+        _bazel_delegate_action(ctx, bazel, capability)
+        return {"mode": "delegated", "unsupported": unsupported, "action_count": len(actions)}
+    prep = _bazel_prepare_shadow(ctx, bazel, workspace_abs)
+    _bazel_link_workspace_sources(prep["shadow_abs"], workspace_abs)
+    shadow_rel = _bazel_shadow_dir(ctx)
+    for index in range(len(actions)):
+        action = actions[index]
+        merged_env = _bazel_env()
+        for key, value in action["env"].items():
+            merged_env[key] = value
+        # Bazel pre-creates each output's parent directory before running an
+        # action; the action itself only writes the file, never the parent
+        # tree. Mirror that expectation with `create_dirs` so the wrapped
+        # spawn finds `bazel-out/<config>/bin/...` ready.
+        parent_dirs = _unique([
+            shadow_rel + "/" + _parent_dir(output)
+            for output in action["outputs"]
+            if _parent_dir(output)
+        ])
+        run_action(
+            argv = action["arguments"],
+            inputs = [],
+            outputs = [],
+            cwd = shadow_rel,
+            env = merged_env,
+            sandbox = "off",
+            network = "unrestricted",
+            cacheable = False,
+            inherit_parent_env = True,
+            create_dirs = parent_dirs,
+            toolchain_identity = "once.bazel.action.v1\x00" + action["mnemonic"],
+            identifier = ctx["label"]["id"] + ":bazel-action-" + str(index) + ":" + action["mnemonic"],
+        )
+    return {"mode": "own", "action_count": len(actions)}
 
 def _bazel_common_impl(ctx, providers):
     if not ctx["attr"].get("_bazel_resolved"):
@@ -179,25 +390,15 @@ def _bazel_common_impl(ctx, providers):
             providers[0]: True,
         }
     bazel = _bazel_resolve_executable(ctx)
-    workspace_dir = _bazel_workspace_dir(ctx)
-    argv = _bazel_capability_argv(ctx, bazel, capability)
-    run_action(
-        argv = argv,
-        inputs = [],
-        outputs = [],
-        cwd = workspace_dir,
-        env = _bazel_env(),
-        sandbox = "off",
-        network = "unrestricted",
-        cacheable = False,
-        inherit_parent_env = True,
-        toolchain_identity = "once.bazel.v1\x00" + bazel,
-        identifier = ctx["label"]["id"] + ":bazel-" + capability,
-    )
+    workspace_abs = _bazel_workspace_absolute_dir(ctx)
+    outcome = _bazel_own_execution_or_fallback(ctx, bazel, workspace_abs, capability)
     return {
         "label_id": ctx["label"]["id"],
         "bazel_label": ctx["attr"]["bazel_label"],
         "bazel_rule_kind": ctx["attr"]["bazel_rule_kind"],
+        "execution_mode": outcome["mode"],
+        "action_count": outcome.get("action_count") or 0,
+        "unsupported_mnemonics": outcome.get("unsupported") or {},
         providers[0]: True,
     }
 
@@ -229,7 +430,7 @@ _BAZEL_EXAMPLES = [
 ]
 
 bazel_workspace = target_kind(
-    docs = "Native Bazel workspace seed. Its resolver runs `bazel query` to enumerate every rule in the workspace and materializes each one as a bazel_target, bazel_test, or bazel_binary that forwards its capabilities to Bazel.",
+    docs = "Native Bazel workspace seed. Its resolver runs `bazel query` to enumerate every rule in the workspace and materializes each one as a bazel_target, bazel_test, or bazel_binary that runs through Once when its action graph is fully spawn-based and falls back to `bazel <capability>` otherwise.",
     attrs = [
         attr("bazel", "string", default = "\"bazel\"", docs = "Bazel executable name or workspace-relative executable path. Defaults to `bazel`, which resolves through `bazelisk` when installed.", configurable = False),
         attr("query", "string", docs = "Bazel query expression used to enumerate rules. Defaults to `kind(\"rule\", //...)`.", configurable = False),
@@ -253,9 +454,15 @@ bazel_workspace = target_kind(
         ),
         source_reference(
             "Bazel",
+            "aquery reference",
+            "https://bazel.build/query/aquery",
+            "Use `aquery` to obtain the concrete action graph Once executes for each Bazel target.",
+        ),
+        source_reference(
+            "Bazel",
             "command-line reference",
             "https://bazel.build/reference/command-line-reference",
-            "Preserve the documented `bazel build`, `bazel test`, and `bazel run` semantics rather than reimplementing a subset.",
+            "Preserve the documented `bazel build`, `bazel test`, and `bazel run` semantics for the delegating fallback path.",
         ),
     ],
     impl = _bazel_workspace_impl,
@@ -272,7 +479,7 @@ bazel_target = target_kind(
 )
 
 bazel_test = target_kind(
-    docs = "Resolver-generated Bazel test rule (rule class ending in `_test`) materialized as a Once graph target. Exposes `build` and `test` capabilities, both forwarded to Bazel.",
+    docs = "Resolver-generated Bazel test rule (rule class ending in `_test`) materialized as a Once graph target. Exposes `build` and `test` capabilities.",
     attrs = _BAZEL_TARGET_ATTRS,
     providers = ["bazel_test", "bazel_target"],
     capabilities = [capability("build", []), capability("test", [])],
@@ -282,7 +489,7 @@ bazel_test = target_kind(
 )
 
 bazel_binary = target_kind(
-    docs = "Resolver-generated Bazel binary rule (rule class ending in `_binary`) materialized as a Once graph target. Exposes `build` and `run` capabilities, both forwarded to Bazel.",
+    docs = "Resolver-generated Bazel binary rule (rule class ending in `_binary`) materialized as a Once graph target. Exposes `build` and `run` capabilities.",
     attrs = _BAZEL_TARGET_ATTRS,
     providers = ["bazel_binary", "bazel_target"],
     capabilities = [capability("build", []), capability("run", [])],
@@ -293,7 +500,7 @@ bazel_binary = target_kind(
 
 bazel = native_project(
     target_kind = "bazel_workspace",
-    docs = "Recognizes a Bazel workspace from MODULE.bazel and exposes its rules as Once targets that delegate execution to Bazel.",
+    docs = "Recognizes a Bazel workspace from MODULE.bazel and exposes its rules as Once targets whose action graph Once executes itself when it is entirely spawn-based.",
     markers = ["MODULE.bazel"],
     target_name = "bazel",
     inputs = ["WORKSPACE", "WORKSPACE.bazel", "MODULE.bazel.lock", "**/BUILD", "**/BUILD.bazel", "**/*.bzl"],
