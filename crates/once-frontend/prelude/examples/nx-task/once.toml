@@ -1,0 +1,10 @@
+[[target]]
+name = "hello_world__build"
+kind = "nx_task"
+srcs = ["apps/hello-world/**/*.js"]
+
+[target.attrs]
+project = "hello-world"
+task = "build"
+project_root = "apps/hello-world"
+outputs = ["dist/apps/hello-world"]

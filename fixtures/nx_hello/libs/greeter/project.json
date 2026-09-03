@@ -1,0 +1,24 @@
+{
+  "name": "greeter",
+  "projectType": "library",
+  "sourceRoot": "libs/greeter/src",
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "outputs": ["{workspaceRoot}/dist/libs/greeter"],
+      "options": {
+        "commands": [
+          "mkdir -p dist/libs/greeter",
+          "cp libs/greeter/src/index.js dist/libs/greeter/"
+        ],
+        "parallel": false
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node -e \"require('./libs/greeter/src/index.js').greet('hi')\""
+      }
+    }
+  }
+}

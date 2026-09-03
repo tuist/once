@@ -1,0 +1,9 @@
+{
+  "name": "once-nx-workspace-example",
+  "version": "0.0.0",
+  "private": true,
+  "workspaces": ["apps/*"],
+  "devDependencies": {
+    "nx": "^19.0.0"
+  }
+}

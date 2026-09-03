@@ -724,6 +724,31 @@ mod tests {
     }
 
     #[test]
+    fn built_in_native_projects_detect_nx_workspaces_and_skip_node_modules() {
+        let temporary = tempfile::tempdir().unwrap();
+        std::fs::write(temporary.path().join("nx.json"), "{}\n").unwrap();
+        std::fs::write(
+            temporary.path().join("package.json"),
+            "{\"name\":\"demo\"}\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(temporary.path().join("node_modules/@nx/js")).unwrap();
+        // A vendored dependency ships its own nx.json under node_modules.
+        // The nx integration must not treat that as a second workspace.
+        std::fs::write(temporary.path().join("node_modules/@nx/js/nx.json"), "{}\n").unwrap();
+
+        let matches = detect_native_projects(temporary.path()).unwrap();
+
+        let nx: Vec<_> = matches
+            .iter()
+            .filter(|matched| matched.native_project == "nx")
+            .collect();
+        assert_eq!(nx.len(), 1);
+        assert!(nx[0].package.is_empty());
+        assert_eq!(nx[0].markers, vec!["nx.json".to_string()]);
+    }
+
+    #[test]
     fn built_in_native_projects_ignore_generated_dependency_trees() {
         let temporary = tempfile::tempdir().unwrap();
         std::fs::write(temporary.path().join("mix.exs"), "raise \"not executed\"\n").unwrap();

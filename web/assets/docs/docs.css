@@ -168,6 +168,10 @@ p {
   --nav-icon-mask: url("/docs/icons/react-native.svg");
   --nav-icon-color: #149eca;
 }
+#docs-sidebar [data-part="nav-item-icon"][data-icon="nx"] {
+  --nav-icon-mask: url("/docs/icons/nx.svg");
+  --nav-icon-color: oklch(63% 0.182 259.5);
+}
 
 #docs-sidebar [data-part="nav-item-icon"][data-icon="ruby"],
 #docs-sidebar [data-part="nav-item-icon"][data-icon="javascript"],
