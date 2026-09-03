@@ -16,6 +16,9 @@ concurrency:
   group: bench-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   CARGO_NET_RETRY: "10"
   RUSTUP_MAX_RETRIES: "10"
