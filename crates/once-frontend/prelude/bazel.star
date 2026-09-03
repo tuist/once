@@ -497,16 +497,9 @@ def _bazel_topological_sort(actions):
     # producer-before-consumer sequence. Build the DAG from output→input
     # dependencies and Kahn-sort so every producer runs before any consumer.
     producer_of = {}
-    tree_producers = []
     for index in range(len(actions)):
         for output in actions[index]["outputs"]:
             producer_of[output] = index
-            # A MaterializeIncludeDir (and other tree-artifact producers)
-            # emits a directory. Later actions consume individual files
-            # inside it whose paths are not themselves listed as outputs, so
-            # remember the tree prefix so a consumer can be linked to its
-            # producer by directory ancestry.
-            tree_producers.append((output + "/", index))
     dependencies = []
     dependents = []
     remaining = []
@@ -517,12 +510,23 @@ def _bazel_topological_sort(actions):
     for index in range(len(actions)):
         for input_path in actions[index]["inputs"]:
             producer = producer_of.get(input_path)
-            if producer == None:
-                # Fall through to prefix match for tree-artifact inputs.
-                for tree_prefix, tree_producer in tree_producers:
-                    if input_path.startswith(tree_prefix) and tree_producer != index:
-                        producer = tree_producer
+            if producer == None and input_path.startswith("bazel-out/"):
+                # A `bazel-out/` path with no exact producer is likely a file
+                # inside a tree-artifact output (aquery lists the directory
+                # but not its individual files). Walk the parent chain and
+                # link to the ancestor directory's producer instead of doing
+                # an O(N) scan over every action's outputs, which on a
+                # workspace like kura would take orders of magnitude longer
+                # than the actions themselves.
+                parent = _parent_dir(input_path)
+                for _ in range(64):
+                    if not parent:
                         break
+                    candidate = producer_of.get(parent)
+                    if candidate != None and candidate != index:
+                        producer = candidate
+                        break
+                    parent = _parent_dir(parent)
             if producer == None or producer == index:
                 continue
             if not dependencies[index].get(producer):
