@@ -352,7 +352,12 @@ def _bazel_aquery(ctx, bazel, workspace_abs):
     # RepoMappingManifest, and SourceSymlinkManifest actions; without it the
     # payload aquery would need to emit is redacted and every Bazel target
     # with a runfiles tree falls back.
-    argv = [bazel, "aquery", "deps(" + label + ")", "--output=jsonproto", "--include_file_write_contents", "--noshow_progress"] + _bazel_bazel_flags()
+    # `--include_param_files` inlines the argv Bazel would otherwise fan
+    # out through a `@file` reference. Actions like rules_rs's
+    # cargo_build_script_runner pass their real arguments through param
+    # files, so without this flag Once would run them with a truncated
+    # argv and the runner would panic on the missing arguments.
+    argv = [bazel, "aquery", "deps(" + label + ")", "--output=jsonproto", "--include_file_write_contents", "--include_param_files", "--noshow_progress"] + _bazel_bazel_flags()
     text = host_command(
         argv,
         cwd = workspace_abs,
