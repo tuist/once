@@ -90,6 +90,7 @@ defmodule OnceSiteWeb.Docs.Sidebar do
           %Item{label: "Go", slug: "/docs/guide/graph/go", icon: "go"},
           %Item{label: "Rust", slug: "/docs/guide/graph/rust", icon: "rust"},
           %Item{label: "Zig", slug: "/docs/guide/graph/zig", icon: "zig"},
+          %Item{label: "Nx", slug: "/docs/guide/graph/nx"},
           %Item{
             label: "React Native",
             slug: "/docs/guide/graph/react-native",
@@ -212,6 +213,7 @@ defmodule OnceSiteWeb.Docs.Sidebar do
               target_group("Python", ~w(pytest_test)),
               target_group("Ruby", ~w(rspec_test minitest_test)),
               target_group("JavaScript", ~w(vitest_test jest_test)),
+              target_group("Nx", ~w(nx_workspace nx_task)),
               target_group(
                 "Go",
                 ~w(go_dependencies go_module go_source go_library go_binary go_test)
