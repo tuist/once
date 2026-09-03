@@ -92,6 +92,9 @@ query-before-build workflow, current limitations, and follow-up steps:
 - [React Native](/guide/graph/react-native) covers New Architecture
   dependencies, native modules, JavaScript bundles, Apple and Android
   applications, and Fast Refresh.
+- [Nx](/guide/graph/nx) reads an existing Nx workspace, derives one Once
+  target per project and task, and schedules `nx:run-commands` and
+  `nx:run-script` tasks directly through Once.
 - [Zig](/guide/graph/zig) covers modules, binaries, tests, libraries, and C or
   C++ dependencies.
 

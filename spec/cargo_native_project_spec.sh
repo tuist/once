@@ -66,7 +66,7 @@ Describe 'cargo native project'
 
     When call target_ids
     The status should be success
-    The stdout should include 'rust_crate itoa-1.0.14'
+    The stdout should include 'rust_crate itoa-1.0.18'
     The stdout should include 'rust_library cargo_bat'
   End
 

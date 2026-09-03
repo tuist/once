@@ -17,6 +17,7 @@ PRELUDE_SOURCES = [
     "python.star",
     "ruby.star",
     "javascript.star",
+    "nx.star",
     "react_native.star",
     "oci.star",
     "dockerfile.star",
@@ -125,6 +126,10 @@ PRELUDE_TARGET_KINDS = {
     "javascript.star": [
         "vitest_test",
         "jest_test",
+    ],
+    "nx.star": [
+        "nx_workspace",
+        "nx_task",
     ],
     "react_native.star": [
         "react_native_dependencies",
