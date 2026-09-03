@@ -3,6 +3,7 @@
 //! these.
 
 pub mod auth;
+pub mod bazel;
 pub mod cache;
 pub mod change_tracker;
 pub mod compatibility;
