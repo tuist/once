@@ -144,6 +144,43 @@ Outputs are materialized under `.once/out/<target>/`. The
 [`rust_test` reference](/reference/prelude/rust_test) list their executable,
 log, and test-result outputs.
 
+### Keep Cargo Commands
+
+Once can sit behind the `cargo` command for one native Cargo project or
+workspace. Add this mise wrapper, then run `mise reshim` and activate mise in
+the shell that starts the build:
+
+```toml
+[wrappers.cargo]
+command = "once"
+args = ["cargo", "--"]
+```
+
+Once routes the default debug build and test forms into the native graph:
+
+```sh
+cargo build
+cargo test
+```
+
+`cargo build` builds the workspace seed and its resolved products. `cargo
+test` runs each first-party test target once through Once, excluding tests
+that belong to resolved external crates. `-q` or `--quiet`, `--locked`,
+`--offline`, `--frozen`, and `--manifest-path Cargo.toml` are also supported.
+
+For troubleshooting without mise, call the compatibility surface directly and
+put the separator before the Cargo arguments:
+
+```sh
+once cargo -- test
+```
+
+Every other request, including release builds, feature selection, package
+selection, cross-compilation targets, `cargo check`, `cargo run`, `cargo
+clippy`, and a manifest path outside the workspace root, invokes the system
+`cargo` executable with its original arguments and exit status. This preserves
+Cargo behavior until the request has an exact Once equivalent.
+
 ### Confirm Caching
 
 Run the same build twice without changing an input:
