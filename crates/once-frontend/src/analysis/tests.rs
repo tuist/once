@@ -1272,6 +1272,26 @@ fn glob_skips_a_missing_symlink_target_outside_the_workspace() {
 
 #[cfg(unix)]
 #[test]
+fn glob_skips_a_symlink_that_resolves_outside_the_workspace() {
+    let workspace = TempDir::new().unwrap();
+    let external = TempDir::new().unwrap();
+    let package = workspace.path().join("packages/app");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(package.join("app.rs"), "").unwrap();
+    // A hybrid Cargo + Bazel project leaves convenience symlinks like
+    // `bazel-<workspace>` pointing into the Bazel output tree. They exist
+    // and resolve fine, but their targets live outside the Cargo workspace.
+    // The glob should drop them instead of failing the whole graph load.
+    std::fs::create_dir_all(external.path().join("bin")).unwrap();
+    std::os::unix::fs::symlink(external.path(), package.join("bazel-app")).unwrap();
+
+    let matches = expand_globs(workspace.path(), "packages/app", &["**/*".to_string()]).unwrap();
+
+    assert_eq!(matches, vec!["packages/app/app.rs".to_string()]);
+}
+
+#[cfg(unix)]
+#[test]
 fn glob_skips_a_missing_relative_symlink_target_inside_the_workspace() {
     let workspace = TempDir::new().unwrap();
     let package = workspace.path().join("packages/app");
@@ -1364,31 +1384,33 @@ fn glob_normalizes_package_parent_segments_without_losing_the_logical_path() {
     assert_eq!(matches, vec!["shared/value.ex"]);
 }
 
-/// A symlink that resolves outside the workspace must surface as
-/// an error rather than silently leaking external paths into the
-/// returned list. The check rejects honest mistakes; the threat
-/// model assumes a non-adversarial workspace (documented on
-/// `expand_globs`). Windows junctions/symlinks behave similarly
-/// via the same canonicalize call, but get their own test once
-/// Windows CI exists.
+/// A symlink whose canonical target lives outside the workspace is
+/// silently dropped from glob results (and the target is recorded as
+/// an observed host path so its appearance or disappearance still
+/// invalidates cached work). This preserves hybrid layouts such as a
+/// Cargo project that also runs Bazel, which leaves `bazel-*`
+/// convenience symlinks pointing into the Bazel output tree. Windows
+/// junctions and symlinks behave similarly via the same canonicalize
+/// call, but get their own test once Windows CI exists.
 #[cfg(unix)]
 #[test]
-fn glob_rejects_symlink_that_escapes_workspace() {
+fn glob_silently_drops_symlink_that_escapes_workspace() {
     let workspace = TempDir::new().unwrap();
     let external = TempDir::new().unwrap();
     let pkg = workspace.path().join("apps/ios/AppCore");
     std::fs::create_dir_all(&pkg).unwrap();
+    std::fs::write(pkg.join("kept.src"), "").unwrap();
     std::fs::write(external.path().join("stolen.src"), "").unwrap();
     std::os::unix::fs::symlink(external.path().join("stolen.src"), pkg.join("escape.src")).unwrap();
 
-    let err = expand_globs(
+    let matches = expand_globs(
         workspace.path(),
         "apps/ios/AppCore",
-        &["escape.src".to_string()],
+        &["*.src".to_string()],
     )
-    .unwrap_err()
-    .to_string();
-    assert!(err.contains("outside the workspace"), "{err}");
+    .unwrap();
+
+    assert_eq!(matches, vec!["apps/ios/AppCore/kept.src".to_string()]);
 }
 
 #[test]
