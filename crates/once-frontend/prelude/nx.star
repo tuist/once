@@ -77,7 +77,17 @@ def _nx_env_with_path(env, node):
 # gitignored by convention.
 _NX_GRAPH_OUTPUT = ".nx/once-workspace-graph.json"
 
-def _nx_load_graph(ctx, node, nx_binary):
+def _nx_load_graph(ctx):
+    # A checked-in graph snapshot (`graph_file` attribute) skips the live
+    # `nx graph` invocation entirely. Bundled starters and CI-only workspaces
+    # use it to prove the target kind loads without an installed Node.js and
+    # `node_modules/nx`.
+    graph_file = _nx_attr(ctx, "graph_file", "")
+    if graph_file:
+        raw = host_file_read(workspace_root() + "/" + graph_file)
+        return json_decode(raw)
+    node = _nx_node(ctx)
+    nx_binary = _nx_binary(ctx)
     # `--view=projects` returns every project's full `data.targets`, so no
     # `--targets` filter is needed at graph-load time. The filter, when set,
     # is applied downstream in the resolver.
@@ -195,9 +205,7 @@ def _nx_run_commands_attrs(task_config):
     }
 
 def _nx_workspace_resolver(ctx):
-    node = _nx_node(ctx)
-    nx_binary = _nx_binary(ctx)
-    graph_root = _nx_load_graph(ctx, node, nx_binary)
+    graph_root = _nx_load_graph(ctx)
     graph = graph_root.get("graph") or graph_root
     nodes = graph.get("nodes") or {}
     project_dependencies = _nx_project_dependencies(graph_root)
@@ -223,7 +231,7 @@ def _nx_workspace_resolver(ctx):
                     outputs.append(expanded)
             srcs = []
             if project_root:
-                srcs.append(project_root + "/**")
+                srcs.append(project_root + "/**/*")
             executor = task_config.get("executor") or ""
             attrs = {
                 "project": project_name,
@@ -318,7 +326,7 @@ def _nx_task_impl(ctx):
     project_source_globs = []
     project_root = _nx_attr(ctx, "project_root", "")
     if project_root:
-        project_source_globs.append(project_root + "/**")
+        project_source_globs.append(project_root + "/**/*")
 
     inputs = _unique(
         _file_globs(project_source_globs) +
@@ -362,6 +370,7 @@ nx_workspace = target_kind(
         attr("node", "string", default = "\"node\"", docs = "Node.js executable name, absolute path, or workspace-relative path.", configurable = False),
         attr("targets", "list<string>", default = "[\"build\", \"test\", \"lint\"]", docs = "Nx task names to emit. Defaults to build, test, and lint. Set an empty list to include every task in the graph.", configurable = False),
         attr("resolver_inputs", "list<string>", default = "[]", docs = "Package-relative text globs supplied to native integration resolution. Defaults to srcs when empty.", configurable = False),
+        attr("graph_file", "string", default = "\"\"", docs = "Optional workspace-relative path to a checked-in `nx graph --view=projects` JSON snapshot. When set, Once reads it directly instead of running `nx graph`, which lets a workspace load without an installed Node.js and `node_modules/nx`.", configurable = False),
     ],
     resolver = _nx_workspace_resolver,
     deps = [dep("deps", ["nx_task"], "Nx tasks emitted by native integration discovery.")],

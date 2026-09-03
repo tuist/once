@@ -735,11 +735,7 @@ mod tests {
         std::fs::create_dir_all(temporary.path().join("node_modules/@nx/js")).unwrap();
         // A vendored dependency ships its own nx.json under node_modules.
         // The nx integration must not treat that as a second workspace.
-        std::fs::write(
-            temporary.path().join("node_modules/@nx/js/nx.json"),
-            "{}\n",
-        )
-        .unwrap();
+        std::fs::write(temporary.path().join("node_modules/@nx/js/nx.json"), "{}\n").unwrap();
 
         let matches = detect_native_projects(temporary.path()).unwrap();
 

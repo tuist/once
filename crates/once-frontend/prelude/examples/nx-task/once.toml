@@ -1,7 +1,7 @@
 [[target]]
 name = "hello_world__build"
 kind = "nx_task"
-srcs = ["apps/hello-world/**"]
+srcs = ["apps/hello-world/**/*.js"]
 
 [target.attrs]
 project = "hello-world"

@@ -1,7 +1,8 @@
 [[target]]
 name = "nx"
 kind = "nx_workspace"
-srcs = ["nx.json", "package.json"]
+srcs = ["nx.json", "package.json", "graph.json"]
 
 [target.attrs]
 resolver_inputs = ["nx.json", "package.json", "**/project.json", "**/package.json"]
+graph_file = "graph.json"

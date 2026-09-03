@@ -1,0 +1,29 @@
+{
+  "graph": {
+    "nodes": {
+      "hello-world": {
+        "name": "hello-world",
+        "type": "app",
+        "data": {
+          "root": "apps/hello-world",
+          "name": "hello-world",
+          "projectType": "application",
+          "sourceRoot": "apps/hello-world/src",
+          "targets": {
+            "build": {
+              "executor": "nx:run-commands",
+              "outputs": ["{workspaceRoot}/dist/apps/hello-world"],
+              "options": {
+                "command": "node apps/hello-world/src/index.js"
+              }
+            }
+          },
+          "tags": []
+        }
+      }
+    },
+    "dependencies": {
+      "hello-world": []
+    }
+  }
+}
