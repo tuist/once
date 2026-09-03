@@ -247,7 +247,9 @@ async fn run_command(
         }
         Cmd::Reference { out } => crate::reference::generate(&out),
         Cmd::ChangeTracker => commands::change_tracker::serve(workspace, xdg).await,
-        Cmd::Compatibility { .. } | Cmd::PackageCompatibility { .. } => {
+        Cmd::Compatibility { .. }
+        | Cmd::PackageCompatibility { .. }
+        | Cmd::CargoCompatibility { .. } => {
             unreachable!("compatibility commands are routed before command dispatch")
         }
     }

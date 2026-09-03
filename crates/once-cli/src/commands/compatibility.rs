@@ -35,6 +35,16 @@ pub async fn run(
             ))
             .await
         }
+        CompatibilityInvocation::Cargo(argv) => {
+            Box::pin(crate::commands::cargo::run(
+                workspace,
+                xdg,
+                output,
+                resource_limits,
+                argv,
+            ))
+            .await
+        }
     }
 }
 
