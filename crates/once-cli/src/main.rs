@@ -2,6 +2,7 @@
 //! to the verb modules under [`commands`], and propagates the
 //! resulting exit code.
 
+mod bus_events;
 mod cache_provider;
 mod cli;
 mod commands;
@@ -9,6 +10,7 @@ mod dispatch;
 mod logging;
 mod reference;
 mod render;
+mod reporter;
 mod sound;
 
 use std::ffi::OsStr;

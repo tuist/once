@@ -26,7 +26,9 @@ pub async fn run(
         return passthrough::run(&argv);
     };
     let resolved = crate::commands::graph::resolve_invocation_configuration(workspace, &[])?;
-    let output = Output::new(output.format, output.quiet || invocation.quiet);
+    let output = Output::new(output.format, output.quiet || invocation.quiet)
+        .with_color(output.color)
+        .with_verbose(output.verbose);
     let cache = crate::cache_provider::resolve(workspace, xdg)?;
     match invocation.command {
         invocation::Command::Build => {
