@@ -6,7 +6,6 @@ PRELUDE_SOURCES = [
     "android.star",
     "go.star",
     "rust.star",
-    "bazel.star",
     "xcode.star",
     "swift_package.star",
     "c.star",
@@ -22,6 +21,7 @@ PRELUDE_SOURCES = [
     "react_native.star",
     "oci.star",
     "dockerfile.star",
+    "bazel.star",
 ]
 
 PRELUDE_DEPENDENCIES = {
@@ -80,10 +80,6 @@ PRELUDE_TARGET_KINDS = {
         "rust_test",
         "rust_crate",
         "rust_proc_macro",
-    ],
-    "bazel.star": [
-        "bazel_workspace",
-        "bazel_command",
     ],
     "xcode.star": [
         "xcode_workspace",
@@ -152,5 +148,11 @@ PRELUDE_TARGET_KINDS = {
     ],
     "dockerfile.star": [
         "dockerfile_image",
+    ],
+    "bazel.star": [
+        "bazel_workspace",
+        "bazel_target",
+        "bazel_test",
+        "bazel_binary",
     ],
 }

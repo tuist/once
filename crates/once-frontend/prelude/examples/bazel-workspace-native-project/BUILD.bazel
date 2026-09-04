@@ -1,10 +1,15 @@
-cc_library(
-    name = "greeting",
-    srcs = ["greeting.cc"],
+load(":rules.bzl", "example_binary", "example_test")
+
+genrule(
+    name = "hello",
+    outs = ["hello.txt"],
+    cmd = "echo hello > $@",
 )
 
-cc_test(
-    name = "greeting_test",
-    srcs = ["greeting_test.cc"],
-    deps = [":greeting"],
+example_binary(
+    name = "hello_binary",
+)
+
+example_test(
+    name = "hello_test",
 )

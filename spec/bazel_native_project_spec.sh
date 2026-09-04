@@ -1,5 +1,5 @@
 #shellcheck shell=bash
-# End-to-end specs for the opaque graph Once derives from a Bazel workspace.
+# End-to-end specs for the graph Once derives from a Bazel workspace.
 
 Describe 'bazel native project'
   BeforeEach 'setup_workspace'
@@ -7,7 +7,7 @@ Describe 'bazel native project'
 
   setup_bazel_workspace() {
     cp -R "$REPO_ROOT/fixtures/bazel_rules_rust/." "$WORKSPACE/"
-    chmod +x "$WORKSPACE/tools/bazelisk"
+    chmod +x "$WORKSPACE/tools/bazel" "$WORKSPACE/tools/bazelisk"
   }
 
   target_ids() {
@@ -22,7 +22,8 @@ Describe 'bazel native project'
     When call target_ids
     The status should be success
     The stdout should include 'bazel_workspace bazel'
-    The stdout should include 'bazel_command bazel_all'
+    The stdout should include 'bazel_target bz_support'
+    The stdout should include 'bazel_test bz_support_test'
     The stdout should not include 'cargo_workspace'
     The stdout should not include 'swift_package_workspace'
     The path "$WORKSPACE/once.toml" should not be exist
@@ -34,7 +35,7 @@ Describe 'bazel native project'
     When call env PATH="$WORKSPACE/tools:$PATH" "$ONCE_BIN" -C "$WORKSPACE" test --quiet
     The status should be success
     The stdout should include 'test batches'
-    The contents of file "$WORKSPACE/.once/out/bazel_all/test/test_results.json" should include '"status":"passed"'
+    The contents of file "$WORKSPACE/.once/out/bz_support_test/test/test_results.json" should include '"status":"passed"'
     The path "$WORKSPACE/once.toml" should not be exist
   End
 
@@ -54,7 +55,8 @@ Describe 'bazel native project'
     When call env PATH="$WORKSPACE/tools:$PATH" "$ONCE_BIN" -C "$WORKSPACE" --format json query targets
     The status should be success
     The stdout should include '"id":"bazel"'
-    The stdout should include '"id":"bazel_all"'
+    The stdout should include '"id":"bz_support"'
+    The stdout should include '"id":"bz_support_test"'
     The path "$WORKSPACE/once.toml" should not be exist
   End
 End

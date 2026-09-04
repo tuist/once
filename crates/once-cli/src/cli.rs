@@ -554,6 +554,18 @@ pub enum Cmd {
         argv: Vec<String>,
     },
 
+    /// Accept a Bazel build or test invocation and use the Once graph when
+    /// its semantics are supported. Other invocations pass through to the
+    /// system Bazel executable unchanged. Configure this as a mise command
+    /// wrapper to make ordinary `bazel` commands use this compatibility
+    /// surface.
+    #[usage(name = "bazel")]
+    BazelCompatibility {
+        /// Arguments supplied by the Bazel invocation.
+        #[usage(trailing_var_arg = true, value_name = "ARG")]
+        argv: Vec<String>,
+    },
+
     /// Accept a Cargo build or test invocation and use the Once graph when its
     /// semantics are supported. Other invocations pass through to the system
     /// Cargo executable unchanged. Configure this as a mise command wrapper to
@@ -606,6 +618,7 @@ pub enum Cmd {
 pub(crate) enum CompatibilityInvocation {
     Xcodebuild(Vec<String>),
     Swift(Vec<String>),
+    Bazel(Vec<String>),
     Cargo(Vec<String>),
 }
 
@@ -655,6 +668,7 @@ impl Cmd {
             Self::PackageCompatibility { argv } => {
                 Some(CompatibilityInvocation::Swift(argv.clone()))
             }
+            Self::BazelCompatibility { argv } => Some(CompatibilityInvocation::Bazel(argv.clone())),
             Self::CrateCompatibility { argv } => Some(CompatibilityInvocation::Cargo(argv.clone())),
             _ => None,
         }
@@ -704,6 +718,7 @@ impl Cmd {
             }
             Self::Compatibility { .. } => vec!["xcodebuild"],
             Self::PackageCompatibility { .. } => vec!["swift"],
+            Self::BazelCompatibility { .. } => vec!["bazel"],
             Self::CrateCompatibility { .. } => vec!["cargo"],
             Self::Runtime { cmd } => {
                 let mut path = vec!["runtime"];
