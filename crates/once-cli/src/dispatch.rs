@@ -315,6 +315,19 @@ mod tests {
             std::fs::canonicalize(workspace).unwrap()
         );
     }
+
+    #[test]
+    fn default_build_target_does_not_expand_native_project_resolvers() {
+        let temporary = tempfile::tempdir().unwrap();
+        let project = temporary.path().join("App.xcodeproj");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::write(project.join("project.pbxproj"), "not a project").unwrap();
+
+        assert_eq!(
+            resolve_build_target(temporary.path(), None).unwrap(),
+            "xcode"
+        );
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -935,25 +948,24 @@ fn resolve_build_target(workspace: &Path, target: Option<String>) -> Result<Stri
     if let Some(target) = target {
         return resolve_target_arg(workspace, &target);
     }
-    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
     let resolver_kinds = once_frontend::target_kind_schemas_for_workspace(workspace)?
         .into_iter()
-        .filter(once_frontend::TargetKindSchema::has_resolver)
-        .map(|schema| schema.kind)
-        .collect::<std::collections::BTreeSet<_>>();
-    let candidates = graph
-        .iter()
-        .filter(|target| {
-            resolver_kinds.contains(&target.kind)
-                && target
+        .filter(|schema| {
+            schema.has_resolver()
+                && schema
                     .capabilities
                     .iter()
                     .any(|capability| capability.name == "build")
         })
-        .map(|target| target.label.id.as_str())
+        .map(|schema| schema.kind)
+        .collect::<std::collections::BTreeSet<_>>();
+    let candidates = once_frontend::load_workspace(workspace)?
+        .iter()
+        .filter(|target| resolver_kinds.contains(&target.kind))
+        .map(once_frontend::Target::id)
         .collect::<Vec<_>>();
     match candidates.as_slice() {
-        [target] => Ok((*target).to_string()),
+        [target] => Ok(target.clone()),
         [] => anyhow::bail!(
             "no default build target was discovered; pass `once build <target>` using an id from `once query targets`"
         ),
