@@ -21,6 +21,22 @@
 //!
 //! Off by default; a headless audio backend degrades to a silent no-op.
 
+// Numeric DSP code lives in this module: sample-rate integers become
+// floats and float sample counts become integers on almost every line.
+// Those casts are bounded and safe in the ranges the synth actually uses
+// (sample rates and sample counts well under 2^23), and the pedantic cast
+// lints do not add signal here. The synth's main loop is also
+// deliberately long and mixes `const` locals with computation, both of
+// which fit the file's numerical style rather than a defect.
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::too_many_lines,
+    clippy::items_after_statements,
+    clippy::needless_pass_by_value
+)]
+
 use std::f32::consts::TAU;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc;
