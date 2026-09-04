@@ -266,7 +266,10 @@ jobs:
     needs: [changes, release-build]
     if: needs.changes.outputs.rust_ci == 'true'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # The macOS suite drives real Swift, Xcode, and toolchain installs and
+    # lands between 20 and 30 minutes depending on runner and network speed,
+    # so the cap only needs to catch a genuine hang.
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
