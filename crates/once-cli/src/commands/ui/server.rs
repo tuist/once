@@ -15,12 +15,20 @@ use tokio::sync::{oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
 
+use once_core::RunEventBus;
+
 use super::{assets, Publisher, RunSnapshot};
+
+/// Ring capacity for the additive event bus. Sized so a burst of
+/// per-target and log events cannot make the local UI drop its own
+/// snapshot updates.
+const EVENT_BUS_CAPACITY: usize = 1024;
 
 #[derive(Clone)]
 pub(super) struct RunStore {
     snapshot: Arc<Mutex<Option<RunSnapshot>>>,
     updates: watch::Sender<Option<RunSnapshot>>,
+    event_bus: RunEventBus,
 }
 
 impl RunStore {
@@ -29,7 +37,12 @@ impl RunStore {
         Self {
             snapshot: Arc::new(Mutex::new(None)),
             updates,
+            event_bus: RunEventBus::new(EVENT_BUS_CAPACITY),
         }
+    }
+
+    pub(super) fn event_bus(&self) -> RunEventBus {
+        self.event_bus.clone()
     }
 
     pub(super) fn replace(&self, run: RunSnapshot) {
@@ -107,6 +120,13 @@ impl UiServer {
     #[must_use]
     pub fn publisher(&self) -> Publisher {
         Publisher::from_store(self.store.clone())
+    }
+
+    /// Subscribe to the additive RFC 0008 event bus. Callers use this
+    /// to feed a live gRPC transport in parallel to the local UI.
+    #[must_use]
+    pub fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<once_core::RunEvent> {
+        self.store.event_bus().subscribe()
     }
 
     #[must_use]

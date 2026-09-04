@@ -4,7 +4,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use once_core::{ActionOutputObserver, ActionOutputStream};
+use once_core::{
+    ActionOutputObserver, ActionOutputStream, LogStream, Phase, RunEvent, RunEventBus, TargetResult,
+};
 use once_frontend::{AttrValue, BuildConfiguration};
 use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
@@ -99,6 +101,8 @@ struct OutputObserver {
     sender: mpsc::Sender<OutputMessage>,
     dropped_output: AtomicBool,
     decoder: Mutex<OutputDecoder>,
+    event_bus: Option<RunEventBus>,
+    target_id: Option<String>,
 }
 
 enum OutputMessage {
@@ -119,12 +123,34 @@ struct OutputDecoder {
 }
 
 impl OutputObserver {
-    fn new(sender: mpsc::Sender<OutputMessage>) -> Self {
+    fn new(
+        sender: mpsc::Sender<OutputMessage>,
+        event_bus: Option<RunEventBus>,
+        target_id: Option<String>,
+    ) -> Self {
         Self {
             sender,
             dropped_output: AtomicBool::new(false),
             decoder: Mutex::new(OutputDecoder::default()),
+            event_bus,
+            target_id,
         }
+    }
+
+    fn publish_chunk(&self, stream: ActionOutputStream, bytes: &[u8]) {
+        let Some(bus) = &self.event_bus else { return };
+        let Some(target_id) = &self.target_id else {
+            return;
+        };
+        bus.publish(RunEvent::LogChunk {
+            at_epoch_ms: now_epoch_ms(),
+            target_id: target_id.clone(),
+            stream: match stream {
+                ActionOutputStream::Stdout => LogStream::Stdout,
+                ActionOutputStream::Stderr => LogStream::Stderr,
+            },
+            bytes: bytes.to_vec(),
+        });
     }
 
     fn queue(&self, stream: ActionOutputStream, text: String) {
@@ -207,6 +233,7 @@ impl ActionOutputObserver for OutputObserver {
         if bytes.is_empty() {
             return;
         }
+        self.publish_chunk(stream, bytes);
         let text = self
             .decoder
             .lock()
@@ -218,10 +245,21 @@ impl ActionOutputObserver for OutputObserver {
     }
 }
 
+fn now_epoch_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or_default()
+}
+
 impl Publisher {
     #[must_use]
     fn from_store(store: RunStore) -> Self {
         Self { store }
+    }
+
+    fn event_bus(&self) -> RunEventBus {
+        self.store.event_bus()
     }
 
     #[allow(clippy::unused_async)]
@@ -246,12 +284,80 @@ impl Publisher {
             static_report_path: None,
             output_byte_count: 0,
         });
+        let bus = self.event_bus();
+        bus.publish(RunEvent::RunStarted {
+            at_epoch_ms: i64::try_from(context.started_at_ms).unwrap_or(i64::MAX),
+        });
+        bus.publish(RunEvent::TargetQueued {
+            at_epoch_ms: i64::try_from(context.started_at_ms).unwrap_or(i64::MAX),
+            target_id: context.target.clone(),
+        });
+    }
+
+    /// Announce that the target is doing an action-cache lookup.
+    #[allow(clippy::unused_async)]
+    pub async fn target_cache_checking(&self, context: &RunContext) {
+        self.event_bus().publish(RunEvent::TargetPhase {
+            at_epoch_ms: now_epoch_ms(),
+            target_id: context.target.clone(),
+            phase: Phase::CacheChecking,
+        });
+    }
+
+    /// Announce that the target has moved past cache decision into
+    /// worker allocation, sandbox setup, and input materialization.
+    #[allow(clippy::unused_async)]
+    pub async fn target_preparing(&self, context: &RunContext) {
+        self.event_bus().publish(RunEvent::TargetPhase {
+            at_epoch_ms: now_epoch_ms(),
+            target_id: context.target.clone(),
+            phase: Phase::Preparing,
+        });
+    }
+
+    /// Announce that the target subprocess has finished and outputs
+    /// are being collected and validated.
+    #[allow(clippy::unused_async)]
+    pub async fn target_capturing(&self, context: &RunContext) {
+        self.event_bus().publish(RunEvent::TargetPhase {
+            at_epoch_ms: now_epoch_ms(),
+            target_id: context.target.clone(),
+            phase: Phase::Capturing,
+        });
+    }
+
+    /// Announce that the target has begun executing. Emits
+    /// `TargetStarted` followed by `TargetPhase(Executing)`.
+    #[allow(clippy::unused_async)]
+    pub async fn target_executing(&self, context: &RunContext) {
+        let bus = self.event_bus();
+        let at = now_epoch_ms();
+        bus.publish(RunEvent::TargetStarted {
+            at_epoch_ms: at,
+            target_id: context.target.clone(),
+        });
+        bus.publish(RunEvent::TargetPhase {
+            at_epoch_ms: at,
+            target_id: context.target.clone(),
+            phase: Phase::Executing,
+        });
+    }
+
+    /// Announce that the target has moved into the publishing phase
+    /// (writing outputs and evidence to CAS).
+    #[allow(clippy::unused_async)]
+    pub async fn target_publishing(&self, context: &RunContext) {
+        self.event_bus().publish(RunEvent::TargetPhase {
+            at_epoch_ms: now_epoch_ms(),
+            target_id: context.target.clone(),
+            phase: Phase::Publishing,
+        });
     }
 
     #[allow(clippy::unused_async)]
     pub async fn finished(
         &self,
-        _context: &RunContext,
+        context: &RunContext,
         action_digest: &str,
         duration_ms: u64,
         cache: &str,
@@ -271,19 +377,47 @@ impl Publisher {
             run.exit_code = Some(exit_code);
             run.test_results = test_results;
         });
+        let bus = self.event_bus();
+        bus.publish(RunEvent::TargetCompleted {
+            at_epoch_ms: now_epoch_ms(),
+            target_id: context.target.clone(),
+            result: if exit_code == 0 {
+                TargetResult::Succeeded
+            } else {
+                TargetResult::Failed
+            },
+            was_cached: cache.eq_ignore_ascii_case("hit"),
+            duration_ms: i64::try_from(duration_ms).unwrap_or(i64::MAX),
+        });
+        bus.publish(RunEvent::RunCompleted {
+            at_epoch_ms: now_epoch_ms(),
+            exit_status: exit_code,
+        });
     }
 
     #[allow(clippy::unused_async)]
-    pub async fn failed(&self, _context: &RunContext, duration_ms: u64) {
+    pub async fn failed(&self, context: &RunContext, duration_ms: u64) {
         self.store.update(|run| {
             run.status = "failed".to_string();
             run.duration_ms = Some(duration_ms);
             run.exit_code = Some(1);
         });
+        let bus = self.event_bus();
+        bus.publish(RunEvent::TargetCompleted {
+            at_epoch_ms: now_epoch_ms(),
+            target_id: context.target.clone(),
+            result: TargetResult::Failed,
+            was_cached: false,
+            duration_ms: i64::try_from(duration_ms).unwrap_or(i64::MAX),
+        });
+        bus.publish(RunEvent::RunCompleted {
+            at_epoch_ms: now_epoch_ms(),
+            exit_status: 1,
+        });
     }
 
     #[must_use]
-    pub fn live_output(&self, _context: &RunContext) -> LiveOutput {
+    pub fn live_output(&self, context: &RunContext) -> LiveOutput {
         let (sender, mut receiver) = mpsc::channel(OUTPUT_CHANNEL_CAPACITY);
         let store = self.store.clone();
         tokio::spawn(async move {
@@ -305,7 +439,11 @@ impl Publisher {
             }
         });
         LiveOutput {
-            observer: Arc::new(OutputObserver::new(sender)),
+            observer: Arc::new(OutputObserver::new(
+                sender,
+                Some(self.event_bus()),
+                Some(context.target.clone()),
+            )),
         }
     }
 
@@ -341,6 +479,13 @@ impl LiveOutput {
 }
 
 impl RunContext {
+    /// Copy of the run id as an owned string. Used by the optional
+    /// event ingest path to name the run on the wire.
+    #[must_use]
+    pub fn run_id_string(&self) -> String {
+        self.run_id.clone()
+    }
+
     #[must_use]
     pub fn build(workspace: &Path, target: String, configuration: &BuildConfiguration) -> Self {
         Self::new(workspace, target, configuration, RunOperation::Build)
@@ -579,7 +724,7 @@ mod tests {
     #[test]
     fn retains_split_utf8_output() {
         let (sender, mut receiver) = mpsc::channel(1);
-        let observer = OutputObserver::new(sender);
+        let observer = OutputObserver::new(sender, None, None);
 
         observer.observe(ActionOutputStream::Stdout, &[0xe2, 0x80]);
         assert!(receiver.try_recv().is_err());
@@ -597,7 +742,7 @@ mod tests {
     #[test]
     fn marks_dropped_output_when_the_channel_is_full() {
         let (sender, _receiver) = mpsc::channel(1);
-        let observer = OutputObserver::new(sender);
+        let observer = OutputObserver::new(sender, None, None);
 
         observer.observe(ActionOutputStream::Stdout, b"first");
         observer.observe(ActionOutputStream::Stdout, b"second");

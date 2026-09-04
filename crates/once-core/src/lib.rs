@@ -11,6 +11,7 @@ mod contract;
 mod directory_blob;
 mod env;
 mod error;
+mod events;
 mod evidence;
 mod execute;
 mod execution_path;
@@ -51,6 +52,9 @@ pub use env::{
     workspace_tool_env_with_executables, workspace_tool_var, ToolEnvError, MANAGED_MISE_VERSION,
 };
 pub use error::{Error, Result};
+pub use events::{
+    LogStream, Phase, RunEvent, RunEventBus, TargetResult, TestCaseResult, TestTotals,
+};
 pub use evidence::{
     EvidenceCacheState, EvidenceRecord, EvidenceStatus, EvidenceStore, EvidenceSubject,
 };
