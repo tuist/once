@@ -3473,6 +3473,7 @@ dependencies = [
  "axum",
  "blake3",
  "console",
+ "fd-lock",
  "futures",
  "glob",
  "libc",
