@@ -80,7 +80,7 @@ jobs:
         with:
           experimental: true
           cache: true
-      - run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
+      - run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
       - run: rustup component add clippy
       - uses: Swatinem/rust-cache@v2
         with:
@@ -105,7 +105,7 @@ jobs:
           experimental: true
           cache: true
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
+        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: tests-${{ matrix.os }}
@@ -131,7 +131,7 @@ jobs:
           experimental: true
           cache: true
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
+        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: release-build-${{ matrix.os }}
@@ -172,7 +172,7 @@ jobs:
         with:
           experimental: true
           cache: true
-      - run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
+      - run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: tuist-cache-smoke
@@ -253,7 +253,7 @@ jobs:
           experimental: true
           cache: true
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
+        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
       - uses: actions/download-artifact@v8
         with:
           name: once-${{ matrix.os }}
