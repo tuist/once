@@ -5,6 +5,7 @@ members = [
     "crates/once-cli",
     "crates/once-core",
     "crates/once-cas",
+    "crates/once-events-client",
     "crates/once-frontend",
     "crates/once-host-tree",
 ]

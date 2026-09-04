@@ -9,6 +9,8 @@ pub mod cargo;
 pub mod change_tracker;
 pub mod compatibility;
 pub mod edit;
+#[cfg(feature = "events-ingest")]
+pub mod events;
 pub mod evidence;
 pub mod exec;
 pub mod fingerprint;
@@ -19,6 +21,7 @@ pub mod run;
 pub mod runtime;
 pub mod surface;
 pub mod swift;
+pub mod test_events_cargo;
 pub mod test_schedule;
 pub mod toolchain;
 pub mod ui;

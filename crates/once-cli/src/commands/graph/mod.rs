@@ -114,11 +114,30 @@ pub async fn build(
     } else {
         None
     };
+    // Optional live event ingest to a compatible ingest server. Enabled
+    // by ONCE_EVENTS_ENDPOINT; failures are logged and never abort the
+    // run. Subscribing before publisher.started() ensures RunStarted
+    // is captured. Gated behind the `events-ingest` build feature so
+    // that self-hosted graph builds of the CLI do not require the
+    // once-events-client crate.
+    #[cfg(feature = "events-ingest")]
+    let mut event_client = if let (Some(server), Some(context)) = (&ui_server, &run_context) {
+        match crate::commands::events::try_start(server, context.run_id_string()).await {
+            Ok(handle) => handle,
+            Err(error) => {
+                tracing::warn!(%error, "event ingest disabled for this run");
+                None
+            }
+        }
+    } else {
+        None
+    };
     if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
         publisher.started(run_context).await;
         publisher
             .progress(run_context, "Preparing the Once build graph…\n")
             .await;
+        publisher.target_cache_checking(run_context).await;
     }
     let live_output = publisher
         .as_ref()
@@ -209,6 +228,8 @@ pub async fn build(
                 "Analysing the Once targets and starting actions…\n",
             )
             .await;
+        publisher.target_preparing(run_context).await;
+        publisher.target_executing(run_context).await;
     }
     session.with_known_changes(changes);
     let session = session;
@@ -340,6 +361,8 @@ pub async fn build(
         }
     }
     if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
+        publisher.target_capturing(run_context).await;
+        publisher.target_publishing(run_context).await;
         publisher
             .finished(
                 run_context,
@@ -356,6 +379,12 @@ pub async fn build(
             .await;
     }
     write_record(output, &record).await?;
+    #[cfg(feature = "events-ingest")]
+    if let Some(handle) = event_client.take() {
+        handle
+            .shutdown_with_timeout(std::time::Duration::from_secs(3))
+            .await;
+    }
     write_runs_report(workspace, ui_server.as_ref()).await;
     Ok(ExitCode::SUCCESS)
 }

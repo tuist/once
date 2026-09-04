@@ -10,9 +10,17 @@ repository.workspace = true
 name = "once"
 path = "src/main.rs"
 
+[features]
+default = ["events-ingest"]
+# Wire the RFC 0008 live event ingest client. Off in the Once graph
+# release build so that self-hosted builds do not need the extra
+# crate; on by default for cargo builds.
+events-ingest = ["dep:once-events-client", "dep:tonic"]
+
 [dependencies]
 once-cas.workspace = true
 once-core = { workspace = true, features = ["remote-microsandbox"] }
+once-events-client = { version = "0.0.0", path = "../once-events-client", optional = true }
 once-frontend.workspace = true
 
 anyhow.workspace = true
@@ -31,6 +39,7 @@ thiserror.workspace = true
 toml.workspace = true
 toon-rust.workspace = true
 tokio.workspace = true
+tonic = { workspace = true, optional = true }
 tree-sitter.workspace = true
 tree-sitter-cypher.workspace = true
 tracing.workspace = true
