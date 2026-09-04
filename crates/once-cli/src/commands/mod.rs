@@ -19,6 +19,7 @@ pub mod mcp;
 pub mod query;
 pub mod run;
 pub mod runtime;
+pub mod sound_seed;
 pub mod surface;
 pub mod swift;
 pub mod test_events_cargo;
