@@ -5691,7 +5691,7 @@ def _swiftpm_package_path(ctx, value):
     return value
 
 def _swiftpm_build_triple_dir(platform, sdk_variant, arch):
-    return _apple_swiftmodule_triple(platform, sdk_variant, arch, False)
+    return _apple_triple(platform, "", sdk_variant, arch, False)
 
 def _swiftpm_absolute_package_path(ctx, value):
     path = _swiftpm_package_path(ctx, value)
