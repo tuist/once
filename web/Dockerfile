@@ -17,8 +17,9 @@ FROM rust:${RUST_VERSION}-slim-bookworm AS once-builder
 
 # libcap-ng is required to link the `once` binary (via the microsandbox deps).
 # libasound2-dev is required to link the ALSA backend of cpal, which rodio
-# uses for the optional --sound flag.
-RUN apt-get update -y && apt-get install -y libcap-ng-dev libasound2-dev \
+# uses for the optional --sound flag; pkg-config resolves alsa-sys's link
+# flags and is not present in the slim Rust base image by default.
+RUN apt-get update -y && apt-get install -y libcap-ng-dev libasound2-dev pkg-config \
     && apt-get clean && rm -f /var/lib/apt/lists/*_*
 
 WORKDIR /src
