@@ -79,6 +79,42 @@ pub fn target_publishing(bus: &RunEventBus, target_id: &str) {
     });
 }
 
+/// Publish `RunCompleted` for the whole run. Used at the outer run
+/// boundary when the scheduler already published a per-target
+/// `TargetCompleted` for the top-level target and only the terminal
+/// run event is missing.
+pub fn run_completed(bus: &RunEventBus, exit_code: i32) {
+    bus.publish(RunEvent::RunCompleted {
+        at_epoch_ms: now_epoch_ms(),
+        exit_status: exit_code,
+    });
+}
+
+/// Publish `TargetCompleted` for one target with no `RunCompleted`.
+/// Used by the graph scheduler which fires many of these as
+/// dependencies finish; the outer run publishes its own `RunCompleted`
+/// via [`target_finished`] or [`run_completed`].
+pub fn target_completed(
+    bus: &RunEventBus,
+    target_id: &str,
+    duration_ms: u64,
+    was_cached: bool,
+    exit_code: i32,
+) {
+    let result = if exit_code == 0 {
+        TargetResult::Succeeded
+    } else {
+        TargetResult::Failed
+    };
+    bus.publish(RunEvent::TargetCompleted {
+        at_epoch_ms: now_epoch_ms(),
+        target_id: target_id.to_string(),
+        result,
+        was_cached,
+        duration_ms: i64::try_from(duration_ms).unwrap_or(i64::MAX),
+    });
+}
+
 /// Publish `TargetCompleted` for a target that finished (any outcome)
 /// followed by `RunCompleted` for the whole run. The cache label is
 /// interpreted case-insensitively: `hit` maps to `was_cached=true`.

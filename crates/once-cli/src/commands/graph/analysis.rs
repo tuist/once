@@ -190,6 +190,10 @@ pub(super) struct BuildSession {
     target_outcomes: Arc<TargetOutcomes>,
     sandbox: SandboxMode,
     output_observer: Option<Arc<dyn ActionOutputObserver>>,
+    /// Optional per-run event bus so the scheduler can publish
+    /// `TargetStarted` / `TargetCompleted` per graph target while it
+    /// walks the dependency closure.
+    event_bus: Option<once_core::RunEventBus>,
 }
 
 struct Resolution {
@@ -343,6 +347,7 @@ impl BuildSession {
             )),
             sandbox,
             output_observer: None,
+            event_bus: None,
         }
     }
 
@@ -356,6 +361,15 @@ impl BuildSession {
         output_observer: Arc<dyn ActionOutputObserver>,
     ) -> Self {
         self.output_observer = Some(output_observer);
+        self
+    }
+
+    /// Wire the session to publish per-target lifecycle events onto
+    /// the given bus while it schedules dependencies. Without this the
+    /// scheduler is silent per-target and only the outer run's own
+    /// events fire.
+    pub(super) fn with_event_bus(mut self, bus: once_core::RunEventBus) -> Self {
+        self.event_bus = Some(bus);
         self
     }
 
@@ -729,6 +743,7 @@ impl BuildSession {
             sandbox: self.sandbox,
             resources: Arc::clone(&self.resources),
             output_observer: self.output_observer.clone(),
+            event_bus: self.event_bus.clone(),
         }
     }
 
@@ -1110,6 +1125,11 @@ struct BuildContext {
     pub sandbox: SandboxMode,
     pub resources: Arc<ResourcePool>,
     pub output_observer: Option<Arc<dyn ActionOutputObserver>>,
+    /// When set, `build_one` publishes per-target lifecycle events onto
+    /// this bus so the terminal reporter (and other subscribers) can
+    /// render live per-dependency progress rather than only the
+    /// top-level target's phase transitions.
+    pub event_bus: Option<once_core::RunEventBus>,
 }
 
 /// Analyse one target, reusing a stored analysis when its recorded answers
@@ -1199,6 +1219,7 @@ async fn build_one(
         sandbox,
         resources,
         output_observer,
+        event_bus,
     } = context;
     let DependencyInputs {
         providers,
@@ -1209,6 +1230,10 @@ async fn build_one(
 
     ensure_graph_target_valid(&target)?;
     let target_id = target.label.id.clone();
+    let build_started_at = std::time::Instant::now();
+    if let Some(bus) = &event_bus {
+        crate::bus_events::target_executing(bus, &target_id);
+    }
     // Names this build: the same target definition, reached through the same
     // dependency outcomes, analysed by the same code against the same
     // configuration. Computed once and used both to look for a recorded
@@ -1227,6 +1252,18 @@ async fn build_one(
     {
         if let Some(outcome) = target_outcomes.reuse(&target, &key, &changes) {
             target_outcomes.carry_forward(&target_id);
+            if let Some(bus) = &event_bus {
+                let duration_ms =
+                    u64::try_from(build_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+                let was_cached = matches!(outcome.cache_state, once_core::EvidenceCacheState::Hit);
+                crate::bus_events::target_completed(
+                    bus,
+                    &target_id,
+                    duration_ms,
+                    was_cached,
+                    outcome.result.exit_code,
+                );
+            }
             return Ok((target_id, outcome));
         }
     }
@@ -1291,6 +1328,17 @@ async fn build_one(
         .map(|key| target_outcomes::key(key, &action_digests))
     {
         target_outcomes.record(&target, key, &observations, &declared_inputs, &outcome);
+    }
+    if let Some(bus) = &event_bus {
+        let duration_ms = u64::try_from(build_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let was_cached = matches!(outcome.cache_state, once_core::EvidenceCacheState::Hit);
+        crate::bus_events::target_completed(
+            bus,
+            &target_id,
+            duration_ms,
+            was_cached,
+            outcome.result.exit_code,
+        );
     }
     Ok((target_id, outcome))
 }

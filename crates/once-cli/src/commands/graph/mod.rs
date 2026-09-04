@@ -245,7 +245,9 @@ pub async fn build(
     .await
     {
         Ok(session) => {
-            let session = session.with_resource_limits(resource_limits);
+            let session = session
+                .with_resource_limits(resource_limits)
+                .with_event_bus(bus.clone());
             match (&live_output, &bus_observer) {
                 (Some(live_output), _) => session.with_output_observer(live_output.observer()),
                 (None, Some(observer)) => session.with_output_observer(observer.clone()),
@@ -433,13 +435,10 @@ pub async fn build(
             )
             .await;
     }
-    bus_events::target_finished(
-        &bus,
-        target_id,
-        duration_ms,
-        &record.cache,
-        record.result.exit_code,
-    );
+    // The scheduler already fired `TargetCompleted` for the top-level
+    // target from `build_one`; publish only the outer `RunCompleted`
+    // here to avoid a duplicate completion line.
+    bus_events::run_completed(&bus, record.result.exit_code);
     write_record(output, &record).await?;
     #[cfg(feature = "events-ingest")]
     if let Some(handle) = event_client.take() {
@@ -696,7 +695,8 @@ pub async fn test_with_filters(
         resolved,
     )
     .await?
-    .with_resource_limits(resource_limits);
+    .with_resource_limits(resource_limits)
+    .with_event_bus(bus.clone());
     let session = match (&live_output, &bus_observer) {
         (Some(live_output), _) => session.with_output_observer(live_output.observer()),
         (None, Some(observer)) => session.with_output_observer(observer.clone()),
@@ -784,13 +784,10 @@ pub async fn test_with_filters(
             )
             .await;
     }
-    bus_events::target_finished(
-        &bus,
-        target_id,
-        duration_ms,
-        &record.cache,
-        record.result.exit_code,
-    );
+    // The scheduler already fired `TargetCompleted` for the top-level
+    // target from `build_one`; publish only the outer `RunCompleted`
+    // here to avoid a duplicate completion line.
+    bus_events::run_completed(&bus, record.result.exit_code);
     write_record(output, &record).await?;
     write_runs_report(workspace, ui_server.as_ref()).await;
     emit_capability_completion_sounds(&record);
