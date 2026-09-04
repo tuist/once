@@ -51,20 +51,15 @@ npm install
 
 Once never installs Node.js dependencies or updates lock files.
 
-Discover and preview the native integration:
+Inspect the automatically derived graph:
 
 ```sh
-once native list
-once native show nx
+once query workspace
+once query targets --kind nx_task
 ```
 
-Initialize the seed:
-
-```sh
-once native init nx
-```
-
-The imported target is equivalent to:
+No `once.toml` is required. To configure the resolver explicitly, author a
+target equivalent to:
 
 ```toml
 [[target]]

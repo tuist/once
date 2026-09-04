@@ -18,12 +18,13 @@ without `once.toml` can therefore query and build its first-party package
 targets directly. Discovery skips generated package-manager state such as
 `.build` and `.swiftpm`.
 
-For locked source-control dependencies, the resolver materializes the pinned
-sources and lowers their package targets into the same Apple target kinds.
-Once compiles those targets directly with the selected Swift compiler. Swift
-Package Manager supplies manifest and lockfile metadata, but does not build
-the dependency products. Registry dependencies are not supported by native
-package lowering yet.
+For source-control dependencies, the resolver uses `Package.resolved` or asks
+Swift Package Manager to create it when it is absent. It materializes the
+pinned sources and lowers their package targets into the same Apple target
+kinds. Once compiles those targets directly with the selected Swift compiler.
+Swift Package Manager supplies manifest and lockfile metadata, but does not
+build the dependency products. Registry dependencies are not supported by
+native package lowering yet.
 
 ## Attributes
 
@@ -46,27 +47,14 @@ build products.
 
 ## Direct use
 
-Discover and preview a package without writing a manifest:
+Inspect the automatically derived graph without writing a manifest:
 
 ```sh
-once native list
-once native show swift_package
+once query workspace
+once query targets
 ```
 
-For a repository with several package roots, select one workspace-relative root
-path:
-
-```sh
-once native show swift_package --path modules/service
-```
-
-Store the generated seed only when it should be reviewed in `once.toml`:
-
-```sh
-once native init swift_package
-```
-
-The imported seed is equivalent to:
+To configure the resolver explicitly, author a seed equivalent to:
 
 ```toml
 [[target]]

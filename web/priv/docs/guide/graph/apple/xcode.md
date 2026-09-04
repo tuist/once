@@ -38,7 +38,7 @@ project, so there is nothing to write. From the directory holding the
 `.xcodeproj`:
 
 ```sh
-once native list
+once query workspace
 once query targets
 ```
 
@@ -46,14 +46,20 @@ Once detects the project, supplies an ephemeral `xcode_workspace` seed, and
 resolves the graph. Build and test commands work against that graph
 immediately, with no `once.toml` in the repository.
 
-Persist the seed only when you want it under version control:
+For the shortest end-to-end trial, build the discovered project and watch the
+live action graph in the Runs interface:
 
 ```sh
-once native init xcode
+once build --ui
+once test
 ```
 
-That writes the seed target and nothing else. The `.xcodeproj` stays
-authoritative for everything the seed resolves.
+No scheme or Once target name is needed when the directory contains one
+discovered Xcode project. If Once discovers several project roots, use the
+identifiers from `once query targets` to choose one explicitly.
+
+Discovery does not write `once.toml`. The `.xcodeproj` stays authoritative for
+everything the seed resolves.
 
 ## Declare the Seed Explicitly
 
@@ -131,11 +137,15 @@ once query capabilities BrowserKit
 
 ## Build and Test
 
-Building the seed builds every target the project resolved to:
+Building without a target selects the one discovered project seed. Application
+projects build their application roots; library-only projects build their
+non-test products:
 
 ```sh
-once build xcode
+once build --ui
 ```
+
+Omit `--ui` for ordinary terminal-only output.
 
 Building one lowered target builds only that target and its dependencies:
 
@@ -153,6 +163,10 @@ test target:
 ```sh
 once test ClientTests
 ```
+
+Run `once test` with no target to select the first-party test bundles rooted in
+the discovered project. `once test --all` includes tests from the complete
+resolved graph.
 
 See [Testing and Scheduling](/guide/graph/testing) for selection and reporting,
 and that target kind's limitations for the test shapes that are supported.

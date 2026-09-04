@@ -22,9 +22,8 @@ workspace references and merges their targets into one graph, so dependencies
 that cross a project boundary are wired. A referenced project that is not on
 disk is skipped instead of failing the graph.
 
-Xcode projects, including projects in nested packages, are recognized as
-native projects named `xcode`, so their seeds are supplied without any
-`once.toml`. Use `once native init xcode` to persist a selected seed.
+Xcode projects, including projects in nested packages, are recognized
+automatically, so their seeds are supplied without any `once.toml`.
 
 When an Xcode project uses a workspace-level `Package.resolved`, Once uses its
 matching pinned revisions while lowering remote Swift packages. Checksum-pinned
@@ -76,8 +75,10 @@ their own kinds, so downstream targets depend on them normally.
 | --- | --- |
 | `build` | none |
 
-Building the seed builds every lowered target. Lowered targets can also be
-built, run, and tested individually by name.
+Building the seed builds application roots, or every non-test product in a
+library-only project. Resolver metadata selects first-party test bundles for
+targetless `once test`. Lowered targets can also be built, run, and tested
+individually by name.
 
 ## Tools
 

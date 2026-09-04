@@ -124,7 +124,7 @@ native = native_project(
   drives the bounded scan.
 - `inputs` adds optional text globs to the seed's resolver inputs. Markers are
   always included.
-- `target_name` names the virtual or initialized target.
+- `target_name` names the ephemeral seed target.
 - `exclude` lists directory names skipped during discovery.
 - `input_exclude` lists directory names that cannot hold a resolver input, so
   gathering the seed's inputs does not descend into them. This is a different
@@ -139,10 +139,14 @@ native = native_project(
   directory-spanning markers such as `*.xcodeproj/project.pbxproj`.
 - `max_depth` bounds discovery.
 - `requires_tools` reports executables needed when the seed resolver runs.
+- `owns_descendants = true` makes a matched workspace root take precedence over
+  other native project seeds beside or below it. Use this for a native
+  workspace whose checked tree intentionally contains another package format,
+  examples, or third-party projects that belong to the outer build.
 
 Detection reads file names only. It does not evaluate executable manifests or
-invoke native tools. Previewing or loading the graph runs the seed target's
-resolver through the normal trusted analysis boundary.
+invoke native tools. Loading the graph runs the seed target's resolver through
+the normal trusted analysis boundary.
 
 Discovery retains at most 16 mebibytes of match records. Once stops with an
 error if a workspace produces more, rather than allowing repository size to
@@ -155,25 +159,16 @@ unrelated root target does not hide native roots elsewhere in a monorepo.
 The configured workspace include and exclude patterns still define the
 boundary.
 
-Discover and preview native roots from the command line:
+Inspect the automatically derived graph through the ordinary query surface:
 
 ```sh
-once native list
-once native show native
+once query workspace
+once query targets
 ```
 
-Initialize only the stable seed when the repository should own the selection:
-
-```sh
-once native init native
-```
-
-Initialization is idempotent and preserves unrelated `once.toml` configuration and
-comments. Resolver-emitted dependency and product targets remain derived from
-the native manifest and lockfile.
-
-[Model Context Protocol](https://modelcontextprotocol.io/) callers use the
-matching `once_native_list`, `once_native_show`, and `once_native_init` tools.
+Discovery never writes `once.toml`. Resolver-emitted dependency and product
+targets remain derived from the native manifest and lockfile. Model Context
+Protocol callers use `once_query_workspace` and `once_query_targets`.
 
 ## Dependency Resolver Contract
 
@@ -245,9 +240,17 @@ cannot replace a value declared by the owner target. Expansion stops at
 100,000 workspace targets so a recursive resolver cannot grow the graph
 without bound.
 
-Ordinary builds consume locked metadata and already materialized sources. A
-separate explicit update workflow should invoke the native package manager when
-the lockfile or source set needs to change. Modules may use the
+Built-in native workspace resolvers record first-party test target names in
+the non-configurable `_default_test_roots` attribute. Targetless `once test`
+uses that metadata to avoid running test suites that belong only to resolved
+dependencies. A custom resolver can use the same convention by declaring the
+attribute as `list<string>` on its seed target kind and returning the generated
+test names through `attrs`.
+
+Resolvers should preserve the ecosystem's authoritative lockfile and source
+selection. They may invoke the native package manager when a missing lockfile
+must be created or pinned sources must be materialized, and should surface its
+failure without inventing a parallel resolution. Modules may use the
 [PubGrub version-solving algorithm](https://github.com/dart-lang/pub/blob/master/doc/solver.md)
 for an ecosystem that has no authoritative resolver, but it is not the primary
 integration boundary.

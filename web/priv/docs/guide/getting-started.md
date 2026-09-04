@@ -18,7 +18,30 @@ pin its own Once version in `mise.toml`.
 The remaining examples assume that mise is active in your shell. If it is
 not, prefix each `once` command with `mise exec --`.
 
-## Run A Cacheable Script
+## Try an Existing Project
+
+If the repository already uses Cargo, Swift Package Manager, Xcode, or Bazel,
+try it before writing Once configuration:
+
+```sh
+cd path/to/project
+once query targets
+once build --ui
+once test
+```
+
+Once recognizes the native workspace from its existing files. The build opens
+the Runs interface so you can follow the live graph and see which actions are
+running or reused. The test command selects first-party tests by default. No
+`once.toml` is created. Add `--ui` to `once test` when you also want to follow
+test batches and results in the Runs interface.
+
+Continue with the matching guide for [Rust](/guide/graph/rust), [Swift
+Packages](/guide/graph/swift-packages), [Xcode
+Projects](/guide/graph/apple/xcode), or [Bazel](/guide/graph/bazel) for
+prerequisites, native dependency behavior, and current boundaries.
+
+## Run a Cacheable Script
 
 Create `scripts/greet.sh` in a repository:
 

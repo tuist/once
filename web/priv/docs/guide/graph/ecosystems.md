@@ -68,6 +68,8 @@ contents remain part of action keys.
 Full build ecosystems have incremental guides with a first project,
 query-before-build workflow, current limitations, and follow-up steps:
 
+- [Bazel](/guide/graph/bazel) builds and tests an existing Bazel workspace
+  without a Once manifest while Bazel retains its native graph and cache.
 - [Apple](/guide/graph/apple) covers libraries, frameworks, applications, and
   tests written in Swift, Objective-C, C, and C++.
 - [Xcode Projects](/guide/graph/apple/xcode) covers reading an existing

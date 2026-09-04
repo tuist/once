@@ -10,32 +10,26 @@ targets. Swift Package Manager remains authoritative for manifests, version
 selection, and `Package.resolved`; Once uses that information to build and
 cache the targets it derives.
 
-## Start From A Native Package
+## Start From a Native Package
 
 Once recognizes `Package.swift` automatically and lowers first-party package
 targets into the existing Apple target kinds. This works without `once.toml`:
 
 ```sh
-once native list
-once native show swift_package
+once query workspace
 once query targets
-```
-
-If a repository contains several package roots, select the workspace-relative
-root path reported by discovery:
-
-```sh
-once native show swift_package --path modules/service
+once build --ui
+once test
 ```
 
 The generated `swift_package_workspace` seed reads the package manifest and
 derives first-party libraries, executables, macros, binary targets, and tests.
-Discovery skips generated `.build` and `.swiftpm` directories. Store the seed
-only when it should be reviewed in `once.toml`:
-
-```sh
-once native init swift_package
-```
+Discovery skips generated `.build` and `.swiftpm` directories and does not
+write `once.toml`. `once build` selects the package workspace when it is the
+only discovered build root. `--ui` opens the Runs interface so the first
+compile is visible target by target. `once test` runs first-party test bundles
+and excludes test bundles that belong only to resolved packages. Use `once
+test --all` when you intentionally want the complete resolved test graph.
 
 ## Keep Swift Package Manager Commands
 
@@ -103,17 +97,21 @@ compiler, software development kit, linker, and code-signing path work.
 
 ## Packages With Remote Dependencies
 
-Commit `Package.resolved` with `Package.swift`. Native package lowering uses
-the lockfile to materialize each source-control dependency at its pinned
-revision. It then derives and compiles the dependency targets directly, so
-Swift Package Manager does not build a separate dependency graph. Registry
-dependencies are not supported by this native path yet.
+Native package lowering uses `Package.resolved` to materialize each
+source-control dependency at its pinned revision. When a package declares
+dependencies but does not commit the lockfile, Once asks Swift Package Manager
+to resolve them and uses the generated lockfile. It then derives and compiles
+the dependency targets directly, so Swift Package Manager does not build a
+separate dependency graph. Registry dependencies are not supported by this
+native path yet.
 
 The ordinary workflow stays the same:
 
 ```sh
-once native show swift_package
+once query targets
 once build SwiftPackage_MyPackage_MyLibrary
 ```
 
-There is no initialization step or network setting for the native workflow.
+There is no Once initialization step. A first build can access the network when
+Swift Package Manager must create `Package.resolved` or Once must materialize a
+pinned source dependency.
