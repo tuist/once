@@ -46,6 +46,12 @@ jobs:
           install_args: "git-cliff"
       - name: Detect release
         id: detect
+        env:
+          # git-cliff resolves pull request titles and authors through the
+          # GitHub API. Unauthenticated calls from Actions runners get rate
+          # limited, and git-cliff treats that as fatal, so the token is what
+          # keeps release detection from failing.
+          GITHUB_TOKEN: ${{ github.token }}
         run: mise run release:detect
 
   build:
@@ -214,6 +220,8 @@ jobs:
       - name: Flatten artifacts
         run: find dist -type f -exec mv {} dist/ \;
       - name: Generate release notes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: mise run release:notes --version "${{ needs.detect.outputs.next-version }}" > release-notes.md
       - name: Publish release
         env:
