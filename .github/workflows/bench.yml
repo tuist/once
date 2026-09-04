@@ -38,7 +38,7 @@ jobs:
           experimental: true
           cache: true
       - if: matrix.os == 'ubuntu-latest'
-        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
+        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: bench

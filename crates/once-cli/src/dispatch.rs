@@ -44,6 +44,24 @@ pub(crate) async fn dispatch(cli: Cli) -> Result<ExitCode> {
     .await
 }
 
+/// Whether this command produces action-shaped work worth marking with the
+/// `--sound` opening and closing tones. Informational verbs (query, cache
+/// stats, help-style paths) are left silent.
+fn command_makes_sound(command: &Cmd) -> bool {
+    matches!(
+        command,
+        Cmd::Build { .. }
+            | Cmd::Lint { .. }
+            | Cmd::Run { .. }
+            | Cmd::Test { .. }
+            | Cmd::Exec { .. }
+            | Cmd::Compatibility { .. }
+            | Cmd::PackageCompatibility { .. }
+            | Cmd::BazelCompatibility { .. }
+            | Cmd::CrateCompatibility { .. }
+    )
+}
+
 fn resolve_workspace(directory: Option<PathBuf>) -> Result<PathBuf> {
     let workspace = match directory {
         Some(directory) => {
@@ -76,6 +94,10 @@ async fn run_command(
     resource_limits: &ResourceLimits,
     command: Cmd,
 ) -> Result<ExitCode> {
+    if command_makes_sound(&command) {
+        crate::sound::seed(commands::sound_seed::for_command(&command));
+        crate::sound::emit(crate::sound::Event::Started);
+    }
     if let Some(invocation) = command.compatibility() {
         return Box::pin(commands::compatibility::run(
             workspace,

@@ -106,7 +106,8 @@ defmodule OnceSiteWeb.Docs.Sidebar do
           %Item{
             label: "Unchanged Builds",
             slug: "/docs/guide/local-execution/unchanged-builds"
-          }
+          },
+          %Item{label: "The Sound of Your Build", slug: "/docs/guide/local-execution/sound"}
         ]
       },
       %Group{

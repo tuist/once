@@ -57,7 +57,7 @@ jobs:
       - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925
 
       - name: Install native build dependencies
-        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
+        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
@@ -107,7 +107,7 @@ jobs:
       - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925
 
       - name: Install native build dependencies
-        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
+        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
