@@ -19,6 +19,15 @@ once --sound exec -- mise install --yes
 When the default audio device is unavailable (headless CI, no audio hardware)
 the flag has no effect and the command runs as if it had not been passed.
 
+On Linux, audio output goes through ALSA, and `once` links against it when it
+loads, whether or not you pass `--sound`. Minimal images such as
+`debian:*-slim` do not ship it, so install `libasound2` there before running
+`once`:
+
+```sh
+apt-get update && apt-get install -y libasound2
+```
+
 ## What You Hear
 
 Each run is one continuous piece of music. It has a beginning, a middle, and

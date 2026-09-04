@@ -83,8 +83,11 @@ jobs:
           version: ${{ env.MISE_VERSION }}
           # Restrict to the build tools needed on every matrix host.
           install_args: "rust jq"
+      # libcap-ng-dev links the embedded sandbox provider; libasound2-dev
+      # resolves the ALSA backend that the audio output layer links on
+      # Linux, whether or not sound is used at runtime.
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y binutils build-essential libcap-ng-dev
+        run: sudo apt-get update && sudo apt-get install -y binutils build-essential libcap-ng-dev libasound2-dev
       - name: Cache Rust
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
@@ -166,8 +169,9 @@ jobs:
         with:
           version: ${{ env.MISE_VERSION }}
           install_args: "rust jq"
+      # Same native libraries as the CLI build above.
       - if: startsWith(matrix.runner, 'ubuntu-')
-        run: sudo apt-get update && sudo apt-get install -y binutils build-essential libcap-ng-dev
+        run: sudo apt-get update && sudo apt-get install -y binutils build-essential libcap-ng-dev libasound2-dev
       - name: Cache Rust
         continue-on-error: true
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32

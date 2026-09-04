@@ -212,12 +212,19 @@ with the same pin.
 ## Native Dependencies
 
 Linux builds need `libcap-ng-dev` because the embedded Microsandbox
-provider links through native KVM support. Install it before running
-workspace builds locally on Linux:
+provider links through native KVM support, and `libasound2-dev` because
+the CLI links the ALSA backend of its audio output layer. The ALSA
+library is a load-time dependency of the resulting binary even when
+sound is never used, so `libasound2` has to be present on Linux hosts
+that run it. Install both before running workspace builds locally on
+Linux:
 
 ```sh
-sudo apt-get update && sudo apt-get install -y libcap-ng-dev
+sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
 ```
+
+Every Linux job that compiles the workspace needs the same two packages,
+release jobs included.
 
 ## Android Toolchain
 
