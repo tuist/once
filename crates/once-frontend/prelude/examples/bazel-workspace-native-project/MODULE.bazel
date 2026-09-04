@@ -1,0 +1,3 @@
+"""Minimal Bazel module used by the Once bazel_workspace native integration example."""
+
+module(name = "once_bazel_native_project_example")
