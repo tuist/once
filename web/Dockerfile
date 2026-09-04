@@ -16,7 +16,9 @@ ARG RUNNER_IMAGE="debian:${DEBIAN_VERSION}"
 FROM rust:${RUST_VERSION}-slim-bookworm AS once-builder
 
 # libcap-ng is required to link the `once` binary (via the microsandbox deps).
-RUN apt-get update -y && apt-get install -y libcap-ng-dev \
+# libasound2-dev is required to link the ALSA backend of cpal, which rodio
+# uses for the optional --sound flag.
+RUN apt-get update -y && apt-get install -y libcap-ng-dev libasound2-dev \
     && apt-get clean && rm -f /var/lib/apt/lists/*_*
 
 WORKDIR /src
@@ -29,7 +31,9 @@ FROM ${BUILDER_IMAGE} AS builder
 
 # chromium renders Open Graph images at build time; libcap-ng0 is the runtime
 # library the `once` binary (used to generate the CLI reference) links against.
-RUN apt-get update -y && apt-get install -y build-essential git chromium libcap-ng0 \
+# libasound2 is required at load time by the same binary because cpal
+# dynamically links against ALSA on Linux, even when --sound is not used.
+RUN apt-get update -y && apt-get install -y build-essential git chromium libcap-ng0 libasound2 \
     && apt-get clean && rm -f /var/lib/apt/lists/*_*
 
 WORKDIR /app
