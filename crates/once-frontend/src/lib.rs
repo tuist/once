@@ -39,9 +39,7 @@ pub use cache_provider::{
 pub use cache_resolution::{
     resolve_cache_provider, ResolvedCacheProviderConfig, ResolvedTuistCacheProviderConfig,
 };
-pub use error::{
-    CacheProviderError, Error, ManifestSchemaError, NativeProjectError, Result, ScriptHeaderError,
-};
+pub use error::{CacheProviderError, Error, ManifestSchemaError, Result, ScriptHeaderError};
 pub use examples::{load_example_bundle, load_target_kind_example};
 pub use graph::{
     built_in_target_kind_schema, built_in_target_kind_schemas, built_in_target_kind_schemas_result,
@@ -59,11 +57,6 @@ pub use manifest_editor::{
     apply_operations, apply_operations_with_schemas, EditOperation, TargetSpec, TargetUpdate,
 };
 pub use module_contract::{module_authoring_contract, ContractEntry, ModuleAuthoringContract};
-pub use native_project::{
-    detect_native_projects, discover_native_projects, native_project_schemas_for_workspace,
-    native_project_seed_target, preview_native_project, NativeProjectCatalog, NativeProjectMatch,
-    NativeProjectPreview, NativeProjectSchema,
-};
 pub use script::{parse_script_annotations, script_has_once_directives, ScriptAnnotations};
 pub use target::{AttrValue, Target};
 pub use target_ref::{

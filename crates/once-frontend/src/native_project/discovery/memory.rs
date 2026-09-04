@@ -264,6 +264,7 @@ mod tests {
             on_match: "stop".to_string(),
             max_depth: 16,
             requires_tools: Vec::new(),
+            owns_descendants: false,
         }
     }
 

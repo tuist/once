@@ -140,6 +140,19 @@ SH
     The path "$WORKSPACE/.once/out/SwiftPackage_OnceNativeSwiftPackage_OnceNativeSwiftPackageTests/test/test_results.json" should be file
   End
 
+  It 'builds and tests a discovered Swift package without a Once manifest'
+    Skip if 'Apple Swift toolchain unavailable on this host' swift_package_tools_unavailable
+    copy_native_package
+    rm "$WORKSPACE/once.toml"
+
+    When call /bin/sh -c '"$1" -C "$2" build --quiet && "$1" -C "$2" test --quiet' sh "$ONCE_BIN" "$WORKSPACE"
+    The status should be success
+    The stdout should include 'once: build swift_package (swift_package_workspace)'
+    The stdout should include 'test batches'
+    The path "$WORKSPACE/once.toml" should not be exist
+    The path "$WORKSPACE/.once/out/SwiftPackage_OnceNativeSwiftPackage_OnceNativeSwiftPackageTests/test/test_results.json" should be file
+  End
+
   It 'restores every declared artifact and invalidates only changed Swift actions'
     Skip if 'Apple Swift toolchain unavailable on this host' swift_package_tools_unavailable
 

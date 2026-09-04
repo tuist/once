@@ -376,6 +376,14 @@ def _rust_response_file_args(ctx, args, name):
         ),
     ]
 
+def _rust_materialized_cwd_arg(arg):
+    if arg.startswith(".once/"):
+        return _workspace_absolute(arg)
+    parts = _split_once(arg, "=")
+    if len(parts) == 2 and parts[1].startswith(".once/"):
+        return parts[0] + "=" + _workspace_absolute(parts[1])
+    return arg
+
 def _rust_user_flags(ctx):
     return _rust_attr(ctx, "rustc_flags", [])
 
@@ -1250,7 +1258,7 @@ def _rustc_unix_read_dependency_link_searches(stdout):
       ;;
   esac
 done < {stdout}
-""".format(stdout = _shell_quote(stdout))
+""".format(stdout = _shell_quote(_workspace_absolute(stdout)))
 
 def _rustc_unix_read_own_build_script_args(stdout):
     return """while IFS= read -r line; do
@@ -1287,7 +1295,7 @@ def _rustc_unix_read_own_build_script_args(stdout):
       ;;
   esac
 done < {stdout}
-""".format(stdout = _shell_quote(stdout))
+""".format(stdout = _shell_quote(_workspace_absolute(stdout)))
 
 def _rustc_unix_build_script_args(argv, own_stdout, dependency_stdouts):
     snippets = []
@@ -1625,11 +1633,17 @@ def _rust_compile(ctx, crate_type, default_root, output_name, test = False, prov
     wrapped = _rustc_with_build_script_args(ctx, argv, build_stdout, dependency_build_outputs)
     argv = wrapped[0]
     build_inputs.extend(wrapped[1])
+    compile_cwd = None
+    if materialized_sources and host_os() != "windows":
+        argv = [_rust_materialized_cwd_arg(arg) for arg in argv]
+        crate_manifest_dir = _rust_env(ctx).get("CARGO_MANIFEST_DIR") or _parent_dir(crate_root)
+        compile_cwd = _rust_manifest_dir(ctx, crate_manifest_dir)
     run_action(
         argv = argv,
         inputs = _unique(srcs + dep_inputs + dep_search_inputs + build_inputs + dependency_build_outputs + dependency_build_inputs + linker_script_inputs + (_rust_native_dep_link_inputs(deps) if crate_type != "rlib" else []) + _rust_extra_inputs(ctx)),
         outputs = [output],
         env = compile_env,
+        cwd = compile_cwd,
         toolchain_identity = identity + linker_identity,
         identifier = _rust_action_identifier(ctx, "rustc"),
     )
@@ -2292,9 +2306,10 @@ def _cargo_resolved_metadata(ctx, default_vendor_dir = "third_party/rust/vendor"
         host_metadata = None
         if target and target != host_triple:
             host_metadata = _cargo_metadata_for_platform(ctx, cargo, manifest, host_triple)
-    _cargo_attach_locked_checksums(metadata, _cargo_lock_document(ctx))
+    lock = _cargo_lock_document(ctx, metadata)
+    _cargo_attach_locked_checksums(metadata, lock)
     if host_metadata != None:
-        _cargo_attach_locked_checksums(host_metadata, _cargo_lock_document(ctx))
+        _cargo_attach_locked_checksums(host_metadata, lock)
     split_host = _cargo_requires_host_variants(ctx, target, host_triple)
     resolver_attrs = {"vendor_dir": vendor_dir, "split_host_variants": split_host}
     if target:
@@ -2480,13 +2495,18 @@ def _cargo_validate_metadata_snapshot(ctx, metadata, path, host, host_triple):
         if actual != value:
             fail(ctx["label"]["id"] + ": Cargo metadata snapshot `" + path + "` selection `" + key + "` does not match the target")
 
-def _cargo_lock_document(ctx):
+def _cargo_lock_document(ctx, metadata = None):
     path = _rust_attr(ctx, "lockfile", "Cargo.lock")
     files = ctx.get("files") or {}
     key = path[2:] if path.startswith("./") else path
     content = files.get(key)
+    if content == None and metadata != None:
+        workspace_root = metadata.get("workspace_root") or ""
+        resolved_path = workspace_root + "/Cargo.lock" if workspace_root else ""
+        if resolved_path and host_file_exists(resolved_path):
+            content = host_file_read(resolved_path)
     if content == None:
-        fail(ctx["label"]["id"] + ": Cargo lockfile `" + path + "` must be included in resolver_inputs, or srcs when resolver_inputs is omitted")
+        fail(ctx["label"]["id"] + ": Cargo did not produce lockfile `" + path + "` while resolving package dependencies")
     return toml_decode(content)
 
 def _cargo_attach_locked_checksums(metadata, lock):
@@ -2510,7 +2530,6 @@ def _cargo_attach_locked_checksums(metadata, lock):
 
 def _cargo_dependencies_resolver(ctx):
     _cargo_require_resolver_file(ctx, "manifest", "Cargo.toml")
-    _cargo_require_resolver_file(ctx, "lockfile", "Cargo.lock")
     metadata_file = _rust_attr(ctx, "metadata_file", "")
     host_metadata_file = _rust_attr(ctx, "host_metadata_file", "")
     if metadata_file:
@@ -2536,11 +2555,13 @@ def _cargo_metadata_for_platform(ctx, cargo, manifest, platform):
         argv.extend(["--config", _workspace_absolute(config)])
     argv.extend([
         "metadata",
-        "--locked",
-        "--offline",
         "--format-version", "1",
         "--manifest-path", _workspace_absolute(manifest),
     ])
+    lockfile = _rust_attr(ctx, "lockfile", "Cargo.lock")
+    lockfile_key = lockfile[2:] if lockfile.startswith("./") else lockfile
+    if (ctx.get("files") or {}).get(lockfile_key) != None:
+        argv.append("--locked")
     if platform:
         argv.extend(["--filter-platform", platform])
     argv.extend(_cargo_feature_args(ctx))
@@ -3038,6 +3059,14 @@ def _cargo_metadata_resolution(ctx, metadata, host_metadata = None, materialize_
     vendor_dir = _trim_trailing_slash(ctx["attrs"].get("vendor_dir") or "vendor")
     rust_target = ctx["attrs"].get("target") or ""
     id_to_target_name, id_to_host_name = _cargo_dependency_name_maps(packages, duplicate_counts, host_dependency_ids, rust_target, workspace_member_ids, split_host)
+    workspace_names = _cargo_workspace_library_names([
+        package
+        for package in packages
+        if workspace_member_ids.get(package.get("id"))
+    ])
+    for package_id, name in workspace_names.items():
+        id_to_target_name[package_id] = name
+        id_to_host_name[package_id] = name
     targets = []
     for package in packages:
         if workspace_member_ids.get(package.get("id")):
@@ -3319,7 +3348,6 @@ def _cargo_attach_bin_deps(spec, binary_refs):
 
 def _cargo_workspace_resolver(ctx):
     _cargo_require_resolver_file(ctx, "manifest", "Cargo.toml")
-    _cargo_require_resolver_file(ctx, "lockfile", "Cargo.lock")
     vendor_dir = _rust_attr(ctx, "vendor_dir", "")
     resolved = _cargo_resolved_metadata(ctx, vendor_dir, not vendor_dir)
     metadata = resolved["metadata"]
@@ -3354,6 +3382,7 @@ def _cargo_workspace_resolver(ctx):
     targets = _cargo_resolver_target_specs(ctx, resolved["specs"])
     shared_attrs = _cargo_shared_attrs(ctx)
     roots = []
+    test_roots = []
 
     for package in workspace_packages:
         source_root = _cargo_workspace_source_root(ctx, package)
@@ -3383,6 +3412,8 @@ def _cargo_workspace_resolver(ctx):
                 if kind == "test":
                     _cargo_attach_bin_deps(spec, package_binaries)
             targets.extend(specs)
+            if kind == "test":
+                test_roots.extend([spec["name"] for spec in specs])
             if kind != "test" and default_member_ids.get(package.get("id")):
                 roots.extend([spec["name"] for spec in specs])
 
@@ -3401,10 +3432,12 @@ def _cargo_workspace_resolver(ctx):
                 test_spec["name"] = specs[0]["name"] + "_unit_tests"
                 _cargo_apply_shared_attrs(test_spec["attrs"], shared_attrs)
                 targets.append(test_spec)
+                test_roots.append(test_spec["name"])
 
     return {
         "targets": targets,
         "roots": _unique(roots),
+        "attrs": {"_default_test_roots": _unique(test_roots)},
     }
 
 def _cargo_workspace_impl(ctx):
@@ -3517,6 +3550,7 @@ cargo_workspace = target_kind(
         attr("target", "string", docs = "Rust target triple passed to Cargo as `--filter-platform`.", configurable = False),
         attr("dep_rustc_flags", "list<string>", default = "[]", docs = "Additional compiler flags applied to resolved external packages.", configurable = False),
         attr("build_script_tools", "list<string>", default = str(_CARGO_BUILD_SCRIPT_TOOLS), docs = "Host tool names that package build scripts may invoke. Each name is resolved on PATH during graph loading and its directory joins the build script's search path; names that resolve to nothing are ignored. Set an empty list to give build scripts nothing beyond the Rust and C toolchains.", configurable = False),
+        attr("_default_test_roots", "list<string>", default = "[]", docs = "Resolver-owned first-party test target names used by targetless test selection.", configurable = False),
     ],
     resolver = _cargo_workspace_resolver,
     deps = [dep("deps", ["rust_crate", "rust_proc_macro", "rust_binary"], "Default first-party Cargo products emitted by native integration discovery.")],

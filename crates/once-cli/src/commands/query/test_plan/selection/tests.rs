@@ -192,6 +192,71 @@ fn configured_module_changes_select_every_test() {
     assert!(report.tests[0].reasons[0].contains("changed graph definition"));
 }
 
+#[test]
+fn default_selection_uses_only_test_roots_reported_by_the_resolver() {
+    let mut resolver = target("cargo", "cargo_workspace", &["Cargo.toml"], &[], false);
+    resolver.attrs.insert(
+        "_default_test_roots".to_string(),
+        AttrValue::List(vec![AttrValue::String("first_party_tests".to_string())]),
+    );
+    let graph = vec![
+        resolver,
+        target(
+            "first_party_tests",
+            "rust_test",
+            &["tests/main.rs"],
+            &[],
+            true,
+        ),
+        target(
+            "dependency_tests",
+            "rust_test",
+            &["vendor/dependency/tests.rs"],
+            &[],
+            true,
+        ),
+    ];
+
+    let report = default_selection_report(&graph, &BTreeSet::from(["cargo_workspace".to_string()]));
+
+    assert_eq!(report.tests.len(), 1);
+    assert_eq!(report.tests[0].id, "first_party_tests");
+    assert_eq!(report.policy.evidence, "resolver_test_roots");
+}
+
+#[test]
+fn default_selection_resolves_reported_test_names_inside_the_seed_package() {
+    let mut resolver = target(
+        "packages/tool/swift_package",
+        "swift_package_workspace",
+        &["Package.swift"],
+        &[],
+        false,
+    );
+    resolver.attrs.insert(
+        "_default_test_roots".to_string(),
+        AttrValue::List(vec![AttrValue::String("ToolTests".to_string())]),
+    );
+    let graph = vec![
+        resolver,
+        target(
+            "packages/tool/ToolTests",
+            "apple_test_bundle",
+            &["Tests/ToolTests/Test.swift"],
+            &[],
+            true,
+        ),
+    ];
+
+    let report = default_selection_report(
+        &graph,
+        &BTreeSet::from(["swift_package_workspace".to_string()]),
+    );
+
+    assert_eq!(report.tests.len(), 1);
+    assert_eq!(report.tests[0].id, "packages/tool/ToolTests");
+}
+
 fn target(id: &str, kind: &str, srcs: &[&str], deps: &[&str], test: bool) -> GraphTarget {
     let (package, name) = id.rsplit_once('/').unwrap_or(("", id));
     GraphTarget {

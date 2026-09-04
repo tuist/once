@@ -338,9 +338,6 @@ impl Server {
             "once_query_evidence" => self.tool_query_evidence(&call.arguments),
             "once_query_graph_fingerprint" => self.tool_query_graph_fingerprint(&call.arguments),
             "once_query_module_contract" => crate::commands::query::module_contract_value(),
-            "once_native_list" => crate::commands::query::native_projects_value(&self.workspace),
-            "once_native_show" => self.tool_preview_native_project(&call.arguments),
-            "once_native_init" => self.tool_init_native_project(&call.arguments),
             "once_fetch_external_source" => Self::tool_fetch_external_source(&call.arguments),
             "once_validate_module" => self.tool_validate_module(&call.arguments),
             "once_validate_workspace" => {
@@ -440,24 +437,6 @@ impl Server {
             &args.kind,
             &args.slug,
             &args.destination,
-        )
-    }
-
-    fn tool_preview_native_project(&self, args: &Value) -> Result<Value> {
-        let args: NativeArgs = serde_json::from_value(tool_args(args))?;
-        crate::commands::query::native_project_preview_value(
-            &self.workspace,
-            &args.name,
-            args.path.as_deref(),
-        )
-    }
-
-    fn tool_init_native_project(&self, args: &Value) -> Result<Value> {
-        let args: NativeArgs = serde_json::from_value(tool_args(args))?;
-        crate::commands::edit::init_native_project_json(
-            &self.workspace,
-            &args.name,
-            args.path.as_deref(),
         )
     }
 
@@ -1069,14 +1048,6 @@ struct MaterializeExampleArgs {
     slug: String,
     #[serde(default)]
     destination: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct NativeArgs {
-    name: String,
-    #[serde(default)]
-    path: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -1733,8 +1704,6 @@ demo_kind = target_kind(
                 "once_query_schema".to_string(),
                 "once_query_example".to_string(),
                 "once_list_target_kinds".to_string(),
-                "once_native_list".to_string(),
-                "once_native_show".to_string(),
                 "once_query_module_contract".to_string(),
                 "once_fetch_external_source".to_string(),
                 "once_validate_module".to_string(),
@@ -2000,7 +1969,6 @@ script_runtime = "sh"
         assert!(names.contains(&"once_apply_edit".to_string()));
         assert!(names.contains(&"once_materialize_example".to_string()));
         assert!(names.contains(&"once_exec_script".to_string()));
-        assert!(names.contains(&"once_native_init".to_string()));
 
         for tool in result["tools"].as_array().unwrap() {
             assert!(tool["outputSchema"].is_object());
@@ -2038,7 +2006,6 @@ script_runtime = "sh"
             "once_exec_script",
             "once_apply_edit",
             "once_materialize_example",
-            "once_native_init",
         ] {
             let response = server(tmp.path().to_path_buf()).dispatch(request(
                 "tools/call",

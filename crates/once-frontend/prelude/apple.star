@@ -84,6 +84,8 @@ def _apple_triple(platform, minimum_os, sdk_variant, arch, mac_catalyst):
     return arch + "-apple-" + triple_os + minimum_os + suffix
 
 def _apple_swiftmodule_triple(platform, sdk_variant, arch, mac_catalyst):
+    if not mac_catalyst and (platform == "macos" or platform == "macosx"):
+        return arch + "-apple-macos"
     return _apple_triple(platform, "", sdk_variant, arch, mac_catalyst)
 
 def _apple_swift_module_sidecars(swiftmodule):
@@ -2573,6 +2575,9 @@ def _apple_workspace_relative(path):
     prefix = workspace_root() + "/"
     return path[len(prefix):] if path.startswith(prefix) else path
 
+def _apple_workspace_absolute(path):
+    return path if path.startswith("/") else workspace_root() + "/" + path
+
 def _apple_is_directory(path):
     absolute = path if path.startswith("/") else workspace_root() + "/" + path
     if not host_path_exists(absolute):
@@ -3344,7 +3349,7 @@ def _apple_mixed_framework_impl(ctx):
 def _apple_framework_impl(ctx):
     framework_sources = _unique(glob(ctx["srcs"]) + _apple_declared_source_paths(ctx))
     framework_attrs = ctx["attr"]
-    if _filter_objc_sources(framework_sources) or _filter_c_sources(framework_sources) or _filter_cxx_sources(framework_sources) or framework_attrs.get("resources") or framework_attrs.get("asset_catalogs") or framework_attrs.get("privacy_manifest") or framework_attrs.get("modulemap") or framework_attrs.get("bridging_header"):
+    if _filter_objc_sources(framework_sources) or _filter_c_sources(framework_sources) or _filter_cxx_sources(framework_sources) or framework_attrs.get("headers") or framework_attrs.get("exported_headers") or framework_attrs.get("resources") or framework_attrs.get("asset_catalogs") or framework_attrs.get("privacy_manifest") or framework_attrs.get("modulemap") or framework_attrs.get("bridging_header"):
         return _apple_mixed_framework_impl(ctx)
     attrs = _resolve_attrs(ctx, ctx["attr"], ctx["label"]["id"], ["product_name"])
     _reject_unsupported_attrs(attrs, ctx["label"]["id"], ["headers", "exported_headers", "resources", "asset_catalogs", "privacy_manifest"])
@@ -5005,7 +5010,7 @@ def _apple_test_bundle_impl(ctx):
     for flag in _apple_swift_link_flags(swift_flags):
         swift_argv.append(flag)
     for src in swift_srcs:
-        swift_argv.append(src)
+        swift_argv.append(_apple_workspace_absolute(src))
     _apple_append_archives(swift_argv, dep_archives, alwayslink_archives)
 
     swift_inputs = list(swift_srcs)
@@ -5317,7 +5322,9 @@ def _apple_test_bundle_impl(ctx):
                 selectors.append(case_filter)
         xctest_spec = ",".join(selectors) if selectors else "All"
         if platform == "macos" or platform == "macosx":
-            runner_command = """DYLD_LIBRARY_PATH={usr_lib}${{DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}} DYLD_FALLBACK_FRAMEWORK_PATH={frameworks}${{DYLD_FALLBACK_FRAMEWORK_PATH:+:$DYLD_FALLBACK_FRAMEWORK_PATH}} {command}""".format(
+            runner_command = """cd {workspace}
+DYLD_LIBRARY_PATH={usr_lib}${{DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}} DYLD_FALLBACK_FRAMEWORK_PATH={frameworks}${{DYLD_FALLBACK_FRAMEWORK_PATH:+:$DYLD_FALLBACK_FRAMEWORK_PATH}} {command}""".format(
+                workspace = _shell_literal(workspace_root()),
                 usr_lib = _shell_literal(xctest_usr_lib_dir),
                 frameworks = _shell_literal(xctest_framework_dir),
                 command = _shell_words([runner_xcrun, "xctest", "-XCTest", xctest_spec, test_bundle_path]),

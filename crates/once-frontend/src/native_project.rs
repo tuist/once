@@ -1,8 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
-use crate::error::{Error, NativeProjectError, Result};
-use crate::graph::GraphTarget;
+use crate::error::{Error, Result};
 use crate::target::{AttrValue, Target};
 use serde::Serialize;
 use starlark::environment::Module;
@@ -12,14 +11,14 @@ use starlark::values::list::ListRef;
 mod discovery;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct NativeProjectSchema {
-    pub name: String,
-    pub docs: String,
-    pub markers: Vec<String>,
-    pub target_name: String,
-    pub target_kind: String,
-    pub inputs: Vec<String>,
-    pub exclude: Vec<String>,
+pub(crate) struct NativeProjectSchema {
+    pub(crate) name: String,
+    pub(crate) docs: String,
+    pub(crate) markers: Vec<String>,
+    pub(crate) target_name: String,
+    pub(crate) target_kind: String,
+    pub(crate) inputs: Vec<String>,
+    pub(crate) exclude: Vec<String>,
     /// Directory names to skip when gathering the project's resolver inputs.
     ///
     /// Separate from `exclude`, which says where not to look for a project at
@@ -28,37 +27,19 @@ pub struct NativeProjectSchema {
     /// input to the project that vendored it. What belongs here is a directory
     /// that cannot hold an input under any reading: a build output tree, a
     /// version control directory.
-    pub input_exclude: Vec<String>,
-    pub on_match: String,
-    pub max_depth: usize,
-    pub requires_tools: Vec<String>,
+    pub(crate) input_exclude: Vec<String>,
+    pub(crate) on_match: String,
+    pub(crate) max_depth: usize,
+    pub(crate) requires_tools: Vec<String>,
+    pub(crate) owns_descendants: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct NativeProjectMatch {
-    pub native_project: String,
-    pub package: String,
-    pub markers: Vec<String>,
-    pub seed_target: String,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct NativeProjectPreview {
-    pub native_project: NativeProjectSchema,
-    pub matched: NativeProjectMatch,
-    pub seed: Target,
-    pub targets: Vec<GraphTarget>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct NativeProjectCatalog {
-    pub native_projects: Vec<NativeProjectSchema>,
-    pub matches: Vec<NativeProjectMatch>,
-}
-
-pub fn native_project_schemas_for_workspace(root: &Path) -> Result<Vec<NativeProjectSchema>> {
-    let target_kinds = crate::graph::target_kind_schemas_for_workspace(root)?;
-    native_project_schemas_for_workspace_with_target_kinds(root, &target_kinds)
+pub(crate) struct NativeProjectMatch {
+    pub(crate) native_project: String,
+    pub(crate) package: String,
+    pub(crate) markers: Vec<String>,
+    pub(crate) seed_target: String,
 }
 
 pub(crate) fn native_project_schemas_for_workspace_with_target_kinds(
@@ -91,21 +72,15 @@ pub(crate) fn native_project_schemas_for_workspace_with_target_kinds(
     Ok(native_projects)
 }
 
-pub fn discover_native_projects(root: &Path) -> Result<NativeProjectCatalog> {
+#[cfg(test)]
+fn detect_native_projects(root: &Path) -> Result<Vec<NativeProjectMatch>> {
     let target_kinds = crate::graph::target_kind_schemas_for_workspace(root)?;
     let native_projects =
         native_project_schemas_for_workspace_with_target_kinds(root, &target_kinds)?;
     let boundary = crate::workspace::load_workspace_scan(root)?;
     let (matches, _) =
         discovery::detect_native_projects_with_schemas(root, &native_projects, &boundary)?;
-    Ok(NativeProjectCatalog {
-        native_projects,
-        matches,
-    })
-}
-
-pub fn detect_native_projects(root: &Path) -> Result<Vec<NativeProjectMatch>> {
-    Ok(discover_native_projects(root)?.matches)
+    Ok(matches)
 }
 
 pub(crate) fn synthesized_workspace_seeds(
@@ -131,70 +106,13 @@ pub(crate) fn synthesized_workspace_seeds(
                 ),
             })?;
         let target = seed_target(schema, &matched.package, &matched.markers);
-        if let Some(previous_native_project) =
-            ids.insert(target.id(), matched.native_project.clone())
-        {
-            return Err(Error::Eval {
-                path: matched.native_project.clone(),
-                message: format!(
-                    "native projects `{previous_native_project}` and `{}` both emitted seed target `{}` in package `{}`",
-                    matched.native_project,
-                    target.id(),
-                    if matched.package.is_empty() { "." } else { &matched.package },
-                ),
-            });
+        if ids.contains_key(&target.id()) {
+            continue;
         }
+        ids.insert(target.id(), matched.native_project.clone());
         targets.push((matched, target));
     }
     Ok(targets)
-}
-
-pub fn native_project_seed_target(root: &Path, name: &str, package: &str) -> Result<Target> {
-    let catalog = discover_native_projects(root)?;
-    let schema = catalog
-        .native_projects
-        .into_iter()
-        .find(|schema| schema.name == name)
-        .ok_or_else(|| unknown_native_project(name))?;
-    let matched = catalog
-        .matches
-        .into_iter()
-        .find(|matched| matched.native_project == name && matched.package == package)
-        .ok_or_else(|| native_project_package_mismatch(name, package))?;
-    Ok(seed_target(&schema, package, &matched.markers))
-}
-
-pub fn preview_native_project(
-    root: &Path,
-    name: &str,
-    package: &str,
-) -> Result<NativeProjectPreview> {
-    let target_kinds = crate::graph::target_kind_schemas_for_workspace(root)?;
-    let native_projects =
-        native_project_schemas_for_workspace_with_target_kinds(root, &target_kinds)?;
-    let boundary = crate::workspace::load_workspace_scan(root)?;
-    let (matches, _) =
-        discovery::detect_native_projects_with_schemas(root, &native_projects, &boundary)?;
-    let schema = native_projects
-        .into_iter()
-        .find(|schema| schema.name == name)
-        .ok_or_else(|| unknown_native_project(name))?;
-    let selected_match = matches
-        .into_iter()
-        .find(|matched| matched.native_project == name && matched.package == package)
-        .ok_or_else(|| native_project_package_mismatch(name, package))?;
-    let seed = seed_target(&schema, package, &selected_match.markers);
-    let targets = crate::graph::load_graph_workspace_with_targets_and_schemas(
-        root,
-        vec![seed.clone()],
-        &target_kinds,
-    )?;
-    Ok(NativeProjectPreview {
-        native_project: schema,
-        matched: selected_match,
-        seed,
-        targets,
-    })
 }
 
 /// Build the ephemeral seed for one match. `markers` are the marker paths as
@@ -332,6 +250,7 @@ fn native_project_schema(name: String, dict: &DictRef<'_>) -> Result<NativeProje
         on_match,
         max_depth,
         requires_tools,
+        owns_descendants: required_bool(dict, "owns_descendants")?,
     })
 }
 
@@ -432,6 +351,14 @@ fn required_string(dict: &DictRef<'_>, field: &str) -> Result<String> {
     })
 }
 
+fn required_bool(dict: &DictRef<'_>, field: &str) -> Result<bool> {
+    dict.get_str(field)
+        .and_then(starlark::values::Value::unpack_bool)
+        .ok_or_else(|| {
+            native_project_error("", format!("native project `{field}` must be a boolean"))
+        })
+}
+
 fn string_list(dict: &DictRef<'_>, field: &str) -> Result<Vec<String>> {
     let value = dict
         .get_str(field)
@@ -478,29 +405,6 @@ fn native_project_error(path: &str, message: impl Into<String>) -> Error {
     Error::Eval {
         path: path.to_string(),
         message: message.into(),
-    }
-}
-
-fn unknown_native_project(name: &str) -> Error {
-    Error::NativeProject {
-        path: crate::modules::COMBINED_MODULE_PATH.to_string(),
-        kind: NativeProjectError::Unknown {
-            name: name.to_string(),
-        },
-    }
-}
-
-fn native_project_package_mismatch(name: &str, package: &str) -> Error {
-    Error::NativeProject {
-        path: name.to_string(),
-        kind: NativeProjectError::PackageMismatch {
-            name: name.to_string(),
-            package: if package.is_empty() {
-                ".".to_string()
-            } else {
-                package.to_string()
-            },
-        },
     }
 }
 
@@ -624,7 +528,7 @@ mod tests {
     }
 
     #[test]
-    fn built_in_native_projects_detect_xcode_projects_in_nested_packages() {
+    fn a_root_xcode_project_owns_nested_xcode_projects() {
         let temporary = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(temporary.path().join("Browser.xcodeproj")).unwrap();
         std::fs::write(
@@ -647,16 +551,11 @@ mod tests {
             .iter()
             .filter(|matched| matched.native_project == "xcode")
             .collect::<Vec<_>>();
-        assert_eq!(xcode.len(), 2);
+        assert_eq!(xcode.len(), 1);
         assert_eq!(xcode[0].package, "");
         assert_eq!(
             xcode[0].markers,
             vec!["Browser.xcodeproj/project.pbxproj".to_string()]
-        );
-        assert_eq!(xcode[1].package, "ios");
-        assert_eq!(
-            xcode[1].markers,
-            vec!["Nested.xcodeproj/project.pbxproj".to_string()]
         );
     }
 

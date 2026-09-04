@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use once_core::{TestSelectionPolicy, TestSelectionReport, WorkspacePath, TEST_SELECTION_SCHEMA};
-use once_frontend::GraphTarget;
+use once_frontend::{AttrValue, GraphTarget};
 
 use super::inputs::{is_graph_input, target_input_patterns, workspace_graph_input_patterns};
 use super::AffectedTestRecord;
@@ -104,6 +104,115 @@ pub(super) fn selection_report(
         unmatched_paths,
         tests,
     })
+}
+
+pub(super) fn default_selection_report(
+    graph: &[GraphTarget],
+    resolver_kinds: &BTreeSet<String>,
+) -> TestSelectionReport {
+    let mut has_declared_test_roots = false;
+    let declared_test_roots = graph
+        .iter()
+        .filter(|target| resolver_kinds.contains(&target.kind))
+        .flat_map(|target| {
+            let Some(AttrValue::List(values)) = target.attrs.get("_default_test_roots") else {
+                return Vec::new();
+            };
+            has_declared_test_roots = true;
+            values
+                .iter()
+                .filter_map(AttrValue::as_str)
+                .map(|name| {
+                    if target.label.package.is_empty() {
+                        name.to_string()
+                    } else {
+                        format!("{}/{}", target.label.package, name)
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<BTreeSet<_>>();
+    if has_declared_test_roots {
+        return TestSelectionReport {
+            schema: TEST_SELECTION_SCHEMA.to_string(),
+            policy: TestSelectionPolicy {
+                mode: "default".to_string(),
+                safety: "exact".to_string(),
+                evidence: "resolver_test_roots".to_string(),
+            },
+            changed_paths: Vec::new(),
+            unmatched_paths: Vec::new(),
+            tests: graph
+                .iter()
+                .filter(|target| declared_test_roots.contains(&target.label.id))
+                .filter(|target| has_capability(target, "test"))
+                .map(|target| AffectedTestRecord {
+                    id: target.label.id.clone(),
+                    kind: target.kind.clone(),
+                    reasons: vec![
+                        "first-party test reported by a discovered workspace root".to_string()
+                    ],
+                })
+                .collect(),
+        };
+    }
+    let targets = graph
+        .iter()
+        .map(|target| (target.label.id.as_str(), target))
+        .collect::<BTreeMap<_, _>>();
+    let roots = graph
+        .iter()
+        .filter(|target| resolver_kinds.contains(&target.kind))
+        .flat_map(GraphTarget::dependency_ids)
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let mut tests = graph
+        .iter()
+        .filter(|target| has_capability(target, "test"))
+        .filter(|target| {
+            resolver_kinds.contains(&target.kind) || depends_on_any_root(target, &targets, &roots)
+        })
+        .map(|target| AffectedTestRecord {
+            id: target.label.id.clone(),
+            kind: target.kind.clone(),
+            reasons: vec!["belongs to a discovered workspace root".to_string()],
+        })
+        .collect::<Vec<_>>();
+    if roots.is_empty() {
+        tests = all_tests(graph, "no discovered workspace root; include test target");
+    }
+    TestSelectionReport {
+        schema: TEST_SELECTION_SCHEMA.to_string(),
+        policy: TestSelectionPolicy {
+            mode: "default".to_string(),
+            safety: "exact".to_string(),
+            evidence: "discovered_workspace_roots".to_string(),
+        },
+        changed_paths: Vec::new(),
+        unmatched_paths: Vec::new(),
+        tests,
+    }
+}
+
+fn depends_on_any_root<'a>(
+    target: &'a GraphTarget,
+    targets: &BTreeMap<&'a str, &'a GraphTarget>,
+    roots: &BTreeSet<&'a str>,
+) -> bool {
+    let mut pending = VecDeque::from([target.label.id.as_str()]);
+    let mut visited = BTreeSet::new();
+    while let Some(target_id) = pending.pop_front() {
+        if roots.contains(target_id) {
+            return true;
+        }
+        if !visited.insert(target_id) {
+            continue;
+        }
+        if let Some(target) = targets.get(target_id) {
+            pending.extend(target.dependency_ids().map(String::as_str));
+        }
+    }
+    false
 }
 
 fn nearest_package_owners<'a>(path: &str, graph: &'a [GraphTarget]) -> Vec<&'a str> {

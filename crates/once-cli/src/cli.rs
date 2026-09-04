@@ -9,7 +9,6 @@ use once_core::{LintSeverity, NetworkPolicy, SandboxMode, WorkspacePath};
 mod auth;
 mod cache;
 mod edit;
-mod native;
 mod query;
 mod runtime;
 mod toolchain;
@@ -19,7 +18,6 @@ pub(crate) use cache::OutputDigest;
 pub use cache::{CacheActionCmd, CacheBlobCmd, CacheCmd};
 pub(crate) use cache::{CacheSize, DEFAULT_CACHE_SIZE_CAP_BYTES};
 pub use edit::EditCmd;
-pub use native::NativeCmd;
 pub use query::QueryCmd;
 pub use runtime::RuntimeCmd;
 pub use toolchain::ToolchainCmd;
@@ -185,7 +183,9 @@ pub enum Cmd {
     /// match a cached action key reuse the prior outputs; everything
     /// else runs and lands its declared outputs in
     /// `<workspace>/.once/out/<target>/`. Use `once query targets` to
-    /// list available ids.
+    /// list available ids. When no target is supplied, Once builds the
+    /// single discovered workspace root. An ambiguous or explicitly authored
+    /// graph still requires a target.
     Build {
         /// Local filesystem sandbox policy for command actions.
         #[usage(long, default = "off")]
@@ -207,7 +207,8 @@ pub enum Cmd {
         #[usage(long)]
         ui: bool,
 
-        /// Target id, such as `services/api/Api` or `./Api`.
+        /// Target id, such as `services/api/Api` or `./Api`. Omit it to build
+        /// the single automatically discovered workspace root.
         target: Option<String>,
     },
 
@@ -282,7 +283,9 @@ pub enum Cmd {
     /// groups are owned by the target kind that exposes the capability.
     /// With `--changed-path` or `--all`, stable target batches are pulled
     /// from a duration-informed dynamic queue. `--jobs` caps local workers
-    /// without changing the plan or batch identities.
+    /// without changing the plan or batch identities. With no target or
+    /// selection flags, Once runs the first-party tests reported by each
+    /// discovered workspace root.
     Test {
         /// Local filesystem sandbox policy for command actions.
         #[usage(long, default = "off")]
@@ -332,7 +335,8 @@ pub enum Cmd {
         #[usage(long, hide = true, requires = "batch_test_units")]
         test_batch_id: Option<String>,
 
-        /// Target id, such as `tests/unit` or `./unit`.
+        /// Target id, such as `tests/unit` or `./unit`. Omit it to test the
+        /// discovered workspace's first-party tests.
         target: Option<String>,
     },
 
@@ -527,12 +531,6 @@ pub enum Cmd {
         cmd: Option<EditCmd>,
     },
 
-    /// Discover, inspect, and initialize native workspace roots.
-    Native {
-        #[usage(subcommand)]
-        cmd: Option<NativeCmd>,
-    },
-
     /// Accept an Xcode build invocation and use the Once graph when its
     /// semantics are supported. Other invocations pass through to the system
     /// Xcode build tool unchanged. Configure this as a mise command wrapper
@@ -624,15 +622,8 @@ impl Cli {
         }
 
         match self.command.as_ref()? {
-            Cmd::Build { target: None, .. } => Some(&["build"]),
             Cmd::Lint { target: None, .. } => Some(&["lint"]),
             Cmd::Run { target: None, .. } => Some(&["run"]),
-            Cmd::Test {
-                target: None,
-                changed_paths,
-                all: false,
-                ..
-            } if changed_paths.is_empty() => Some(&["test"]),
             Cmd::Exec { argv, .. } if argv.is_empty() => Some(&["exec"]),
             Cmd::Cache { cmd: None } => Some(&["cache"]),
             Cmd::Cache {
@@ -652,7 +643,6 @@ impl Cli {
                 cmd: Some(RuntimeCmd::Start { target: None }),
             } => Some(&["runtime", "start"]),
             Cmd::Edit { cmd: None } => Some(&["edit"]),
-            Cmd::Native { cmd: None } => Some(&["native"]),
             _ => None,
         }
     }
@@ -707,13 +697,6 @@ impl Cmd {
             }
             Self::Edit { cmd } => {
                 let mut path = vec!["edit"];
-                if let Some(cmd) = cmd {
-                    path.extend(cmd.surface_path());
-                }
-                path
-            }
-            Self::Native { cmd } => {
-                let mut path = vec!["native"];
                 if let Some(cmd) = cmd {
                     path.extend(cmd.surface_path());
                 }
@@ -868,7 +851,7 @@ mod tests {
     fn identifies_commands_that_need_their_help_rendered() {
         assert_eq!(
             parse(&["once", "build"]).incomplete_command_help_path(),
-            Some(&["build"][..])
+            None
         );
         assert_eq!(
             parse(&["once", "cache", "blob"]).incomplete_command_help_path(),
@@ -876,6 +859,10 @@ mod tests {
         );
         assert_eq!(
             parse(&["once", "test", "--all"]).incomplete_command_help_path(),
+            None
+        );
+        assert_eq!(
+            parse(&["once", "test"]).incomplete_command_help_path(),
             None
         );
         assert_eq!(

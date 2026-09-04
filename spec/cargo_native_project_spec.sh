@@ -39,6 +39,32 @@ Describe 'cargo native project'
     The path "$WORKSPACE/once.toml" should not be exist
   End
 
+  It 'builds and tests a Cargo project with no Once manifest or lockfile'
+    cargo_toolchain_unavailable && Skip 'cargo and rustc are required'
+    copy_fixture cargo_fd
+    rm "$WORKSPACE/Cargo.lock"
+
+    When call /bin/sh -c '"$1" -C "$2" build --quiet && "$1" -C "$2" test --quiet' sh "$ONCE_BIN" "$WORKSPACE"
+    The status should be success
+    The stdout should include 'once: build cargo (cargo_workspace)'
+    The stdout should include 'test batches'
+    The path "$WORKSPACE/once.toml" should not be exist
+    The path "$WORKSPACE/Cargo.lock" should be file
+    The path "$WORKSPACE/.once/out/cargo_fd_find_test_tests/test/test_results.json" should be file
+  End
+
+  It 'defaults to every first-party test in a Cargo workspace'
+    cargo_toolchain_unavailable && Skip 'cargo and rustc are required'
+    copy_fixture cargo_ripgrep
+
+    When call once test --quiet
+    The stdout should include 'once: ran 5 test batches'
+    The status should be success
+    The path "$WORKSPACE/.once/out/cargo_ripgrep_test_integration/test/test_results.json" should be file
+    The path "$WORKSPACE/.once/out/cargo_ignore_test_gitignore/test/test_results.json" should be file
+    The path "$WORKSPACE/once.toml" should not be exist
+  End
+
   It 'names a binary target after its Cargo target rather than its package'
     cargo_toolchain_unavailable && Skip 'cargo and rustc are required'
     copy_fixture cargo_fd

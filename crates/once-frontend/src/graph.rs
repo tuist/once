@@ -179,6 +179,13 @@ pub struct TargetKindSchema {
     pub examples: Vec<TargetKindExample>,
 }
 
+impl TargetKindSchema {
+    /// Whether this target kind expands an authoritative project graph.
+    pub fn has_resolver(&self) -> bool {
+        self.has_resolver
+    }
+}
+
 /// External build-system concept related to a target kind.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct SourceReference {
