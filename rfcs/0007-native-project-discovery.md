@@ -12,9 +12,9 @@ resolver reads authoritative native metadata and emits the detailed Once
 targets. This keeps one graph expansion mechanism and keeps Rust independent
 of individual ecosystems.
 
-The discovered seed is ephemeral. `once native init` can
-materialize the same seed into `once.toml` when a repository wants to review
-and store that choice.
+The discovered seed is ephemeral and remains an internal graph-loading detail.
+Projects use the resulting graph through the ordinary query and execution
+commands without an initialization step.
 
 Discovered targets may accept invocation-specific arguments through the
 generic run capability. `once run <target> -- <arguments>` exposes those
@@ -35,7 +35,7 @@ Native project discovery must preserve these invariants:
 - native manifests and lockfiles remain authoritative;
 - actions declare inputs and outputs for caching and scheduling;
 - diagnostics remain structured;
-- initialization never rewrites a native manifest;
+- discovery never writes a native manifest or `once.toml`;
 - generic Rust code does not recognize Mix, Cargo, or another ecosystem by
   name.
 
@@ -114,9 +114,10 @@ Discovery is generic and deterministic:
 Detection reads names only. It does not evaluate executable manifests, invoke
 a package manager, access the network, or write files.
 
-Resolver preview and normal graph loading may invoke a native tool through
-trusted analysis. Missing tools, lockfiles, or acquired sources surface there
-as structured diagnostics.
+Normal graph loading may invoke a native tool through trusted analysis. An
+ecosystem resolver may ask its package manager to create a missing lockfile
+before importing pinned dependencies. Missing tools, unresolved dependencies,
+or unavailable sources surface as structured diagnostics.
 
 ## Precedence
 
@@ -139,25 +140,22 @@ Traversal and resolver behavior compose. A Cargo workspace uses
 `"descend"` because an umbrella resolver can point to separately discovered
 child seeds while independent nested Mix projects remain valid.
 
-## Query And Initialization
+## Query And Execution
 
 The command line and
-[Model Context Protocol](https://modelcontextprotocol.io/) expose matching
-operations:
+[Model Context Protocol](https://modelcontextprotocol.io/) expose discovered
+targets through their ordinary graph operations:
 
 | Command line | Model Context Protocol tool | Result |
 | --- | --- | --- |
-| `once native list` | `once_native_list` | List declarations and marker matches without running resolvers |
-| `once native show <name> [--path <path>]` | `once_native_show` | Preview one exact seed and its expanded graph |
-| `once native init <name> [--path <path>]` | `once_native_init` | Materialize one validated seed |
+| `once query workspace` | `once_query_workspace` | Describe the loaded workspace |
+| `once query targets` | `once_query_targets` | List the expanded typed graph |
+| `once build <target>` | `once_build_target` | Build a discovered target |
+| `once test <target>` | `once_run_tests` | Test a discovered target |
 
-Initialization writes only the seed. Resolver-emitted dependency and product
-targets remain derived from native metadata.
-
-Initialization is idempotent when the exact seed already exists. A target with
-the same name and different fields is a conflict and is never overwritten.
-This preserves hand edits and leaves room for a future explicit update
-operation.
+Discovery never writes `once.toml` or modifies the native manifest. A future
+conversion process may produce an owned Once graph, but conversion is outside
+the discovery contract.
 
 ## Compatibility
 

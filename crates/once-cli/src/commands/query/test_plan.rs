@@ -1,7 +1,7 @@
 mod inputs;
 mod selection;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::{ensure, Context, Result};
@@ -24,6 +24,15 @@ pub(crate) fn plan(
     changed_paths: &[String],
 ) -> Result<TestPlan> {
     let selection = selection::selection_report(workspace, graph, changed_paths)?;
+    plan_from_selection(workspace, selection)
+}
+
+pub(crate) fn default_plan(
+    workspace: &Path,
+    graph: &[GraphTarget],
+    resolver_kinds: &BTreeSet<String>,
+) -> Result<TestPlan> {
+    let selection = selection::default_selection_report(graph, resolver_kinds);
     plan_from_selection(workspace, selection)
 }
 

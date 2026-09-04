@@ -332,20 +332,12 @@ SH
   It 'lowers a Firefox-style multi-library project from a real .xcodeproj'
     Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
     copy_xcode_firefox_app_fixture
-    cat > "$WORKSPACE/once.toml" <<'TOML'
-[[target]]
-name = "FirefoxClient"
-kind = "xcode_workspace"
-srcs = ["Client.xcodeproj/project.pbxproj"]
 
-[target.attrs]
-project = "Client.xcodeproj"
-TOML
-
-    When call once --format json build FirefoxClient
+    When call once --format json build
     The status should be success
-    The stdout should include '"target":"FirefoxClient"'
+    The stdout should include '"target":"xcode"'
     The stdout should include '"status":"completed"'
+    The path "$WORKSPACE/once.toml" should not be exist
     The path "$WORKSPACE/.once/out/Client/Client.app/Client" should be file
     The path "$WORKSPACE/.once/out/BrowserKit/BrowserKit.a" should be file
     The path "$WORKSPACE/.once/out/Tabs/Tabs.a" should be file
@@ -355,15 +347,6 @@ TOML
   It 'lists the Firefox-style targets with their Once kinds'
     Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
     copy_xcode_firefox_app_fixture
-    cat > "$WORKSPACE/once.toml" <<'TOML'
-[[target]]
-name = "FirefoxClient"
-kind = "xcode_workspace"
-srcs = ["Client.xcodeproj/project.pbxproj"]
-
-[target.attrs]
-project = "Client.xcodeproj"
-TOML
 
     When call once --format json query targets
     The status should be success
@@ -373,25 +356,28 @@ TOML
     The stdout should include '"name":"Bookmarks","kind":"apple_library"'
     The stdout should include '"name":"ClientTests","kind":"apple_test_bundle"'
     The stdout should include 'apple_xcframework_import'
+    The path "$WORKSPACE/once.toml" should not be exist
+  End
+
+  It 'reports the first-party test bundle for a Firefox-style native project'
+    Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+    copy_xcode_firefox_app_fixture
+
+    When call once --format json query target xcode
+    The status should be success
+    The stdout should include '"_default_test_roots":["ClientTests"]'
+    The path "$WORKSPACE/once.toml" should not be exist
   End
 
   It 'lowers a Wikipedia-style design-system + feature modules from a real .xcodeproj'
     Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
     copy_xcode_wikipedia_app_fixture
-    cat > "$WORKSPACE/once.toml" <<'TOML'
-[[target]]
-name = "WikipediaWorkspace"
-kind = "xcode_workspace"
-srcs = ["Wikipedia.xcodeproj/project.pbxproj"]
 
-[target.attrs]
-project = "Wikipedia.xcodeproj"
-TOML
-
-    When call once --format json build WikipediaWorkspace
+    When call once --format json build
     The status should be success
-    The stdout should include '"target":"WikipediaWorkspace"'
+    The stdout should include '"target":"xcode"'
     The stdout should include '"status":"completed"'
+    The path "$WORKSPACE/once.toml" should not be exist
     The path "$WORKSPACE/.once/out/Client/Client.app/Client" should be file
     The path "$WORKSPACE/.once/out/DesignSystem/DesignSystem.framework/DesignSystem" should be file
     End
@@ -399,15 +385,6 @@ TOML
   It 'lists the Wikipedia-style targets with their Once kinds'
     Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
     copy_xcode_wikipedia_app_fixture
-    cat > "$WORKSPACE/once.toml" <<'TOML'
-[[target]]
-name = "WikipediaWorkspace"
-kind = "xcode_workspace"
-srcs = ["Wikipedia.xcodeproj/project.pbxproj"]
-
-[target.attrs]
-project = "Wikipedia.xcodeproj"
-TOML
 
     When call once --format json query targets
     The status should be success
@@ -417,25 +394,18 @@ TOML
     The stdout should include '"name":"Search","kind":"apple_library"'
     The stdout should include '"name":"Settings","kind":"apple_library"'
     The stdout should include '"name":"ClientTests","kind":"apple_test_bundle"'
+    The path "$WORKSPACE/once.toml" should not be exist
   End
 
   It 'lowers a Signal-style app with embedded extensions from a real .xcodeproj'
     Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
     copy_xcode_signal_app_fixture
-    cat > "$WORKSPACE/once.toml" <<'TOML'
-[[target]]
-name = "SignalWorkspace"
-kind = "xcode_workspace"
-srcs = ["Signal.xcodeproj/project.pbxproj"]
 
-[target.attrs]
-project = "Signal.xcodeproj"
-TOML
-
-    When call once --format json build SignalWorkspace
+    When call once --format json build
     The status should be success
-    The stdout should include '"target":"SignalWorkspace"'
+    The stdout should include '"target":"xcode"'
     The stdout should include '"status":"completed"'
+    The path "$WORKSPACE/once.toml" should not be exist
     The path "$WORKSPACE/.once/out/SignalApp/SignalApp.app/SignalApp" should be file
     The path "$WORKSPACE/.once/out/SignalShare/SignalShare.app/SignalShare" should be file
     The path "$WORKSPACE/.once/out/SignalNotification/SignalNotification.app/SignalNotification" should be file
@@ -444,15 +414,6 @@ TOML
   It 'lists the Signal-style targets with their Once kinds'
     Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
     copy_xcode_signal_app_fixture
-    cat > "$WORKSPACE/once.toml" <<'TOML'
-[[target]]
-name = "SignalWorkspace"
-kind = "xcode_workspace"
-srcs = ["Signal.xcodeproj/project.pbxproj"]
-
-[target.attrs]
-project = "Signal.xcodeproj"
-TOML
 
     When call once --format json query targets
     The status should be success
@@ -461,6 +422,7 @@ TOML
     The stdout should include '"name":"SignalNotification","kind":"apple_application"'
     The stdout should include '"name":"SignalCore","kind":"apple_library"'
     The stdout should include '"name":"SignalAppTests","kind":"apple_test_bundle"'
+    The path "$WORKSPACE/once.toml" should not be exist
   End
 
   It 'builds a cache-substituted style app graph around prebuilt XCFrameworks'

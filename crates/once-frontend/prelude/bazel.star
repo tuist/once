@@ -111,6 +111,7 @@ def _bazel_workspace_resolver(ctx):
     rules = _bazel_parse_query_output(raw)
     targets = []
     roots = []
+    test_roots = []
     seen = {}
     for entry in rules:
         name = _bazel_target_name(entry["label"])
@@ -139,12 +140,15 @@ def _bazel_workspace_resolver(ctx):
         # not become build roots automatically, matching cargo_workspace.
         if kind != "bazel_test":
             roots.append(name)
+        else:
+            test_roots.append(name)
     return {
         "targets": targets,
         "roots": roots,
         "attrs": {
             "_bazel_resolved": True,
             "_bazel_version": version,
+            "_default_test_roots": test_roots,
         },
     }
 
@@ -670,6 +674,7 @@ bazel_workspace = target_kind(
         attr("resolver_inputs", "list<string>", default = "[]", docs = "Package-relative text globs supplied to native integration resolution. Defaults to srcs when empty.", configurable = False),
         attr("_bazel_resolved", "bool", default = "false", docs = "Resolver-owned marker indicating that Bazel targets were expanded into graph targets.", configurable = False),
         attr("_bazel_version", "string", docs = "Resolver-recorded Bazel version banner.", configurable = False),
+        attr("_default_test_roots", "list<string>", default = "[]", docs = "Resolver-owned first-party test target names used by targetless test selection.", configurable = False),
     ],
     resolver = _bazel_workspace_resolver,
     deps = [dep("deps", ["bazel_target"], "Resolver-generated Bazel rules materialized as graph targets.")],
@@ -740,4 +745,31 @@ bazel = native_project(
     input_exclude = ["bazel-bin", "bazel-out", "bazel-testlogs", ".git", ".once"],
     on_match = "stop",
     requires_tools = ["bazel"],
+    owns_descendants = True,
+)
+
+bazel_workspace_file = native_project(
+    target_kind = "bazel_workspace",
+    docs = "Recognizes a Bazel workspace from WORKSPACE and exposes its rules as Once targets whose action graph Once executes itself when it is entirely spawn-based.",
+    markers = ["WORKSPACE"],
+    target_name = "bazel",
+    inputs = ["WORKSPACE.bazel", "MODULE.bazel.lock", "**/BUILD", "**/BUILD.bazel", "**/*.bzl"],
+    exclude = _native_project_generated_dirs() + ["bazel-bin", "bazel-out", "bazel-testlogs", "node_modules"],
+    input_exclude = ["bazel-bin", "bazel-out", "bazel-testlogs", ".git", ".once"],
+    on_match = "stop",
+    requires_tools = ["bazel"],
+    owns_descendants = True,
+)
+
+bazel_workspace_bazel_file = native_project(
+    target_kind = "bazel_workspace",
+    docs = "Recognizes a Bazel workspace from WORKSPACE.bazel and exposes its rules as Once targets whose action graph Once executes itself when it is entirely spawn-based.",
+    markers = ["WORKSPACE.bazel"],
+    target_name = "bazel",
+    inputs = ["WORKSPACE", "MODULE.bazel.lock", "**/BUILD", "**/BUILD.bazel", "**/*.bzl"],
+    exclude = _native_project_generated_dirs() + ["bazel-bin", "bazel-out", "bazel-testlogs", "node_modules"],
+    input_exclude = ["bazel-bin", "bazel-out", "bazel-testlogs", ".git", ".once"],
+    on_match = "stop",
+    requires_tools = ["bazel"],
+    owns_descendants = True,
 )

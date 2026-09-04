@@ -11,6 +11,21 @@ and test the project without first translating it into `once.toml`.
 
 ## Start With an Existing Cargo Project
 
+From the directory that contains the root `Cargo.toml`, try the complete path
+without creating `once.toml`:
+
+```sh
+once query targets
+once build --ui
+once test
+```
+
+The Runs interface shows the live build graph, including independently cached
+package and dependency actions. Add `--ui` to `once test` to follow test
+batches and results there too. The targetless test command selects first-party
+tests and excludes test targets belonging only to external crates. Use `once
+test --all` to request every test target in the resolved graph.
+
 ### Check the Toolchain
 
 Once invokes `rustc` and `cargo` from the selected toolchain. Confirm that the
@@ -34,51 +49,30 @@ Host binaries and tests also need the platform linker selected by the Rust
 compiler. Cross-compiled and mobile outputs require the linker and Rust target
 support for their destination platform.
 
-### Materialize Locked Dependencies
+### Resolve Dependencies
 
-Once does not download dependencies or change `Cargo.lock`. If the project has
-a current lockfile, populate Cargo's local source cache from its exact
-resolution:
+Once asks Cargo for package metadata while loading an automatically discovered
+workspace. An existing `Cargo.lock` remains authoritative and is used with
+Cargo's locked mode. When the lockfile is absent, Cargo resolves dependencies
+and creates it before Once imports the resulting graph. The first load can
+therefore access the network and populate Cargo's local source cache.
 
-```sh
-cargo fetch --locked
-```
+### Inspect the Derived Graph
 
-Run `cargo generate-lockfile` once when the lockfile needs to be created or
-deliberately updated. Review that change before continuing. Once requires a
-concrete lockfile when a project declares external dependencies. Library
-maintainers who do not commit `Cargo.lock` can generate one locally, but
-repeatable builds on another machine require the same resolution.
-
-### Preview the Derived Graph
-
-From the directory that contains the root `Cargo.toml`, inspect the match and
-the first-party targets:
+To narrow the graph by target kind, inspect the first-party targets:
 
 ```sh
-once native list
+once query workspace
 once query targets --kind rust_binary
 once query targets --kind rust_library
 once query targets --kind rust_test
 ```
 
-No `once.toml` is required, and these commands do not write one. If a
-repository contains several independent Cargo projects, select one explicitly:
+No `once.toml` is required, and these commands do not write one.
 
-```sh
-once native show cargo --path tools/linter
-```
-
-The `cargo_workspace` seed runs locked, offline Cargo metadata. It emits
+The `cargo_workspace` seed runs Cargo metadata and emits
 first-party libraries, binaries, procedural macros, unit and integration test
 targets, build-script edges, and locked external packages.
-
-The complete preview includes locked external packages, so it can be large.
-Request it only when you need to inspect the full expansion:
-
-```sh
-once native show cargo
-```
 
 The identifiers printed by `once query targets` are the source of truth.
 Generated first-party identifiers carry their package and Cargo target role.
@@ -98,8 +92,8 @@ copying sources into the repository. It does not reuse or modify a repository's
 `vendor` directory.
 
 An explicit `vendor_dir` remains available for repositories that already
-manage pre-vendored Cargo sources. Graph loading never acquires sources or
-changes `Cargo.lock`.
+manage pre-vendored Cargo sources. With that attribute set, Once reads the
+repository-managed source tree instead of Cargo's local source cache.
 
 Targets gated by Cargo `required-features` appear only when every required
 feature is selected. Generated tests, benchmarks, and examples include the
@@ -124,8 +118,8 @@ procedural macros and build scripts must not inherit.
 
 ### Build, Run, and Test
 
-Use a generated identifier through the same commands as every other Once
-graph:
+The targetless commands are the quickest whole-workspace path. Use a generated
+identifier when you want one artifact or test:
 
 ```sh
 once build cargo_hello_bin_hello
@@ -196,26 +190,12 @@ consumers. Changing one workspace package invalidates that package and its
 dependants. Changing only a test file reruns the affected test without
 recompiling an unchanged library.
 
-Dependency fetching is outside the Once graph. Once caches compilation after
-Cargo's local cache contains the sources selected by `Cargo.lock`. Continue
-with [Caching](/guide/scripted/caching) to configure a shared remote cache.
+Once caches compilation after Cargo resolves and materializes the sources
+selected by `Cargo.lock`. Continue with [Caching](/guide/scripted/caching) to
+configure a shared remote cache.
 
-### Record the Project Selection
-
-Initialization is optional. Use it when the repository should make its native
-project selection explicit:
-
-```sh
-once native init cargo
-```
-
-This writes only the `cargo_workspace` seed. The detailed targets remain
-derived from `Cargo.toml` and `Cargo.lock`, so they do not become duplicated
-configuration. Commit the seed when reviewers and continuous integration
-should see the selection.
-
-After initialization, the seed can select Cargo features or a compilation
-target without copying the generated package graph into the manifest:
+An explicitly authored seed can select Cargo features or a compilation target
+without copying the generated package graph into the manifest:
 
 ```toml
 [target.attrs]
@@ -228,12 +208,10 @@ the complete seed contract.
 
 ### Workspaces and Troubleshooting
 
-- If graph loading reports a missing source, run `cargo fetch --locked` with
-  the same Cargo home and retry.
-- If a binary or example is absent, inspect its `required-features`, initialize
-  the seed, and select those features explicitly.
-- Use `once native show cargo --path <path>` when more than one
-  independent `Cargo.toml` matches the workspace.
+- If Cargo cannot resolve or download a source, fix the native Cargo error and
+  retry the Once command.
+- If a binary or example is absent, inspect its `required-features` and author
+  a seed that selects those features explicitly.
 - A build script that invokes a host tool needs that tool named in
   `build_script_tools`. The seed already lists the build tools that packages
   ending in `-sys` conventionally use, and each name is resolved on the search
@@ -261,7 +239,7 @@ project does not need to migrate away from `Cargo.toml` to gain more control.
 | Layer | Repository change | Use it when |
 | --- | --- | --- |
 | Native Cargo project | None | The graph derived from `Cargo.toml` already describes the build. |
-| Recorded native seed | One `cargo_workspace` target in `once.toml` | The repository should pin project selection, features, target configuration, caching, or execution infrastructure. |
+| Explicit native seed | One `cargo_workspace` target in `once.toml` | The repository should configure features, target selection, caching, or execution infrastructure. |
 | Explicit typed targets | Additional targets in `once.toml` | A package needs a custom boundary, cross-language dependency, mobile artifact, or operation that Cargo metadata does not describe. |
 | Project Starlark module | A registered reusable target kind | Several targets need the same new behavior and an existing target kind cannot express it. |
 
@@ -270,10 +248,9 @@ annotated script for a one-off repository task. Move data into `once.toml` when
 the task needs typed dependencies, inputs, outputs, or platform selection. Move
 behavior into a Starlark target kind only when the rule should be reusable.
 
-The initialized `cargo_workspace` seed can live beside additional explicit
-targets, so Cargo can continue to own its package graph while Once owns only
-the exceptional edges. Do not restate every generated Cargo package in
-`once.toml`.
+An explicit `cargo_workspace` seed can live beside additional targets, so Cargo
+can continue to own its package graph while Once owns only the exceptional
+edges. Do not restate every generated Cargo package in `once.toml`.
 
 When a custom target kind is necessary, keep project-specific Cargo behavior
 inside that Starlark module and build it from generic action primitives. The

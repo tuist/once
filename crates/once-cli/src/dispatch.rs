@@ -231,7 +231,6 @@ async fn run_command(
             run_query_command(workspace, output, expression.as_deref(), cmd).await
         }
         Cmd::Edit { cmd } => run_edit_command(workspace, output, cmd).await,
-        Cmd::Native { cmd } => run_native_command(workspace, output, cmd).await,
         Cmd::Runtime { cmd } => run_runtime_command(workspace, output, cmd).await,
         Cmd::Mcp {
             workspace: workspace_override,
@@ -305,7 +304,7 @@ async fn dispatch_build(
     resolved: commands::graph::ResolvedConfiguration,
     ui: bool,
 ) -> Result<ExitCode> {
-    let target = resolve_required_target(workspace, target)?;
+    let target = resolve_build_target(workspace, target)?;
     let cache = crate::cache_provider::resolve(workspace, xdg)?;
     Box::pin(commands::graph::build(
         workspace,
@@ -379,7 +378,11 @@ async fn dispatch_test(workspace: &Path, xdg: &Xdg, args: TestDispatchArgs) -> R
         ))
         .await;
     }
-    if !args.all && args.changed_paths.is_empty() && args.jobs.is_none() && args.test_unit.is_none()
+    if args.target.is_some()
+        && !args.all
+        && args.changed_paths.is_empty()
+        && args.jobs.is_none()
+        && args.test_unit.is_none()
     {
         let target = resolve_required_target(workspace, args.target)?;
         let cache = crate::cache_provider::resolve(workspace, xdg)?;
@@ -412,8 +415,16 @@ async fn dispatch_test(workspace: &Path, xdg: &Xdg, args: TestDispatchArgs) -> R
                 commands::query::explicit_test_plan_with_graph(workspace, &graph, &[target])?
             }
         }
-        None => {
+        None if args.all || !args.changed_paths.is_empty() => {
             commands::query::test_plan_for_paths_with_graph(workspace, &graph, &args.changed_paths)?
+        }
+        None => {
+            let resolver_kinds = once_frontend::target_kind_schemas_for_workspace(workspace)?
+                .into_iter()
+                .filter(once_frontend::TargetKindSchema::has_resolver)
+                .map(|schema| schema.kind)
+                .collect();
+            commands::query::default_test_plan_with_graph(workspace, &graph, &resolver_kinds)?
         }
     };
     Box::pin(commands::test_schedule::run(
@@ -607,29 +618,6 @@ async fn run_edit_command(
             .await
             .map(|()| ExitCode::SUCCESS),
         None => anyhow::bail!("edit subcommand required"),
-    }
-}
-
-async fn run_native_command(
-    workspace: &Path,
-    output: Output,
-    command: Option<cli::NativeCmd>,
-) -> Result<ExitCode> {
-    match command {
-        Some(cli::NativeCmd::List) => commands::query::native_projects(workspace, output)
-            .await
-            .map(|()| ExitCode::SUCCESS),
-        Some(cli::NativeCmd::Show { name, path }) => {
-            commands::query::native_project(workspace, output, &name, path.as_deref())
-                .await
-                .map(|()| ExitCode::SUCCESS)
-        }
-        Some(cli::NativeCmd::Init { name, path }) => {
-            commands::edit::init_native_project(workspace, output, &name, path.as_deref())
-                .await
-                .map(|()| ExitCode::SUCCESS)
-        }
-        None => anyhow::bail!("native subcommand required"),
     }
 }
 
@@ -917,6 +905,39 @@ fn resolve_remote_execution(
 fn resolve_required_target(workspace: &Path, target: Option<String>) -> Result<String> {
     let raw = target.context("missing target")?;
     resolve_target_arg(workspace, &raw)
+}
+
+fn resolve_build_target(workspace: &Path, target: Option<String>) -> Result<String> {
+    if let Some(target) = target {
+        return resolve_target_arg(workspace, &target);
+    }
+    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    let resolver_kinds = once_frontend::target_kind_schemas_for_workspace(workspace)?
+        .into_iter()
+        .filter(once_frontend::TargetKindSchema::has_resolver)
+        .map(|schema| schema.kind)
+        .collect::<std::collections::BTreeSet<_>>();
+    let candidates = graph
+        .iter()
+        .filter(|target| {
+            resolver_kinds.contains(&target.kind)
+                && target
+                    .capabilities
+                    .iter()
+                    .any(|capability| capability.name == "build")
+        })
+        .map(|target| target.label.id.as_str())
+        .collect::<Vec<_>>();
+    match candidates.as_slice() {
+        [target] => Ok((*target).to_string()),
+        [] => anyhow::bail!(
+            "no default build target was discovered; pass `once build <target>` using an id from `once query targets`"
+        ),
+        _ => anyhow::bail!(
+            "multiple default build targets were discovered; pass `once build <target>` using one of: {}",
+            candidates.join(", ")
+        ),
+    }
 }
 
 fn resolve_target_arg(workspace: &Path, raw: &str) -> Result<String> {

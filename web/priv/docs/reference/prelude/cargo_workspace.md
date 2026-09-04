@@ -4,8 +4,9 @@ Native Cargo project seed.
 
 ## Description
 
-`cargo_workspace` runs `cargo metadata --locked --offline` and emits ordinary
-first-party and external Rust targets. First-party packages become
+`cargo_workspace` runs Cargo metadata and emits ordinary first-party and
+external Rust targets. An existing `Cargo.lock` is used in locked mode. When it
+is absent, Cargo resolves dependencies and creates it. First-party packages become
 `rust_library`, `rust_binary`, `rust_test`, or `rust_proc_macro` targets.
 Locked external packages use the same fine-grained lowering as
 `cargo_dependencies`.
@@ -61,29 +62,19 @@ The target emits `cargo_workspace`.
 
 ## Direct Use
 
-On a fresh clone, populate Cargo's local source cache from the lockfile:
+On a fresh clone, the first graph load can access the network while Cargo
+resolves or downloads dependencies. Once then imports the pinned graph from
+`Cargo.lock` and Cargo's local source cache.
+
+Inspect the automatically derived graph:
 
 ```sh
-cargo fetch --locked
+once query workspace
+once query targets
 ```
 
-Once never performs that network operation while loading or building the
-graph.
-
-Discover and preview the native integration:
-
-```sh
-once native list
-once native show cargo
-```
-
-Initialize the seed:
-
-```sh
-once native init cargo
-```
-
-The imported target is equivalent to:
+No `once.toml` is required. To configure the resolver explicitly, author a
+target equivalent to:
 
 ```toml
 [[target]]

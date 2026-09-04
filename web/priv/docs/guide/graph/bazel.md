@@ -16,14 +16,15 @@ Bazel-internal action that has no argv in `aquery` output (`Symlink`,
 `FileWrite`, `RunfilesTree`, `SymlinkTree`, `RepoMappingManifest`). Each
 such mnemonic Once learns to run natively shrinks the fallback set.
 
-## Start From A Native Workspace
+## Try an Existing Workspace
 
-Once recognizes `MODULE.bazel` automatically. This works without `once.toml`:
+Once recognizes `MODULE.bazel`, `WORKSPACE.bazel`, and `WORKSPACE`
+automatically. This works without `once.toml`:
 
 ```sh
-once native list
-once native show bazel
 once query targets
+once build --ui
+once test
 ```
 
 The generated `bazel_workspace` seed runs
@@ -32,11 +33,10 @@ rule as a `bazel_target`, and forwards the label and rule class on
 `bazel_label` and `bazel_rule_kind`. Discovery skips generated
 `bazel-bin`, `bazel-out`, and `bazel-testlogs` directories.
 
-Store the seed only when it should be reviewed in `once.toml`:
-
-```sh
-once native init bazel
-```
+When discovery finds one Bazel workspace, `once build --ui` builds its
+non-test roots and opens the Runs interface. `once test` runs the test rules
+reported by that workspace. Use `once test --ui` to follow scheduling and
+results in the same interface. Discovery does not write an Once manifest.
 
 ## Ignore The Once Cache
 

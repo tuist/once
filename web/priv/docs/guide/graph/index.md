@@ -4,6 +4,29 @@ The Once graph describes the named parts of a workspace and what Once can do
 with them. Start with one target, inspect it, and build it. Add dependencies or
 more specialized target kinds only when the project needs them.
 
+## Try Your Existing Project First
+
+If the repository already uses Cargo, Swift Package Manager, Xcode, or Bazel,
+start in its root without creating a file:
+
+```sh
+once query targets
+once build --ui
+once test
+```
+
+The first command shows what Once recognized. The second opens the Runs
+interface and streams the live build graph while the native workspace builds.
+The third runs first-party tests. Resolved dependency test suites are excluded
+unless you explicitly request `once test --all`. Use `once test --ui` to keep
+the Runs interface open through test scheduling and results.
+
+Continue with the guide for [Rust](/guide/graph/rust), [Swift
+Packages](/guide/graph/swift-packages), [Xcode
+Projects](/guide/graph/apple/xcode), or [Bazel](/guide/graph/bazel). Declare
+targets only when the automatically derived graph needs a project-specific
+boundary or capability.
+
 ## Start With One Target
 
 Targets live in package-level `once.toml` files. This example declares an
@@ -126,6 +149,7 @@ ecosystem-specific examples:
 - [Apple](/guide/graph/apple)
 - [Android](/guide/graph/android)
 - [C and C++](/guide/graph/c)
+- [Bazel](/guide/graph/bazel)
 - [CMake](/guide/graph/cmake)
 - [Elixir](/guide/graph/elixir)
 - [Kotlin](/guide/graph/kotlin)
@@ -143,41 +167,24 @@ an explicit target. A native integration supplies an ephemeral seed target, then
 the seed's ordinary resolver derives the detailed typed graph from native
 metadata.
 
-Before previewing a project, follow its ecosystem guide to make the native
+Before loading a project, follow its ecosystem guide to make the native
 lockfile and locked dependency sources available. Detection only reads marker
-names, but preview and normal graph loading may run the native resolver and
-require those sources.
+names, but graph loading may run the native resolver and require those sources.
 
-Inspect the available native integrations and their current matches:
-
-```sh
-once native list
-```
-
-Preview one match without changing the repository:
+Inspect the graph Once derived from the workspace:
 
 ```sh
-once native show mix
-once native show cargo
-once native show xcode
-once native show swift_package
+once query workspace
+once query targets
 ```
 
-The preview includes the exact seed and every resolver-emitted target. Normal
-build, run, and test commands can use that ephemeral graph immediately.
-
-Initialize the seed when the native integration selection should be reviewed and stored:
-
-```sh
-once native init mix
-once native init cargo
-once native init xcode
-once native init swift_package
-```
-
-Initialization writes only the seed target to `once.toml`. The native integration
-description and lockfile remain authoritative for dependencies, products,
-tests, and releases. Repeating an identical initialization makes no change.
+Normal build, run, and test commands can use the derived graph immediately.
+Discovery does not write `once.toml`; the native project description and
+lockfile remain authoritative for dependencies, products, tests, and releases.
+When discovery produces one buildable workspace root, `once build` selects it
+without requiring a target argument. `once test` runs the first-party test
+targets rooted in that workspace. Use `once test --all` to include test targets
+from its complete resolved dependency graph.
 
 The native seed can remain the only target, or it can live beside explicit
 targets for exceptional build boundaries. Keep manifest data in `once.toml`
@@ -194,7 +201,6 @@ frameworks, libraries, resource bundles, and test bundles, so a repository with
 no `once.toml` at all can be queried and built directly:
 
 ```sh
-once native show xcode
 once query targets
 once build MyApp
 ```
@@ -208,15 +214,12 @@ native seed lowers first-party package targets into the existing Apple target
 kinds, without requiring an `once.toml` file:
 
 ```sh
-once native show swift_package
 once query targets
 once build MyLibrary
 ```
 
-For a repository with several packages, pass `--path` using the directory
-shown by `once native list`. The [Swift Packages](/guide/graph/swift-packages)
-guide covers native package workspaces, locked external package graphs, and
-network policy.
+The [Swift Packages](/guide/graph/swift-packages) guide covers native package
+workspaces, locked external package graphs, and network policy.
 
 Every built-in target kind also ships a complete starter with manifests and
 source files. Discover the available slugs, then materialize one directly:

@@ -39,7 +39,15 @@ def _xcode_project_path(ctx):
     if configured:
         package = ctx["label"]["package"]
         return _xcode_join(package, configured) if package else configured
-    candidates = [path for path in glob(["*.xcodeproj/project.pbxproj"]) if _ends_with(path, "/project.pbxproj")]
+    package = ctx["label"]["package"]
+    prefix = package + "/" if package else ""
+    candidates = []
+    for path in glob(["*.xcodeproj/project.pbxproj"]):
+        if not _ends_with(path, "/project.pbxproj") or not path.startswith(prefix):
+            continue
+        relative = path[len(prefix):]
+        if len(relative.split("/")) == 2:
+            candidates.append(path)
     if len(candidates) == 0:
         fail(ctx["label"]["id"] + ": no `project` attribute was set and no `*.xcodeproj/project.pbxproj` was found in the package")
     if len(candidates) > 1:
@@ -1841,7 +1849,7 @@ def _xcode_swift_package_structured_resource_paths(package_path, target):
                 paths.append(candidate)
     return _unique(paths)
 
-def _xcode_swift_package_resource_accessor(package, target, target_id, has_swift_sources):
+def _xcode_swift_package_resource_accessor(package, target, target_id, has_swift_sources, fallback_to_containing_bundle = False):
     if not has_swift_sources or not (target.get("resources") or []):
         return None
     bundle_name = _xcode_swift_package_resource_bundle_name(package, target)
@@ -1861,7 +1869,7 @@ extension Bundle {
                 return bundle
             }
         }
-        fatalError(""" + repr("unable to find resource bundle " + bundle_name) + """)
+        """ + ("return Bundle(for: BundleFinder.self)" if fallback_to_containing_bundle else "fatalError(" + repr("unable to find resource bundle " + bundle_name) + ")") + """
     }()
 }
 """
@@ -2151,7 +2159,7 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
                 prebuild_actions = []
                 core_data = _xcode_datamodel_sources(ctx, _xcode_swift_package_target_datamodels(package_path, target), name, "", variant_id)
                 prebuild_actions.extend(core_data["actions"])
-                resource_accessor = _xcode_swift_package_resource_accessor(package, target, variant_id, any([source.endswith(".swift") for source in sources]))
+                resource_accessor = _xcode_swift_package_resource_accessor(package, target, variant_id, any([source.endswith(".swift") for source in sources]), target_type == "test")
                 if resource_accessor:
                     prebuild_actions.append(resource_accessor)
                 dependencies = _xcode_swift_package_dependencies(target, identity, variant["target_ids"], variant["product_ids"], variant_platform, package_traits, lazy_products, lazy_dependency)
@@ -3530,9 +3538,9 @@ def _xcode_workspace_resolver(ctx):
     for spec in specs:
         spec["deps"] = [dep for dep in spec["deps"] if dep[2:] in emitted]
 
-    # The application targets are the natural build roots; tests are roots too
-    # so `once test` can reach them, but applications take precedence in order.
-    return {"targets": specs, "roots": _xcode_roots(specs)}
+    # Applications are the natural build roots. Library-only projects build
+    # their non-test products, while the resolver metadata selects test bundles.
+    return {"targets": specs, "roots": _xcode_roots(specs), "attrs": {"_default_test_roots": [spec["name"] for spec in specs if spec["kind"] == "apple_test_bundle"]}}
 
 def _xcode_spm_platform(ctx, objects, native_targets, project_settings, configuration, path_maps):
     # The synthesized package builds for one platform. Prefer the project's
@@ -3668,6 +3676,9 @@ def _xcode_roots(specs):
     applications = [spec["name"] for spec in specs if spec["kind"] == "apple_application"]
     if applications:
         return applications
+    products = [spec["name"] for spec in specs if spec["kind"] != "apple_test_bundle"]
+    if products:
+        return products
     return [spec["name"] for spec in specs]
 
 def _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_closure, configuration, file_paths, project_dir, path_maps, test_plan_settings = {}):
@@ -3842,6 +3853,7 @@ xcode_workspace = target_kind(
         attr("xcode_developer_dir", "string", docs = "Optional `DEVELOPER_DIR` override folded into lowered Apple target cache keys.", configurable = False),
         attr("binary_artifact_authorization_env", "string", docs = "Optional environment-variable name supplying an Authorization header while downloading private binary package artifacts. The variable value is never recorded in the graph or cache.", configurable = False),
         attr("resolver_inputs", "list<string>", default = "[]", docs = "Package-relative text globs supplied to native integration resolution. Defaults to srcs when empty.", configurable = False),
+        attr("_default_test_roots", "list<string>", default = "[]", docs = "Resolver-owned first-party test target names used by targetless test selection.", configurable = False),
     ],
     resolver = _xcode_workspace_resolver,
     deps = [dep("deps", ["apple_linkable", "apple_application", "apple_test_bundle", "native_linkable"], "Native Xcode targets lowered into Apple application, library, framework, and test targets.")],
@@ -3877,4 +3889,5 @@ xcode = native_project(
     on_match = "all",
     max_depth = 16,
     requires_tools = ["plutil", "xcrun"],
+    owns_descendants = True,
 )

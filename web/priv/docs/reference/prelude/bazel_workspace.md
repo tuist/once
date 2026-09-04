@@ -23,10 +23,11 @@ builds; the target's provider records which mnemonics forced the fallback
 so users can see the gap. Each mnemonic Once learns to run natively shrinks
 the fallback set until every Bazel rule executes through Once.
 
-Once discovers a Bazel workspace automatically from `MODULE.bazel`. A
-repository without `once.toml` can therefore query and build its rules with
-`once` as soon as the module is checked in. Discovery skips generated
-directories such as `bazel-bin`, `bazel-out`, and `bazel-testlogs`.
+Once discovers a Bazel workspace automatically from `MODULE.bazel`,
+`WORKSPACE.bazel`, or `WORKSPACE`. A repository without `once.toml` can
+therefore query, build, and test its rules with `once` as soon as its native
+workspace file is checked in. Discovery skips generated directories such as
+`bazel-bin`, `bazel-out`, and `bazel-testlogs`.
 
 The default query is `kind("rule", //...)`, which returns every buildable
 rule the workspace exposes. The `query` attribute overrides that expression
@@ -44,7 +45,7 @@ and everything else becomes [`bazel_target`](/reference/prelude/bazel_target)
 folds `/` and `:` into `_` and adds a `bz_` prefix so the label survives
 Once's target-name grammar; two Bazel labels that would collide in that
 mapping are reported as a resolver error instead of silently deduplicated.
-The `once native show bazel` command prints the label-to-name mapping.
+`once query targets` prints the label-to-name mapping.
 
 ## Attributes
 
@@ -63,38 +64,17 @@ carry the actual build, test, and run capabilities.
 
 ## Direct use
 
-Discover and preview the workspace without writing a manifest:
+Discover and use the workspace without writing a manifest:
 
 ```sh
-once native list
-once native show bazel
+once query targets
+once build --ui
+once test
 ```
 
-Store the generated seed only when it should be reviewed in `once.toml`:
-
-```sh
-once native init bazel
-```
-
-The imported seed is equivalent to:
-
-```toml
-[[target]]
-name = "bazel"
-kind = "bazel_workspace"
-srcs = ["MODULE.bazel"]
-
-[target.attrs]
-resolver_inputs = [
-  "MODULE.bazel",
-  "WORKSPACE",
-  "WORKSPACE.bazel",
-  "MODULE.bazel.lock",
-  "**/BUILD",
-  "**/BUILD.bazel",
-  "**/*.bzl",
-]
-```
+Targetless build selects the single discovered workspace seed. Targetless
+test selects the first-party Bazel test rules reported by its resolver.
+Discovery does not create `once.toml`.
 
 ## Coexistence with Once outputs
 

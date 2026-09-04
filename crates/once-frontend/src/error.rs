@@ -45,11 +45,6 @@ pub enum Error {
         path: String,
         kind: CacheProviderError,
     },
-    #[error("{path}: {kind}")]
-    NativeProject {
-        path: String,
-        kind: NativeProjectError,
-    },
     #[error("validating target `{target}` name in {path}")]
     TargetNameInvalid {
         path: String,
@@ -155,20 +150,6 @@ pub enum CacheProviderError {
          set it to the name of an `[infrastructures.<name>]` block"
     )]
     EmptyInfrastructureName,
-}
-
-/// Structured detail for the two recurring native-project lookup
-/// failures. Fires when a user names a native project that doesn't
-/// exist in the prelude, or names one whose discovered package
-/// doesn't match what was asked for. Other native-project errors
-/// still flow through `Error::Eval`; they're one-off shapes that do
-/// not benefit from typed variants until B3 rewrites want them.
-#[derive(Debug, thiserror::Error)]
-pub enum NativeProjectError {
-    #[error("unknown native project `{name}`")]
-    Unknown { name: String },
-    #[error("native project `{name}` does not match package `{package}`")]
-    PackageMismatch { name: String, package: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

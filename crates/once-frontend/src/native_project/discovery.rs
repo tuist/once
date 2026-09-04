@@ -63,6 +63,29 @@ fn detect_native_projects_with_limit(
         scan.visit(&entry)?;
     }
     let mut matches = scan.finish();
+    let owning_packages = matches
+        .iter()
+        .filter(|matched| {
+            schemas
+                .iter()
+                .any(|schema| schema.name == matched.native_project && schema.owns_descendants)
+        })
+        .map(|matched| matched.package.clone())
+        .collect::<Vec<_>>();
+    matches.retain(|matched| {
+        let owns_descendants = schemas
+            .iter()
+            .any(|schema| schema.name == matched.native_project && schema.owns_descendants);
+        !owning_packages.iter().any(|owner| {
+            (!owns_descendants || matched.package != *owner)
+                && (matched.package == *owner
+                    || owner.is_empty()
+                    || matched
+                        .package
+                        .strip_prefix(owner.as_str())
+                        .is_some_and(|suffix| suffix.starts_with('/')))
+        })
+    });
     matches.sort_unstable_by(|left, right| {
         left.package
             .cmp(&right.package)
@@ -335,6 +358,7 @@ mod tests {
             on_match: "descend".to_string(),
             max_depth: 16,
             requires_tools: Vec::new(),
+            owns_descendants: false,
         }
     }
 
@@ -416,6 +440,57 @@ exclude = ["apps/excluded/**"]
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].native_project, "secondary");
         assert_eq!(matches[0].package, "vendor");
+    }
+
+    #[test]
+    fn an_owning_project_suppresses_other_projects_at_its_root_and_below_it() {
+        let temporary = tempfile::tempdir().unwrap();
+        write(&temporary.path().join("WORKSPACE"), "workspace");
+        write(&temporary.path().join("Cargo.toml"), "[workspace]");
+        write(
+            &temporary.path().join("examples/demo/Package.swift"),
+            "// swift-tools-version: 6.0",
+        );
+        let mut owner = schema("bazel", "WORKSPACE", &[]);
+        owner.owns_descendants = true;
+        let schemas = vec![
+            owner,
+            schema("cargo", "Cargo.toml", &[]),
+            schema("swift", "Package.swift", &[]),
+        ];
+        let boundary = crate::workspace::load_workspace_scan(temporary.path()).unwrap();
+
+        let (matches, _) =
+            detect_native_projects_with_schemas(temporary.path(), &schemas, &boundary).unwrap();
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].native_project, "bazel");
+        assert!(matches[0].package.is_empty());
+    }
+
+    #[test]
+    fn owning_projects_do_not_suppress_sibling_projects() {
+        let temporary = tempfile::tempdir().unwrap();
+        write(
+            &temporary.path().join("apps/apple/Project.xcode"),
+            "project",
+        );
+        write(&temporary.path().join("tools/Cargo.toml"), "[workspace]");
+        let mut owner = schema("xcode", "Project.xcode", &[]);
+        owner.owns_descendants = true;
+        let schemas = vec![owner, schema("cargo", "Cargo.toml", &[])];
+        let boundary = crate::workspace::load_workspace_scan(temporary.path()).unwrap();
+
+        let (matches, _) =
+            detect_native_projects_with_schemas(temporary.path(), &schemas, &boundary).unwrap();
+
+        assert_eq!(
+            matches
+                .iter()
+                .map(|matched| (matched.native_project.as_str(), matched.package.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("xcode", "apps/apple"), ("cargo", "tools")]
+        );
     }
 
     #[test]

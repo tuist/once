@@ -33,7 +33,7 @@ From the directory that contains `nx.json`, inspect the match and the
 emitted targets:
 
 ```sh
-once native list
+once query workspace
 once query targets --kind nx_task
 ```
 

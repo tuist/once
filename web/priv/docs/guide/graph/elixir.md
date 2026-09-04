@@ -58,22 +58,16 @@ dependencies. Library maintainers who do not commit `mix.lock` can generate
 one locally before using Once, but repeatable builds on another machine require
 the same lockfile.
 
-### Preview the Derived Graph
+### Inspect the Derived Graph
 
-From the directory that contains `mix.exs`, inspect the match and the graph:
+From the directory that contains `mix.exs`, inspect the graph:
 
 ```sh
-once native list
-once native show mix
+once query workspace
 once query targets
 ```
 
-No `once.toml` is required, and these commands do not write one. If the
-workspace contains several Mix projects, select one explicitly:
-
-```sh
-once native show mix --path apps/accounts
-```
+No `once.toml` is required, and these commands do not write one.
 
 The identifiers printed by `once query targets` are the source of truth. For a
 Mix project at the workspace root, discovery normally derives:
@@ -135,21 +129,6 @@ Dependency fetching is outside the Once graph. Once caches compilation after
 `deps/` contains the sources selected by `mix.lock`. Continue with
 [Caching](/guide/scripted/caching) to configure a shared remote cache.
 
-### Record the Project Selection
-
-Initialization is optional. Use it when the repository should make its native
-project selection explicit:
-
-```sh
-once native init mix
-```
-
-This writes only the `mix_workspace` seed. The detailed targets remain derived
-from `mix.exs` and `mix.lock`, so they do not become duplicated configuration.
-Commit the seed if reviewers and continuous integration should see the
-selection. Pin the same Once version in continuous integration, materialize
-locked dependencies, and run the same target commands used locally.
-
 ### Umbrellas, Nested Projects, and Path Dependencies
 
 Discovery preserves workspace-relative source roots for path dependencies and
@@ -173,8 +152,6 @@ back to an opaque build.
   declare a `mix_release` target with `pre_tasks`. Once does not infer
   framework conventions.
 - Native project evaluation requires Erlang 27 or newer.
-- Use `once native show mix --path <path>` when more than one
-  `mix.exs` matches the workspace.
 
 ## Author a Graph When You Need More Control
 

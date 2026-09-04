@@ -22,7 +22,7 @@ invoked in the ownership path.
 Actions inherit the caller's environment (`PATH`, `HOME`, `SSL_CERT_FILE`,
 and other toolchain-related variables). When the action graph contains any
 Bazel-internal action (`Symlink`, `FileWrite`, `RunfilesTree`,
-`SymlinkTree`, `RepoMappingManifest` — actions with no argv in `aquery`
+`SymlinkTree`, `RepoMappingManifest`, which are actions with no argument vector in `aquery`
 output), Once falls back to `bazel build <label>` for that target and
 records the unsupported mnemonics on the target's provider.
 
@@ -46,9 +46,8 @@ The target emits `bazel_target` and exposes only the `build` capability. Use
 
 ## Direct use
 
-`bazel_target` is discovered through its workspace seed. Query the graph
-after `once native show bazel` to list the materialized rules and their
-labels:
+`bazel_target` is discovered through its workspace seed. Query the graph to
+list the materialized rules and their labels:
 
 ```sh
 once query targets

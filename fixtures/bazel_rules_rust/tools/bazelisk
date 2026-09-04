@@ -1,0 +1,21 @@
+#!/bin/sh
+case "${1:-}" in
+  --version)
+    printf '%s\n' 'bazel 9.0.0'
+    ;;
+  query)
+    printf '%s\n' 'cc_library rule //:support' 'cc_test rule //:support_test'
+    ;;
+  aquery)
+    printf '%s\n' '{}'
+    ;;
+  info)
+    printf '%s\n' "${TMPDIR:-/tmp}/once-bazel-output-base"
+    ;;
+  fetch|build|test)
+    exit 0
+    ;;
+  *)
+    exit 2
+    ;;
+esac
