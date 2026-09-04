@@ -298,39 +298,6 @@ fn resolve_mcp_workspace(workspace: &Path, workspace_override: Option<PathBuf>) 
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[cfg(unix)]
-    #[test]
-    fn mcp_workspace_override_is_canonicalized() {
-        let temporary = tempfile::tempdir().unwrap();
-        let workspace = temporary.path().join("workspace");
-        let alias = temporary.path().join("alias");
-        std::fs::create_dir(&workspace).unwrap();
-        std::os::unix::fs::symlink(&workspace, &alias).unwrap();
-
-        assert_eq!(
-            resolve_mcp_workspace(temporary.path(), Some(alias)).unwrap(),
-            std::fs::canonicalize(workspace).unwrap()
-        );
-    }
-
-    #[test]
-    fn default_build_target_does_not_expand_native_project_resolvers() {
-        let temporary = tempfile::tempdir().unwrap();
-        let project = temporary.path().join("App.xcodeproj");
-        std::fs::create_dir(&project).unwrap();
-        std::fs::write(project.join("project.pbxproj"), "not a project").unwrap();
-
-        assert_eq!(
-            resolve_build_target(temporary.path(), None).unwrap(),
-            "xcode"
-        );
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_build(
     workspace: &Path,
@@ -979,4 +946,37 @@ fn resolve_build_target(workspace: &Path, target: Option<String>) -> Result<Stri
 
 fn resolve_target_arg(workspace: &Path, raw: &str) -> Result<String> {
     once_frontend::normalize_cli_target(workspace, raw).context("resolving target argument")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn mcp_workspace_override_is_canonicalized() {
+        let temporary = tempfile::tempdir().unwrap();
+        let workspace = temporary.path().join("workspace");
+        let alias = temporary.path().join("alias");
+        std::fs::create_dir(&workspace).unwrap();
+        std::os::unix::fs::symlink(&workspace, &alias).unwrap();
+
+        assert_eq!(
+            resolve_mcp_workspace(temporary.path(), Some(alias)).unwrap(),
+            std::fs::canonicalize(workspace).unwrap()
+        );
+    }
+
+    #[test]
+    fn default_build_target_does_not_expand_native_project_resolvers() {
+        let temporary = tempfile::tempdir().unwrap();
+        let project = temporary.path().join("App.xcodeproj");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::write(project.join("project.pbxproj"), "not a project").unwrap();
+
+        assert_eq!(
+            resolve_build_target(temporary.path(), None).unwrap(),
+            "xcode"
+        );
+    }
 }
