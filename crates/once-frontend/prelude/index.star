@@ -6,6 +6,7 @@ PRELUDE_SOURCES = [
     "android.star",
     "go.star",
     "rust.star",
+    "bazel.star",
     "xcode.star",
     "swift_package.star",
     "c.star",
@@ -79,6 +80,10 @@ PRELUDE_TARGET_KINDS = {
         "rust_test",
         "rust_crate",
         "rust_proc_macro",
+    ],
+    "bazel.star": [
+        "bazel_workspace",
+        "bazel_command",
     ],
     "xcode.star": [
         "xcode_workspace",

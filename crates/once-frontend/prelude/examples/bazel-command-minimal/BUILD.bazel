@@ -1,0 +1,10 @@
+cc_library(
+    name = "greeting",
+    srcs = ["greeting.cc"],
+)
+
+cc_test(
+    name = "greeting_test",
+    srcs = ["greeting_test.cc"],
+    deps = [":greeting"],
+)

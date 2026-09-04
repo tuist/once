@@ -1,0 +1,4 @@
+[[target]]
+name = "bazel_direct"
+kind = "bazel_command"
+srcs = ["MODULE.bazel", "BUILD.bazel", "*.cc"]
