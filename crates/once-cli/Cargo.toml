@@ -20,6 +20,7 @@ axum.workspace = true
 blake3.workspace = true
 usage.workspace = true
 console.workspace = true
+fd-lock.workspace = true
 glob.workspace = true
 futures.workspace = true
 notify.workspace = true

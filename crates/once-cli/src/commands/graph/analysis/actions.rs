@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::OsStr;
 use std::fmt::Write as _;
+use std::fs::OpenOptions;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -10,6 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use fd_lock::RwLock;
 use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{
     resolve_execution_argv, resolve_execution_env, validate_action_contract_with_options,
@@ -844,9 +846,17 @@ async fn resolve_cacheable_declared_action(
     // setup, so they must only run when the command actually executes.
     // A cache hit does not run command setup. Removing a clean_paths entry on
     // a hit could delete an unrelated path with no command left to recreate it.
+    let action_digest = action.digest();
+    let mut action_lock = cacheable_action_lock(context.workspace, action_digest)?;
+    let _action_guard = action_lock.write().with_context(|| {
+        format!(
+            "locking action {} for {} ({})",
+            context.index, context.target_id, context.identifier
+        )
+    })?;
     let cached = context
         .cache
-        .get_action_result(&action.digest())
+        .get_action_result(&action_digest)
         .await
         .with_context(|| {
             format!(
@@ -854,7 +864,6 @@ async fn resolve_cacheable_declared_action(
                 context.index, context.target_id, context.identifier
             )
         })?;
-    let action_digest = action.digest();
     let outcome = if let Some(result) = cached {
         if action_result_blobs_present(
             &result,
@@ -881,6 +890,21 @@ async fn resolve_cacheable_declared_action(
         }
     }
     Ok(outcome)
+}
+
+fn cacheable_action_lock(workspace: &Path, digest: Digest) -> Result<RwLock<std::fs::File>> {
+    let directory = workspace.join(".once/locks/actions");
+    std::fs::create_dir_all(&directory)
+        .with_context(|| format!("creating action lock directory `{}`", directory.display()))?;
+    let path = directory.join(format!("{digest}.lock"));
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("opening action lock `{}`", path.display()))?;
+    Ok(RwLock::new(file))
 }
 
 async fn action_result_blobs_present(
