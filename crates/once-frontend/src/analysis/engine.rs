@@ -16,8 +16,8 @@ use sha2::Digest as _;
 
 use super::globals::{globals_for_prelude, UnchangedWorkspace};
 use super::store::{
-    with_active_store, AnalysisObservations, AnalysisStore, CachedToolCommand, CommandPolicy,
-    DeclaredAction, HostCache,
+    with_active_store, with_store, AnalysisObservations, AnalysisStore, CachedToolCommand,
+    CommandPolicy, DeclaredAction, HostCache, HostToolFailure,
 };
 use super::values::{attr_value_to_starlark, json_to_value, value_to_json};
 use crate::graph::{Diagnostic, GraphTarget, TargetKindSchema};
@@ -751,7 +751,57 @@ fn resolve_targets_in_starlark<T>(
     result
 }
 
+/// The host tool failure behind `message`, when one explains it.
+///
+/// A resolver stops at its first failure, so the last recorded one is the
+/// candidate. Requiring the executable to appear in `message` is what ties the
+/// two together: without it a stale record from an earlier target could
+/// describe a failure it had nothing to do with.
+fn causing_tool_failure(message: &str) -> Option<HostToolFailure> {
+    let failure = with_store(|store| store.and_then(|store| store.host_cache.last_tool_failure()))?;
+    message.contains(&failure.program).then_some(failure)
+}
+
+/// Report a host tool that ran and refused, leading with the executable and
+/// the reason rather than the Starlark traceback that wraps them.
+///
+/// The traceback names the prelude function that reached for the tool, which
+/// reads as a fault in Once. The fault is in the tool: Once ran whatever the
+/// host resolves for that name, so the repair is to fix that executable, and
+/// the way to see it plainly is to run it outside Once.
+fn tool_failure_diagnostic(
+    target: &GraphTarget,
+    stage: &str,
+    failure: &HostToolFailure,
+) -> anyhow::Error {
+    let name = failure.name();
+    let mut message = format!(
+        "target kind {stage} failed for `{target}`: `{name}` is not usable\n\n  resolved to  {program}\n  exited with  {status}",
+        target = target.label.id,
+        program = failure.program,
+        status = failure.status,
+    );
+    if !failure.stderr.is_empty() {
+        message.push_str("\n  stderr       ");
+        message.push_str(&failure.stderr.replace('\n', "\n               "));
+    }
+    // Carried in the message, not only in the repair: the repair reaches
+    // structured consumers, and this is the line a person needs to read.
+    let repair = format!(
+        "Once runs the `{name}` the host resolves, not one of its own. Run `{name}` yourself from the workspace root to see the same failure, then repair that installation."
+    );
+    message.push_str("\n\n");
+    message.push_str(&repair);
+    let diagnostic = Diagnostic::new("host_tool_not_usable", message)
+        .with_target(&target.label.id)
+        .with_repair(repair);
+    anyhow!(AnalysisFailure { diagnostic })
+}
+
 fn analysis_failure(target: &GraphTarget, stage: &str, message: &str) -> anyhow::Error {
+    if let Some(failure) = causing_tool_failure(message) {
+        return tool_failure_diagnostic(target, stage, &failure);
+    }
     let (code, repair) = if message.contains("select()") && message.contains("no") {
         (
             "select_no_matching_branch",

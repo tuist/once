@@ -533,8 +533,38 @@ impl<K: Ord + Clone, V: Clone> SingleFlight<K, V> {
     }
 }
 
+/// What a host tool did when it refused to run.
+///
+/// A resolver's toolchain probe reaches the host through Starlark, and a
+/// Starlark error flattens to a traceback string on the way back out. Keeping
+/// the parts here lets the analysis boundary say which executable failed and
+/// why, instead of leaving the reason buried at the bottom of a traceback.
+#[derive(Debug, Clone)]
+pub(super) struct HostToolFailure {
+    /// Executable that ran, as resolved (usually an absolute path).
+    pub(super) program: String,
+    /// How the process ended, rendered.
+    pub(super) status: String,
+    /// What it wrote to stderr, trimmed.
+    pub(super) stderr: String,
+}
+
+impl HostToolFailure {
+    /// The name a person would call this tool: the file name of the
+    /// executable that actually ran.
+    pub(super) fn name(&self) -> &str {
+        Path::new(&self.program)
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .unwrap_or(&self.program)
+    }
+}
+
 pub(super) struct HostCache {
     which: Arc<SingleFlight<String, Option<String>>>,
+    /// The most recent command that exited non-zero. Read only on the error
+    /// path, to describe a failure the traceback would otherwise obscure.
+    last_tool_failure: Arc<Mutex<Option<HostToolFailure>>>,
     commands: Arc<SingleFlight<CommandKey, String>>,
     environment: Arc<Mutex<BTreeMap<String, Option<String>>>>,
     paths: Arc<Mutex<BTreeSet<PathBuf>>>,
@@ -554,6 +584,7 @@ impl Clone for HostCache {
     fn clone(&self) -> Self {
         Self {
             which: Arc::clone(&self.which),
+            last_tool_failure: Arc::clone(&self.last_tool_failure),
             commands: Arc::clone(&self.commands),
             environment: Arc::clone(&self.environment),
             paths: Arc::clone(&self.paths),
@@ -575,6 +606,7 @@ impl HostCache {
     fn with_env_lookup(host_env: impl Fn(&str) -> Option<String> + Send + Sync + 'static) -> Self {
         Self {
             which: Arc::new(SingleFlight::new()),
+            last_tool_failure: Arc::new(Mutex::new(None)),
             commands: Arc::new(SingleFlight::new()),
             environment: Arc::new(Mutex::new(BTreeMap::new())),
             paths: Arc::new(Mutex::new(BTreeSet::new())),
@@ -723,6 +755,24 @@ impl HostCache {
         Ok(resolved)
     }
 
+    /// Remember the most recent non-zero exit so the analysis boundary can
+    /// describe it. Only the last one is kept: a resolver stops at its first
+    /// failure, so that is the one being reported.
+    fn record_tool_failure(&self, failure: HostToolFailure) {
+        *self
+            .last_tool_failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(failure);
+    }
+
+    /// The most recent host tool failure, if one has been recorded.
+    pub(super) fn last_tool_failure(&self) -> Option<HostToolFailure> {
+        self.last_tool_failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     /// Run `argv` (optionally with extra env vars) and cache its
     /// stdout.
     ///
@@ -759,11 +809,11 @@ impl HostCache {
             .next()
             .ok_or_else(|| anyhow!("host_command requires a non-empty argv"))?;
         let command_args: Vec<&String> = iter.collect();
-        let resolved_program = self.tool_paths.get(program).unwrap_or(program);
-        if Path::new(resolved_program).components().count() > 1 {
-            self.observe_path(Path::new(resolved_program));
+        let resolved_program = self.tool_paths.get(program).unwrap_or(program).clone();
+        if Path::new(&resolved_program).components().count() > 1 {
+            self.observe_path(Path::new(&resolved_program));
         }
-        let mut command = Command::new(resolved_program);
+        let mut command = Command::new(&resolved_program);
         command.args(&command_args);
         if let Some(cwd) = cwd {
             command.current_dir(cwd);
@@ -779,11 +829,14 @@ impl HostCache {
                 .map(|arg| arg.as_str())
                 .collect::<Vec<_>>()
                 .join(" ");
+            let stderr = String::from_utf8_lossy(&stderr).trim().to_string();
+            self.record_tool_failure(HostToolFailure {
+                program: resolved_program.clone(),
+                status: status.to_string(),
+                stderr: stderr.clone(),
+            });
             return Err(anyhow!(
-                "`{program} {}` exited with {}: {}",
-                rendered_args,
-                status,
-                String::from_utf8_lossy(&stderr).trim()
+                "`{program} {rendered_args}` exited with {status}: {stderr}"
             ));
         }
         // Some tools (kotlinc, older javac) print their version banner to
