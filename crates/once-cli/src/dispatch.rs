@@ -298,10 +298,11 @@ fn resolve_mcp_workspace(workspace: &Path, workspace_override: Option<PathBuf>) 
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn mcp_workspace_override_is_canonicalized() {
         let temporary = tempfile::tempdir().unwrap();
