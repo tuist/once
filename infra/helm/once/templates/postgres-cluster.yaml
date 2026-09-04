@@ -1,0 +1,20 @@
+{{- if .Values.postgres.enabled }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ include "once.postgresClusterName" . }}
+  labels:
+    {{- include "once.labels" . | nindent 4 }}
+spec:
+  instances: {{ .Values.postgres.instances }}
+  imageName: {{ .Values.postgres.imageName }}
+  storage:
+    size: {{ .Values.postgres.storageSize }}
+    storageClass: {{ .Values.postgres.storageClass }}
+  bootstrap:
+    initdb:
+      database: {{ .Values.postgres.database }}
+      owner: {{ .Values.postgres.owner }}
+  resources:
+    {{- toYaml .Values.postgres.resources | nindent 4 }}
+{{- end }}

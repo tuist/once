@@ -95,8 +95,35 @@ externalSecrets:
   items:
     SECRET_KEY_BASE:
       remoteRef: "once-secret-key-base/password"
+    GITHUB_OAUTH_CLIENT_ID:
+      remoteRef: "once-github-app/client_id"
+    GITHUB_OAUTH_CLIENT_SECRET:
+      remoteRef: "once-github-app/client_secret"
+    GITHUB_OAUTH_REDIRECT_URI:
+      remoteRef: "once-github-app/redirect_uri"
+    GITHUB_APP_INSTALL_URL:
+      remoteRef: "once-github-app/install_url"
   # The image is public, so no registry pull secret is synced.
   pullSecret:
     enabled: false
     item: "once-ghcr-pull"
     field: "notesPlain"
+
+postgres:
+  # Kept running but unused by the app today; a single instance frees a
+  # replica pod and its 20Gi volume. Dropping Postgres entirely needs app
+  # changes (Repo is started unconditionally and runtime.exs requires
+  # DATABASE_URL), so that is left for the larger restructure.
+  enabled: true
+  instances: 1
+  storageSize: 20Gi
+  storageClass: hcloud-volumes
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.0
+  database: once
+  owner: once
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi

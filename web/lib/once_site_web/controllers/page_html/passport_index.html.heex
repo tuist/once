@@ -1,0 +1,27 @@
+<Layouts.app flash={@flash}>
+  <section data-part="passport-page">
+    <header data-part="passport-header">
+      <div>
+        <h1>Zero-to-Once</h1>
+        <p>Open source repositories that are being brought to Once.</p>
+      </div>
+    </header>
+
+    <div data-part="passport-directory">
+      <a
+        :for={repository <- @repositories}
+        data-part="passport-directory-item"
+        href={"/github.com/#{repository.github_account}/#{repository.github_repository}"}
+      >
+        <div>
+          <strong>{repository.github_account}/{repository.github_repository}</strong>
+          <span>{repository.github_description}</span>
+        </div>
+        <Badge.status_badge
+          status={if repository.scans == [], do: "in_progress", else: "success"}
+          label={if repository.scans == [], do: "Indexing", else: "Indexed"}
+        />
+      </a>
+    </div>
+  </section>
+</Layouts.app>

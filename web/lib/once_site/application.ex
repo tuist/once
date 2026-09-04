@@ -7,12 +7,16 @@ defmodule OnceSite.Application do
 
   @impl true
   def start(_type, _args) do
+    EMCP.SessionStore.ETS.init()
+
     children = [
       OnceSiteWeb.Telemetry,
+      OnceSite.Repo,
       {DNSCluster, query: Application.get_env(:once_site, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: OnceSite.PubSub},
       {OnceSite.RateLimit, [clean_period: :timer.minutes(1)]},
       OnceSiteWeb.Docs.Cache,
+      {Cachex, name: OnceSite.Passport.Cache},
       # Start to serve requests, typically the last entry
       OnceSiteWeb.Endpoint
     ]
