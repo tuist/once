@@ -14679,6 +14679,74 @@ result = repr([[info["identity"], info["path"]] for info in infos])
 }
 
 #[test]
+fn prelude_xcode_discovers_products_from_unreferenced_local_swift_packages() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "/workspace"
+
+def glob(patterns):
+    return ["WMFComponents/Package.swift"]
+
+def host_which(name):
+    return name
+
+def host_command(argv, env = None, cwd = None, merge_stderr = None):
+    if argv == ["xcrun", "--find", "swift"]:
+        return "swift"
+    return '{{"name":"WMFComponents","platforms":[],"products":[{{"name":"WMFComponents","targets":["WMFComponents"]}}],"targets":[]}}'
+
+products = _xcode_local_package_products({{}}, ["WMFComponents"])
+result = repr(products["WMFComponents"])
+"#,
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"{"identity": "WMFComponents", "path": "WMFComponents", "platforms": {}, "info": {"name": "WMFComponents", "platforms": [], "products": [{"name": "WMFComponents", "targets": ["WMFComponents"]}], "targets": []}}"#
+    );
+}
+
+#[test]
+fn prelude_xcode_expands_local_swift_package_dependencies() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "/workspace"
+
+def host_file_exists(path):
+    return path == "/workspace/WMFData/Package.swift"
+
+def host_which(name):
+    return name
+
+def host_command(argv, env = None, cwd = None, merge_stderr = None):
+    if argv == ["xcrun", "--find", "swift"]:
+        return "swift"
+    return '{{"name":"WMFData","dependencies":[],"products":[],"targets":[]}}'
+
+infos = _xcode_expand_swift_package_infos({{}}, [{{
+    "identity": "WMFComponents",
+    "path": "WMFComponents",
+    "info": {{
+        "dependencies": [{{"fileSystem": [{{
+            "identity": "wmfdata",
+            "nameForTargetDependencyResolutionOnly": "WMFData",
+            "path": "/workspace/WMFData",
+        }}]}}],
+    }},
+}}])
+result = repr([[info["identity"], info["path"]] for info in infos])
+"#,
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["WMFComponents", "WMFComponents"], ["WMFData", "WMFData"]]"#
+    );
+}
+
+#[test]
 fn prelude_xcode_reconciles_local_package_products_into_native_targets() {
     let prelude = xcode_prelude_source();
     let source = format!(
@@ -17409,6 +17477,25 @@ def host_file_exists(path):
 def host_file_read(path):
     return ""
 
+def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, sdk_variant, configuration = "Debug", lazy_products = {{}}, lazy_dependency = "", target_prefix = "SwiftPackage"):
+    return {{
+        "specs": [{{
+            "name": "XcodePackage_swift-argument-parser_changelog-authors",
+            "kind": "apple_application",
+            "deps": [],
+            "srcs": ["Tools/changelog-authors/ChangelogAuthors.swift"],
+            "attrs": {{}},
+        }}, {{
+            "name": "XcodePackage_swift-argument-parser_ArgumentParserTests",
+            "kind": "apple_test_bundle",
+            "deps": [],
+            "srcs": ["Tests/ArgumentParserTests.swift"],
+            "attrs": {{}},
+        }}],
+        "products": {{}},
+        "modules": {{}},
+    }}
+
 ctx = {{
     "label": {{"package": "app", "name": "hello", "id": "app/hello"}},
     "attr": {{"project": "App.xcodeproj"}},
@@ -17417,6 +17504,7 @@ graph = _xcode_workspace_resolver(ctx)
 specs = {{spec["name"]: spec for spec in graph["targets"]}}
 result = repr([
     graph["roots"],
+    graph["attrs"]["_default_test_roots"],
     [specs["Feature"]["kind"], specs["App"]["kind"], specs["AppTests"]["kind"]],
     specs["App"]["deps"],
     specs["AppTests"]["deps"],
@@ -17435,6 +17523,6 @@ result = repr([
     let out = eval_prelude_source_to_repr(source).unwrap();
     assert_eq!(
         out,
-        r#"[["App"], ["apple_framework", "apple_application", "apple_test_bundle"], ["./Feature"], ["./App"], ["Source/Core/Feature.swift"], {"Source/Core/Feature.swift": "[\"-DNDEBUG\",\"-fno-objc-arc\"]"}, ["App.swift"], "dev.once.App", "TEAM123", ["iphone", "ipad"], "16.0", True]"#
+        r#"[["App"], ["AppTests"], ["apple_framework", "apple_application", "apple_test_bundle"], ["./Feature"], ["./App"], ["Source/Core/Feature.swift"], {"Source/Core/Feature.swift": "[\"-DNDEBUG\",\"-fno-objc-arc\"]"}, ["App.swift"], "dev.once.App", "TEAM123", ["iphone", "ipad"], "16.0", True]"#
     );
 }
