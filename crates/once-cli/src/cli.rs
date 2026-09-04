@@ -162,6 +162,13 @@ pub struct Cli {
     #[usage(short = 'q', long, global = true)]
     pub quiet: bool,
 
+    /// Play soft procedural pad tones at meaningful moments in a command's
+    /// lifecycle: a note when work starts, a note per action as it completes,
+    /// and a resolving chord when the command finishes. Off by default; when
+    /// the default audio device is unavailable the flag has no effect.
+    #[usage(long, global = true)]
+    pub sound: bool,
+
     /// Print the command surface at the current command depth.
     #[usage(long, global = true)]
     pub list: bool,

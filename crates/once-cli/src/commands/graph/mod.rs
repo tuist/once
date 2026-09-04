@@ -357,7 +357,24 @@ pub async fn build(
     }
     write_record(output, &record).await?;
     write_runs_report(workspace, ui_server.as_ref()).await;
+    emit_capability_completion_sounds(&record);
     Ok(ExitCode::SUCCESS)
+}
+
+fn emit_capability_completion_sounds(record: &CapabilityRunRecord) {
+    let action_event = if record.result.exit_code != 0 {
+        crate::sound::Event::ActionFailed
+    } else if record.cache_state == EvidenceCacheState::Hit {
+        crate::sound::Event::ActionCacheHit
+    } else {
+        crate::sound::Event::ActionExecuted
+    };
+    crate::sound::emit(action_event);
+    crate::sound::emit(if record.result.exit_code == 0 {
+        crate::sound::Event::Finished
+    } else {
+        crate::sound::Event::Failed
+    });
 }
 
 async fn write_runs_report(workspace: &Path, ui_server: Option<&crate::commands::ui::UiServer>) {
@@ -423,7 +440,21 @@ pub async fn lint(
     };
     record_capability_run(workspace, &record).await;
     write_lint_results(output, &results).await?;
-    Ok(if results.fails_at(fail_on) {
+    let fails = results.fails_at(fail_on);
+    let action_event = if fails {
+        crate::sound::Event::ActionFailed
+    } else if record.cache_state == EvidenceCacheState::Hit {
+        crate::sound::Event::ActionCacheHit
+    } else {
+        crate::sound::Event::ActionExecuted
+    };
+    crate::sound::emit(action_event);
+    crate::sound::emit(if fails {
+        crate::sound::Event::Failed
+    } else {
+        crate::sound::Event::Finished
+    });
+    Ok(if fails {
         ExitCode::from(1)
     } else {
         ExitCode::SUCCESS
@@ -639,6 +670,7 @@ pub async fn test_with_filters(
     }
     write_record(output, &record).await?;
     write_runs_report(workspace, ui_server.as_ref()).await;
+    emit_capability_completion_sounds(&record);
     Ok(ExitCode::SUCCESS)
 }
 
@@ -732,6 +764,7 @@ pub async fn run(
     };
     record_capability_run(workspace, &record).await;
     write_record(output, &record).await?;
+    emit_capability_completion_sounds(&record);
     Ok(ExitCode::SUCCESS)
 }
 

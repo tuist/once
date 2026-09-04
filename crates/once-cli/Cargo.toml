@@ -24,6 +24,7 @@ glob.workspace = true
 futures.workspace = true
 notify.workspace = true
 reqwest.workspace = true
+rodio = { version = "0.20", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

@@ -60,6 +60,12 @@ pub async fn run(
     } else {
         runner.run(&plan.action).await.context("executing action")?
     };
+    crate::sound::emit(sound_for_action_outcome(&outcome));
+    crate::sound::emit(if outcome.result.exit_code == 0 {
+        crate::sound::Event::Finished
+    } else {
+        crate::sound::Event::Failed
+    });
     crate::commands::evidence::record_outcome(
         workspace,
         EvidenceSubject::target(target_id, "run"),
@@ -160,5 +166,15 @@ fn action_remote(action: &Action) -> Option<&RemoteExecution> {
     match action {
         Action::RunCommand { remote, .. } => remote.as_deref(),
         _ => None,
+    }
+}
+
+fn sound_for_action_outcome(outcome: &once_core::Outcome) -> crate::sound::Event {
+    if outcome.result.exit_code != 0 {
+        crate::sound::Event::ActionFailed
+    } else if outcome.cache == CacheState::Hit {
+        crate::sound::Event::ActionCacheHit
+    } else {
+        crate::sound::Event::ActionExecuted
     }
 }

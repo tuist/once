@@ -44,6 +44,87 @@ pub(crate) async fn dispatch(cli: Cli) -> Result<ExitCode> {
     .await
 }
 
+/// Whether this command produces action-shaped work worth marking with the
+/// `--sound` opening and closing tones. Informational verbs (query, cache
+/// stats, help-style paths) are left silent.
+fn command_makes_sound(command: &Cmd) -> bool {
+    matches!(
+        command,
+        Cmd::Build { .. }
+            | Cmd::Lint { .. }
+            | Cmd::Run { .. }
+            | Cmd::Test { .. }
+            | Cmd::Exec { .. }
+            | Cmd::Compatibility { .. }
+            | Cmd::PackageCompatibility { .. }
+            | Cmd::BazelCompatibility { .. }
+            | Cmd::CrateCompatibility { .. }
+    )
+}
+
+/// Derive a musical fingerprint for the synth from the command being run.
+/// The seed only needs to be stable per invocation shape — same command, same
+/// piece — so we hash the verb and its most identifying arguments (target id
+/// or argv). Not cryptographic; `DefaultHasher` is enough.
+fn command_sound_seed(command: &Cmd) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    match command {
+        Cmd::Build { target, .. } => {
+            "build".hash(&mut hasher);
+            target.hash(&mut hasher);
+        }
+        Cmd::Lint { target, .. } => {
+            "lint".hash(&mut hasher);
+            target.hash(&mut hasher);
+        }
+        Cmd::Run {
+            target, arguments, ..
+        } => {
+            "run".hash(&mut hasher);
+            target.hash(&mut hasher);
+            arguments.hash(&mut hasher);
+        }
+        Cmd::Test {
+            target,
+            changed_paths,
+            test_unit,
+            all,
+            ..
+        } => {
+            "test".hash(&mut hasher);
+            target.hash(&mut hasher);
+            changed_paths.hash(&mut hasher);
+            test_unit.hash(&mut hasher);
+            all.hash(&mut hasher);
+        }
+        Cmd::Exec { argv, .. } => {
+            "exec".hash(&mut hasher);
+            argv.hash(&mut hasher);
+        }
+        Cmd::Compatibility { argv } => {
+            "xcodebuild".hash(&mut hasher);
+            argv.hash(&mut hasher);
+        }
+        Cmd::PackageCompatibility { argv } => {
+            "swift".hash(&mut hasher);
+            argv.hash(&mut hasher);
+        }
+        Cmd::BazelCompatibility { argv } => {
+            "bazel".hash(&mut hasher);
+            argv.hash(&mut hasher);
+        }
+        Cmd::CrateCompatibility { argv } => {
+            "cargo".hash(&mut hasher);
+            argv.hash(&mut hasher);
+        }
+        _ => {}
+    }
+    hasher.finish()
+}
+
 fn resolve_workspace(directory: Option<PathBuf>) -> Result<PathBuf> {
     let workspace = match directory {
         Some(directory) => {
@@ -76,6 +157,10 @@ async fn run_command(
     resource_limits: &ResourceLimits,
     command: Cmd,
 ) -> Result<ExitCode> {
+    if command_makes_sound(&command) {
+        crate::sound::seed(command_sound_seed(&command));
+        crate::sound::emit(crate::sound::Event::Started);
+    }
     if let Some(invocation) = command.compatibility() {
         return Box::pin(commands::compatibility::run(
             workspace,
