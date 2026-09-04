@@ -1458,6 +1458,36 @@ def _xcode_swift_package_info(ctx, package_dir, identity = ""):
     swift = host_command([xcrun, "--find", "swift"]).strip()
     absolute = _xcode_abs(package_dir) if package_dir else _xcode_workspace_root()
     info = json_decode(host_command([swift, "package", "dump-package", "--package-path", absolute]))
+    if any([not target.get("path") for target in info.get("targets") or []]):
+        # `dump-package` preserves manifest details but omits target paths computed
+        # by SwiftPM. `describe` supplies those paths. This is needed when the
+        # computed location differs from the default `Sources/<target>`, such as
+        # `CustomPath/MyLibrary`.
+        description = json_decode(host_command([
+            swift,
+            "package",
+            "--package-path",
+            absolute,
+            "--disable-automatic-resolution",
+            "describe",
+            "--type",
+            "json",
+        ]))
+        paths = {}
+        for target in description.get("targets") or []:
+            name = target.get("name") or ""
+            path = target.get("path") or ""
+            if name and path:
+                paths[name] = path
+        targets = []
+        for target in info.get("targets") or []:
+            path = paths.get(target.get("name") or "")
+            if not target.get("path") and path:
+                target = dict(target)
+                target["path"] = path
+            targets.append(target)
+        info = dict(info)
+        info["targets"] = targets
     return {
         "identity": identity or _basename(package_dir) or (info.get("name") or "Package"),
         "path": package_dir,
