@@ -136,7 +136,11 @@ fn progression_table(variant: u8, chord_kind: u8) -> &'static [[f32; 3]; 4] {
 }
 
 fn transposed_chord(chord: &[f32; 3], multiplier: f32) -> [f32; 3] {
-    [chord[0] * multiplier, chord[1] * multiplier, chord[2] * multiplier]
+    [
+        chord[0] * multiplier,
+        chord[1] * multiplier,
+        chord[2] * multiplier,
+    ]
 }
 
 // -------- Arpeggiator --------------------------------------------------
@@ -308,7 +312,9 @@ fn audio_loop(events: &mpsc::Receiver<Event>, shared: Arc<SynthShared>) {
     // finish gesture room to breathe.
     let current = shared.master_target.load(Ordering::Relaxed);
     if current == MASTER_SUSTAIN || current == MASTER_OFF {
-        shared.master_target.store(MASTER_RELEASE, Ordering::Relaxed);
+        shared
+            .master_target
+            .store(MASTER_RELEASE, Ordering::Relaxed);
     }
     // Wait for the synth to signal it has fully decayed to inaudibility,
     // rather than sleeping for a fixed duration and then dropping the
@@ -331,7 +337,9 @@ fn apply_event(shared: &SynthShared, event: Event) {
     match event {
         Event::Started => {
             shared.chord_kind.store(CHORD_MAJOR, Ordering::Relaxed);
-            shared.master_target.store(MASTER_SUSTAIN, Ordering::Relaxed);
+            shared
+                .master_target
+                .store(MASTER_SUSTAIN, Ordering::Relaxed);
         }
         Event::ActionExecuted => trigger_pulse(shared, PULSE_SHIMMER),
         Event::ActionCacheHit => trigger_pulse(shared, PULSE_WARM),
@@ -339,12 +347,16 @@ fn apply_event(shared: &SynthShared, event: Event) {
         Event::Finished => {
             shared.chord_kind.store(CHORD_MAJOR, Ordering::Relaxed);
             trigger_pulse(shared, PULSE_RESOLVE);
-            shared.master_target.store(MASTER_CLOSING, Ordering::Relaxed);
+            shared
+                .master_target
+                .store(MASTER_CLOSING, Ordering::Relaxed);
         }
         Event::Failed => {
             shared.chord_kind.store(CHORD_MINOR, Ordering::Relaxed);
             trigger_pulse(shared, PULSE_LOW);
-            shared.master_target.store(MASTER_CLOSING, Ordering::Relaxed);
+            shared
+                .master_target
+                .store(MASTER_CLOSING, Ordering::Relaxed);
         }
     }
 }
@@ -546,11 +558,11 @@ struct AmbientSynth {
 
     // Free-running LFOs at incommensurate rates. Their interference is what
     // keeps the pad from ever repeating exactly the same texture.
-    breath_lfo_phase: f32,        // 0.08 Hz — drone amplitude
-    mid_lfo_phase: f32,           // 0.055 Hz — mid pad amplitude
-    shimmer_amp_lfo_phase: f32,   // 0.19 Hz — shimmer amplitude
-    detune_lfo_phase: f32,        // 0.028 Hz — drone detune
-    wow_lfo_phase: f32,           // 0.4 Hz — tape-like pitch wow on drone
+    breath_lfo_phase: f32,      // 0.08 Hz — drone amplitude
+    mid_lfo_phase: f32,         // 0.055 Hz — mid pad amplitude
+    shimmer_amp_lfo_phase: f32, // 0.19 Hz — shimmer amplitude
+    detune_lfo_phase: f32,      // 0.028 Hz — drone detune
+    wow_lfo_phase: f32,         // 0.4 Hz — tape-like pitch wow on drone
 
     // Persistent dimensions: each event bumps one or more of these, and they
     // decay slowly. They reshape the pad's overall character over the run.
@@ -910,7 +922,10 @@ impl Iterator for AmbientSynth {
             }
             gesture.freq += (gesture.freq_target - gesture.freq) * gesture.freq_slew;
             advance(&mut gesture.phase, step * gesture.freq);
-            advance(&mut gesture.phase_detune, step * (gesture.freq * gesture.detune_ratio));
+            advance(
+                &mut gesture.phase_detune,
+                step * (gesture.freq * gesture.detune_ratio),
+            );
             let mut voice = 0.0;
             for h in 0..4 {
                 let n = (h as f32) + 1.0;
