@@ -52,6 +52,7 @@ fn spawn_reporter(
     }
     let options = ReporterOptions {
         command_label: command_label.to_string(),
+        initial_status: Some("loading graph".to_string()),
         color: match output.color {
             ColorChoice::Auto => ColorMode::Auto,
             ColorChoice::Always => ColorMode::Always,
