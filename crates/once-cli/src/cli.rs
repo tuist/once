@@ -39,10 +39,22 @@ pub enum Format {
     Toon,
 }
 
+/// When to emit ANSI color escapes in human-mode output. `auto`
+/// respects TTY detection and the standard `NO_COLOR`,
+/// `CLICOLOR_FORCE`, and `TERM=dumb` environment variables; `always`
+/// forces color even when piped; `never` suppresses it entirely.
+#[derive(Copy, Clone, Debug, usage::ValueEnum, Default, PartialEq, Eq)]
+pub enum ColorChoice {
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
 /// Output policy passed to command handlers. Bundles the chosen
-/// [`Format`] with the global `--quiet` flag so commands have one
-/// argument to consult instead of two. Cheap to copy; future flags
-/// that affect rendering (e.g. `--no-color`) drop in here.
+/// [`Format`] with the global `--quiet`, `--color`, and `--verbose`
+/// flags so commands have one argument to consult instead of four.
+/// Cheap to copy.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Output {
     pub format: Format,
@@ -50,12 +62,37 @@ pub struct Output {
     /// Errors and the structured
     /// envelope of `--format json`/`toon` are never suppressed.
     pub quiet: bool,
+    /// When and how to emit ANSI color escapes.
+    pub color: ColorChoice,
+    /// Repeat count of the `-v/--verbose` flag. In human mode the
+    /// terminal reporter treats `>=1` as "surface a short tail of
+    /// captured output on every target" and `>=2` as "stream all
+    /// captured output live". Values `>=1` also raise the tracing
+    /// stderr filter (see `logging::init`), which is unchanged.
+    pub verbose: u8,
 }
 
 impl Output {
     #[must_use]
     pub fn new(format: Format, quiet: bool) -> Self {
-        Self { format, quiet }
+        Self {
+            format,
+            quiet,
+            color: ColorChoice::default(),
+            verbose: 0,
+        }
+    }
+
+    #[must_use]
+    pub fn with_color(mut self, color: ColorChoice) -> Self {
+        self.color = color;
+        self
+    }
+
+    #[must_use]
+    pub fn with_verbose(mut self, verbose: u8) -> Self {
+        self.verbose = verbose;
+        self
     }
 
     /// Whether human-mode progress and success trailers should print.
@@ -159,6 +196,12 @@ pub struct Cli {
     /// `-q` flag of common build tools.
     #[usage(short = 'q', long, global = true)]
     pub quiet: bool,
+
+    /// When to emit ANSI color in human-mode output. Defaults to
+    /// `auto`, which honors TTY detection, `NO_COLOR`, `CLICOLOR_FORCE`,
+    /// and `TERM=dumb`.
+    #[usage(long, global = true, value_enum, default = "auto")]
+    pub color: ColorChoice,
 
     /// Play soft procedural pad tones at meaningful moments in a command's
     /// lifecycle: a note when work starts, a note per action as it completes,

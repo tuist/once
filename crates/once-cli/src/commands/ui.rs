@@ -4,9 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use once_core::{
-    ActionOutputObserver, ActionOutputStream, LogStream, Phase, RunEvent, RunEventBus, TargetResult,
-};
+use once_core::{ActionOutputObserver, ActionOutputStream, LogStream, RunEvent, RunEventBus};
 use once_frontend::{AttrValue, BuildConfiguration};
 use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
@@ -262,6 +260,9 @@ impl Publisher {
         self.store.event_bus()
     }
 
+    /// Announce that the run started, seeding the UI snapshot store.
+    /// Bus emission for the lifecycle event lives in
+    /// [`crate::bus_events`] so a run without the UI still fires it.
     #[allow(clippy::unused_async)]
     pub async fn started(&self, context: &RunContext) {
         self.store.replace(RunSnapshot {
@@ -284,80 +285,15 @@ impl Publisher {
             static_report_path: None,
             output_byte_count: 0,
         });
-        let bus = self.event_bus();
-        bus.publish(RunEvent::RunStarted {
-            at_epoch_ms: i64::try_from(context.started_at_ms).unwrap_or(i64::MAX),
-        });
-        bus.publish(RunEvent::TargetQueued {
-            at_epoch_ms: i64::try_from(context.started_at_ms).unwrap_or(i64::MAX),
-            target_id: context.target.clone(),
-        });
     }
 
-    /// Announce that the target is doing an action-cache lookup.
-    #[allow(clippy::unused_async)]
-    pub async fn target_cache_checking(&self, context: &RunContext) {
-        self.event_bus().publish(RunEvent::TargetPhase {
-            at_epoch_ms: now_epoch_ms(),
-            target_id: context.target.clone(),
-            phase: Phase::CacheChecking,
-        });
-    }
-
-    /// Announce that the target has moved past cache decision into
-    /// worker allocation, sandbox setup, and input materialization.
-    #[allow(clippy::unused_async)]
-    pub async fn target_preparing(&self, context: &RunContext) {
-        self.event_bus().publish(RunEvent::TargetPhase {
-            at_epoch_ms: now_epoch_ms(),
-            target_id: context.target.clone(),
-            phase: Phase::Preparing,
-        });
-    }
-
-    /// Announce that the target subprocess has finished and outputs
-    /// are being collected and validated.
-    #[allow(clippy::unused_async)]
-    pub async fn target_capturing(&self, context: &RunContext) {
-        self.event_bus().publish(RunEvent::TargetPhase {
-            at_epoch_ms: now_epoch_ms(),
-            target_id: context.target.clone(),
-            phase: Phase::Capturing,
-        });
-    }
-
-    /// Announce that the target has begun executing. Emits
-    /// `TargetStarted` followed by `TargetPhase(Executing)`.
-    #[allow(clippy::unused_async)]
-    pub async fn target_executing(&self, context: &RunContext) {
-        let bus = self.event_bus();
-        let at = now_epoch_ms();
-        bus.publish(RunEvent::TargetStarted {
-            at_epoch_ms: at,
-            target_id: context.target.clone(),
-        });
-        bus.publish(RunEvent::TargetPhase {
-            at_epoch_ms: at,
-            target_id: context.target.clone(),
-            phase: Phase::Executing,
-        });
-    }
-
-    /// Announce that the target has moved into the publishing phase
-    /// (writing outputs and evidence to CAS).
-    #[allow(clippy::unused_async)]
-    pub async fn target_publishing(&self, context: &RunContext) {
-        self.event_bus().publish(RunEvent::TargetPhase {
-            at_epoch_ms: now_epoch_ms(),
-            target_id: context.target.clone(),
-            phase: Phase::Publishing,
-        });
-    }
-
+    /// Update the UI snapshot with the run's terminal state. Bus
+    /// emission of `TargetCompleted` and `RunCompleted` lives in
+    /// [`crate::bus_events`] so it fires whether or not the UI is on.
     #[allow(clippy::unused_async)]
     pub async fn finished(
         &self,
-        context: &RunContext,
+        _context: &RunContext,
         action_digest: &str,
         duration_ms: u64,
         cache: &str,
@@ -377,42 +313,17 @@ impl Publisher {
             run.exit_code = Some(exit_code);
             run.test_results = test_results;
         });
-        let bus = self.event_bus();
-        bus.publish(RunEvent::TargetCompleted {
-            at_epoch_ms: now_epoch_ms(),
-            target_id: context.target.clone(),
-            result: if exit_code == 0 {
-                TargetResult::Succeeded
-            } else {
-                TargetResult::Failed
-            },
-            was_cached: cache.eq_ignore_ascii_case("hit"),
-            duration_ms: i64::try_from(duration_ms).unwrap_or(i64::MAX),
-        });
-        bus.publish(RunEvent::RunCompleted {
-            at_epoch_ms: now_epoch_ms(),
-            exit_status: exit_code,
-        });
     }
 
+    /// Update the UI snapshot with a failure that terminated before the
+    /// action reached the runner. Bus emission of the corresponding
+    /// terminal events lives in [`crate::bus_events`].
     #[allow(clippy::unused_async)]
-    pub async fn failed(&self, context: &RunContext, duration_ms: u64) {
+    pub async fn failed(&self, _context: &RunContext, duration_ms: u64) {
         self.store.update(|run| {
             run.status = "failed".to_string();
             run.duration_ms = Some(duration_ms);
             run.exit_code = Some(1);
-        });
-        let bus = self.event_bus();
-        bus.publish(RunEvent::TargetCompleted {
-            at_epoch_ms: now_epoch_ms(),
-            target_id: context.target.clone(),
-            result: TargetResult::Failed,
-            was_cached: false,
-            duration_ms: i64::try_from(duration_ms).unwrap_or(i64::MAX),
-        });
-        bus.publish(RunEvent::RunCompleted {
-            at_epoch_ms: now_epoch_ms(),
-            exit_status: 1,
         });
     }
 

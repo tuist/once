@@ -30,7 +30,9 @@ pub async fn run(
     Box::pin(crate::commands::graph::build(
         workspace,
         &cache,
-        Output::new(output.format, output.quiet || invocation.quiet),
+        Output::new(output.format, output.quiet || invocation.quiet)
+            .with_color(output.color)
+            .with_verbose(output.verbose),
         &target,
         SandboxMode::Off,
         resource_limits,
