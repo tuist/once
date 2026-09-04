@@ -72,18 +72,18 @@ SH
   restore_swift_artifacts_from_cache() {
     copy_native_package
 
-    once swift -- build >/dev/null
+    once swift -- build >/dev/null 2>&1
     find "$WORKSPACE/.once/out" -type f -print | sort > "$WORKSPACE/first-artifacts"
     swift_library_evidence > "$WORKSPACE/first-evidence.json"
     clear_swift_build_outputs
 
-    once swift -- build >/dev/null
+    once swift -- build >/dev/null 2>&1
     find "$WORKSPACE/.once/out" -type f -print | sort > "$WORKSPACE/second-artifacts"
     swift_library_evidence > "$WORKSPACE/second-evidence.json"
 
     printf '\npublic func cacheProbe() {}\n' >> "$WORKSPACE/Sources/OnceNativeSwiftPackage/Greeting.swift"
     clear_swift_build_outputs
-    once swift -- build >/dev/null
+    once swift -- build >/dev/null 2>&1
     swift_library_evidence > "$WORKSPACE/third-evidence.json"
 
     verify_swift_cache_evidence
@@ -92,11 +92,11 @@ SH
   reuse_consumer_when_module_is_unchanged() {
     copy_native_package
 
-    once swift -- build >/dev/null
+    once swift -- build >/dev/null 2>&1
     swift_dependency_evidence > "$WORKSPACE/dependency-before-evidence.json"
     perl -0pi -e 's/"one"/"two"/' "$WORKSPACE/Sources/OnceNativeDependency/Dependency.swift"
     clear_swift_build_outputs
-    once swift -- build >/dev/null
+    once swift -- build >/dev/null 2>&1
     swift_dependency_evidence > "$WORKSPACE/dependency-after-evidence.json"
     swift_consumer_evidence > "$WORKSPACE/consumer-evidence.json"
 
@@ -128,6 +128,8 @@ SH
     When call once swift -- build
     The status should be success
     The stdout should include 'once: build swift_package (swift_package_workspace)'
+    The stderr should include 'once  build swift_package'
+    The stderr should include 'Done'
   End
 
   It 'routes a compatible debug test through Once'
@@ -137,6 +139,8 @@ SH
     When call once swift -- test
     The status should be success
     The stdout should include 'once: test SwiftPackage_OnceNativeSwiftPackage_OnceNativeSwiftPackageTests (apple_test_bundle)'
+    The stderr should include 'once  test SwiftPackage_OnceNativeSwiftPackage_OnceNativeSwiftPackageTests'
+    The stderr should include 'Done'
     The path "$WORKSPACE/.once/out/SwiftPackage_OnceNativeSwiftPackage_OnceNativeSwiftPackageTests/test/test_results.json" should be file
   End
 
