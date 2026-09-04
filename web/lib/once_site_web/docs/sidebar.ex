@@ -234,6 +234,12 @@ defmodule OnceSiteWeb.Docs.Sidebar do
           %Item{label: "Overview", slug: "/docs/reference/mcp"},
           %Item{label: "Tools", slug: "/docs/reference/mcp/tools"}
         ]
+      },
+      %Group{
+        label: "Live Run Event Protocol",
+        items: [
+          %Item{label: "Overview", slug: "/docs/reference/events"}
+        ]
       }
     ]
   end
