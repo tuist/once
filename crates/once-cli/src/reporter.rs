@@ -162,6 +162,12 @@ struct CapturedOutput {
     stderr: Vec<u8>,
 }
 
+/// Function pointer that wraps a string in one of the reporter's
+/// styling roles (green success, red failure, and so on). Aliased here
+/// to keep the completion match arm readable and satisfy
+/// clippy's `type_complexity` lint.
+type StyleFn = fn(String) -> console::StyledObject<String>;
+
 #[derive(Default, Clone, Copy)]
 struct Totals {
     started: usize,
@@ -216,10 +222,15 @@ impl RenderState {
     }
 
     /// Returns `true` when the run is complete and the reporter can stop.
+    ///
+    /// The wildcard arm covers not just future `RunEvent` variants
+    /// (the enum is `#[non_exhaustive]`) but also every variant that
+    /// today is a no-op for the reporter: `RunStarted`, `TargetQueued`,
+    /// and the test-suite/test-case events. Consolidating them keeps
+    /// clippy's `match_same_arms` happy without a target-by-target
+    /// list of `=> false` branches.
     fn handle_event(&mut self, event: RunEvent) -> bool {
         match event {
-            RunEvent::RunStarted { .. } => false,
-            RunEvent::TargetQueued { .. } => false,
             RunEvent::TargetStarted { target_id, .. } => {
                 self.totals.started += 1;
                 self.on_target_started(&target_id);
@@ -252,10 +263,6 @@ impl RenderState {
                 self.refresh_summary();
                 false
             }
-            RunEvent::TestSuiteStarted { .. }
-            | RunEvent::TestSuiteCompleted { .. }
-            | RunEvent::TestCaseStarted { .. }
-            | RunEvent::TestCaseCompleted { .. } => false,
             RunEvent::RunCompleted { .. } => true,
             _ => false,
         }
@@ -284,7 +291,9 @@ impl RenderState {
         if let Some(entry) = self.active.get_mut(target_id) {
             entry.phase = phase;
             let elapsed = entry.started_at.elapsed();
-            entry.bar.set_message(active_line(target_id, phase, elapsed));
+            entry
+                .bar
+                .set_message(active_line(target_id, phase, elapsed));
         }
     }
 
@@ -321,19 +330,18 @@ impl RenderState {
         }
 
         let duration = format_duration_ms(duration_ms);
-        let (icon, tag, style_fn): (&str, &str, fn(String) -> console::StyledObject<String>) =
-            match (result, was_cached) {
-                (TargetResult::Succeeded, true) => ("✓", "cached", |s| style(s).green()),
-                (TargetResult::Succeeded, false) => ("✓", "built", |s| style(s).green()),
-                (TargetResult::Failed, _) => ("✗", "failed", |s| style(s).red().bold()),
-                (TargetResult::Skipped, _) => ("○", "skipped", |s| style(s).dim()),
-                (TargetResult::Cancelled, _) => ("⊘", "cancelled", |s| style(s).yellow()),
-            };
+        let (icon, tag, style_fn): (&str, &str, StyleFn) = match (result, was_cached) {
+            (TargetResult::Succeeded, true) => ("✓", "cached", |s| style(s).green()),
+            (TargetResult::Succeeded, false) => ("✓", "built", |s| style(s).green()),
+            (TargetResult::Failed, _) => ("✗", "failed", |s| style(s).red().bold()),
+            (TargetResult::Skipped, _) => ("○", "skipped", |s| style(s).dim()),
+            (TargetResult::Cancelled, _) => ("⊘", "cancelled", |s| style(s).yellow()),
+        };
 
         match (result, was_cached) {
             (TargetResult::Succeeded, true) => self.totals.cached += 1,
             (TargetResult::Succeeded, false) => self.totals.built += 1,
-            (TargetResult::Failed, _) | (TargetResult::Cancelled, _) => self.totals.failed += 1,
+            (TargetResult::Failed | TargetResult::Cancelled, _) => self.totals.failed += 1,
             (TargetResult::Skipped, _) => self.totals.skipped += 1,
         }
 
@@ -407,7 +415,8 @@ impl RenderState {
 
     fn summary_message(&self) -> String {
         let running = self.active.len();
-        let done = self.totals.built + self.totals.cached + self.totals.failed + self.totals.skipped;
+        let done =
+            self.totals.built + self.totals.cached + self.totals.failed + self.totals.skipped;
         let cache_pct = if self.totals.built + self.totals.cached > 0 {
             let denom = self.totals.built + self.totals.cached;
             (self.totals.cached * 100) / denom
@@ -423,11 +432,9 @@ impl RenderState {
     }
 
     fn warn_lagged(&self, missed: u64) {
-        let msg = style(format!(
-            "(reporter fell behind; {missed} events dropped)"
-        ))
-        .yellow()
-        .dim();
+        let msg = style(format!("(reporter fell behind; {missed} events dropped)"))
+            .yellow()
+            .dim();
         self.emit(format!("  {msg}"));
     }
 

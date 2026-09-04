@@ -18,8 +18,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use once_core::{
-    ActionOutputObserver, ActionOutputStream, LogStream, Phase, RunEvent, RunEventBus,
-    TargetResult,
+    ActionOutputObserver, ActionOutputStream, LogStream, Phase, RunEvent, RunEventBus, TargetResult,
 };
 
 /// Publish `RunStarted` and `TargetQueued`. Idempotent from the caller's
@@ -183,7 +182,10 @@ mod tests {
         target_executing(&bus, "//foo:bar");
         target_finished(&bus, "//foo:bar", 10, "miss", 0);
 
-        assert!(matches!(rx.recv().await.unwrap(), RunEvent::RunStarted { at_epoch_ms: 42 }));
+        assert!(matches!(
+            rx.recv().await.unwrap(),
+            RunEvent::RunStarted { at_epoch_ms: 42 }
+        ));
         assert!(matches!(
             rx.recv().await.unwrap(),
             RunEvent::TargetQueued { target_id, .. } if target_id == "//foo:bar"
@@ -194,11 +196,18 @@ mod tests {
         ));
         assert!(matches!(
             rx.recv().await.unwrap(),
-            RunEvent::TargetPhase { phase: Phase::Executing, .. }
+            RunEvent::TargetPhase {
+                phase: Phase::Executing,
+                ..
+            }
         ));
         assert!(matches!(
             rx.recv().await.unwrap(),
-            RunEvent::TargetCompleted { result: TargetResult::Succeeded, was_cached: false, .. }
+            RunEvent::TargetCompleted {
+                result: TargetResult::Succeeded,
+                was_cached: false,
+                ..
+            }
         ));
         assert!(matches!(
             rx.recv().await.unwrap(),

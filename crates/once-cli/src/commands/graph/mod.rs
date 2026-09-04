@@ -42,7 +42,11 @@ use crate::reporter::{ColorMode, ReporterOptions, TerminalReporter, Verbosity};
 /// snapshot updates.
 const EVENT_BUS_CAPACITY: usize = 1024;
 
-fn spawn_reporter(bus: &RunEventBus, output: Output, command_label: &str) -> Option<TerminalReporter> {
+fn spawn_reporter(
+    bus: &RunEventBus,
+    output: Output,
+    command_label: &str,
+) -> Option<TerminalReporter> {
     if output.format != Format::Human || output.quiet {
         return None;
     }
@@ -180,11 +184,12 @@ pub async fn build(
     // publishes LogChunk events onto the bus so the terminal reporter
     // (and the ingest client, when the feature is enabled) can still
     // render captured child output.
-    let bus_observer: Option<std::sync::Arc<dyn once_core::ActionOutputObserver>> = if live_output.is_none() {
-        Some(BusOutputObserver::new(bus.clone(), target_id.to_string()))
-    } else {
-        None
-    };
+    let bus_observer: Option<std::sync::Arc<dyn once_core::ActionOutputObserver>> =
+        if live_output.is_none() {
+            Some(BusOutputObserver::new(bus.clone(), target_id.to_string()))
+        } else {
+            None
+        };
     let xdg = once_core::Xdg::from_env();
     let stored_receipt =
         build_receipt::read(workspace, target_id, sandbox, &resolved.path_suffix).await;
@@ -642,11 +647,12 @@ pub async fn test_with_filters(
         .as_ref()
         .zip(run_context.as_ref())
         .map(|(publisher, run_context)| publisher.live_output(run_context));
-    let bus_observer: Option<std::sync::Arc<dyn once_core::ActionOutputObserver>> = if live_output.is_none() {
-        Some(BusOutputObserver::new(bus.clone(), target_id.to_string()))
-    } else {
-        None
-    };
+    let bus_observer: Option<std::sync::Arc<dyn once_core::ActionOutputObserver>> =
+        if live_output.is_none() {
+            Some(BusOutputObserver::new(bus.clone(), target_id.to_string()))
+        } else {
+            None
+        };
     let graph = match once_frontend::load_graph_workspace_with_configuration(
         workspace,
         &resolved.configuration,

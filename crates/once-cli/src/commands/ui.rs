@@ -4,9 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use once_core::{
-    ActionOutputObserver, ActionOutputStream, LogStream, RunEvent, RunEventBus,
-};
+use once_core::{ActionOutputObserver, ActionOutputStream, LogStream, RunEvent, RunEventBus};
 use once_frontend::{AttrValue, BuildConfiguration};
 use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
