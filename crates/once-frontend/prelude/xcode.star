@@ -1449,7 +1449,7 @@ def _xcode_local_package_products(ctx, wanted):
         for product in info.get("products") or []:
             product_name = product.get("name") or ""
             if product_name in remaining:
-                resolved[product_name] = {"identity": package_identity, "path": absolute, "platforms": platforms}
+                resolved[product_name] = {"identity": package_identity, "path": package_dir, "platforms": platforms, "info": info}
                 remaining.pop(product_name)
     return resolved
 
@@ -1616,6 +1616,17 @@ def _xcode_expand_swift_package_infos(ctx, initial_infos):
     for _ in range(32):
         discovered = []
         for package in pending:
+            for dependency in package["info"].get("dependencies") or []:
+                for local in dependency.get("fileSystem") or []:
+                    path = _xcode_workspace_input_path(local.get("path") or "")
+                    identity = local.get("nameForTargetDependencyResolutionOnly") or local.get("identity") or _basename(path)
+                    key = identity.lower()
+                    if not path or key in known or not host_file_exists(_xcode_abs(path + "/Package.swift")):
+                        continue
+                    info = _xcode_swift_package_info(ctx, path, identity)
+                    discovered.append(info)
+                    infos.append(info)
+                    known[key] = True
             pins = _xcode_package_resolved_pins_at(package.get("path") or "")
             for identity, pin in pins.items():
                 if pin.get("kind") != "remoteSourceControl" or identity in known:
@@ -3442,6 +3453,7 @@ def _xcode_workspace_resolver(ctx):
     # Pass two: lower every project's native targets, resolving dependencies and
     # test hosts against the workspace-wide name map.
     all_specs = []
+    native_spec_names = {}
     all_xcframework_modules = {}
     test_plan_settings = _xcode_test_plan_settings(ctx)
     for project in projects:
@@ -3465,15 +3477,31 @@ def _xcode_workspace_resolver(ctx):
         # package manifest supplies graph metadata only; Once compiles every
         # source target directly rather than delegating package builds.
         package_refs = _xcode_spm_package_refs(objects)
+        per_target_products = {}
+        unresolved_product_names = {}
+        for target in native_targets:
+            products = _xcode_target_spm_products(objects, target, package_refs)
+            per_target_products[target.get("name") or ""] = products
+            for product in products:
+                if not product.get("package_identity"):
+                    unresolved_product_names[product["name"]] = True
+        local_products = _xcode_local_package_products(ctx, unresolved_product_names.keys())
+        for products in per_target_products.values():
+            for product in products:
+                local = local_products.get(product["name"])
+                if local and not product.get("package_identity"):
+                    product["package_identity"] = local["identity"]
         local_package_infos = _xcode_local_swift_package_infos(ctx, project_dir, package_refs)
+        known_local_package_paths = {info["path"]: True for info in local_package_infos}
+        for name in sorted(local_products.keys()):
+            local = local_products[name]
+            if local["path"] not in known_local_package_paths:
+                local_package_infos.append({"identity": local["identity"], "path": local["path"], "info": local["info"]})
+                known_local_package_paths[local["path"]] = True
         package_infos = _xcode_expand_swift_package_infos(
             ctx,
             local_package_infos + _xcode_remote_swift_package_infos(ctx, entry_path, project_path, package_refs),
         )
-        per_target_products = {}
-        for target in native_targets:
-            products = _xcode_target_spm_products(objects, target, package_refs)
-            per_target_products[target.get("name") or ""] = products
         package_platform = _xcode_spm_platform(ctx, objects, native_targets, project_settings, configuration, path_maps)
         package_minimum_os = _xcode_spm_min_os(ctx, objects, native_targets, package_platform, configuration, project_settings, path_maps)
         package_graph = _xcode_local_swift_package_specs(
@@ -3517,6 +3545,7 @@ def _xcode_workspace_resolver(ctx):
             if spec["kind"] == "apple_library":
                 spec["attrs"]["exported_deps"] = list(spec["deps"])
             all_specs.append(spec)
+            native_spec_names[spec["name"]] = True
         all_specs.extend(package_graph["specs"])
         all_specs.extend(xcframework_specs)
 
@@ -3538,9 +3567,11 @@ def _xcode_workspace_resolver(ctx):
     for spec in specs:
         spec["deps"] = [dep for dep in spec["deps"] if dep[2:] in emitted]
 
-    # Applications are the natural build roots. Library-only projects build
-    # their non-test products, while the resolver metadata selects test bundles.
-    return {"targets": specs, "roots": _xcode_roots(specs), "attrs": {"_default_test_roots": [spec["name"] for spec in specs if spec["kind"] == "apple_test_bundle"]}}
+    # Native applications are the natural build roots. Library-only projects
+    # build their non-test products, while resolver metadata selects native test
+    # bundles. Package targets remain reachable only through native dependencies.
+    native_specs = [spec for spec in specs if spec["name"] in native_spec_names]
+    return {"targets": specs, "roots": _xcode_roots(native_specs), "attrs": {"_default_test_roots": [spec["name"] for spec in native_specs if spec["kind"] == "apple_test_bundle"]}}
 
 def _xcode_spm_platform(ctx, objects, native_targets, project_settings, configuration, path_maps):
     # The synthesized package builds for one platform. Prefer the project's

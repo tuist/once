@@ -63,6 +63,8 @@ pub enum Verbosity {
 pub struct ReporterOptions {
     /// A short label naming the run, e.g. `"build ripgrep-cli"`.
     pub command_label: String,
+    /// Status shown until the first target starts executing.
+    pub initial_status: Option<String>,
     pub color: ColorMode,
     pub verbosity: Verbosity,
     /// When true, do not draw the sticky bottom panel; only render
@@ -94,9 +96,9 @@ impl TerminalReporter {
 
         let mut receiver = bus.subscribe();
         let render_multi = Arc::clone(&multi);
+        let mut state = RenderState::new(render_multi, options);
+        state.render_header();
         let handle = tokio::spawn(async move {
-            let mut state = RenderState::new(render_multi, options);
-            state.render_header();
             loop {
                 match receiver.recv().await {
                     Ok(event) => {
@@ -145,6 +147,7 @@ struct RenderState {
     options: ReporterOptions,
     started_at: Instant,
     summary: Option<ProgressBar>,
+    status: Option<String>,
     active: HashMap<String, ActiveTarget>,
     captured: HashMap<String, CapturedOutput>,
     totals: Totals,
@@ -179,11 +182,13 @@ struct Totals {
 
 impl RenderState {
     fn new(multi: Arc<MultiProgress>, options: ReporterOptions) -> Self {
+        let status = options.initial_status.clone();
         Self {
             multi,
             options,
             started_at: Instant::now(),
             summary: None,
+            status,
             active: HashMap::new(),
             captured: HashMap::new(),
             totals: Totals::default(),
@@ -232,6 +237,7 @@ impl RenderState {
     fn handle_event(&mut self, event: RunEvent) -> bool {
         match event {
             RunEvent::TargetStarted { target_id, .. } => {
+                self.status = None;
                 self.totals.started += 1;
                 self.on_target_started(&target_id);
                 self.refresh_summary();
@@ -414,6 +420,10 @@ impl RenderState {
     }
 
     fn summary_message(&self) -> String {
+        let label = &self.options.command_label;
+        if let Some(status) = &self.status {
+            return format!("{} · {}", style(label).bold(), style(status).dim());
+        }
         let running = self.active.len();
         let done =
             self.totals.built + self.totals.cached + self.totals.failed + self.totals.skipped;
@@ -423,7 +433,6 @@ impl RenderState {
         } else {
             0
         };
-        let label = &self.options.command_label;
         let stats = style(format!(
             "{done} done · {running} running · cache {cache_pct}%"
         ))
@@ -592,6 +601,7 @@ mod tests {
             &bus,
             ReporterOptions {
                 command_label: "build test".into(),
+                initial_status: Some("loading graph".into()),
                 color: ColorMode::Never,
                 verbosity: Verbosity::Normal,
                 suppress_panel: true,
@@ -605,5 +615,28 @@ mod tests {
         drop(bus);
         // finish awaits the render task and clears the multi progress.
         reporter.finish().await;
+    }
+
+    #[test]
+    fn initial_status_is_replaced_when_a_target_starts() {
+        let multi = Arc::new(MultiProgress::with_draw_target(ProgressDrawTarget::hidden()));
+        let mut state = RenderState::new(
+            multi,
+            ReporterOptions {
+                command_label: "build xcode".into(),
+                initial_status: Some("loading graph".into()),
+                color: ColorMode::Never,
+                verbosity: Verbosity::Normal,
+                suppress_panel: false,
+            },
+        );
+
+        assert!(state.summary_message().contains("loading graph"));
+        state.handle_event(RunEvent::TargetStarted {
+            at_epoch_ms: 0,
+            target_id: "xcode".into(),
+        });
+        assert!(!state.summary_message().contains("loading graph"));
+        assert!(state.summary_message().contains("1 running"));
     }
 }
