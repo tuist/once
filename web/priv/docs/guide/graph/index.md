@@ -11,15 +11,42 @@ start in its root without creating a file:
 
 ```sh
 once query targets
-once build --ui
+once build
 once test
+once lint
 ```
 
-The first command shows what Once recognized. The second opens the Runs
-interface and streams the live build graph while the native workspace builds.
-The third runs first-party tests. Resolved dependency test suites are excluded
-unless you explicitly request `once test --all`. Use `once test --ui` to keep
-the Runs interface open through test scheduling and results.
+The first command shows what Once recognized. The remaining three act on the
+workspace's own targets by default: `once build` builds every workspace-owned
+target that exposes `build` (failing fast on the first bad build), `once test`
+runs first-party tests, and `once lint` lints every workspace-owned target
+that exposes `lint` (running each one to completion so you see every finding).
+
+Workspace-owned means the target is one of the pieces the repository's own
+manifest declares, not one pulled in through a resolved dependency. A test
+run on a Cargo project builds and tests the workspace's crates without
+running the test suites of the crates they depend on; the same rule applies
+to `once build` and `once lint`.
+
+The current definition of workspace-owned is heuristic: Once traces every
+target whose dependency chain reaches one of the resolver's declared primary
+products. Sibling targets that live in the same manifest but do not depend
+on one of those products (a standalone macro plugin, for example) can slip
+past the default. Pass the target id explicitly, or use `--all`, to pick
+those up. A future release will replace the heuristic with an explicit
+origin marker on each target so the default catches every workspace-owned
+target without exception.
+
+Pass `--all` (available on all three) to reach past the workspace boundary
+and act on every capable target in the loaded graph, resolved dependencies
+included. Use it with care on `once lint --all`: it will run every
+lint-capable target in the graph, including vendored third-party code, and
+the invocation fails when any finding meets `--fail-on`. `once lint --all
+--fail-on error` is a reasonable starting point when you want to sweep the
+whole graph.
+
+Pass `once build --ui` or `once test --ui` on a single explicit target to
+follow the live graph in the Runs interface.
 
 Continue with the guide for [Rust](/guide/graph/rust), [Swift
 Packages](/guide/graph/swift-packages), [Xcode

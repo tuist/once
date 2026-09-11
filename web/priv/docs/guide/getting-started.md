@@ -26,15 +26,24 @@ try it before writing Once configuration:
 ```sh
 cd path/to/project
 once query targets
-once build --ui
+once build
 once test
+once lint
 ```
 
-Once recognizes the native workspace from its existing files. The build opens
-the Runs interface so you can follow the live graph and see which actions are
-running or reused. The test command selects first-party tests by default. No
-`once.toml` is created. Add `--ui` to `once test` when you also want to follow
-test batches and results in the Runs interface.
+Once recognizes the native workspace from its existing files. `once build`,
+`once test`, and `once lint` each default to the workspace's own targets: the
+build fans out over every workspace-owned target that exposes `build`, the
+test run selects first-party tests, and lint runs every workspace-owned
+target that exposes `lint`. No `once.toml` is created.
+
+Pass `--all` to any of the three to include targets reached through resolved
+dependencies; `once lint --all` in particular will lint vendored third-party
+code, so pair it with `--fail-on error` when you want to keep the noise
+manageable. Pass `--ui` to `once build` or `once test` on one explicit
+target to follow the live graph in the Runs interface. See
+[Graph guide](/guide/graph/) for the full workspace-owned rule (and its
+current heuristic limitations) and the per-ecosystem behavior.
 
 Continue with the matching guide for [Rust](/guide/graph/rust), [Swift
 Packages](/guide/graph/swift-packages), [Xcode

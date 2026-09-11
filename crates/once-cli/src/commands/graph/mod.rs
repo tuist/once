@@ -487,8 +487,12 @@ async fn write_runs_report(workspace: &Path, ui_server: Option<&crate::commands:
     }
 }
 
+/// Run static analysis for one target and report whether findings met
+/// `fail_on` as a plain bool, so a caller that lints several targets in one
+/// invocation can OR the outcomes together and translate the result into a
+/// process exit code once.
 #[allow(clippy::too_many_arguments)]
-pub async fn lint(
+pub async fn lint_returning_fails(
     workspace: &Path,
     cache: &CacheProvider,
     output: Output,
@@ -497,7 +501,7 @@ pub async fn lint(
     fail_on: LintSeverity,
     resource_limits: ResourceLimits,
     resolved: &configuration::ResolvedConfiguration,
-) -> Result<ExitCode> {
+) -> Result<bool> {
     let graph =
         once_frontend::load_graph_workspace_with_configuration(workspace, &resolved.configuration)
             .context("loading graph")?;
@@ -553,11 +557,7 @@ pub async fn lint(
     } else {
         crate::sound::Event::Finished
     });
-    Ok(if fails {
-        ExitCode::from(1)
-    } else {
-        ExitCode::SUCCESS
-    })
+    Ok(fails)
 }
 
 #[allow(clippy::too_many_arguments)]
