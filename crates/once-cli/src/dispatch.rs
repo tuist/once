@@ -1065,40 +1065,7 @@ fn select_workspace_owned(workspace: &Path, capability: &str) -> Result<Workspac
             .filter(|target| resolver_kinds.contains(&target.kind))
             .flat_map(|root| root.dependency_ids().map(String::as_str))
             .collect::<std::collections::BTreeSet<_>>();
-        // Also seed with anything a resolver root explicitly named as one of
-        // its workspace-owned test targets, provided the target itself exposes
-        // the `test` capability. Those targets are owned by the resolver's
-        // project even when their dep chain does not otherwise reach a primary
-        // product (macro test bundles, for example); the capability filter is a
-        // soft guard against a resolver accidentally seeding a vendored id.
-        for root in graph
-            .iter()
-            .filter(|target| resolver_kinds.contains(&target.kind))
-        {
-            if let Some(once_frontend::AttrValue::List(values)) =
-                root.attrs.get("_default_test_roots")
-            {
-                for value in values {
-                    let Some(name) = value.as_str() else {
-                        continue;
-                    };
-                    let qualified = if root.label.package.is_empty() {
-                        name.to_string()
-                    } else {
-                        format!("{}/{}", root.label.package, name)
-                    };
-                    if let Some(target) = by_id.get(qualified.as_str()) {
-                        if target
-                            .capabilities
-                            .iter()
-                            .any(|declared| declared.name == "test")
-                        {
-                            root_seed.insert(target.label.id.as_str());
-                        }
-                    }
-                }
-            }
-        }
+        enrich_seed_with_declared_test_roots(graph, &resolver_kinds, &by_id, &mut root_seed);
         let mut selected = graph
             .iter()
             .filter(|target| has_capability(target))
@@ -1145,6 +1112,53 @@ fn select_workspace_owned(workspace: &Path, capability: &str) -> Result<Workspac
         targets: Vec::new(),
         resolver_candidates,
     })
+}
+
+/// Extend `root_seed` with resolver-declared workspace test targets.
+///
+/// A resolver root may publish its workspace test targets under the
+/// `_default_test_roots` attribute (the same signal `once test` consumes). Add
+/// each such target to the seed so a downstream reachability walk classifies
+/// it and its dep chain as workspace-owned, even when the chain does not
+/// otherwise reach a primary product (macro test bundles, for example). The
+/// `test` capability check is a soft guard against a resolver accidentally
+/// seeding a vendored id.
+fn enrich_seed_with_declared_test_roots<'graph>(
+    graph: &'graph [once_frontend::GraphTarget],
+    resolver_kinds: &std::collections::BTreeSet<String>,
+    by_id: &std::collections::BTreeMap<&'graph str, &'graph once_frontend::GraphTarget>,
+    root_seed: &mut std::collections::BTreeSet<&'graph str>,
+) {
+    for root in graph
+        .iter()
+        .filter(|target| resolver_kinds.contains(&target.kind))
+    {
+        let Some(once_frontend::AttrValue::List(values)) =
+            root.attrs.get("_default_test_roots")
+        else {
+            continue;
+        };
+        for value in values {
+            let Some(name) = value.as_str() else {
+                continue;
+            };
+            let qualified = if root.label.package.is_empty() {
+                name.to_string()
+            } else {
+                format!("{}/{}", root.label.package, name)
+            };
+            let Some(target) = by_id.get(qualified.as_str()) else {
+                continue;
+            };
+            if target
+                .capabilities
+                .iter()
+                .any(|declared| declared.name == "test")
+            {
+                root_seed.insert(target.label.id.as_str());
+            }
+        }
+    }
 }
 
 /// True when `target`'s transitive dependency chain reaches any id in `roots`.
