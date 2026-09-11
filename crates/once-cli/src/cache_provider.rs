@@ -117,7 +117,7 @@ pub(crate) fn credentials_root(xdg: &Xdg) -> PathBuf {
     xdg.config_home.join("once").join("credentials")
 }
 
-fn resolve_config(workspace: &Path, xdg: &Xdg) -> Result<ResolvedCacheProviderConfig> {
+pub(crate) fn resolve_config(workspace: &Path, xdg: &Xdg) -> Result<ResolvedCacheProviderConfig> {
     resolve_config_with_env(workspace, xdg, std::env::var(ONCE_CACHE_PROVIDER_ENV).ok())
 }
 
