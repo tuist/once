@@ -117,6 +117,7 @@ async fn run_command(
             sandbox,
             config,
             ui,
+            all,
         } => {
             let resolved = commands::graph::resolve_invocation_configuration(workspace, &config)?;
             dispatch_build(
@@ -124,6 +125,7 @@ async fn run_command(
                 xdg,
                 output,
                 target,
+                all,
                 sandbox,
                 resource_limits,
                 resolved,
@@ -136,6 +138,7 @@ async fn run_command(
             sandbox,
             config,
             fail_on,
+            all,
         } => {
             let resolved = commands::graph::resolve_invocation_configuration(workspace, &config)?;
             dispatch_lint(
@@ -143,6 +146,7 @@ async fn run_command(
                 xdg,
                 output,
                 target,
+                all,
                 sandbox,
                 fail_on,
                 resource_limits,
@@ -304,24 +308,38 @@ async fn dispatch_build(
     xdg: &Xdg,
     output: Output,
     target: Option<String>,
+    all: bool,
     sandbox: SandboxMode,
     resource_limits: &ResourceLimits,
     resolved: commands::graph::ResolvedConfiguration,
     ui: bool,
 ) -> Result<ExitCode> {
-    let target = resolve_build_target(workspace, target)?;
+    let targets = resolve_build_targets(workspace, target, all)?;
+    if ui && targets.len() > 1 {
+        anyhow::bail!(
+            "the Runs interface currently supports a single build target; \
+             pass one explicitly or omit --ui to fan out"
+        );
+    }
     let cache = crate::cache_provider::resolve(workspace, xdg)?;
-    Box::pin(commands::graph::build(
-        workspace,
-        &cache,
-        output,
-        &target,
-        sandbox,
-        resource_limits.clone(),
-        &resolved,
-        ui,
-    ))
-    .await
+    // `commands::graph::build` currently signals failure exclusively through
+    // `Err`; a `?` here fails the fan-out fast. If that contract ever weakens
+    // to "may return Ok(ExitCode::from(nonzero))", the loop needs to inspect
+    // the exit code and short-circuit on the first non-success value.
+    for target in &targets {
+        Box::pin(commands::graph::build(
+            workspace,
+            &cache,
+            output,
+            target,
+            sandbox,
+            resource_limits.clone(),
+            &resolved,
+            ui,
+        ))
+        .await?;
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -330,24 +348,36 @@ async fn dispatch_lint(
     xdg: &Xdg,
     output: Output,
     target: Option<String>,
+    all: bool,
     sandbox: SandboxMode,
     fail_on: once_core::LintSeverity,
     resource_limits: &ResourceLimits,
     resolved: commands::graph::ResolvedConfiguration,
 ) -> Result<ExitCode> {
-    let target = resolve_required_target(workspace, target)?;
+    let targets = resolve_lint_targets(workspace, target, all)?;
     let cache = crate::cache_provider::resolve(workspace, xdg)?;
-    Box::pin(commands::graph::lint(
-        workspace,
-        &cache,
-        output,
-        &target,
-        sandbox,
-        fail_on,
-        resource_limits.clone(),
-        &resolved,
-    ))
-    .await
+    let mut any_failed = false;
+    for target in &targets {
+        let fails = Box::pin(commands::graph::lint_returning_fails(
+            workspace,
+            &cache,
+            output,
+            target,
+            sandbox,
+            fail_on,
+            resource_limits.clone(),
+            &resolved,
+        ))
+        .await?;
+        if fails {
+            any_failed = true;
+        }
+    }
+    Ok(if any_failed {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    })
 }
 
 struct TestDispatchArgs {
@@ -912,36 +942,256 @@ fn resolve_required_target(workspace: &Path, target: Option<String>) -> Result<S
     resolve_target_arg(workspace, &raw)
 }
 
-fn resolve_build_target(workspace: &Path, target: Option<String>) -> Result<String> {
+fn resolve_build_targets(
+    workspace: &Path,
+    target: Option<String>,
+    all: bool,
+) -> Result<Vec<String>> {
+    resolve_capability_targets(workspace, target, all, "build")
+}
+
+fn resolve_lint_targets(
+    workspace: &Path,
+    target: Option<String>,
+    all: bool,
+) -> Result<Vec<String>> {
+    resolve_capability_targets(workspace, target, all, "lint")
+}
+
+fn resolve_capability_targets(
+    workspace: &Path,
+    target: Option<String>,
+    all: bool,
+    capability: &str,
+) -> Result<Vec<String>> {
     if let Some(target) = target {
-        return resolve_target_arg(workspace, &target);
+        return Ok(vec![resolve_target_arg(workspace, &target)?]);
     }
-    let resolver_kinds = once_frontend::target_kind_schemas_for_workspace(workspace)?
-        .into_iter()
+    if all {
+        let targets = all_targets_with_capability(workspace, capability)?;
+        if targets.is_empty() {
+            anyhow::bail!(
+                "no {capability}-capable target was found in the graph; \
+                 pass `once {capability} <target>` using an id from `once query targets`",
+            );
+        }
+        return Ok(targets);
+    }
+    let selection = select_workspace_owned(workspace, capability)?;
+    if !selection.targets.is_empty() {
+        return Ok(selection.targets);
+    }
+    match selection.resolver_candidates.as_slice() {
+        [] => anyhow::bail!(
+            "no workspace-owned {capability} target was discovered; \
+             pass `once {capability} <target>` using an id from `once query targets`, \
+             or `once {capability} --all` to include every {capability}-capable target in the graph",
+        ),
+        candidates => anyhow::bail!(
+            "multiple workspace-owned {capability} candidates were discovered; \
+             pass `once {capability} <target>` using one of: {list}, \
+             or `once {capability} --all` to build every {capability}-capable target in the graph",
+            list = candidates.join(", "),
+        ),
+    }
+}
+
+/// Selection produced for a capability's targetless fan-out.
+struct WorkspaceOwnedSelection {
+    /// Targets to fan out over. Empty when the heuristic anchored nothing.
+    targets: Vec<String>,
+    /// Resolver-kind targets that expose the capability at the kind level.
+    /// The caller uses this to build an actionable error when `targets` is
+    /// empty and more than one candidate exists (single-candidate graphs are
+    /// promoted into `targets` here).
+    resolver_candidates: Vec<String>,
+}
+
+/// Targets that count as workspace-owned for the given capability, plus any
+/// resolver-kind candidates the caller can surface in an error.
+///
+/// Owned means declared by a manifest Once loaded from the project root, not
+/// synthesized by transitive dependency resolution. Once does not yet carry an
+/// explicit origin marker on `GraphTarget`, so the primary rule is heuristic:
+/// "any target whose dependency chain reaches one of the resolver-declared
+/// anchor points". Anchor points are the direct dependencies of every
+/// resolver-kind root plus the entries the resolver lists under its
+/// `_default_test_roots` attribute (filtered to ones that actually expose the
+/// `test` capability, to reduce the risk of a vendored id sneaking through
+/// the seed). Vendored packages typically do not depend on the workspace that
+/// consumes them, so the walk terminates without a hit and they stay out. The
+/// heuristic still leaks when an anchor id itself points at vendored code;
+/// replacing it with a modeled origin marker is tracked as a follow-up.
+///
+/// The single-resolver fallback kicks in when the primary rule finds nothing,
+/// or when the resolver itself refuses to load: if exactly one
+/// manifest-declared target is of a resolver kind whose schema exposes the
+/// capability, that target is returned as the sole selection. This preserves
+/// the bare-native-project shape where the resolver itself is the buildable
+/// thing. Multi-candidate graphs are returned via `resolver_candidates` for
+/// the caller to render as an actionable error.
+fn select_workspace_owned(workspace: &Path, capability: &str) -> Result<WorkspaceOwnedSelection> {
+    let schemas = once_frontend::target_kind_schemas_for_workspace(workspace)?;
+    let resolver_kinds = schemas
+        .iter()
+        .filter(|schema| schema.has_resolver())
+        .map(|schema| schema.kind.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    let capable_resolver_kinds = schemas
+        .iter()
         .filter(|schema| {
             schema.has_resolver()
                 && schema
                     .capabilities
                     .iter()
-                    .any(|capability| capability.name == "build")
+                    .any(|declared| declared.name == capability)
         })
-        .map(|schema| schema.kind)
+        .map(|schema| schema.kind.clone())
         .collect::<std::collections::BTreeSet<_>>();
-    let candidates = once_frontend::load_workspace(workspace)?
-        .iter()
-        .filter(|target| resolver_kinds.contains(&target.kind))
-        .map(once_frontend::Target::id)
-        .collect::<Vec<_>>();
-    match candidates.as_slice() {
-        [target] => Ok(target.clone()),
-        [] => anyhow::bail!(
-            "no default build target was discovered; pass `once build <target>` using an id from `once query targets`"
-        ),
-        _ => anyhow::bail!(
-            "multiple default build targets were discovered; pass `once build <target>` using one of: {}",
-            candidates.join(", ")
-        ),
+    let graph_result = once_frontend::load_graph_workspace(workspace);
+    if let Ok(graph) = graph_result.as_ref() {
+        let has_capability = |target: &once_frontend::GraphTarget| {
+            target
+                .capabilities
+                .iter()
+                .any(|declared| declared.name == capability)
+        };
+        let by_id = graph
+            .iter()
+            .map(|target| (target.label.id.as_str(), target))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let mut root_seed = graph
+            .iter()
+            .filter(|target| resolver_kinds.contains(&target.kind))
+            .flat_map(|root| root.dependency_ids().map(String::as_str))
+            .collect::<std::collections::BTreeSet<_>>();
+        // Also seed with anything a resolver root explicitly named as one of
+        // its workspace-owned test targets, provided the target itself exposes
+        // the `test` capability. Those targets are owned by the resolver's
+        // project even when their dep chain does not otherwise reach a primary
+        // product (macro test bundles, for example); the capability filter is a
+        // soft guard against a resolver accidentally seeding a vendored id.
+        for root in graph
+            .iter()
+            .filter(|target| resolver_kinds.contains(&target.kind))
+        {
+            if let Some(once_frontend::AttrValue::List(values)) =
+                root.attrs.get("_default_test_roots")
+            {
+                for value in values {
+                    let Some(name) = value.as_str() else {
+                        continue;
+                    };
+                    let qualified = if root.label.package.is_empty() {
+                        name.to_string()
+                    } else {
+                        format!("{}/{}", root.label.package, name)
+                    };
+                    if let Some(target) = by_id.get(qualified.as_str()) {
+                        if target
+                            .capabilities
+                            .iter()
+                            .any(|declared| declared.name == "test")
+                        {
+                            root_seed.insert(target.label.id.as_str());
+                        }
+                    }
+                }
+            }
+        }
+        let mut selected = graph
+            .iter()
+            .filter(|target| has_capability(target))
+            .filter(|target| reaches_any_root(target, &by_id, &root_seed))
+            .map(|target| target.label.id.clone())
+            .collect::<Vec<_>>();
+        selected.sort();
+        selected.dedup();
+        if !selected.is_empty() {
+            return Ok(WorkspaceOwnedSelection {
+                targets: selected,
+                resolver_candidates: Vec::new(),
+            });
+        }
     }
+    let mut resolver_candidates = match graph_result.as_ref() {
+        Ok(graph) => graph
+            .iter()
+            .filter(|target| capable_resolver_kinds.contains(&target.kind))
+            .map(|target| target.label.id.clone())
+            .collect::<Vec<_>>(),
+        Err(_) => once_frontend::load_workspace(workspace)?
+            .iter()
+            .filter(|target| capable_resolver_kinds.contains(&target.kind))
+            .map(once_frontend::Target::id)
+            .collect::<Vec<_>>(),
+    };
+    resolver_candidates.sort();
+    resolver_candidates.dedup();
+    if resolver_candidates.len() == 1 {
+        return Ok(WorkspaceOwnedSelection {
+            targets: resolver_candidates,
+            resolver_candidates: Vec::new(),
+        });
+    }
+    if resolver_candidates.is_empty() {
+        // Nothing usable. If the graph itself failed to load, surface the
+        // original error so the targetless invocation does not disappear.
+        if let Err(error) = graph_result {
+            return Err(anyhow::Error::new(error).context("loading graph"));
+        }
+    }
+    Ok(WorkspaceOwnedSelection {
+        targets: Vec::new(),
+        resolver_candidates,
+    })
+}
+
+/// True when `target`'s transitive dependency chain reaches any id in `roots`.
+///
+/// `roots` is the set of direct dependencies of any resolver-kind target -- the
+/// resolver's declared primary products for a native integration project. Test
+/// bundles, macro plugins, and example executables sit alongside those products
+/// in the same workspace and pull them in as deps, so a BFS from such a target
+/// through its own `dependency_ids` hits a root and the target counts as owned.
+/// Vendored packages never depend on the workspace that consumes them, so the
+/// walk terminates without a hit and they stay out.
+fn reaches_any_root(
+    target: &once_frontend::GraphTarget,
+    by_id: &std::collections::BTreeMap<&str, &once_frontend::GraphTarget>,
+    roots: &std::collections::BTreeSet<&str>,
+) -> bool {
+    let mut pending = std::collections::VecDeque::from([target.label.id.as_str()]);
+    let mut visited = std::collections::BTreeSet::new();
+    while let Some(id) = pending.pop_front() {
+        if roots.contains(id) {
+            return true;
+        }
+        if !visited.insert(id) {
+            continue;
+        }
+        if let Some(node) = by_id.get(id) {
+            pending.extend(node.dependency_ids().map(String::as_str));
+        }
+    }
+    false
+}
+
+fn all_targets_with_capability(workspace: &Path, capability: &str) -> Result<Vec<String>> {
+    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    let mut selected = graph
+        .iter()
+        .filter(|target| {
+            target
+                .capabilities
+                .iter()
+                .any(|declared| declared.name == capability)
+        })
+        .map(|target| target.label.id.clone())
+        .collect::<Vec<_>>();
+    selected.sort();
+    selected.dedup();
+    Ok(selected)
 }
 
 fn resolve_target_arg(workspace: &Path, raw: &str) -> Result<String> {
@@ -968,15 +1218,47 @@ mod tests {
     }
 
     #[test]
-    fn default_build_target_does_not_expand_native_project_resolvers() {
+    fn default_build_target_falls_back_to_the_lone_native_project_resolver() {
         let temporary = tempfile::tempdir().unwrap();
         let project = temporary.path().join("App.xcodeproj");
         std::fs::create_dir(&project).unwrap();
         std::fs::write(project.join("project.pbxproj"), "not a project").unwrap();
 
         assert_eq!(
-            resolve_build_target(temporary.path(), None).unwrap(),
-            "xcode"
+            resolve_build_targets(temporary.path(), None, false).unwrap(),
+            vec!["xcode".to_string()]
         );
+    }
+
+    #[test]
+    fn explicit_target_bypasses_default_selection_for_build_and_lint() {
+        let temporary = tempfile::tempdir().unwrap();
+        let project = temporary.path().join("App.xcodeproj");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::write(project.join("project.pbxproj"), "not a project").unwrap();
+
+        assert_eq!(
+            resolve_build_targets(temporary.path(), Some("xcode".to_string()), false).unwrap(),
+            vec!["xcode".to_string()]
+        );
+        assert_eq!(
+            resolve_lint_targets(temporary.path(), Some("xcode".to_string()), false).unwrap(),
+            vec!["xcode".to_string()]
+        );
+    }
+
+    #[test]
+    fn targetless_lint_errors_when_no_lint_target_is_declared() {
+        let temporary = tempfile::tempdir().unwrap();
+        let project = temporary.path().join("App.xcodeproj");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::write(project.join("project.pbxproj"), "not a project").unwrap();
+
+        // The bare xcode fixture exposes build at the kind level but not lint,
+        // so targetless lint has nothing to fall back to and errors either
+        // with the workspace-owned message or by surfacing the graph load
+        // failure. What matters is that it fails cleanly instead of panicking.
+        resolve_lint_targets(temporary.path(), None, false)
+            .expect_err("bare xcode fixture has no lint-capable target");
     }
 }

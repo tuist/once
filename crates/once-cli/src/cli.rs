@@ -233,9 +233,11 @@ pub enum Cmd {
     /// match a cached action key reuse the prior outputs; everything
     /// else runs and lands its declared outputs in
     /// `<workspace>/.once/out/<target>/`. Use `once query targets` to
-    /// list available ids. When no target is supplied, Once builds the
-    /// single discovered workspace root. An ambiguous or explicitly authored
-    /// graph still requires a target.
+    /// list available ids. With no target and no `--all`, Once builds
+    /// every workspace-owned target that exposes `build`, in id order,
+    /// and fails fast when one build fails. Pass `--all` to include
+    /// every build-capable target in the loaded graph, including targets
+    /// reached through vendored dependencies.
     Build {
         /// Local filesystem sandbox policy for command actions.
         #[usage(long, default = "off")]
@@ -254,11 +256,19 @@ pub enum Cmd {
         /// Once serves the client interface from this process. The page
         /// receives the build target, dependency graph, cache decision,
         /// duration, action digest, and output as the build progresses.
+        /// The Runs interface currently supports a single target; combine
+        /// it with an explicit target id rather than a targetless build.
         #[usage(long)]
         ui: bool,
 
-        /// Target id, such as `services/api/Api` or `./Api`. Omit it to build
-        /// the single automatically discovered workspace root.
+        /// Build every build-capable target in the loaded graph, including
+        /// targets reached through vendored dependencies. Without it the
+        /// targetless default builds only workspace-owned targets.
+        #[usage(long, conflicts = "target")]
+        all: bool,
+
+        /// Target id, such as `services/api/Api` or `./Api`. Omit it to
+        /// build every workspace-owned build target discovered in the graph.
         target: Option<String>,
     },
 
@@ -266,6 +276,11 @@ pub enum Cmd {
     ///
     /// Executes the target's `lint` capability, normalizes its report,
     /// and returns a failing status when a finding meets `--fail-on`.
+    /// With no target and no `--all`, Once lints every workspace-owned
+    /// target that exposes `lint`, runs each one to completion, and
+    /// returns a failing status when any finding meets `--fail-on`.
+    /// Pass `--all` to include every lint-capable target in the loaded
+    /// graph, including targets reached through vendored dependencies.
     Lint {
         /// Local filesystem sandbox policy for command actions.
         #[usage(long, default = "off")]
@@ -279,7 +294,14 @@ pub enum Cmd {
         #[usage(long, default = "warning")]
         fail_on: LintSeverity,
 
-        /// Target id, such as `quality/python` or `./python`.
+        /// Lint every lint-capable target in the loaded graph, including
+        /// targets reached through vendored dependencies. Without it the
+        /// targetless default lints only workspace-owned targets.
+        #[usage(long, conflicts = "target")]
+        all: bool,
+
+        /// Target id, such as `quality/python` or `./python`. Omit it to
+        /// lint every workspace-owned lint target discovered in the graph.
         target: Option<String>,
     },
 
@@ -685,7 +707,6 @@ impl Cli {
         }
 
         match self.command.as_ref()? {
-            Cmd::Lint { target: None, .. } => Some(&["lint"]),
             Cmd::Run { target: None, .. } => Some(&["run"]),
             Cmd::Exec { argv, .. } if argv.is_empty() => Some(&["exec"]),
             Cmd::Cache { cmd: None } => Some(&["cache"]),
