@@ -1133,8 +1133,7 @@ fn enrich_seed_with_declared_test_roots<'graph>(
         .iter()
         .filter(|target| resolver_kinds.contains(&target.kind))
     {
-        let Some(once_frontend::AttrValue::List(values)) =
-            root.attrs.get("_default_test_roots")
+        let Some(once_frontend::AttrValue::List(values)) = root.attrs.get("_default_test_roots")
         else {
             continue;
         };
