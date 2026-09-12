@@ -217,8 +217,8 @@ async fn send(
     payload: &InvocationReport,
 ) -> Result<()> {
     let auth_token = auth_token(config, xdg)?;
-    let base = config.url.trim_end_matches('/');
-    let url = format!("{base}/{REPORT_PATH}/{account}/{project}/once/invocations");
+    let ingest_base = resolve_events_base(&config.url).await;
+    let url = format!("{ingest_base}/{REPORT_PATH}/{account}/{project}/once/invocations");
     let body = ReporterPayload::from(payload);
 
     let timeout_duration = configured_timeout();
@@ -243,6 +243,23 @@ async fn send(
         }
         Ok(Err(source)) => Err(source.into()),
         Err(_) => anyhow::bail!("Tuist invocation report timed out after {timeout_duration:?}"),
+    }
+}
+
+/// Ask the server which endpoint should carry event ingestion. Falls back to
+/// `config_url` when discovery is not available or does not advertise an
+/// events endpoint - older servers, self-hosted deployments on the
+/// pre-discovery release, or a temporary outage all end up posting to the
+/// server directly, which is what the reporter did before discovery existed.
+async fn resolve_events_base(config_url: &str) -> String {
+    let trimmed = config_url.trim_end_matches('/').to_string();
+    match crate::discovery::fetch(&trimmed).await {
+        Ok(Some(discovery)) => discovery
+            .events
+            .first_url()
+            .map(|url| url.trim_end_matches('/').to_string())
+            .unwrap_or(trimmed),
+        Ok(None) | Err(_) => trimmed,
     }
 }
 

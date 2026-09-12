@@ -6,6 +6,7 @@ mod bus_events;
 mod cache_provider;
 mod cli;
 mod commands;
+mod discovery;
 mod dispatch;
 mod logging;
 mod reference;
