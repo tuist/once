@@ -6,12 +6,14 @@ mod bus_events;
 mod cache_provider;
 mod cli;
 mod commands;
+mod discovery;
 mod dispatch;
 mod logging;
 mod reference;
 mod render;
 mod reporter;
 mod sound;
+mod tuist_reporter;
 
 use std::ffi::OsStr;
 use std::fmt::Write as _;

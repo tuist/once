@@ -141,6 +141,9 @@ pub async fn exec(
         cache_failures: args.cache_failures,
     };
     let resource_limits = args.resource_limits.clone();
+    let started_at_ms = current_epoch_ms();
+    let argv_snapshot = args.argv.clone();
+    let remote_execution_provider = args.remote.as_ref().map(|remote| remote.provider.clone());
     let (workspace, action) = plan_exec_action(workspace, xdg, cache, opts, args).await?;
     if verify_reproducible {
         return verify_and_report(&workspace, cache, &action, output).await;
@@ -169,8 +172,77 @@ pub async fn exec(
     )
     .await;
     write_exec_output(cache, output, streams_live, &outcome).await?;
+    let finished_at_ms = current_epoch_ms();
+
+    report_invocation_to_tuist(
+        &workspace,
+        xdg,
+        &outcome,
+        &argv_snapshot,
+        remote_execution_provider.as_deref(),
+        started_at_ms,
+        finished_at_ms,
+    )
+    .await;
 
     Ok(exit_from(outcome.result.exit_code))
+}
+
+fn current_epoch_ms() -> i64 {
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(elapsed) => i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX),
+        Err(_) => 0,
+    }
+}
+
+async fn report_invocation_to_tuist(
+    workspace: &Path,
+    xdg: &Xdg,
+    outcome: &once_core::Outcome,
+    argv: &[String],
+    remote_execution: Option<&str>,
+    started_at_ms: i64,
+    finished_at_ms: i64,
+) {
+    let (git_branch, git_commit_sha) = crate::tuist_reporter::resolve_git_context(workspace);
+    let duration_ms = finished_at_ms
+        .saturating_sub(started_at_ms)
+        .max(0)
+        .cast_unsigned();
+    let non_negative = finished_at_ms.max(0).cast_unsigned();
+    let invocation_id = format!(
+        "once-{}-{}",
+        finished_at_ms,
+        uuid::Uuid::new_v7(uuid::Timestamp::from_unix(
+            uuid::NoContext,
+            non_negative / 1000,
+            (u32::try_from(non_negative % 1000).unwrap_or(0)) * 1_000_000
+        ))
+    );
+
+    let report = crate::tuist_reporter::InvocationReport {
+        invocation_id,
+        command: "exec".to_string(),
+        argv: argv.to_vec(),
+        cwd: None,
+        action_digest: outcome.action.to_string(),
+        cache: outcome.cache.into(),
+        status: outcome.result.exit_code.into(),
+        exit_code: outcome.result.exit_code,
+        duration_ms,
+        started_at_ms,
+        finished_at_ms,
+        git_branch,
+        git_commit_sha,
+        is_ci: crate::tuist_reporter::detect_ci(),
+        remote_execution: remote_execution.map(str::to_string),
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+        once_version: env!("CARGO_PKG_VERSION").to_string(),
+        workspace: workspace.display().to_string(),
+    };
+
+    crate::tuist_reporter::report(workspace, xdg, report).await;
 }
 
 async fn verify_and_report(
