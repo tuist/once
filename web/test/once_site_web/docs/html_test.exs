@@ -23,7 +23,8 @@ defmodule OnceSiteWeb.Docs.HTMLTest do
 
     html = HTML.add_heading_anchors(mdex)
 
-    assert html =~ ~s(<a class="heading-anchor" id="my-section" href="#my-section">)
+    assert html =~ ~s(<a class="heading-anchor" href="#my-section">)
+    assert html |> Floki.parse_fragment!() |> Floki.find("#my-section") |> length() == 1
     assert html =~ ~s(<span data-part="heading-text">My Section</span>)
   end
 
