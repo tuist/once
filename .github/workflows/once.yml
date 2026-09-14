@@ -45,7 +45,7 @@ jobs:
           rust_ci=false
           while IFS= read -r path; do
             case "$path" in
-              Cargo.toml|Cargo.lock|mise.toml|once.toml|crates/*|spec/*|mise/tasks/*|.cargo/*)
+              Cargo.toml|Cargo.lock|mise.toml|once.toml|crates/*|spec/*|fixtures/*|mise/tasks/*|.cargo/*)
                 rust_ci=true
                 ;;
             esac

@@ -324,9 +324,23 @@ impl SourceDigestCache {
         cache: &once_cas::CacheProvider,
     ) -> once_core::Result<()> {
         let mut required = result.clone();
-        required
-            .outputs
-            .retain(|relative, expected| !self.output_matches(workspace, relative, *expected));
+        let mut selected = BTreeSet::new();
+        required.outputs.retain(|relative, expected| {
+            let mut candidate = relative.as_str();
+            let mut parent_selected = false;
+            while let Some((parent, _)) = candidate.rsplit_once('/') {
+                if selected.contains(parent) {
+                    parent_selected = true;
+                    break;
+                }
+                candidate = parent;
+            }
+            let restore = parent_selected || !self.output_matches(workspace, relative, *expected);
+            if restore {
+                selected.insert(relative.clone());
+            }
+            restore
+        });
         if required.outputs.is_empty() {
             // Every output was already the one this action produced, which is
             // what the recorded description said. Describing them again to
@@ -340,8 +354,31 @@ impl SourceDigestCache {
     }
 
     pub(super) fn record_outputs(&self, result: &once_cas::ActionResult, workspace: &Path) {
+        let mut ancestors = BTreeSet::new();
+        for relative in result.outputs.keys() {
+            let mut candidate = relative.as_str();
+            while let Some((parent, _)) = candidate.rsplit_once('/') {
+                ancestors.insert(parent.to_string());
+                candidate = parent;
+            }
+        }
+        {
+            let mut entries = self
+                .inner
+                .output_entries
+                .write()
+                .expect("output digest cache lock poisoned");
+            let previous_len = entries.len();
+            entries.retain(|path, _| !ancestors.contains(path));
+            super::output_state::prune_replaced_descendants(&mut entries, &result.outputs);
+            if entries.len() != previous_len {
+                self.inner.dirty.store(true, Ordering::Relaxed);
+            }
+        }
         for (relative, digest) in &result.outputs {
-            self.record_output(workspace, relative, *digest);
+            if !ancestors.contains(relative) {
+                self.record_output(workspace, relative, *digest);
+            }
         }
     }
 

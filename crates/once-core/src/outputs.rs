@@ -141,6 +141,16 @@ async fn outputs_needing_restore(
             spawn_output_validation(&mut tasks, workspace_root, path, digest);
         }
     }
+    for (path, digest) in &result.outputs {
+        let mut candidate = path.as_str();
+        while let Some((parent, _)) = candidate.rsplit_once('/') {
+            if outputs.contains_key(parent) {
+                outputs.insert(path.clone(), *digest);
+                break;
+            }
+            candidate = parent;
+        }
+    }
     Ok(ActionResult {
         exit_code: result.exit_code,
         stdout: result.stdout,
@@ -623,6 +633,43 @@ mod tests {
         assert_eq!(
             std::fs::read(workspace.join("out/nested/second.txt")).unwrap(),
             b"second"
+        );
+    }
+
+    #[tokio::test]
+    async fn restored_parent_does_not_overwrite_an_already_matching_child() {
+        let (_tmp, workspace, cache) = workspace_and_cache();
+        std::fs::create_dir_all(workspace.join("out/tree")).unwrap();
+        std::fs::write(workspace.join("out/tree/file"), "old").unwrap();
+        let mut outputs = capture(
+            &[WorkspacePath::try_from("out/tree").unwrap()],
+            &workspace,
+            &cache,
+            OutputSymlinkMode::default(),
+        )
+        .await
+        .unwrap();
+        std::fs::write(workspace.join("out/tree/file"), "new").unwrap();
+        outputs.extend(
+            capture(
+                &[WorkspacePath::try_from("out/tree/file").unwrap()],
+                &workspace,
+                &cache,
+                OutputSymlinkMode::default(),
+            )
+            .await
+            .unwrap(),
+        );
+        let result = ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
+            outputs,
+        };
+        restore(&result, &workspace, &cache).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("out/tree/file")).unwrap(),
+            "new"
         );
     }
 

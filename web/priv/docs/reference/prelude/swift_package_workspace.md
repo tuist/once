@@ -18,6 +18,14 @@ without `once.toml` can therefore query and build its first-party package
 targets directly. Discovery skips generated package-manager state such as
 `.build` and `.swiftpm`.
 
+Local path dependencies within the workspace are expanded transitively and
+shared package identities are deduplicated. A graph containing only local
+dependencies requires no lockfile or dependency-resolution command. Remote dependencies introduced by a
+local package still use the root package's resolved dependency versions.
+
+A product can group several targets. Depending on that product includes every
+target it exports, even when one target has the same name as the product.
+
 For source-control dependencies, the resolver uses `Package.resolved` or asks
 Swift Package Manager to create it when it is absent. It materializes the
 pinned sources and lowers their package targets into the same Apple target
@@ -40,6 +48,12 @@ traits is enabled. The resolved traits control compilation conditions,
 compiler settings, and optional target dependencies, including macro builds.
 
 ## Attributes
+
+`explicit_modules` is a boolean, defaulting to `false`, that enables
+compiler-scanned, cacheable Swift and Clang module actions.
+`dependency_check` accepts `"off"` (the default) or `"error"`; checking
+requires explicit modules. See [explicit modules](/guide/graph/apple#explicit-modules-and-dependency-checks)
+for native propagation, dependency errors, and current limitations.
 
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |

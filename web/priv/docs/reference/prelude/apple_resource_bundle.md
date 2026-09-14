@@ -19,6 +19,9 @@ resource processing pipeline as application and framework resources.
 | `bundle_name` | string | no | target name | Bundle name. The `.bundle` suffix is added when omitted |
 | `bundle_id` | string | no | `dev.once.<bundle_name>.resources` | Bundle identifier written to generated metadata |
 | `resources` | list&lt;string&gt; | no | `[]` | Files and directory roots processed into the bundle |
+| `prebuild_actions` | list&lt;string&gt; | no | `[]` | Ordered serialized scripts run before resource processing |
+| `prepackage_actions` | list&lt;string&gt; | no | `[]` | Ordered serialized resource generators run before packaging |
+| `postbuild_actions` | list&lt;string&gt; | no | `[]` | Ordered serialized scripts run after resource assembly; untracked scripts bypass caching |
 | `structured_resources` | list&lt;string&gt; | no | `[]` | Directory roots whose own basename is preserved inside the bundle |
 | `xcode_developer_dir` | string | no | active Xcode | Xcode developer directory used to resolve resource tools |
 

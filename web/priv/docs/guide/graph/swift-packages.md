@@ -31,7 +31,22 @@ compile is visible target by target. `once test` runs first-party test bundles
 and excludes test bundles that belong only to resolved packages. Use `once
 test --all` when you intentionally want the complete resolved test graph.
 
+Local path dependencies within the workspace are followed transitively,
+including sibling packages and shared dependencies reached through several
+products. An entirely local graph does not need `Package.resolved` and does not
+run dependency resolution.
+If a local dependency introduces a remote package, Swift Package Manager still
+resolves that package through the root package's lockfile.
+
 ## Keep Swift Package Manager Commands
+
+For explicit module builds, add `explicit_modules = true` to your
+`swift_package_workspace` seed's attributes. Optional
+`dependency_check = "error"` checks source imports against declared package
+dependencies. Once propagates these settings through the resolved package
+graph; `Package.swift` remains the source of target and dependency declarations.
+See [explicit Apple modules](/guide/graph/apple#explicit-modules-and-dependency-checks)
+for requirements and current limits.
 
 Once can sit behind the `swift` command for one native [Swift Package
 Manager](https://www.swift.org/documentation/package-manager/) package. Add

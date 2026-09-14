@@ -13,6 +13,14 @@ used for the build.
 
 ## Attributes
 
+`explicit_modules` is a boolean, defaulting to `false`, that enables
+compiler-scanned, cacheable Swift and Clang module actions.
+`dependency_check` accepts `"off"` (the default) or `"error"`; checking
+requires explicit modules. See [explicit modules](/guide/graph/apple#explicit-modules-and-dependency-checks)
+for native propagation, dependency errors, and current limitations.
+The resolver-owned `_declared_deps` metadata preserves declarations before
+import inference and should not be authored manually.
+
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `platform` | string | yes |  | Apple platform for the framework |
@@ -58,6 +66,17 @@ used for the build.
 | `modulemap` | string | no |  | Authored Clang module map retained in the framework |
 | `modulemap_headers` | list&lt;string&gt; | no | `[]` | Headers named by the authored module map, including private explicit submodules |
 | `auxiliary_modulemaps` | list&lt;string&gt; | no | `[]` | Additional Clang module maps referenced by the framework's public Swift interface |
+
+The `prepackage_actions` attribute accepts an ordered `list<string>` of
+serialized script records, defaulting to `[]`. These run after linking and
+before resource processing, so generated resources feed packaging.
+
+The `postbuild_actions` attribute accepts an ordered `list<string>` of
+serialized script records, defaulting to `[]`. These actions run after
+product assembly and before final signing. Complete declarations may be
+cached; untracked scripts rerun and publish changes to known product files.
+See [native script phases](/docs/guide/graph/apple/xcode#script-build-phases)
+for mapped build settings and file-list variables.
 
 ## Dependency Edges
 

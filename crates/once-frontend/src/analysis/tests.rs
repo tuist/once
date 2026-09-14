@@ -12,6 +12,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use tempfile::TempDir;
 
+#[path = "tests/expansion.rs"]
+mod expansion;
+
 fn run(source: &str) -> starlark::Result<()> {
     Module::with_temp_heap(|module| {
         let ast = AstModule::parse("test.star", source.to_string(), &Dialect::Standard)?;

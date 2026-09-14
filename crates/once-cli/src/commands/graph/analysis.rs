@@ -17,6 +17,7 @@
 
 mod actions;
 mod analysis_memo;
+mod output_state;
 mod resolution_cache;
 mod scheduler;
 mod source_digest_cache;
@@ -504,6 +505,7 @@ impl BuildSession {
             } = self.analyze_capability(target, capability).await?;
             validate_provider(target, &analysis.provider)?;
             let outcome = run_declared_actions(
+                Some(&self.analyzer),
                 &self.workspace,
                 &self.cache,
                 self.module_source_digest,
@@ -1279,6 +1281,7 @@ async fn build_one(
     let analysis_target = Arc::clone(&target);
     let analysis_workspace = workspace.clone();
     let memo_key = analysis_key.clone();
+    let planner = analyzer.clone();
     let analysis = tokio::task::spawn_blocking(move || {
         analyze_with_memo(
             &analyzer,
@@ -1295,6 +1298,12 @@ async fn build_one(
     .await
     .context("joining graph analysis task")??;
     let observations = analysis.observations.clone();
+    let has_deferred_actions = analysis.actions.iter().any(|action| {
+        matches!(
+            action.operation,
+            Some(once_frontend::analysis::DeclaredActionOperation::ExpandActions { .. })
+        )
+    });
     let declared_inputs = analysis
         .actions
         .iter()
@@ -1308,6 +1317,7 @@ async fn build_one(
     );
 
     let outcome = run_declared_actions(
+        Some(&planner),
         &workspace,
         &cache,
         module_source_digest,
@@ -1327,7 +1337,9 @@ async fn build_one(
         .as_deref()
         .map(|key| target_outcomes::key(key, &action_digests))
     {
-        target_outcomes.record(&target, key, &observations, &declared_inputs, &outcome);
+        if !has_deferred_actions {
+            target_outcomes.record(&target, key, &observations, &declared_inputs, &outcome);
+        }
     }
     if let Some(bus) = &event_bus {
         let duration_ms = u64::try_from(build_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);

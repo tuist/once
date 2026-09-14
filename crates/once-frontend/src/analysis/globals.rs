@@ -215,6 +215,30 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         Ok(digest)
     }
 
+    #[allow(clippy::unnecessary_wraps)]
+    fn content_sha256(text: &str) -> anyhow::Result<String> {
+        Ok(sha256_hex(text.as_bytes()))
+    }
+
+    fn host_tree_sha256(path: &str) -> anyhow::Result<String> {
+        if !analysis_active() {
+            return Ok(String::new());
+        }
+        let source = Path::new(path);
+        if !source.is_absolute() || !source.is_dir() {
+            anyhow::bail!("host_tree_sha256 requires an absolute directory path");
+        }
+        let digest = with_store(|store| -> anyhow::Result<String> {
+            let store = store.context("host_tree_sha256 called outside analysis")?;
+            cached_host_tree_digest(&store.host_cache, &store.workspace_root, source)
+        })?;
+        observe(Observation::TreeDigest {
+            path: path.to_string(),
+            sha256: digest.clone(),
+        });
+        Ok(digest)
+    }
+
     /// Return whether one host path currently exists as a file.
     fn host_file_exists(path: &str) -> anyhow::Result<bool> {
         if !analysis_active() {
@@ -435,6 +459,52 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             }
             None => Ok(name.to_string()),
         })
+    }
+
+    fn expand_actions<'v>(
+        implementation: &str,
+        inputs: Value<'v>,
+        outputs: Value<'v>,
+        args: Value<'v>,
+    ) -> anyhow::Result<NoneType> {
+        let inputs = unpack_string_list(inputs, "inputs")?;
+        let outputs = unpack_string_list(outputs, "outputs")?;
+        let args = args
+            .to_json_value()
+            .context("action planner arguments must be serializable data")?;
+        if implementation.is_empty() {
+            anyhow::bail!("expand_actions requires an implementation function name");
+        }
+        with_store_mut(|store| {
+            if let Some(store) = store {
+                store.actions.push(DeclaredAction {
+                    operation: Some(DeclaredActionOperation::ExpandActions {
+                        implementation: implementation.to_string(),
+                        args,
+                        build_dir: store.build_dir.clone(),
+                    }),
+                    argv: Vec::new(),
+                    arg_files: Vec::new(),
+                    inputs,
+                    outputs,
+                    stdout: None,
+                    stderr: None,
+                    clean_paths: Vec::new(),
+                    create_dirs: Vec::new(),
+                    cwd: None,
+                    env: BTreeMap::new(),
+                    sandbox: None,
+                    network: None,
+                    success_exit_codes: vec![0],
+                    cacheable: true,
+                    inherit_parent_env: false,
+                    depends_on_prior_actions: true,
+                    toolchain_identity: None,
+                    identifier: Some(format!("expand_actions:{implementation}")),
+                });
+            }
+        });
+        Ok(NoneType)
     }
 
     /// Declare a portable action that writes text or bytes at the
@@ -1819,10 +1889,7 @@ fn observation_holds(
         Observation::TreeDigest { path, sha256 } => {
             let source = Path::new(path);
             source.is_dir()
-                && host_tree_digest_cache(workspace_root)
-                    .digest("host-tree", source, || {
-                        once_host_tree::host_tree_sha256_hex(source)
-                    })
+                && cached_host_tree_digest(host_cache, workspace_root, source)
                     .is_ok_and(|actual| &actual == sha256)
         }
         Observation::FileExists { path, exists } => Path::new(path).is_file() == *exists,
@@ -2285,6 +2352,23 @@ fn host_tree_digest_cache(workspace_root: &Path) -> Arc<once_host_tree::TreeDige
     )
 }
 
+fn cached_host_tree_digest(
+    host_cache: &HostCache,
+    workspace: &Path,
+    source: &Path,
+) -> Result<String> {
+    host_cache.host_tree_digest(source, || {
+        let cache = once_host_tree::TreeDigestCache::open(
+            workspace
+                .join(".once/host-tree-identities")
+                .join(sha256_hex(source.to_string_lossy().as_bytes())),
+        );
+        Ok(cache.digest("host-tree", source, || {
+            once_host_tree::host_tree_sha256_hex(source)
+        })?)
+    })
+}
+
 fn workspace_path_relative_to_package(package: &str, workspace_path: &str) -> String {
     let package_parts = package
         .split('/')
@@ -2516,10 +2600,12 @@ mod observation_completeness_tests {
     /// the same call with the same arguments cannot produce a different answer.
     const PURE: &[&str] = &[
         "cmd_args",
+        "content_sha256",
         "copy_path",
         "declare_output",
         "download_and_extract",
         "execution_path",
+        "expand_actions",
         "json_decode",
         "link_path",
         "prepare_path",
@@ -2545,6 +2631,7 @@ mod observation_completeness_tests {
         "host_path_exists",
         "host_path_is_within",
         "host_read_dir",
+        "host_tree_sha256",
         "host_which",
         "host_which_optional",
         "glob",
