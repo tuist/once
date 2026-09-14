@@ -1,0 +1,175 @@
+<Layouts.app flash={@flash}>
+  <section data-part="passport-page">
+    <header data-part="passport-header">
+      <nav data-part="passport-breadcrumb" aria-label="Breadcrumb">
+        <a href="/zero-to-once/">Zero-to-Once</a>
+        <span>/</span>
+        <a href={"https://github.com/#{@account}"} target="_blank" rel="noopener">{@account}</a>
+        <span>/</span>
+        <span>{@repository}</span>
+      </nav>
+      <div data-part="passport-heading-row">
+        <div>
+          <h1>{@account}/{@repository}</h1>
+          <p>{@github_description}</p>
+        </div>
+        <div data-part="passport-heading-actions">
+          <a
+            class="noora-button"
+            data-variant="secondary"
+            data-size="medium"
+            href={@share_url}
+            target="_blank"
+            rel="noopener"
+          >
+            <span>Share this repository</span>
+          </a>
+          <Button.button
+            label="Join Zero-to-Once"
+            variant="primary"
+            size="medium"
+            href={"/github.com/#{@account}/#{@repository}/integrate"}
+          />
+        </div>
+      </div>
+    </header>
+
+    <Card.card icon="circle_check" title="Once compatibility report" data-part="passport-card">
+      <:actions>
+        <Badge.status_badge status="success" label="Compatible" />
+      </:actions>
+      <Card.card_section>
+        <div data-part="passport-metadata">
+          <div><span>Score</span><strong>{@score}/100</strong></div>
+          <div><span>Estimated savings</span><strong>{@estimated_savings}</strong></div>
+          <div><span>Last checked</span><strong>{@checked_at}</strong></div>
+          <div><span>Branch</span><strong>{@default_branch}</strong></div>
+        </div>
+      </Card.card_section>
+      <Card.card_section>
+        <p data-part="passport-card-copy">{@summary}</p>
+      </Card.card_section>
+    </Card.card>
+
+    <Card.card icon="git_branch" title="Most recent action graph" data-part="passport-card">
+      <:actions>
+        <Badge.status_badge
+          status="success"
+          label={"#{@graph["summary"]["cached_actions"]}/#{@graph["summary"]["actions"]} cached"}
+        />
+      </:actions>
+      <Card.card_section>
+        <div data-part="passport-graph" data-passport-graph={Jason.encode!(@graph)}>
+          <svg aria-label="Repository action graph" role="img"></svg>
+          <div data-part="graph-inspector">Select an action to inspect its Once metadata.</div>
+        </div>
+        <dl data-part="passport-graph-metadata">
+          <div>
+            <dt>Critical path</dt><dd>{@graph["summary"]["critical_path_ms"] / 1000}s</dd>
+          </div>
+          <div>
+            <dt>Artifacts</dt><dd>
+              {Float.round(@graph["summary"]["artifact_bytes"] / 1_000_000, 1)} MB
+            </dd>
+          </div>
+          <div>
+            <dt>History</dt><dd>{@graph_analysis["observed_commits"]} default-branch commits</dd>
+          </div>
+        </dl>
+      </Card.card_section>
+    </Card.card>
+
+    <Card.card icon="bulb" title="Optimization candidates" data-part="passport-card">
+      <Card.card_section>
+        <ol data-part="passport-candidates">
+          <li :for={candidate <- @graph_analysis["candidates"]}>
+            <div><strong>{candidate["target"]}</strong><span>{candidate["reason"]}</span></div>
+            <div data-part="candidate-metrics">
+              <span>{candidate["dependent_targets"]} dependent targets</span><span>{candidate[
+                "invalidated_actions"
+              ]} invalidated actions</span>
+            </div>
+            <p>{candidate["recommendation"]}</p>
+          </li>
+        </ol>
+      </Card.card_section>
+    </Card.card>
+
+    <div data-part="passport-columns">
+      <Card.card
+        icon="checkup_list"
+        title="Recommended for this repository"
+        data-part="passport-card"
+      >
+        <Card.card_section>
+          <ul data-part="passport-feature-list">
+            <li :for={{name, detail} <- @features}>
+              <Badge.badge label="Ready" color="success" style="light-fill" />
+              <div><strong>{name}</strong><span>{detail}</span></div>
+            </li>
+          </ul>
+        </Card.card_section>
+      </Card.card>
+
+      <Card.card icon="git_branch" title="Zero-to-Once queue" data-part="passport-card">
+        <:actions>
+          <Badge.status_badge
+            status={if @integration.status == :queued, do: "in_progress", else: "attention"}
+            label={@integration.label}
+          />
+        </:actions>
+        <Card.card_section>
+          <p data-part="passport-card-copy">{@integration.detail}</p>
+          <p :if={@integration.queue_position} data-part="passport-card-copy">
+            Current position: #{@integration.queue_position}. Community boosts: #{@integration.share_boost}/3.
+          </p>
+          <a
+            :if={
+              @integration.status in [:awaiting_access, :queued] and @integration.share_boost < 3
+            }
+            class="noora-link-button"
+            href={"https://x.com/intent/post?text=#{URI.encode_www_form("I am bringing #{@account}/#{@repository} to Once with Zero-to-Once")}"}
+            target="_blank"
+            rel="noopener"
+          >
+            Share repository page
+          </a>
+          <Button.link_button
+            :if={@integration.status in [:not_requested, :awaiting_access]}
+            label={
+              if @integration.status == :not_requested,
+                do: "Join the queue",
+                else: "Grant access"
+            }
+            href={"/github.com/#{@account}/#{@repository}/integrate"}
+            variant="primary"
+            size="medium"
+          />
+          <form
+            :if={
+              @integration.status in [:awaiting_access, :queued] and @integration.share_boost < 3
+            }
+            method="post"
+            action={"/github.com/#{@account}/#{@repository}/share"}
+          >
+            <input type="hidden" name="_csrf_token" value={Phoenix.Controller.get_csrf_token()} />
+            <Button.button label="Claim share boost" variant="secondary" size="medium" />
+          </form>
+        </Card.card_section>
+      </Card.card>
+    </div>
+
+    <Card.card icon="versions" title="Scan history" data-part="passport-card">
+      <Card.card_section>
+        <div data-part="passport-history-table">
+          <div data-part="passport-history-row" data-variant="header">
+            <span>Revision</span><span>Result</span><span>Finding</span>
+          </div>
+          <div :for={{version, status, detail} <- @versions} data-part="passport-history-row">
+            <code>{version}</code><Badge.status_badge status="success" label={status} /><span>{detail}</span>
+          </div>
+        </div>
+      </Card.card_section>
+    </Card.card>
+  </section>
+</Layouts.app>

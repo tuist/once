@@ -1,0 +1,15 @@
+<Layouts.app flash={@flash}>
+  <section data-part="passport-page">
+    <header data-part="passport-header">
+      <nav data-part="passport-breadcrumb" aria-label="Breadcrumb">
+        <a href="/zero-to-once/">Zero-to-Once</a><span>/</span><span>Indexing</span>
+      </nav>
+      <div>
+        <h1>{@account}/{@repository}</h1><p>{@github_description}</p>
+      </div>
+    </header>
+    <Banner.banner id="passport-indexing" title="Repository indexing" status="information">
+      This repository has joined Zero-to-Once. Once is preparing its first compatibility report.
+    </Banner.banner>
+  </section>
+</Layouts.app>

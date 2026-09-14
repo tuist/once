@@ -23,14 +23,16 @@ import "phoenix_html"
 import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/once_site"
+import Noora from "noora"
 import topbar from "../vendor/topbar"
 import {setupCodeCopy} from "../docs/shared/hooks/code-copy.js"
+import {setupPassportGraphs} from "./passport_graph.js"
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks},
+  hooks: {...Noora.Hooks, ...colocatedHooks},
 })
 
 // Home page terminal tabs: activate the tab and matching panel by index.
@@ -62,6 +64,7 @@ liveSocket.connect()
 window.liveSocket = liveSocket
 
 setupCodeCopy(document)
+setupPassportGraphs()
 
 // The lines below enable quality of life phoenix_live_reload
 // development features:

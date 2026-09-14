@@ -19,6 +19,11 @@ defmodule OnceSite.Config.DevInstance do
 
   def port(base), do: base + suffix()
 
+  def database_name(base_name, opts \\ []) do
+    partition = Keyword.get(opts, :partition, "") || ""
+    "#{base_name}#{partition}_#{suffix()}"
+  end
+
   defp resolve_instance_file do
     git_path(@git_instance_name) || @root_instance_file
   end

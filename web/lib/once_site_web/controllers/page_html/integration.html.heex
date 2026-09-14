@@ -1,0 +1,60 @@
+<Layouts.app flash={@flash}>
+  <section data-part="passport-page">
+    <header data-part="passport-header">
+      <nav data-part="passport-breadcrumb" aria-label="Breadcrumb">
+        <a href="/zero-to-once/">Zero-to-Once</a><span>/</span><span>Join the queue</span>
+      </nav>
+      <div>
+        <h1>Bring {@account}/{@repository} to Once</h1>
+        <p>
+          Join Zero-to-Once. We will inspect the repository and prepare an initial native project integration.
+        </p>
+      </div>
+    </header>
+
+    <Card.card icon="git_branch" title="How it works" data-part="passport-card">
+      <Card.card_section>
+        <ol data-part="integration-list">
+          <li>
+            <strong>Join the queue</strong><span>Save this repository as a Zero-to-Once migration request.</span>
+          </li>
+          <li>
+            <strong>Install the GitHub App</strong><span>Grant access so Once can clone and inspect the repository.</span>
+          </li>
+          <li>
+            <strong>Move up by sharing</strong><span>Share your project page after joining. Community boosts are capped so the queue remains fair.</span>
+          </li>
+        </ol>
+      </Card.card_section>
+    </Card.card>
+
+    <Card.card icon="clock" title="Your place in the queue" data-part="passport-card">
+      <Card.card_section>
+        <p data-part="passport-card-copy">
+          <strong :if={@integration.queue_position}>Position #{@integration.queue_position}</strong>
+          <span :if={@integration.queue_position}> · </span>{@integration.detail}
+        </p>
+      </Card.card_section>
+    </Card.card>
+
+    <Card.card icon="lock" title="Repository access" data-part="passport-card">
+      <Card.card_section>
+        <p data-part="passport-card-copy">
+          Once requests only the access needed to clone and analyze this repository for integration work.
+        </p>
+        <form method="post" action={"#{@repository_url}/integrate"}>
+          <input type="hidden" name="_csrf_token" value={Phoenix.Controller.get_csrf_token()} />
+          <Button.button
+            label={
+              if @install_url,
+                do: "Join Zero-to-Once and install GitHub App",
+                else: "Join Zero-to-Once"
+            }
+            variant="primary"
+            size="medium"
+          />
+        </form>
+      </Card.card_section>
+    </Card.card>
+  </section>
+</Layouts.app>

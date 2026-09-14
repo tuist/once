@@ -35,3 +35,11 @@ app.kubernetes.io/component: web
 {{- define "once.appSecretName" -}}
 {{ include "once.fullname" . }}-app
 {{- end -}}
+
+{{- define "once.postgresClusterName" -}}
+{{ include "once.fullname" . }}-postgres
+{{- end -}}
+
+{{- define "once.postgresAppSecret" -}}
+{{ include "once.postgresClusterName" . }}-app
+{{- end -}}
