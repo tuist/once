@@ -1,0 +1,2 @@
+import Vapor
+print(graphValue())

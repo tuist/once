@@ -2,6 +2,7 @@ PRELUDE_SOURCES = [
     "common.star",
     "archive.star",
     "lint.star",
+    "apple_modules.star",
     "apple.star",
     "android.star",
     "go.star",
@@ -25,6 +26,7 @@ PRELUDE_SOURCES = [
 ]
 
 PRELUDE_DEPENDENCIES = {
+    "apple.star": ["apple_modules.star"],
     "xcode.star": ["apple.star", "archive.star"],
     "react_native.star": ["android.star"],
     "swift_package.star": ["apple.star", "xcode.star"],

@@ -14,6 +14,11 @@ const HOST_COMMAND_OUTPUT_LIMIT: u64 = 16 * 1024 * 1024;
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DeclaredActionOperation {
+    ExpandActions {
+        implementation: String,
+        args: serde_json::Value,
+        build_dir: String,
+    },
     WriteFile {
         path: String,
         bytes: Vec<u8>,
@@ -570,6 +575,7 @@ pub(super) struct HostCache {
     paths: Arc<Mutex<BTreeSet<PathBuf>>>,
     globs: Arc<SingleFlight<GlobKey, Arc<Vec<String>>>>,
     host_file_digests: Arc<SingleFlight<PathBuf, String>>,
+    host_tree_digests: Arc<SingleFlight<PathBuf, String>>,
     host_env: Arc<HostEnvLookup>,
     tool_paths: Arc<BTreeMap<String, String>>,
 }
@@ -590,6 +596,7 @@ impl Clone for HostCache {
             paths: Arc::clone(&self.paths),
             globs: Arc::clone(&self.globs),
             host_file_digests: Arc::clone(&self.host_file_digests),
+            host_tree_digests: Arc::clone(&self.host_tree_digests),
             host_env: Arc::clone(&self.host_env),
             tool_paths: Arc::clone(&self.tool_paths),
         }
@@ -612,6 +619,7 @@ impl HostCache {
             paths: Arc::new(Mutex::new(BTreeSet::new())),
             globs: Arc::new(SingleFlight::new()),
             host_file_digests: Arc::new(SingleFlight::new()),
+            host_tree_digests: Arc::new(SingleFlight::new()),
             host_env: Arc::new(host_env),
             tool_paths: Arc::new(BTreeMap::new()),
         }
@@ -723,6 +731,14 @@ impl HostCache {
         F: FnOnce() -> Result<String>,
     {
         self.host_file_digests
+            .get_or_compute(path.to_path_buf(), hash)
+    }
+
+    pub(super) fn host_tree_digest<F>(&self, path: &Path, hash: F) -> Result<String>
+    where
+        F: FnOnce() -> Result<String>,
+    {
+        self.host_tree_digests
             .get_or_compute(path.to_path_buf(), hash)
     }
 

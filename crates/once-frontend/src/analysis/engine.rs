@@ -23,6 +23,8 @@ use super::values::{attr_value_to_starlark, json_to_value, value_to_json};
 use crate::graph::{Diagnostic, GraphTarget, TargetKindSchema};
 use crate::Target;
 
+mod expansion;
+
 /// Bump when the meaning of an analysis key or a stored analysis changes in a
 /// way an older record would not notice.
 const ANALYSIS_KEY_SCHEMA: &str = "once.analysis.v1";

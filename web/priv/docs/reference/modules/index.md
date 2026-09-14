@@ -624,6 +624,29 @@ layout.
 
 ## Actions
 
+Native adapters can use the Apple kinds' `prebuild_actions`,
+`prepackage_actions`, and `postbuild_actions` attributes for ordered serialized
+script declarations. Preparation actions precede compilation or resource
+processing. Pre-package actions run after linking but before resource processing.
+Shell script records execute in the workspace so absolute native settings and
+in-place product edits agree with the declared output locations. Their caching
+still depends on complete input and output declarations; it does not imply
+filesystem isolation.
+They can generate resource files and declared resource-bundle trees. Post-build
+actions follow product assembly and precede final signing. Records carry a
+shell or argument list, environment, workspace-relative inputs and outputs,
+working directory, and an explicit cacheability decision. Native Xcode
+records also retain their phase identifier and original build directory so
+the target kind can map environment values and paths to the configured
+execution directory. Scripts without complete declarations must bypass the
+cache. After an untracked product script, the bundle tree is captured again
+so later actions consume modified and newly created files and respect deletions.
+A replaced output tree supersedes earlier records for its children. Stale
+top-level signatures are removed before these scripts; final
+signing and subsequent scripts consume the updated tree.
+Native records may carry `unresolved_file_lists` to retain bootstrap-dependent
+phases during import; executing such a record fails until those settings resolve.
+
 `run_action` accepts:
 
 - `argv`: command and arguments as strings or `cmd_args` fragments.
@@ -632,6 +655,8 @@ layout.
 - `outputs`: workspace-relative outputs the action must produce. Once creates
   their parent directories. If a previous action version left a file where a
   managed output now requires a directory, Once replaces the stale file.
+  Later directory outputs supersede older child records. Later child outputs
+  override earlier directory snapshots during restoration.
 - `clean_paths`: workspace-relative paths to remove before a fresh
   command execution. Cache hits restore outputs without running the
   command.
@@ -660,8 +685,9 @@ layout.
   launched from the user's development shell. Explicit `env` values take
   precedence.
 - `depends_on_prior_actions`: `True` by default. When true, each action key
-  includes prior actions declared by the same target. Set `False` only for
-  independent actions that do not read earlier same-target outputs.
+  includes prior actions declared by the same target and acts as an ordering
+  barrier. With `False`, declared input and output paths determine ordering;
+  every consumed generated file must be listed in `inputs`.
 - `toolchain_identity`: optional string folded into the action digest.
 - `identifier`: stable diagnostic label.
 
@@ -672,9 +698,51 @@ Changing target-kind module source without changing that declaration does not
 invalidate the action. A rule edit that changes any declared behavior or input
 still produces a new digest.
 
-Actions inside one target run in declaration order because later actions
-may consume earlier outputs. Independent graph targets run concurrently
-once their analysis-backed dependencies are complete.
+Consecutive actions with `depends_on_prior_actions = False` may run concurrently
+when their declared reads, writes, argument files, and cleanup paths do not
+conflict. Uncacheable actions and ordering barriers remain sequential. Both
+target and action concurrency respect the command's memory budget. Independent
+graph targets become ready after their dependencies complete.
+
+## Deferred Action Planning
+
+`expand_actions(implementation, inputs, outputs, args)` declares a planning
+barrier. After preceding actions finish, Once restores its `inputs` and calls
+the named exported Starlark function from the same module environment. This
+lets a compiler's dependency scan describe further cacheable actions without
+running the compiler during initial analysis.
+
+The callback receives `ctx.args`, `ctx.inputs`, `ctx.outputs`, `ctx.build_dir`,
+and `ctx.label` (`id` and `package`). It declares ordinary actions and returns
+`None` on success, or one structured diagnostic with `code`, `message`,
+`target`, `attribute`, and `repairs`. Every promised output must be produced
+by a declared action. Recursive expansion is rejected. The callback runs under
+the resource budget, and its child actions use normal caching and scheduling.
+
+```python
+def finish_plan(ctx):
+    scan = json_decode(host_file_read(workspace_root() + "/" + ctx["inputs"][0]))
+    run_action(
+        argv = [ctx["args"]["compiler"]] + scan["arguments"],
+        inputs = scan["inputs"],
+        outputs = ctx["outputs"],
+    )
+```
+
+Initial action queries show the scan and planning barrier, not the expanded
+commands. Isolated contract validation reports this limitation rather than
+running prerequisite builds. Execution evidence contains the expanded actions.
+Targets with deferred actions currently replay planning on warm builds instead
+of using the whole-target shortcut; their individual actions still reuse cache
+entries.
+
+`content_sha256(text)` hashes text without filesystem access.
+`host_tree_sha256(path)` hashes an absolute host directory's contents and
+structure, using metadata-validated cached digests on later invocations.
+It records the tree as an analysis observation and rejects symbolic links
+that escape the tree. Together with `host_file_sha256(path)`, these primitives
+let target kinds include host tools and development kits in action identity.
+They identify host inputs; they do not make those inputs remotely available.
 
 ## Executable And Container Providers
 

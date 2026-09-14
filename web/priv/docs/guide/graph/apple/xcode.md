@@ -17,6 +17,14 @@ application, frameworks, libraries, and test bundles as Once targets.
 
 ## Prerequisites
 
+Once honors `SWIFT_ENABLE_EXPLICIT_MODULES = YES` on native targets. You can
+also set `explicit_modules = true` on an `xcode_workspace` seed to enable the
+mode across its Swift targets and resolved packages. Optional
+`dependency_check = "error"` rejects undeclared workspace imports. Import edges
+inferred by Once do not count as declarations for this check. See
+[explicit modules](/guide/graph/apple#explicit-modules-and-dependency-checks)
+for requirements and current limits.
+
 Reading an Xcode project requires a macOS host with Xcode and its command-line
 tools. The resolver uses `plutil` to convert `project.pbxproj` and `xcrun` to
 locate compilers and software development kits:
@@ -265,21 +273,68 @@ than expected:
   exclusion patterns.
 - Schemes, which identify testable targets so a test bundle is wired to its
   host application.
-- Shell script build phases, replayed as prebuild actions whose declared
-  outputs feed the same target's compile.
+- Shell script build phases, including phases without declared outputs.
+  Preparation and source generators run before compilation. Scripts that
+  feed resource phases run after linking and before packaging. Product scripts
+  run after assembly and before final signing.
 - Core Data models and Intents definitions, whose generated sources are
   compiled with the target.
 - Swift package dependencies, both local packages in the repository and remote
   packages, lowered into Apple library targets.
 
+A project containing both macOS and iPhone targets gets separate package
+targets for each destination. Each application and extension depends on the
+matching package graph, including platform-conditional dependencies and binary
+framework slices. Once shares manifest parsing across destinations. Local
+products that Xcode references without a package reference are discovered from
+the repository's package manifests, including their transitive local dependencies.
+
+## Script Build Phases
+
+Once runs imported scripts using their declared shell and selected build
+configuration. It expands project and target settings, including custom
+settings from configuration files, into the script environment. Directory
+settings such as `SRCROOT`, `PROJECT_DIR`, `TARGET_BUILD_DIR`,
+`BUILT_PRODUCTS_DIR`, `DERIVED_FILE_DIR`, and `TARGET_TEMP_DIR` point to Once's
+workspace and products, not an Xcode derived-data directory. Product settings
+such as `EXECUTABLE_PATH`, `INFOPLIST_PATH`, and
+`UNLOCALIZED_RESOURCES_FOLDER_PATH` describe the bundle Once actually creates.
+Configuration-specific Once output directories are reflected at execution.
+
+Input and output paths become graph inputs and outputs. File-list contents
+are expanded for dependency tracking, while the script receives the separate
+`SCRIPT_INPUT_FILE_*`, `SCRIPT_OUTPUT_FILE_*`, and `SCRIPT_*_FILE_LIST_*`
+variables and counts described in [Apple's script documentation](https://developer.apple.com/documentation/xcode/running-custom-scripts-during-a-build).
+Dependency products are staged alongside the current product for scripts
+that use `BUILT_PRODUCTS_DIR`.
+
+Scripts with workspace-contained declared inputs and outputs can be cached.
+Native shell phases execute in the workspace, not an isolated copied-input
+sandbox, so absolute build-setting paths and in-place product edits refer to
+the same files. Cache correctness depends on complete declarations.
+Scripts with no complete declaration, external inputs, `alwaysOutOfDate`, or
+dependency analysis disabled run each time. Their target reports cache bypass,
+although individual compile actions can still hit the cache. Untracked
+post-build scripts capture the resulting bundle, including newly created
+resources, before final signing.
+Files deleted by a product script stay deleted in the resulting bundle.
+Installation-only phases do not run during `once build`.
+
 ## Limitations
 
 Once compiles the project itself rather than delegating to `xcodebuild`, so
 anything outside the project's own description has to be in place beforehand.
-Dependency managers that integrate through their own build steps, notably
-CocoaPods resource bundles and script phases, and native toolchains that a
-repository bootstraps separately, are not reproduced by Once. Resolve them with
-their own tooling first, then build.
+Once does not install dependencies or bootstrap external native toolchains.
+Run tools such as `pod install` first so their generated projects, scripts,
+and resources exist before Once imports the graph. Script phases in supported
+imported targets then run through Once.
+Unresolved dependency-generated file-list settings do not prevent graph import,
+but building the affected target reports the missing setup. A resolved file-list
+path that does not exist is an import error.
+
+Script ordering uses preparation, pre-package, and post-package stages. Projects
+that interleave repeated copy or resource phases with scripts may require
+explicit graph declarations to preserve that finer-grained ordering.
 
 App extensions and embedded watch apps compile as application bundles. The
 `.appex` wrapper and its extension-point metadata are not modeled yet, so their

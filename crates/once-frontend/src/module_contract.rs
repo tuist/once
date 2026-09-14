@@ -303,6 +303,8 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
             entry("host_path_is_within(path, root)", "Test canonical host-path containment, resolving symbolic links."),
             entry("host_file_read(path)", "Read a host text file during analysis."),
             entry("host_file_sha256(path)", "Digest a host file used during analysis."),
+            entry("host_tree_sha256(path)", "Digest an absolute host directory, including file contents and tree structure. Reuses metadata-validated digests and records the tree as an analysis observation."),
+            entry("content_sha256(text)", "Digest text deterministically without reading the filesystem."),
             entry("host_file_contains(path, needle)", "Search a host text file."),
             entry("host_read_dir(path)", "List sorted names in a host directory."),
             entry(
@@ -319,6 +321,7 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
                 "Resolve a workspace-relative path against the local, sandbox, or remote execution root immediately before process launch.",
             ),
             entry("write_path(path, content)", "Declare a portable file-writing action."),
+            entry("expand_actions(implementation, inputs, outputs, args)", "After prior actions finish, materialize inputs and invoke an exported Starlark planner with ctx.args, ctx.inputs, ctx.outputs, ctx.build_dir and ctx.label. The planner declares actions producing every promised output and returns None or a structured diagnostic. Recursive expansion is rejected."),
             entry(
                 "copy_path(source, destination, kind = \"file\", inputs = [], toolchain_identity = None, identifier = None, cacheable = True)",
                 "Copy one workspace path by value, automatically hashing each source, materializing a directory symlink at the destination, or merge directory contents while preserving their symlink layout.",

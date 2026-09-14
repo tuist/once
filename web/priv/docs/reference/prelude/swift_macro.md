@@ -21,6 +21,14 @@ on.
 
 ## Attributes
 
+`explicit_modules` is a boolean, defaulting to `false`, that enables
+compiler-scanned, cacheable Swift and Clang module actions.
+`dependency_check` accepts `"off"` (the default) or `"error"`; checking
+requires explicit modules. See [explicit modules](/guide/graph/apple#explicit-modules-and-dependency-checks)
+for native propagation, dependency errors, and current limitations.
+The resolver-owned `_declared_deps` metadata preserves declarations before
+import inference and should not be authored manually.
+
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `minimum_os` | string | no | `"13.0"` | Minimum macOS version for the host plugin |

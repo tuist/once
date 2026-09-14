@@ -57,6 +57,14 @@ host runs, and when it runs anywhere other than macOS.
 
 ## Attributes
 
+`explicit_modules` is a boolean, defaulting to `false`, that enables
+compiler-scanned, cacheable Swift and Clang module actions.
+`dependency_check` accepts `"off"` (the default) or `"error"`; checking
+requires explicit modules. See [explicit modules](/guide/graph/apple#explicit-modules-and-dependency-checks)
+for native propagation, dependency errors, and current limitations.
+The resolver-owned `_declared_deps` metadata preserves declarations before
+import inference and should not be authored manually.
+
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `platform` | string | yes |  | Apple platform for the tests |
@@ -97,6 +105,17 @@ host runs, and when it runs anywhere other than macOS.
 | `swift_testing` | bool | no | `false` | Run sources that use Swift Testing (`import Testing`) through the generic Once test capability |
 | `ui_testing` | bool | no | `false` | Package the bundle inside the platform test runner and launch an application under test |
 | `labels` | list&lt;string&gt; | no | `[]` | Agent-readable labels used for filtering or policy |
+
+The `prepackage_actions` attribute accepts an ordered `list<string>` of
+serialized script records, defaulting to `[]`. These run after linking and
+before resource processing, so generated resources feed packaging.
+
+The `postbuild_actions` attribute accepts an ordered `list<string>` of
+serialized script records, defaulting to `[]`. These actions run after
+product assembly and before final signing. Complete declarations may be
+cached; untracked scripts rerun and publish changes to known product files.
+See [native script phases](/docs/guide/graph/apple/xcode#script-build-phases)
+for mapped build settings and file-list variables.
 
 ## Dependency Edges
 

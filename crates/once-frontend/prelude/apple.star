@@ -809,21 +809,15 @@ def _write_hmap(path, entries):
 # `exported_deps` membership checks correct even when the manifest
 # author uses any of the three reference styles.
 def _resolve_dep_ref(ref, package):
-    if ref.startswith("./"):
-        rest = ref[2:]
-        if package:
-            return package + "/" + rest
-        return rest
-    if ref.startswith("../"):
-        slash = -1
-        for i in range(len(package)):
-            if package[i] == "/":
-                slash = i
-        if slash < 0:
-            # `../` from a top-level package resolves at the workspace
-            # root; drop the segment and keep walking.
-            return _resolve_dep_ref(ref[3:], "")
-        return _resolve_dep_ref(ref[3:], package[:slash])
+    if ref.startswith("./") or ref.startswith("../"):
+        parts = package.split("/") if package else []
+        for part in ref.split("/"):
+            if part == "..":
+                if parts:
+                    parts.pop()
+            elif part and part != ".":
+                parts.append(part)
+        return "/".join(parts)
     # Root-relative reference. Once normalises top-level `deps` to this
     # shape; the same convention applies here.
     return ref
@@ -2180,7 +2174,7 @@ def _apple_library_impl(ctx):
             ] if generated_framework_module else []
 
             if authored_modulemap:
-                run_action(
+                _apple_swift_action(ctx, attrs, swiftc, ctx["deps"],
                     argv = swift_compile_argv,
                     inputs = swift_compile_inputs,
                     outputs = swift_compile_outputs,
@@ -2192,7 +2186,7 @@ def _apple_library_impl(ctx):
                     identifier = "swift_module_compile_" + module_name + arch_suffix,
                 )
             else:
-                run_action(
+                _apple_swift_action(ctx, attrs, swiftc, ctx["deps"],
                     argv = swift_compile_argv,
                     inputs = swift_compile_inputs,
                     outputs = swift_compile_outputs,
@@ -2447,6 +2441,7 @@ def _apple_library_impl(ctx):
         ([swift_objc_header] if swift_objc_header else []) + auxiliary_modulemap_headers,
     )
     own_resource_bundles = []
+    prepackage_outputs = _apple_run_prepackage_actions(ctx, attrs, [archive])
     if resource_bundle_name:
         own_resource_bundles.append(_apple_create_resource_bundle(
             ctx,
@@ -2461,9 +2456,12 @@ def _apple_library_impl(ctx):
         ))
     transitive_resource_bundles = _apple_collect_resource_bundles(deps, own_resource_bundles)
 
+    _apple_run_postbuild_actions(ctx, attrs, _unique([archive] + prepackage_outputs))
+
     return {
         "label_id": ctx["label"]["id"],
         "swiftmodule_dir": ctx["build_dir"] if len(swift_srcs) > 0 else "",
+        "module_name": module_name,
         "archive": archive,
         "objc_header": swift_objc_header,
         "alwayslink": alwayslink,
@@ -2507,6 +2505,7 @@ def _apple_system_module_impl(ctx):
             header_dirs.append(directory)
     return {
         "label_id": ctx["label"]["id"],
+        "module_name": _apple_xcframework_module_name([modulemap], ctx["label"]["name"]),
         "swiftmodule_dir": "",
         "archive": "",
         "objc_header": "",
@@ -2831,7 +2830,7 @@ def _swift_macro_impl(ctx):
         if path not in swift_inputs:
             swift_inputs.append(path)
 
-    run_action(
+    _apple_swift_action(ctx, attrs, swiftc, ctx["deps"],
         argv = swift_argv,
         inputs = swift_inputs,
         outputs = [plugin_executable, plugin_swiftmodule, plugin_swiftdoc] + plugin_module_sidecars,
@@ -2855,7 +2854,7 @@ def _swift_macro_impl(ctx):
         "-o",
         plugin_archive,
     ] + compile_argv + swift_srcs
-    run_action(
+    _apple_swift_action(ctx, attrs, swiftc, ctx["deps"],
         argv = archive_argv,
         inputs = swift_inputs,
         outputs = [plugin_archive],
@@ -2867,6 +2866,7 @@ def _swift_macro_impl(ctx):
     return {
         "label_id": ctx["label"]["id"],
         "plugin_executable": plugin_executable,
+        "module_name": module_name,
         "plugin_module_name": module_name,
         "transitive_plugin_executables": [plugin_executable + "#" + module_name],
         "transitive_plugin_module_dirs": _unique([ctx["build_dir"]] + dep_swiftmodule_dirs),
@@ -2927,6 +2927,7 @@ def _apple_entitlements_with_application_identifier(contents, development_team, 
     return contents[:closing] + entry + contents[closing:]
 
 def _apple_resource_path(ctx, path):
+    path = _apple_script_output_path(ctx, path)
     if not path or path.startswith("/") or path.startswith("."):
         return path
     package = ctx["label"]["package"]
@@ -2992,8 +2993,17 @@ def _apple_materialize_resources(ctx, raw_resources, destination, platform, mini
     if not resources:
         return []
 
+    generated_trees = {}
+    for key in ["prebuild_actions", "prepackage_actions"]:
+        for encoded in (ctx.get("attr") or {}).get(key) or []:
+            for output in json_decode(encoded).get("outputs") or []:
+                output = _apple_script_output_path(ctx, output)
+                if output.endswith(".bundle") or output in structured_resources:
+                    generated_trees[output] = True
     models = []
     for resource in resources:
+        if resource in generated_trees:
+            continue
         for model in _apple_resource_models(resource):
             if model not in models:
                 models.append(model)
@@ -3019,6 +3029,10 @@ def _apple_materialize_resources(ctx, raw_resources, destination, platform, mini
 
     ibtool = None
     for resource in resources:
+        if resource in generated_trees:
+            output = declare_resource_output(_basename(resource), resource)
+            copy_path(resource, output, kind = "tree", inputs = [resource], identifier = identifier_prefix + "_generated_tree_" + _basename(resource))
+            continue
         source_files = _apple_resource_tree_files(resource) if _apple_is_directory(resource) else [resource]
         for source in source_files:
             if belongs_to_model(source):
@@ -3133,6 +3147,8 @@ def _apple_create_resource_bundle(ctx, resources, structured_resources, bundle_n
 
 def _apple_resource_bundle_target_impl(ctx):
     attrs = _resolve_attrs(ctx, ctx["attr"], ctx["label"]["id"], ["bundle_name"])
+    _apple_run_prebuild_actions(ctx, attrs)
+    _apple_run_prepackage_actions(ctx, attrs, [])
     platform = attrs["platform"]
     minimum_os = attrs.get("minimum_os") or "13.0"
     bundle_name = attrs.get("bundle_name") or ctx["label"]["name"]
@@ -3148,6 +3164,7 @@ def _apple_resource_bundle_target_impl(ctx):
         attrs.get("xcode_developer_dir") or "",
         module_name,
     )
+    own_bundle["files"] = _unique(own_bundle["files"] + _apple_run_postbuild_actions(ctx, attrs, own_bundle["files"], own_bundle["path"]))
     return {
         "label_id": ctx["label"]["id"],
         "transitive_resource_bundles": _apple_collect_resource_bundles(_apple_native_deps(ctx), [own_bundle]),
@@ -3490,6 +3507,8 @@ def _apple_mixed_framework_impl(ctx):
     library_attrs["structured_resources"] = []
     library_attrs["resource_bundle_name"] = ""
     library_attrs["resource_bundle_id"] = ""
+    library_attrs["postbuild_actions"] = []
+    library_attrs["prepackage_actions"] = []
     library_ctx = dict(ctx)
     library_ctx["attr"] = library_attrs
     framework_deps = _apple_native_deps(ctx)
@@ -3627,6 +3646,21 @@ def _apple_mixed_framework_impl(ctx):
             copy_path(header, output, inputs = [header], identifier = "apple_framework_header_" + module_name + "_" + header_name)
         framework_files.append(output)
 
+    write_path(info_plist, _render_plist({
+        "CFBundleDevelopmentRegion": "en",
+        "CFBundleExecutable": product_name,
+        "CFBundleIdentifier": bundle_id,
+        "CFBundleInfoDictionaryVersion": "6.0",
+        "CFBundleName": product_name,
+        "CFBundlePackageType": "FMWK",
+        "CFBundleShortVersionString": "1.0",
+        "CFBundleVersion": "1",
+        "MinimumOSVersion": minimum_os,
+        "DTPlatformName": _apple_sdk_name(platform, sdk_variant),
+    }, {}, {
+        "CFBundleSupportedPlatforms": [_apple_supported_platform(_apple_sdk_name(platform, sdk_variant))],
+    }))
+    framework_files = _unique(framework_files + _apple_run_prepackage_actions(ctx, attrs, framework_files, framework_path))
     resource_files = _apple_materialize_resources(
         ctx,
         resources,
@@ -3640,7 +3674,7 @@ def _apple_mixed_framework_impl(ctx):
     )
     framework_files.extend(resource_files)
 
-    asset_catalogs = [_package_relative(ctx, catalog) for catalog in (attrs.get("asset_catalogs") or [])]
+    asset_catalogs = [_apple_resource_path(ctx, catalog) for catalog in (attrs.get("asset_catalogs") or [])]
     if asset_catalogs:
         actool = _resolve_actool(xcode_developer_dir)
         asset_car = declare_output(framework_dir + "/Assets.car")
@@ -3674,23 +3708,9 @@ def _apple_mixed_framework_impl(ctx):
         copy_path(privacy_source, privacy_output, inputs = [privacy_source], identifier = "apple_framework_privacy_" + module_name)
         framework_files.append(privacy_output)
 
-    write_path(info_plist, _render_plist({
-        "CFBundleDevelopmentRegion": "en",
-        "CFBundleExecutable": product_name,
-        "CFBundleIdentifier": bundle_id,
-        "CFBundleInfoDictionaryVersion": "6.0",
-        "CFBundleName": product_name,
-        "CFBundlePackageType": "FMWK",
-        "CFBundleShortVersionString": "1.0",
-        "CFBundleVersion": "1",
-        "MinimumOSVersion": minimum_os,
-        "DTPlatformName": _apple_sdk_name(platform, sdk_variant),
-    }, {}, {
-        "CFBundleSupportedPlatforms": [_apple_supported_platform(_apple_sdk_name(platform, sdk_variant))],
-    }))
-
     codesign = _resolve_codesign(xcode_developer_dir)
     cs_stamp = declare_output(framework_dir + "/_CodeSignature/CodeResources")
+    framework_files = _unique(framework_files + _apple_run_postbuild_actions(ctx, attrs, framework_files, framework_path))
     run_action(
         argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", framework_path],
         inputs = framework_files,
@@ -3763,7 +3783,8 @@ def _apple_framework_impl(ctx):
             private_header_dirs.append(resolved_header_dir)
     private_header_files = _unique((ctx["attr"].get("private_headers") or []) + _apple_header_inputs(ctx, private_header_dirs))
 
-    all_srcs = glob(ctx["srcs"])
+    generated_srcs = _apple_run_prebuild_actions(ctx, attrs)
+    all_srcs = _unique(glob(ctx["srcs"]) + _apple_declared_source_paths(ctx) + generated_srcs)
     swift_srcs = _filter_swift_sources(all_srcs)
     if len(swift_srcs) == 0:
         fail("apple_framework " + ctx["label"]["id"] + " has no Swift sources (.swift)")
@@ -3886,7 +3907,7 @@ def _apple_framework_impl(ctx):
         if path not in swift_inputs:
             swift_inputs.append(path)
 
-    run_action(
+    _apple_swift_action(ctx, attrs, swiftc, ctx["deps"],
         argv = swift_argv,
         inputs = swift_inputs,
         outputs = [dylib, swiftmodule, swiftdoc] + swift_module_sidecars,
@@ -3918,9 +3939,11 @@ def _apple_framework_impl(ctx):
     # the embedding app loads it.
     codesign = _resolve_codesign(xcode_developer_dir)
     cs_stamp = declare_output(framework_dir + "/_CodeSignature/CodeResources")
+    prepackage_outputs = _apple_run_prepackage_actions(ctx, attrs, [dylib, info_plist, modulemap, swiftmodule, swiftdoc] + swift_module_sidecars, ctx["build_dir"] + "/" + framework_dir)
+    script_outputs = _unique(prepackage_outputs + _apple_run_postbuild_actions(ctx, attrs, [dylib, info_plist, modulemap, swiftmodule, swiftdoc] + swift_module_sidecars + prepackage_outputs, ctx["build_dir"] + "/" + framework_dir))
     run_action(
         argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", ctx["build_dir"] + "/" + framework_dir],
-        inputs = [dylib, info_plist, modulemap, swiftmodule] + swift_module_sidecars,
+        inputs = _unique([dylib, info_plist, modulemap, swiftmodule] + swift_module_sidecars + script_outputs),
         outputs = [dylib, cs_stamp],
         env = codesign["env"],
         toolchain_identity = codesign["identity"],
@@ -3936,7 +3959,7 @@ def _apple_framework_impl(ctx):
     transitive_plugin_dylibs = _collect_transitive(deps, "transitive_plugin_dylibs", plugin_dylibs)
     transitive_plugin_executables = _collect_transitive(deps, "transitive_plugin_executables", plugin_executables)
 
-    framework_files = [dylib, swiftmodule, swiftdoc] + swift_module_sidecars + [modulemap, info_plist, cs_stamp]
+    framework_files = _unique([dylib, swiftmodule, swiftdoc] + swift_module_sidecars + [modulemap, info_plist, cs_stamp] + script_outputs)
     own_framework_bundle = _apple_framework_bundle(
         ctx["build_dir"] + "/" + framework_dir,
         module_name,
@@ -4142,11 +4165,69 @@ def _apple_link_option_inputs(options):
     ])
 
 def _apple_run_prebuild_actions(ctx, attrs):
-    # Prebuild actions are intentionally generic records. They model source
-    # generation that must complete before the compiler expands its inputs.
+    if ctx.get("capability") == "run":
+        return []
+    if attrs.get("prebuild_actions") or attrs.get("prepackage_actions") or attrs.get("postbuild_actions"):
+        _apple_script_dependency_products(ctx)
+    outputs = _apple_run_build_actions(ctx, attrs.get("prebuild_actions") or [], "prebuild_action")
+    return _filter_swift_sources(outputs) + _filter_objc_sources(outputs) + _filter_c_sources(outputs) + _filter_cxx_sources(outputs) + _filter_assembly_sources(outputs)
+
+def _apple_run_postbuild_actions(ctx, attrs, product_inputs, product_root = ""):
+    return _apple_run_build_actions(ctx, attrs.get("postbuild_actions") or [], "postbuild_action", product_inputs, product_root)
+
+def _apple_run_prepackage_actions(ctx, attrs, product_inputs, product_root = ""):
+    return _apple_run_build_actions(ctx, attrs.get("prepackage_actions") or [], "prepackage_action", product_inputs, product_root)
+
+def _apple_script_dependency_products(ctx):
+    destinations = {}
+    for dep in ctx.get("deps") or []:
+        for key, files_key, tree in [("app_path", "app_files", True), ("framework_path", "framework_files", True), ("archive", "", False), ("executable_path", "executable_files", False)]:
+            source = dep.get(key)
+            if not source:
+                continue
+            destination = ctx["build_dir"] + "/" + _basename(source)
+            if destinations.get(destination) == source:
+                continue
+            if destination in destinations:
+                fail(ctx["label"]["id"] + ": script build-products collision at `" + destination + "`")
+            destinations[destination] = source
+            copy_path(source, destination, kind = "tree" if tree else "file", inputs = dep.get(files_key) or [source], identifier = "script_product:" + destination)
+
+def _apple_reconcile_build_action(ctx, action):
+    declared_dir = action.get("build_dir")
+    if not declared_dir or declared_dir == ctx["build_dir"]:
+        return action
+    mapped = dict(action)
+    for key in ["inputs", "outputs"]:
+        mapped[key] = [ctx["build_dir"] + path[len(declared_dir):] if path == declared_dir or path.startswith(declared_dir + "/") else path for path in action.get(key) or []]
+    old_root = workspace_root() + "/" + declared_dir
+    new_root = workspace_root() + "/" + ctx["build_dir"]
+    mapped["env"] = {key: _apple_rebase_build_value(value, old_root, new_root) for key, value in (action.get("env") or {}).items()}
+    return mapped
+
+def _apple_script_output_path(ctx, path):
+    attrs = ctx.get("attr") or {}
+    for key in ["prebuild_actions", "prepackage_actions", "postbuild_actions"]:
+        for encoded in attrs.get(key) or []:
+            old_root = json_decode(encoded).get("build_dir")
+            if old_root and (path == old_root or path.startswith(old_root + "/")):
+                return ctx["build_dir"] + path[len(old_root):]
+    return path
+
+def _apple_rebase_build_value(value, old_root, new_root):
+    parts = value.split(old_root)
+    result = parts[0]
+    for part in parts[1:]:
+        boundary = not part or part[0] in ["/", ":", " ", "\t", "\n", "\"", "'"]
+        result += (new_root if boundary else old_root) + part
+    return result
+
+def _apple_run_build_actions(ctx, actions, identifier_prefix, product_inputs = [], product_root = ""):
     generated_sources = []
-    for encoded in attrs.get("prebuild_actions") or []:
-        action = json_decode(encoded)
+    for encoded in actions:
+        action = _apple_reconcile_build_action(ctx, json_decode(encoded))
+        if action.get("unresolved_file_lists"):
+            fail(ctx["label"]["id"] + ": script file lists contain unresolved build settings: " + ", ".join(action["unresolved_file_lists"]) + ". Prepare the project's dependencies and build settings before building.")
         contents = action.get("contents")
         if contents != None:
             for output in action.get("outputs") or []:
@@ -4158,13 +4239,13 @@ def _apple_run_prebuild_actions(ctx, attrs):
         action_env = action.get("env") or {}
         identity = None
         if not argv and action.get("tool") == "momc":
-            momc = _resolve_momc(attrs.get("xcode_developer_dir") or "")
+            momc = _resolve_momc(ctx["attr"].get("xcode_developer_dir") or "")
             argv = [momc["path"]] + (action.get("args") or [])
             action_env = dict(momc["env"])
             action_env.update(action.get("env") or {})
             identity = momc["identity"]
         if not argv and action.get("tool") == "intentbuilderc":
-            intentbuilderc = _resolve_intentbuilderc(attrs.get("xcode_developer_dir") or "")
+            intentbuilderc = _resolve_intentbuilderc(ctx["attr"].get("xcode_developer_dir") or "")
             argv = [intentbuilderc["path"]] + (action.get("args") or [])
             action_env = dict(intentbuilderc["env"])
             action_env.update(action.get("env") or {})
@@ -4176,27 +4257,38 @@ def _apple_run_prebuild_actions(ctx, attrs):
             argv = [shell, "-c", action.get("script") or ""]
             identity = "once.apple.prebuild.shell.v1\0" + shell + "\0" + host_file_sha256(shell)
         cacheable = action.get("cacheable") == True
+        outputs = action.get("outputs") or []
+        inputs = _unique((action.get("inputs") or []) + product_inputs)
+        # Untracked scripts may edit a product in place. Publish its new bytes
+        # so signing and downstream targets cannot restore the pre-script copy.
+        if not cacheable:
+            outputs = _unique(outputs + product_inputs + ([product_root] if product_root else []))
+            if product_root:
+                outputs = [path for path in outputs if not path.startswith(product_root + "/")]
         output_dirs = _unique([
             _parent_dir(output)
-            for output in (action.get("outputs") or [])
+            for output in outputs
             if _parent_dir(output)
         ])
         run_action(
             argv = argv,
-            inputs = action.get("inputs") or [],
-            outputs = action.get("outputs") or [],
+            inputs = inputs,
+            outputs = outputs,
             cwd = action.get("cwd") or None,
             env = action_env,
             cacheable = cacheable,
             inherit_parent_env = not cacheable,
-            sandbox = "copied-inputs" if cacheable else "off",
-            create_dirs = output_dirs,
+            sandbox = "copied-inputs" if cacheable and action.get("script") == None else "off",
+            clean_paths = [product_root + "/_CodeSignature", product_root + "/Contents/_CodeSignature"] if product_root and not cacheable else [],
+            create_dirs = _unique(output_dirs + [ctx["build_dir"], ctx["build_dir"] + "/Intermediates"]),
             toolchain_identity = identity or "",
-            identifier = "prebuild_action:" + ctx["label"]["id"] + ":" + (action.get("name") or "script"),
+            identifier = identifier_prefix + ":" + ctx["label"]["id"] + ":" + (action.get("id") or action.get("name") or "script"),
         )
         for output in action.get("outputs") or []:
-            if _filter_swift_sources([output]) or _filter_objc_sources([output]) or _filter_c_sources([output]) or _filter_cxx_sources([output]) or _filter_assembly_sources([output]):
-                generated_sources.append(output)
+            generated_sources.append(output)
+        if product_root and not cacheable:
+            generated_sources.append(product_root)
+        product_inputs = _unique(product_inputs + outputs) if product_inputs else []
     return _unique(generated_sources)
 
 def _apple_declared_source_paths(ctx):
@@ -4207,7 +4299,7 @@ def _apple_declared_source_paths(ctx):
         if "*" in path or "?" in path or "[" in path:
             continue
         if _filter_swift_sources([path]) or _filter_objc_sources([path]) or _filter_c_sources([path]) or _filter_cxx_sources([path]) or _filter_assembly_sources([path]):
-            out.append(path)
+            out.append(_apple_script_output_path(ctx, path))
     return _unique(out)
 
 def _apple_swift_emits_single_object(flags):
@@ -4292,7 +4384,7 @@ def _apple_application_impl(ctx):
     # into the `Assets.car` the app loads at runtime. `actool` only emits the
     # Swift symbols when a compile pass runs, and only emits `Assets.car` when
     # the symbol pass is absent, so the two run as separate actions.
-    asset_catalogs = [_package_relative(ctx, catalog) for catalog in (attrs.get("asset_catalogs") or [])]
+    asset_catalogs = [_apple_resource_path(ctx, catalog) for catalog in (attrs.get("asset_catalogs") or [])]
     app_icon = attrs.get("app_icon") or ""
     asset_car = ""
     if asset_catalogs:
@@ -4656,7 +4748,7 @@ def _apple_application_impl(ctx):
         for plugin_input in _apple_swift_plugin_inputs(plugin_dylibs, plugin_executables):
             if plugin_input not in module_inputs:
                 module_inputs.append(plugin_input)
-        run_action(
+        _apple_swift_action(ctx, attrs, swiftc, ctx["deps"],
             argv = module_argv,
             inputs = module_inputs,
             outputs = [swiftmodule, swiftdoc] + swift_module_sidecars + ([swift_objc_header] if swift_objc_header else []),
@@ -4772,7 +4864,7 @@ def _apple_application_impl(ctx):
         if obj not in swift_inputs:
             swift_inputs.append(obj)
 
-    run_action(
+    _apple_swift_action(ctx, attrs, swiftc, ctx["deps"],
         argv = swift_argv,
         inputs = swift_inputs,
         outputs = [executable],
@@ -4814,6 +4906,7 @@ def _apple_application_impl(ctx):
         }
         write_path(info_plist, _render_plist(plist_entries, bool_entries, array_entries))
 
+    prepackage_outputs = _apple_run_prepackage_actions(ctx, attrs, [executable, info_plist], app_path)
     resource_files = _apple_materialize_resources(
         ctx,
         resources,
@@ -4825,6 +4918,7 @@ def _apple_application_impl(ctx):
         "apple_application_resource_" + module_name,
         structured_resources,
     )
+    resource_files = _unique(resource_files + prepackage_outputs)
 
     codesign = _resolve_codesign(xcode_developer_dir)
     embedded_frameworks = _apple_embed_framework_bundles(
@@ -4855,6 +4949,9 @@ def _apple_application_impl(ctx):
         cs_inputs.append(stamp)
     for stamp in embedded_resource_bundles["stamps"]:
         cs_inputs.append(stamp)
+    script_outputs = _apple_run_postbuild_actions(ctx, attrs, _unique(cs_inputs + embedded_frameworks["files"] + embedded_resource_bundles["files"]), app_path)
+    cs_inputs = _unique(cs_inputs + script_outputs)
+    resource_files = _unique(resource_files + script_outputs)
     codesign_argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none"]
     if processed_entitlements and not embeds_simulator_entitlements:
         codesign_argv.extend(["--entitlements", processed_entitlements])
@@ -4893,6 +4990,7 @@ def _apple_application_impl(ctx):
         "label_id": ctx["label"]["id"],
         "target_kind": "apple_application",
         "app_path": app_path,
+        "module_name": module_name,
         "app_executable": executable,
         "application_extension": application_extension,
         "host_link_archives": dep_archives,
@@ -5564,7 +5662,7 @@ def _apple_test_bundle_impl(ctx):
         if obj not in swift_inputs:
             swift_inputs.append(obj)
 
-    run_action(
+    _apple_swift_action(ctx, attrs, swiftc, ctx["deps"],
         argv = swift_argv,
         inputs = swift_inputs,
         outputs = [test_binary],
@@ -5595,6 +5693,7 @@ def _apple_test_bundle_impl(ctx):
         write_path(info_plist, _render_plist(plist_entries, {"XCTContainsUITests": True} if ui_testing else {}))
 
     resource_destination = bundle_dir + "/Contents/Resources" if platform == "macos" or platform == "macosx" else bundle_dir
+    prepackage_outputs = _apple_run_prepackage_actions(ctx, attrs, [test_binary, info_plist], test_bundle_path)
     resource_files = _apple_materialize_resources(
         ctx,
         resources,
@@ -5606,8 +5705,9 @@ def _apple_test_bundle_impl(ctx):
         "apple_test_bundle_resource_" + module_name,
         structured_resources,
     )
+    resource_files = _unique(resource_files + prepackage_outputs)
 
-    asset_catalogs = [_package_relative(ctx, catalog) for catalog in (attrs.get("asset_catalogs") or [])]
+    asset_catalogs = [_apple_resource_path(ctx, catalog) for catalog in (attrs.get("asset_catalogs") or [])]
     asset_files = []
     if asset_catalogs:
         actool = _resolve_actool(xcode_developer_dir)
@@ -5652,6 +5752,9 @@ def _apple_test_bundle_impl(ctx):
     test_codesign_inputs.extend(resource_files)
     test_codesign_inputs.extend(asset_files)
     test_codesign_inputs.extend(embedded_frameworks["stamps"])
+    script_outputs = _apple_run_postbuild_actions(ctx, attrs, _unique(test_codesign_inputs + embedded_frameworks["files"]), test_bundle_path)
+    test_codesign_inputs = _unique(test_codesign_inputs + script_outputs)
+    resource_files = _unique(resource_files + script_outputs)
     run_action(
         argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", test_bundle_path],
         inputs = test_codesign_inputs,
@@ -6379,6 +6482,9 @@ swift_macro = target_kind(
         attr("minimum_os", "string", docs = "Minimum macOS version for the host plugin"),
         attr("module_name", "string", docs = "Compiled module name. Defaults to the target name", configurable = False),
         attr("swift_flags", "list<string>", default = "[]", docs = "Extra Swift compiler flags"),
+        attr("explicit_modules", "bool", default = "false", docs = "Discover and cache compiler module dependencies as individual build actions."),
+        attr("dependency_check", "string", default = "off", docs = "Use error to reject undeclared imports during explicit module builds; off preserves native compatibility.", configurable = False, allowed_values = ["off", "error"]),
+        attr("_declared_deps", "list<string>", docs = "Resolver-owned dependency declarations before import inference.", configurable = False),
         attr("xcode_developer_dir", "string", docs = "Pin a specific Xcode by overriding `DEVELOPER_DIR`. Folded into the action cache key"),
     ],
     deps = [
@@ -6495,6 +6601,9 @@ apple_resource_bundle = target_kind(
     docs = "Processes files into a named Apple resource bundle and propagates that bundle to the top-level application.",
     impl = _apple_resource_bundle_target_impl,
     attrs = [
+        attr("prepackage_actions", "list<string>", default = "[]", docs = "Ordered serialized scripts run after linking and before resource packaging.", configurable = False),
+        attr("prebuild_actions", "list<string>", default = "[]", docs = "Ordered serialized build preparation actions that run before resource processing.", configurable = False),
+        attr("postbuild_actions", "list<string>", default = "[]", docs = "Ordered serialized scripts run after product assembly and before final signing. Undeclared side effects require cache bypass.", configurable = False),
         attr("platform", "string", required = True, docs = "Apple platform such as ios, macos, tvos, watchos, or visionos", configurable = False),
         attr("minimum_os", "string", docs = "Minimum supported operating system version"),
         attr("sdk_variant", "string", default = "\"simulator\"", docs = "`simulator` or `device` software development kit selection. Ignored on macOS", configurable = False),
@@ -6531,6 +6640,8 @@ apple_library = target_kind(
     docs = "Compiles Swift, Objective-C, C, and C++ sources into a linkable Apple module.",
     impl = _apple_library_impl,
     attrs = [
+        attr("prepackage_actions", "list<string>", default = "[]", docs = "Ordered serialized scripts run after linking and before resource packaging.", configurable = False),
+        attr("postbuild_actions", "list<string>", default = "[]", docs = "Ordered serialized scripts run after product assembly and before final signing. Undeclared side effects require cache bypass.", configurable = False),
         attr("platform", "string", required = True, docs = "Apple platform such as ios, macos, tvos, watchos, or visionos", configurable = False),
         attr("minimum_os", "string", docs = "Minimum supported OS version (deployment target)"),
         attr("target_sdk_version", "string", docs = "Build-time SDK version baked into the triple. Defaults to `minimum_os`"),
@@ -6549,6 +6660,9 @@ apple_library = target_kind(
         attr("sdk_dylibs", "list<string>", default = "[]", docs = "Apple SDK dynamic libraries linked by name"),
         attr("linkopts", "list<string>", default = "[]", docs = "Extra linker flags, propagated transitively to consumers"),
         attr("swift_flags", "list<string>", default = "[]", docs = "Extra Swift compiler flags"),
+        attr("explicit_modules", "bool", default = "false", docs = "Discover and cache compiler module dependencies as individual build actions."),
+        attr("dependency_check", "string", default = "off", docs = "Use error to reject undeclared imports during explicit module builds; off preserves native compatibility.", configurable = False, allowed_values = ["off", "error"]),
+        attr("_declared_deps", "list<string>", docs = "Resolver-owned dependency declarations before import inference.", configurable = False),
         attr("binary_swift_plugins", "list<string>", default = "[]", docs = "Prebuilt Swift macro executables in `<executable>#<module>` form", configurable = False),
         attr("clang_flags", "list<string>", default = "[]", docs = "Extra Clang compiler flags"),
         attr("per_source_clang_flags", "map<string,string>", default = "{}", docs = "[JavaScript Object Notation (JSON)](https://www.json.org/json-en.html)-encoded Clang flag lists keyed by source path", configurable = False),
@@ -6643,6 +6757,8 @@ apple_framework = target_kind(
     docs = "Builds a dynamic Apple framework bundle (`Foo.framework/Foo` dylib) with module metadata and resources.",
     impl = _apple_framework_impl,
     attrs = [
+        attr("prepackage_actions", "list<string>", default = "[]", docs = "Ordered serialized scripts run after linking and before resource packaging.", configurable = False),
+        attr("postbuild_actions", "list<string>", default = "[]", docs = "Ordered serialized scripts run after product assembly and before final signing. Undeclared side effects require cache bypass.", configurable = False),
         attr("platform", "string", required = True, docs = "Apple platform for the framework", configurable = False),
         attr("minimum_os", "string", docs = "Minimum supported OS version"),
         attr("target_sdk_version", "string", docs = "Build-time SDK version baked into the triple. Defaults to `minimum_os`"),
@@ -6665,6 +6781,9 @@ apple_framework = target_kind(
         attr("sdk_dylibs", "list<string>", default = "[]", docs = "Apple SDK dynamic libraries linked by name"),
         attr("linkopts", "list<string>", default = "[]", docs = "Extra linker flags"),
         attr("swift_flags", "list<string>", default = "[]", docs = "Extra Swift compiler flags"),
+        attr("explicit_modules", "bool", default = "false", docs = "Discover and cache compiler module dependencies as individual build actions."),
+        attr("dependency_check", "string", default = "off", docs = "Use error to reject undeclared imports during explicit module builds; off preserves native compatibility.", configurable = False, allowed_values = ["off", "error"]),
+        attr("_declared_deps", "list<string>", docs = "Resolver-owned dependency declarations before import inference.", configurable = False),
         attr("binary_swift_plugins", "list<string>", default = "[]", docs = "Prebuilt Swift macro executables in `<executable>#<module>` form", configurable = False),
         attr("clang_flags", "list<string>", default = "[]", docs = "Extra Clang compiler flags"),
         attr("per_source_clang_flags", "map<string,string>", default = "{}", docs = "[JavaScript Object Notation (JSON)](https://www.json.org/json-en.html)-encoded Clang flag lists keyed by source path", configurable = False),
@@ -6924,7 +7043,7 @@ def _apple_executable_impl(ctx):
         if path not in swift_inputs:
             swift_inputs.append(path)
 
-    run_action(
+    _apple_swift_action(ctx, attrs, swiftc, ctx["deps"],
         argv = swift_argv,
         inputs = swift_inputs,
         outputs = [executable],
@@ -6933,16 +7052,10 @@ def _apple_executable_impl(ctx):
         identifier = "apple_executable_compile_" + product_name,
     )
 
+    prepackage_outputs = _apple_run_prepackage_actions(ctx, attrs, [executable])
+
     codesign = _resolve_codesign(xcode_developer_dir)
-    codesign_argv = [codesign["path"], "--force", "--sign", "-", "--timestamp=none", executable]
-    run_action(
-        argv = codesign_argv,
-        inputs = [executable],
-        outputs = [executable],
-        env = codesign["env"],
-        toolchain_identity = codesign["identity"],
-        identifier = "apple_executable_codesign_" + product_name,
-    )
+    codesign_argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", executable]
 
     # Deploy dependency frameworks and resource bundles into the same
     # directory as the executable. Framework install names use
@@ -6968,11 +7081,22 @@ def _apple_executable_impl(ctx):
         "apple_executable_embed_resource",
     )
 
+    script_outputs = _unique(prepackage_outputs + _apple_run_postbuild_actions(ctx, attrs, _unique([executable] + embedded_frameworks["files"] + embedded_resource_bundles["files"] + prepackage_outputs)))
+    run_action(
+        argv = codesign_argv,
+        inputs = _unique([executable] + script_outputs),
+        outputs = [executable],
+        env = codesign["env"],
+        toolchain_identity = codesign["identity"],
+        identifier = "apple_executable_codesign_" + product_name,
+    )
+
     return {
         "label_id": ctx["label"]["id"],
         "target_kind": "apple_executable",
         "executable_path": executable,
-        "executable_files": [executable] + embedded_frameworks["files"] + embedded_resource_bundles["files"],
+        "module_name": module_name,
+        "executable_files": _unique([executable] + embedded_frameworks["files"] + embedded_resource_bundles["files"] + script_outputs),
         "host_link_archives": dep_archives,
         "platform": platform,
         "sdk_variant": sdk_variant,
@@ -6993,6 +7117,8 @@ apple_executable = target_kind(
     docs = "Builds an Apple command-line tool: a single Mach-O executable with no `.app` bundle wrapping, ad-hoc codesigned in place. Lowered from `com.apple.product-type.tool` targets in an Xcode project. Framework dependencies are copied into a `Frameworks/` directory next to the executable and reached at runtime through an `@executable_path/Frameworks` rpath; dependency resource bundles are staged next to the binary so `Bundle.module` in a linked library resolves at launch. Mixed-language tool targets (Objective-C, C, or C++ sources on the tool itself) are declined at resolution today; move that code into an `apple_library` dependency, or file a follow-up.",
     impl = _apple_executable_impl,
     attrs = [
+        attr("prepackage_actions", "list<string>", default = "[]", docs = "Ordered serialized scripts run after linking and before resource packaging.", configurable = False),
+        attr("postbuild_actions", "list<string>", default = "[]", docs = "Ordered serialized scripts run after product assembly and before final signing. Undeclared side effects require cache bypass.", configurable = False),
         attr("platform", "string", required = True, docs = "Apple platform for the executable", configurable = False),
         attr("minimum_os", "string", docs = "Minimum supported OS version"),
         attr("target_sdk_version", "string", docs = "Build-time SDK version baked into the triple. Defaults to `minimum_os`"),
@@ -7005,6 +7131,9 @@ apple_executable = target_kind(
         attr("sdk_dylibs", "list<string>", default = "[]", docs = "Apple SDK dynamic libraries linked by name"),
         attr("linkopts", "list<string>", default = "[]", docs = "Extra linker flags"),
         attr("swift_flags", "list<string>", default = "[]", docs = "Extra Swift compiler flags"),
+        attr("explicit_modules", "bool", default = "false", docs = "Discover and cache compiler module dependencies as individual build actions."),
+        attr("dependency_check", "string", default = "off", docs = "Use error to reject undeclared imports during explicit module builds; off preserves native compatibility.", configurable = False, allowed_values = ["off", "error"]),
+        attr("_declared_deps", "list<string>", docs = "Resolver-owned dependency declarations before import inference.", configurable = False),
         attr("binary_swift_plugins", "list<string>", default = "[]", docs = "Prebuilt Swift macro executables in `<executable>#<module>` form", configurable = False),
         attr("clang_flags", "list<string>", default = "[]", docs = "Extra Clang compiler flags (ignored today; kept for schema parity with apple_application)"),
         attr("per_source_clang_flags", "map<string,string>", default = "{}", docs = "JSON-encoded Clang compiler flag lists keyed by source path (unused in the Swift-only draft)"),
@@ -7040,6 +7169,8 @@ apple_application = target_kind(
     docs = "Builds an Apple application bundle (`Foo.app`) with the Mach-O executable, embedded frameworks, Info.plist, and ad-hoc codesign.",
     impl = _apple_application_impl,
     attrs = [
+        attr("prepackage_actions", "list<string>", default = "[]", docs = "Ordered serialized scripts run after linking and before resource packaging.", configurable = False),
+        attr("postbuild_actions", "list<string>", default = "[]", docs = "Ordered serialized scripts run after product assembly and before final signing. Undeclared side effects require cache bypass.", configurable = False),
         attr("platform", "string", required = True, docs = "Apple platform for the application", configurable = False),
         attr("bundle_id", "string", required = True, docs = "Application bundle identifier"),
         attr("minimum_os", "string", docs = "Minimum supported OS version"),
@@ -7064,6 +7195,9 @@ apple_application = target_kind(
         attr("sdk_dylibs", "list<string>", default = "[]", docs = "Apple SDK dynamic libraries linked by name"),
         attr("linkopts", "list<string>", default = "[]", docs = "Extra linker flags"),
         attr("swift_flags", "list<string>", default = "[]", docs = "Extra Swift compiler flags"),
+        attr("explicit_modules", "bool", default = "false", docs = "Discover and cache compiler module dependencies as individual build actions."),
+        attr("dependency_check", "string", default = "off", docs = "Use error to reject undeclared imports during explicit module builds; off preserves native compatibility.", configurable = False, allowed_values = ["off", "error"]),
+        attr("_declared_deps", "list<string>", docs = "Resolver-owned dependency declarations before import inference.", configurable = False),
         attr("binary_swift_plugins", "list<string>", default = "[]", docs = "Prebuilt Swift macro executables in `<executable>#<module>` form", configurable = False),
         attr("clang_flags", "list<string>", default = "[]", docs = "Extra Clang compiler flags applied to C, C++, Objective-C, and Objective-C++ sources"),
         attr("per_source_clang_flags", "map<string,string>", default = "{}", docs = "JSON-encoded Clang compiler flag lists keyed by source path"),
@@ -7157,6 +7291,8 @@ apple_test_bundle = target_kind(
     docs = "Builds Apple test targets and can run Swift Testing tests through the generic Once test capability.",
     impl = _apple_test_bundle_impl,
     attrs = [
+        attr("prepackage_actions", "list<string>", default = "[]", docs = "Ordered serialized scripts run after linking and before resource packaging.", configurable = False),
+        attr("postbuild_actions", "list<string>", default = "[]", docs = "Ordered serialized scripts run after product assembly and before final signing. Undeclared side effects require cache bypass.", configurable = False),
         attr("platform", "string", required = True, docs = "Apple platform for the tests", configurable = False),
         attr("minimum_os", "string", docs = "Minimum supported OS version"),
         attr("target_sdk_version", "string", docs = "Build-time SDK version baked into the triple. Defaults to `minimum_os`"),
@@ -7181,6 +7317,9 @@ apple_test_bundle = target_kind(
         attr("sdk_dylibs", "list<string>", default = "[]", docs = "Apple software development kit dynamic libraries linked by name"),
         attr("linkopts", "list<string>", default = "[]", docs = "Extra linker flags"),
         attr("swift_flags", "list<string>", default = "[]", docs = "Extra Swift compiler flags"),
+        attr("explicit_modules", "bool", default = "false", docs = "Discover and cache compiler module dependencies as individual build actions."),
+        attr("dependency_check", "string", default = "off", docs = "Use error to reject undeclared imports during explicit module builds; off preserves native compatibility.", configurable = False, allowed_values = ["off", "error"]),
+        attr("_declared_deps", "list<string>", docs = "Resolver-owned dependency declarations before import inference.", configurable = False),
         attr("binary_swift_plugins", "list<string>", default = "[]", docs = "Prebuilt Swift macro executables in `<executable>#<module>` form", configurable = False),
         attr("clang_flags", "list<string>", default = "[]", docs = "Extra Clang compiler flags applied to C, C++, Objective-C, and Objective-C++ test sources"),
         attr("per_source_clang_flags", "map<string,string>", default = "{}", docs = "JSON-encoded Clang compiler flag lists keyed by test source path"),

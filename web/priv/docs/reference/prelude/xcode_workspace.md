@@ -30,6 +30,11 @@ matching pinned revisions while lowering remote Swift packages. Checksum-pinned
 binary package archives download as normal cacheable dependencies instead of
 being fetched while the graph loads.
 
+Projects with multiple destination platforms receive separate package and
+binary-framework targets per platform. Generated target names include the
+platform when the workspace has more than one destination. Native consumers
+depend on the matching variant, while package manifest parsing is shared.
+
 Swift package traits requested by dependencies are combined across the package
 graph and applied to compilation, compiler settings, and optional target
 dependencies. Packages referenced directly by the Xcode project enable their
@@ -39,6 +44,12 @@ them so conformances declared in an extension survive.
 See [Xcode Projects](/guide/graph/apple/xcode) for a walkthrough.
 
 ## Attributes
+
+`explicit_modules` is a boolean, defaulting to `false`, that enables
+compiler-scanned, cacheable Swift and Clang module actions.
+`dependency_check` accepts `"off"` (the default) or `"error"`; checking
+requires explicit modules. See [explicit modules](/guide/graph/apple#explicit-modules-and-dependency-checks)
+for native propagation, dependency errors, and current limitations.
 
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |

@@ -1,0 +1,2 @@
+#include "Common.xcconfig"
+OTHER_SWIFT_FLAGS = $(inherited) -D GRAPH_RELEASE

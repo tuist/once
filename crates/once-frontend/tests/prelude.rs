@@ -29,6 +29,18 @@ mod swift_testing_library;
 #[path = "prelude/swift_testing_results.rs"]
 mod swift_testing_results;
 
+#[path = "prelude/apple_modules.rs"]
+mod apple_modules;
+
+#[path = "prelude/native_graphs.rs"]
+mod native_graphs;
+
+#[path = "prelude/xcode_scripts.rs"]
+mod xcode_scripts;
+
+#[path = "prelude/xcode_script_order.rs"]
+mod xcode_script_order;
+
 fn store_for(workspace: &Path, package: &str) -> AnalysisStore {
     AnalysisStore::new(
         workspace.to_path_buf(),
@@ -103,8 +115,9 @@ fn fake_android_ndk_for_mobile_test(workspace: &Path) -> std::path::PathBuf {
 
 fn apple_prelude_source() -> String {
     format!(
-        "{}\n{}",
+        "{}\n{}\n{}",
         include_str!("../prelude/common.star"),
+        include_str!("../prelude/apple_modules.star"),
         include_str!("../prelude/apple.star")
     )
 }
@@ -144,8 +157,9 @@ fn go_prelude_source() -> String {
 
 fn xcode_prelude_source() -> String {
     format!(
-        "{}\n{}\n{}",
+        "{}\n{}\n{}\n{}",
         include_str!("../prelude/common.star"),
+        include_str!("../prelude/apple_modules.star"),
         include_str!("../prelude/apple.star"),
         include_str!("../prelude/xcode.star")
     )
@@ -212,6 +226,7 @@ fn all_prelude_source() -> String {
     [
         include_str!("../prelude/common.star"),
         include_str!("../prelude/lint.star"),
+        include_str!("../prelude/apple_modules.star"),
         include_str!("../prelude/apple.star"),
         include_str!("../prelude/android.star"),
         include_str!("../prelude/go.star"),
@@ -14241,7 +14256,10 @@ result = repr(True)
     assert_eq!(generator.argv[0], "/bin/sh");
     assert_eq!(generator.argv[1], "-c");
     assert_eq!(generator.outputs, [".once/out/App/App/Generated.swift"]);
-    assert_eq!(generator.create_dirs, [".once/out/App/App"]);
+    assert_eq!(
+        generator.create_dirs,
+        [".once/out/App/App", ".once/out/App/App/Intermediates"]
+    );
     assert!(generator.cacheable);
     assert!(!generator.inherit_parent_env);
     assert!(generator
@@ -14482,12 +14500,12 @@ phase = _xcode_shell_script_phases(
     "",
     "AppTests",
 )
-result = repr([phase["actions"], phase["resource_inputs"], phase["structured_resource_inputs"]])
+result = repr([len(phase["actions"]), phase["resource_inputs"], phase["structured_resource_inputs"]])
 "#
     );
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
-        r#"[[], ["Tests/Fixtures"], ["Tests/Fixtures"]]"#
+        r#"[1, ["Tests/Fixtures"], ["Tests/Fixtures"]]"#
     );
 }
 
@@ -14648,7 +14666,7 @@ result = repr(_xcode_test_plan_settings(ctx))
 }
 
 #[test]
-fn prelude_xcode_shell_phase_ignores_non_source_outputs() {
+fn prelude_xcode_shell_phase_preserves_non_source_outputs() {
     let prelude = xcode_prelude_source();
     let objects = serde_json::json!({
         "PHASE": {
@@ -14675,10 +14693,13 @@ phase = _xcode_shell_script_phases(
     "App",
     "App",
 )
-result = repr([phase["sources"], phase["actions"]])
+result = repr([phase["sources"], json_decode(phase["actions"][0])["outputs"]])
 "#
     );
-    assert_eq!(eval_prelude_source_to_repr(source).unwrap(), r"[[], []]");
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[[], [".once/out/App/App/Frameworks/Example.framework"]]"#
+    );
 }
 
 #[test]
@@ -17547,9 +17568,17 @@ result = repr([
 "#
     );
 
-    let out = eval_prelude_source_to_repr(source).unwrap();
+    let out = eval_prelude_source_to_repr(source.clone()).unwrap();
     assert_eq!(
         out,
         r#"[["App"], ["AppTests"], ["apple_framework", "apple_application", "apple_test_bundle"], ["./Feature"], ["./App"], ["Source/Core/Feature.swift"], {"Source/Core/Feature.swift": "[\"-DNDEBUG\",\"-fno-objc-arc\"]"}, ["App.swift"], "dev.once.App", "CustomAppModule", "TEAM123", ["iphone", "ipad"], "16.0", True]"#
+    );
+    let explicit = source.replace(
+        "\"attr\": {\"project\": \"App.xcodeproj\"}",
+        "\"attr\": {\"project\": \"App.xcodeproj\", \"explicit_modules\": True, \"dependency_check\": \"error\"}",
+    ) + "\nresult = repr([all([spec[\"attrs\"].get(\"explicit_modules\") and spec[\"attrs\"].get(\"dependency_check\") == \"error\" for spec in graph[\"targets\"]]), specs[\"App\"][\"attrs\"][\"_declared_deps\"]])\n";
+    assert_eq!(
+        eval_prelude_source_to_repr(explicit).unwrap(),
+        r#"[True, ["./Feature"]]"#
     );
 }

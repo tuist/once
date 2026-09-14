@@ -40,6 +40,18 @@ defmodule OnceSiteWeb.DocsLiveTest do
     assert html =~ "apple_library"
   end
 
+  test "documents explicit modules, dependency checks, and deferred planning", %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/docs/guide/graph/apple")
+    assert html =~ "Explicit Modules and Dependency Checks"
+    assert html =~ "dependency_check"
+    assert html =~ "not a downloadable hermetic Apple toolchain"
+
+    {:ok, _view, html} = live(conn, ~p"/docs/reference/modules")
+    assert html =~ "Deferred Action Planning"
+    assert html =~ "expand_actions"
+    assert html =~ "host_tree_sha256"
+  end
+
   test "renders a not-found message for unknown pages", %{conn: conn} do
     {:ok, _view, html} = live(conn, ~p"/docs/nope/missing")
 
