@@ -935,7 +935,6 @@ def _xcode_xcproj_to_pbxproj(project, project_dir = ""):
 
     return {"objects": objects, "rootObject": root_id, "archiveVersion": "1"}
 
-
 # ---------------------------------------------------------------------------
 # Build settings: layering, .xcconfig flattening, and variable expansion
 # ---------------------------------------------------------------------------
@@ -1259,10 +1258,32 @@ def _xcode_expand_once(text, subs, depth, opening, closing):
     start = text.find(opening)
     if start < 0:
         return text
-    end = text.find(closing, start + len(opening))
+    # Find the matching `closing` while accounting for nested `opening`
+    # tokens so `$(A_$(B))` resolves the outer name to `A_<value of B>`.
+    scan = start + len(opening)
+    nesting = 1
+    end = -1
+    for _ in range(len(text) - scan + 1):
+        if scan >= len(text):
+            break
+        if text[scan:scan + len(opening)] == opening:
+            nesting += 1
+            scan += len(opening)
+            continue
+        if text[scan:scan + len(closing)] == closing:
+            nesting -= 1
+            if nesting == 0:
+                end = scan
+                break
+            scan += len(closing)
+            continue
+        scan += 1
     if end < 0:
         return text
     expression = text[start + len(opening):end]
+    # Recursively expand any inner `$(...)` or `${...}` inside the
+    # captured expression before looking up the resulting name.
+    expression = _xcode_expand_once(expression, subs, depth + 1, opening, closing)
     parts = expression.split(":")
     name = parts[0]
     head = text[:start]
@@ -1275,6 +1296,61 @@ def _xcode_expand_once(text, subs, depth, opening, closing):
     else:
         replacement = opening + expression + closing
     return _xcode_expand_once(head + replacement + tail, subs, depth + 1, opening, closing)
+
+_XCODE_TOOLCHAIN_VERSION_STATE = {"parsed": None}
+
+def _xcode_zero_pad(value, width):
+    text = str(value)
+    if len(text) >= width:
+        return text
+    return ("0" * (width - len(text))) + text
+
+def _xcode_parse_int_or_zero(text):
+    if not text:
+        return 0
+    for i in range(len(text)):
+        ch = text[i]
+        if ch < "0" or ch > "9":
+            return 0
+    return int(text)
+
+def _xcode_toolchain_version(ctx):
+    if _XCODE_TOOLCHAIN_VERSION_STATE["parsed"] != None:
+        return _XCODE_TOOLCHAIN_VERSION_STATE["parsed"]
+    raw = host_command(["xcrun", "xcodebuild", "-version"])
+    if not raw:
+        _XCODE_TOOLCHAIN_VERSION_STATE["parsed"] = {}
+        return {}
+    lines = raw.split("\n")
+    actual = ""
+    build = ""
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("Xcode "):
+            actual = stripped[len("Xcode "):].strip()
+        elif stripped.startswith("Build version "):
+            build = stripped[len("Build version "):].strip()
+    if not actual:
+        _XCODE_TOOLCHAIN_VERSION_STATE["parsed"] = {}
+        return {}
+    parts = actual.split(".")
+    major_num = _xcode_parse_int_or_zero(parts[0] if len(parts) >= 1 else "")
+    minor_num = _xcode_parse_int_or_zero(parts[1] if len(parts) >= 2 else "")
+    # Xcode reports XCODE_VERSION_MAJOR as a four-digit zero-padded major
+    # (Xcode 15.x -> 1500) and XCODE_VERSION_MINOR as the combined major.minor
+    # in six digits (15.4 -> 1540). Match that so
+    # `MACOSX_DEPLOYMENT_TARGET_XCODE_$(XCODE_VERSION_MAJOR)` picks the right
+    # override key.
+    major_padded = _xcode_zero_pad(major_num * 100, 4)
+    minor_padded = _xcode_zero_pad(major_num * 100 + minor_num * 10, 4)
+    parsed = {
+        "actual": actual,
+        "major": major_padded,
+        "minor": minor_padded,
+        "build": build,
+    }
+    _XCODE_TOOLCHAIN_VERSION_STATE["parsed"] = parsed
+    return parsed
 
 def _xcode_setting_subs(ctx, target_name, product_name, sdkroot, settings = None, project_dir = "", configuration = ""):
     package = (ctx.get("label") or {}).get("package") or ""
@@ -1299,6 +1375,15 @@ def _xcode_setting_subs(ctx, target_name, product_name, sdkroot, settings = None
         subs[key] = target_build_dir
     for key in ["TEMP_DIR", "OBJROOT"]:
         subs[key] = target_build_dir + "/Intermediates"
+    # Xcode-owned version variables. Some projects (Alamofire) drive
+    # deployment targets through `$(MACOSX_DEPLOYMENT_TARGET_XCODE_$(XCODE_VERSION_MAJOR))`,
+    # which cannot resolve without a concrete value for the current Xcode.
+    xcode_version = _xcode_toolchain_version(ctx)
+    if xcode_version:
+        subs["XCODE_VERSION_ACTUAL"] = xcode_version["actual"]
+        subs["XCODE_VERSION_MAJOR"] = xcode_version["major"]
+        subs["XCODE_VERSION_MINOR"] = xcode_version["minor"]
+        subs["XCODE_PRODUCT_BUILD_VERSION"] = xcode_version["build"]
     # A target configuration can introduce arbitrary build-setting names. Make
     # those values available to subsequent expansions, while retaining the
     # adapter-owned values above for paths and target identity.
@@ -4087,7 +4172,7 @@ def _xcode_common_attrs(ctx, target, settings, subs, platform, files):
         attrs["dependency_check"] = ctx["attr"]["dependency_check"]
     minimum_os = _xcode_minimum_os(settings, platform)
     if minimum_os:
-        attrs["minimum_os"] = minimum_os
+        attrs["minimum_os"] = _xcode_resolve_vars(minimum_os, subs)
     sdk_variant = ctx["attr"].get("sdk_variant") or "simulator"
     if platform != "macos":
         attrs["sdk_variant"] = sdk_variant
@@ -4174,9 +4259,35 @@ def _xcode_library_attrs(ctx, target, settings, subs, platform, files):
     if product_name and product_name != _xcode_sanitized_target_name(target["name"]):
         attrs["module_name"] = product_name
     attrs["emit_dsym"] = True
-    if _xcode_scalar(settings.get("ENABLE_TESTABILITY")).upper() == "YES":
+    if _xcode_scalar(settings.get("ENABLE_TESTABILITY")).upper() == "YES" or _xcode_scalar(settings.get("SWIFT_ENABLE_TESTABILITY")).upper() == "YES":
         attrs["enable_testing"] = True
+    xctest_flavor = _xcode_detect_xctest_usage(files["sources"])
+    if xctest_flavor.get("xctest"):
+        attrs["xctest_support"] = True
+    if xctest_flavor.get("swift_testing"):
+        attrs["swift_testing"] = True
     return attrs, product_name
+
+def _xcode_detect_xctest_usage(sources):
+    # A framework or library that itself imports XCTest (RxTest, quick, nimble
+    # style) needs the platform's Developer/Library/Frameworks and the XCTest
+    # dylibs on the search path. Xcode always exposes those directories to
+    # every target; Once gates them behind an explicit attr so it can trim the
+    # unused paths from other frameworks. Look at each Swift source to decide.
+    found = {"xctest": False, "swift_testing": False}
+    for src in sources:
+        if not src.endswith(".swift"):
+            continue
+        text = host_file_read(_xcode_abs(src))
+        if not text:
+            continue
+        if "import XCTest" in text:
+            found["xctest"] = True
+        if "import Testing" in text:
+            found["swift_testing"] = True
+        if found["xctest"] and found["swift_testing"]:
+            break
+    return found
 
 def _xcode_app_icon_exists(catalogs, name):
     # An app icon set lives in an asset catalog as `<name>.appiconset` (or a
@@ -4250,7 +4361,7 @@ def _xcode_application_attrs(ctx, target, settings, subs, platform, files):
     families = _xcode_families(settings)
     if families:
         attrs["families"] = families
-    if _xcode_scalar(settings.get("ENABLE_TESTABILITY")).upper() == "YES":
+    if _xcode_scalar(settings.get("ENABLE_TESTABILITY")).upper() == "YES" or _xcode_scalar(settings.get("SWIFT_ENABLE_TESTABILITY")).upper() == "YES":
         attrs["enable_testing"] = True
     entitlements = _xcode_resolve_vars(_xcode_scalar(settings.get("CODE_SIGN_ENTITLEMENTS")), subs)
     if entitlements and not entitlements.startswith("$("):
@@ -4292,7 +4403,7 @@ def _xcode_executable_attrs(ctx, target, settings, subs, platform, files):
     module_name = _xcode_resolve_vars(_xcode_scalar(settings.get("PRODUCT_MODULE_NAME")), subs)
     if module_name and not module_name.startswith("$(") and not module_name.startswith("${"):
         attrs["module_name"] = module_name
-    if _xcode_scalar(settings.get("ENABLE_TESTABILITY")).upper() == "YES":
+    if _xcode_scalar(settings.get("ENABLE_TESTABILITY")).upper() == "YES" or _xcode_scalar(settings.get("SWIFT_ENABLE_TESTABILITY")).upper() == "YES":
         attrs["enable_testing"] = True
     return attrs, product_name
 
