@@ -42,14 +42,21 @@ def _xcode_project_path(ctx):
     package = ctx["label"]["package"]
     prefix = package + "/" if package else ""
     candidates = []
-    for path in glob(["*.xcodeproj/project.pbxproj"]):
-        if not _ends_with(path, "/project.pbxproj") or not path.startswith(prefix):
+    seen = {}
+    for path in glob(["*.xcodeproj/project.pbxproj", "*.xcodeproj/project.xcproj"]):
+        if not (_ends_with(path, "/project.pbxproj") or _ends_with(path, "/project.xcproj")):
+            continue
+        if not path.startswith(prefix):
             continue
         relative = path[len(prefix):]
         if len(relative.split("/")) == 2:
+            bundle = _parent_dir(path)
+            if bundle in seen:
+                continue
+            seen[bundle] = True
             candidates.append(path)
     if len(candidates) == 0:
-        fail(ctx["label"]["id"] + ": no `project` attribute was set and no `*.xcodeproj/project.pbxproj` was found in the package")
+        fail(ctx["label"]["id"] + ": no `project` attribute was set and no `*.xcodeproj/project.pbxproj` or `*.xcodeproj/project.xcproj` was found in the package")
     if len(candidates) > 1:
         fail(ctx["label"]["id"] + ": multiple Xcode projects found; set the `project` attribute to one of: " + ", ".join(candidates))
     # `glob` always returns workspace-relative paths, including when the
@@ -140,19 +147,794 @@ def _xcode_project_dir(project_path):
     # bundle, relative to the package. `project_path` is either the bundle path
     # (`App.xcodeproj`) or the manifest path (`App.xcodeproj/project.pbxproj`);
     # normalize both to the bundle's parent directory.
-    if _ends_with(project_path, "/project.pbxproj"):
+    if _ends_with(project_path, "/project.pbxproj") or _ends_with(project_path, "/project.xcproj"):
         return _parent_dir(_parent_dir(project_path))
     return _parent_dir(project_path)
 
 def _xcode_pbxproj_path(project_path):
-    # `project_path` is either the `.xcodeproj` bundle or its `project.pbxproj`.
-    if _ends_with(project_path, "/project.pbxproj"):
+    # `project_path` is either the `.xcodeproj` bundle or its `project.pbxproj`
+    # or `project.xcproj`. Returns whichever manifest exists so an existence
+    # check on the return value tells the caller the project is present.
+    if _ends_with(project_path, "/project.pbxproj") or _ends_with(project_path, "/project.xcproj"):
         return project_path
+    xcproj_path = project_path + "/project.xcproj"
+    if host_file_exists(_xcode_abs(xcproj_path)):
+        return xcproj_path
     return project_path + "/project.pbxproj"
 
 def _xcode_read_pbxproj(ctx, project_path):
-    raw = host_command(["plutil", "-convert", "json", "-o", "-", _xcode_abs(_xcode_pbxproj_path(project_path))])
+    bundle = project_path
+    if _ends_with(bundle, "/project.pbxproj") or _ends_with(bundle, "/project.xcproj"):
+        bundle = _parent_dir(bundle)
+    xcproj_path = bundle + "/project.xcproj"
+    if host_file_exists(_xcode_abs(xcproj_path)):
+        return _xcode_read_xcproj(ctx, xcproj_path)
+    raw = host_command(["plutil", "-convert", "json", "-o", "-", _xcode_abs(bundle + "/project.pbxproj")])
     return json_decode(raw)
+
+# ---------------------------------------------------------------------------
+# New Xcode 27.2 `project.xcproj` (JSON) reader
+# ---------------------------------------------------------------------------
+#
+# Xcode 27.2 introduced a JSON-based project format. `project.xcodeproj`
+# holds a `project.xcproj` (or classic `project.pbxproj`, or both during a
+# migration). The JSON shape is intentionally flatter than the OpenStep
+# pbxproj: files reference their target and build phase by name, per-target
+# build settings live in a single dict with `KEY[config=Debug]` suffixes,
+# and target dependencies use bare target names instead of UUIDs.
+#
+# The rest of this file already knows how to walk a classic UUID-keyed
+# object graph, so the reader normalizes the new format into the same
+# `{"objects": {...}, "rootObject": "..."}` shape rather than teaching every
+# downstream consumer a second schema.
+
+def _xcode_read_xcproj(ctx, xcproj_path):
+    raw = host_file_read(_xcode_abs(xcproj_path))
+    text = _xcode_strip_trailing_commas(raw)
+    doc = json_decode(text)
+    return _xcode_xcproj_to_pbxproj(doc, _xcode_project_dir(xcproj_path))
+
+def _xcode_strip_trailing_commas(text):
+    # `project.xcproj` uses relaxed JSON that permits a trailing comma before
+    # `}` or `]`. Starlark's `json_decode` is strict, so scrub those out first.
+    # Skips commas that occur inside string literals so a legitimate `, "..."`
+    # is left untouched.
+    out = []
+    i = 0
+    n = len(text)
+    for _ in range(n + 1):
+        if i >= n:
+            break
+        ch = text[i]
+        if ch == "\"":
+            # Copy the whole string literal without inspecting its contents.
+            out.append(ch)
+            i += 1
+            for _2 in range(n - i + 1):
+                if i >= n:
+                    break
+                c = text[i]
+                out.append(c)
+                i += 1
+                if c == "\\" and i < n:
+                    out.append(text[i])
+                    i += 1
+                elif c == "\"":
+                    break
+        elif ch == ",":
+            # Peek past whitespace for a closing bracket. If present, drop
+            # this comma; otherwise keep it.
+            j = i + 1
+            for _3 in range(n - j + 1):
+                if j >= n:
+                    break
+                pc = text[j]
+                if pc == " " or pc == "\t" or pc == "\n" or pc == "\r":
+                    j += 1
+                    continue
+                break
+            if j < n and (text[j] == "}" or text[j] == "]"):
+                i += 1
+            else:
+                out.append(ch)
+                i += 1
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+_XCODE_XCPROJ_PRODUCT_TYPE_MAP = {
+    "application": "com.apple.product-type.application",
+    "application.messages": "com.apple.product-type.application.messages",
+    "application.on-demand-install-capable": "com.apple.product-type.application.on-demand-install-capable",
+    "application.watchapp": "com.apple.product-type.application.watchapp",
+    "application.watchapp2": "com.apple.product-type.application.watchapp2",
+    "application.watchapp2-container": "com.apple.product-type.application.watchapp2-container",
+    "app-extension": "com.apple.product-type.app-extension",
+    "app-extension.intents-service": "com.apple.product-type.app-extension.intents-service",
+    "app-extension.messages": "com.apple.product-type.app-extension.messages",
+    "app-extension.messages-sticker-pack": "com.apple.product-type.app-extension.messages-sticker-pack",
+    "bundle": "com.apple.product-type.bundle",
+    "bundle.ocunit-test": "com.apple.product-type.bundle.ocunit-test",
+    "bundle.ui-testing": "com.apple.product-type.bundle.ui-testing",
+    "bundle.unit-test": "com.apple.product-type.bundle.unit-test",
+    "driver-extension": "com.apple.product-type.driver-extension",
+    "extensionkit-extension": "com.apple.product-type.extensionkit-extension",
+    "framework": "com.apple.product-type.framework",
+    "framework.static": "com.apple.product-type.framework.static",
+    "instruments-package": "com.apple.product-type.instruments-package",
+    "library.dynamic": "com.apple.product-type.library.dynamic",
+    "library.static": "com.apple.product-type.library.static",
+    "metal-library": "com.apple.product-type.metal-library",
+    "system-extension": "com.apple.product-type.system-extension",
+    "tool": "com.apple.product-type.tool",
+    "tv-app-extension": "com.apple.product-type.tv-app-extension",
+    "watchkit-extension": "com.apple.product-type.watchkit-extension",
+    "watchkit2-extension": "com.apple.product-type.watchkit2-extension",
+    "xcode-extension": "com.apple.product-type.xcode-extension",
+    "xpc-service": "com.apple.product-type.xpc-service",
+}
+
+def _xcode_xcproj_product_type(short):
+    if not short:
+        return ""
+    mapped = _XCODE_XCPROJ_PRODUCT_TYPE_MAP.get(short)
+    if mapped:
+        return mapped
+    if short.startswith("com.apple.product-type."):
+        return short
+    return "com.apple.product-type." + short
+
+def _xcode_xcproj_new_id(state, hint):
+    state["next"] += 1
+    # Ids are only used as dictionary keys, so an opaque counter is enough.
+    # The hint is preserved verbatim to keep failure traces readable.
+    return "XPROJ_" + hint + "_" + str(state["next"])
+
+def _xcode_xcproj_source_tree_and_path(raw_path):
+    if not raw_path:
+        return ("<group>", "")
+    if raw_path.startswith("<PRODUCTS>/"):
+        return ("BUILT_PRODUCTS_DIR", raw_path[len("<PRODUCTS>/"):])
+    if raw_path == "<PRODUCTS>":
+        return ("BUILT_PRODUCTS_DIR", "")
+    if raw_path.startswith("<SDK>/"):
+        return ("SDKROOT", raw_path[len("<SDK>/"):])
+    if raw_path == "<SDK>":
+        return ("SDKROOT", "")
+    if raw_path.startswith("<DEVELOPER>/"):
+        return ("DEVELOPER_DIR", raw_path[len("<DEVELOPER>/"):])
+    if raw_path == "<DEVELOPER>":
+        return ("DEVELOPER_DIR", "")
+    if raw_path.startswith("<PROJECT>/"):
+        return ("SOURCE_ROOT", raw_path[len("<PROJECT>/"):])
+    if raw_path == "<PROJECT>":
+        return ("SOURCE_ROOT", "")
+    if raw_path.startswith("<ABS>/"):
+        return ("<absolute>", "/" + raw_path[len("<ABS>/"):])
+    if raw_path.startswith("/"):
+        return ("<absolute>", raw_path)
+    return ("<group>", raw_path)
+
+def _xcode_xcproj_split_setting_key(key):
+    # Returns (base_key_with_other_conditions, config_name_or_empty).
+    # `KEY[config=Debug]` -> (`KEY`, `Debug`)
+    # `KEY[config=Debug][sdk=iphoneos*]` -> (`KEY[sdk=iphoneos*]`, `Debug`)
+    # `KEY[sdk=iphoneos*]` -> (`KEY[sdk=iphoneos*]`, ``)
+    marker = "[config="
+    idx = key.find(marker)
+    if idx < 0:
+        return (key, "")
+    end = key.find("]", idx + len(marker))
+    if end < 0:
+        return (key, "")
+    config = key[idx + len(marker):end]
+    return (key[:idx] + key[end + 1:], config)
+
+def _xcode_xcproj_split_settings_by_config(flat, configurations):
+    per_config = {}
+    for name in configurations:
+        per_config[name] = {}
+    if not flat:
+        return per_config
+    for key in flat.keys():
+        base, cfg = _xcode_xcproj_split_setting_key(key)
+        if cfg:
+            bucket = per_config.get(cfg)
+            if bucket != None:
+                bucket[base] = flat[key]
+        else:
+            for name in configurations:
+                per_config[name][base] = flat[key]
+    return per_config
+
+def _xcode_xcproj_file_type_hint(entry):
+    if entry.get("type"):
+        return entry.get("type")
+    path = entry.get("path") or entry.get("name") or ""
+    lower = path.lower()
+    guesses = [
+        (".framework", "wrapper.framework"),
+        (".app", "wrapper.application"),
+        (".appex", "wrapper.app-extension"),
+        (".xctest", "wrapper.cfbundle"),
+        (".bundle", "wrapper.cfbundle"),
+        (".a", "archive.ar"),
+        (".dylib", "compiled.mach-o.dylib"),
+        (".tbd", "sourcecode.text-based-dylib-definition"),
+        (".swift", "sourcecode.swift"),
+        (".m", "sourcecode.c.objc"),
+        (".mm", "sourcecode.cpp.objcpp"),
+        (".c", "sourcecode.c.c"),
+        (".cc", "sourcecode.cpp.cpp"),
+        (".cpp", "sourcecode.cpp.cpp"),
+        (".h", "sourcecode.c.h"),
+        (".hpp", "sourcecode.cpp.h"),
+        (".plist", "text.plist.xml"),
+        (".entitlements", "text.plist.entitlements"),
+        (".xcconfig", "text.xcconfig"),
+        (".storyboard", "file.storyboard"),
+        (".xib", "file.xib"),
+        (".xcassets", "folder.assetcatalog"),
+        (".xcdatamodeld", "wrapper.xcdatamodel"),
+        (".json", "text.json"),
+    ]
+    for suffix, kind in guesses:
+        if lower.endswith(suffix):
+            return kind
+    return ""
+
+def _xcode_xcproj_detect_local_packages(project, project_dir):
+    # Bare `{path}` entries (no kind, children, or target-membership) at the
+    # top level of `files` are candidate local Swift package references. Xcode
+    # itself distinguishes them by finding a `Package.swift` at the referenced
+    # directory. Return the list of relative paths that pass that check.
+    local_paths = []
+    for entry in project.get("files") or []:
+        if type(entry) != "dict":
+            continue
+        if entry.get("kind") or entry.get("children") or entry.get("target-membership"):
+            continue
+        path = entry.get("path") or ""
+        if not path or "." in _basename(path):
+            continue
+        candidate = _xcode_join(project_dir, path) if project_dir else path
+        manifest = _xcode_abs(candidate + "/Package.swift")
+        if host_file_exists(manifest):
+            local_paths.append(path)
+    return local_paths
+
+def _xcode_xcproj_emit_file_tree(project, state):
+    # Walks the project's `files` list and materializes PBXGroup /
+    # PBXFileSystemSynchronizedRootGroup / PBXFileReference objects while
+    # collecting the auxiliary maps the downstream code needs. Returns a dict
+    # with:
+    #   objects: partial isa map (later merged into the full objects dict)
+    #   top_children: ordered ids for the synthesized mainGroup
+    #   memberships: {target_name: {phase_name: [file_id, ...]}}
+    #   synced_owners: {target_name: [group_id, ...]}
+    #   exception_sets: [(exception_id, target_name, group_id)]
+    #   file_id_by_ref: {"<PRODUCTS>/Foo.app": id, "id:XX": id, ...}
+    #   package_paths: [(file_id, path)] for local swift packages (kind == None files whose paths look like Package.swift roots)
+    objects = {}
+    top_children = []
+    memberships = {}
+    synced_owners = {}
+    exception_sets = []
+    file_id_by_ref = {}
+
+    entries = project.get("files") or []
+    for entry in entries:
+        child_id = _xcode_xcproj_emit_file_node(entry, objects, state, memberships, synced_owners, exception_sets, file_id_by_ref)
+        if child_id:
+            top_children.append(child_id)
+
+    return {
+        "objects": objects,
+        "top_children": top_children,
+        "memberships": memberships,
+        "synced_owners": synced_owners,
+        "exception_sets": exception_sets,
+        "file_id_by_ref": file_id_by_ref,
+    }
+
+def _xcode_xcproj_record_membership(memberships, entry_id, target_memberships):
+    for membership in target_memberships or []:
+        ref = ""
+        settings = None
+        if type(membership) == "string":
+            ref = membership
+        elif type(membership) == "dict":
+            ref = membership.get("build-phase") or ""
+            role = membership.get("header-role") or ""
+            if role:
+                attribute = "Public" if role == "public" else ("Private" if role == "private" else "")
+                if attribute:
+                    settings = {"ATTRIBUTES": [attribute]}
+        if not ref:
+            continue
+        slash = ref.rfind("/")
+        if slash < 0:
+            continue
+        target_name = ref[:slash]
+        phase_name = ref[slash + 1:]
+        by_phase = memberships.setdefault(target_name, {})
+        entries = by_phase.setdefault(phase_name, [])
+        entries.append({"id": entry_id, "settings": settings})
+
+def _xcode_xcproj_emit_file_node(entry, objects, state, memberships, synced_owners, exception_sets, file_id_by_ref):
+    if type(entry) != "dict":
+        return None
+    kind = entry.get("kind") or ""
+    name = entry.get("name") or ""
+    path = entry.get("path") or ""
+    if kind == "group":
+        # Classic PBXGroup.
+        group_id = _xcode_xcproj_new_id(state, "GRP_" + (name or path or "grp"))
+        source_tree, resolved_path = _xcode_xcproj_source_tree_and_path(path)
+        node = {"isa": "PBXGroup", "sourceTree": source_tree, "children": []}
+        if name:
+            node["name"] = name
+        if resolved_path:
+            node["path"] = resolved_path
+        objects[group_id] = node
+        # Attach members: children may be file entries OR nested groups.
+        children_ids = []
+        for child in entry.get("children") or []:
+            child_id = _xcode_xcproj_emit_file_node(child, objects, state, memberships, synced_owners, exception_sets, file_id_by_ref)
+            if child_id:
+                children_ids.append(child_id)
+        node["children"] = children_ids
+        return group_id
+    if kind == "folder":
+        # File-system synchronized root group (Xcode 16+).
+        group_id = _xcode_xcproj_new_id(state, "SYNCED_" + (name or path or "grp"))
+        source_tree, resolved_path = _xcode_xcproj_source_tree_and_path(path)
+        node = {"isa": "PBXFileSystemSynchronizedRootGroup", "sourceTree": source_tree}
+        if name:
+            node["name"] = name
+        if resolved_path:
+            node["path"] = resolved_path
+        # target-membership on a synced folder marks which targets own it.
+        for owner_name in entry.get("target-membership") or []:
+            synced_owners.setdefault(owner_name, []).append(group_id)
+        # Emit one exception set per membership-exception entry. Exceptions
+        # for the owning target are treated as exclusions by the consumer;
+        # exceptions for non-owning targets are treated as additive
+        # inclusions.
+        exception_ids = []
+        for exc in entry.get("membership-exceptions") or []:
+            target_name = exc.get("target") or ""
+            if not target_name:
+                continue
+            paths = list(exc.get("exclusions") or []) + list(exc.get("inclusions") or [])
+            exception_id = _xcode_xcproj_new_id(state, "EXC_" + target_name)
+            objects[exception_id] = {
+                "isa": "PBXFileSystemSynchronizedBuildFileExceptionSet",
+                "target": target_name,  # a target-name reference; resolved after targets exist.
+                "membershipExceptions": paths,
+            }
+            exception_ids.append(exception_id)
+            exception_sets.append((exception_id, target_name, group_id))
+        if exception_ids:
+            node["exceptions"] = exception_ids
+        objects[group_id] = node
+        return group_id
+    # Leaf file reference. The entry may declare an explicit id (used by
+    # targets' `product` back-reference), a type hint, or a variant group
+    # via nested children.
+    if entry.get("children"):
+        # Variant group (localizations) or version group. `kind` is absent in
+        # the samples we have; distinguish by suffix.
+        looks_like_version = _ends_with(path, ".xcdatamodeld") or _ends_with(name, ".xcdatamodeld")
+        if looks_like_version:
+            group_id = _xcode_xcproj_new_id(state, "VG_" + (name or path or "vg"))
+            source_tree, resolved_path = _xcode_xcproj_source_tree_and_path(path)
+            node = {"isa": "XCVersionGroup", "sourceTree": source_tree, "versionGroupType": "wrapper.xcdatamodel"}
+            if name:
+                node["name"] = name
+            if resolved_path:
+                node["path"] = resolved_path
+            children_ids = []
+            for child in entry.get("children") or []:
+                child_id = _xcode_xcproj_emit_file_node(child, objects, state, memberships, synced_owners, exception_sets, file_id_by_ref)
+                if child_id:
+                    children_ids.append(child_id)
+            node["children"] = children_ids
+            objects[group_id] = node
+            _xcode_xcproj_record_membership(memberships, group_id, entry.get("target-membership"))
+            return group_id
+        # Variant group (typical: localizations).
+        group_id = _xcode_xcproj_new_id(state, "VAR_" + (name or path or "var"))
+        source_tree, resolved_path = _xcode_xcproj_source_tree_and_path(path)
+        node = {"isa": "PBXVariantGroup", "sourceTree": source_tree, "children": []}
+        if name:
+            node["name"] = name
+        if resolved_path:
+            node["path"] = resolved_path
+        children_ids = []
+        for child in entry.get("children") or []:
+            child_id = _xcode_xcproj_emit_file_node(child, objects, state, memberships, synced_owners, exception_sets, file_id_by_ref)
+            if child_id:
+                children_ids.append(child_id)
+        node["children"] = children_ids
+        objects[group_id] = node
+        _xcode_xcproj_record_membership(memberships, group_id, entry.get("target-membership"))
+        return group_id
+    file_id = entry.get("id") or _xcode_xcproj_new_id(state, "FR_" + (name or path or "file"))
+    source_tree, resolved_path = _xcode_xcproj_source_tree_and_path(path)
+    node = {"isa": "PBXFileReference", "sourceTree": source_tree}
+    if name:
+        node["name"] = name
+    if resolved_path:
+        node["path"] = resolved_path
+    type_hint = _xcode_xcproj_file_type_hint(entry)
+    if type_hint:
+        node["lastKnownFileType"] = type_hint
+    objects[file_id] = node
+    _xcode_xcproj_record_membership(memberships, file_id, entry.get("target-membership"))
+    if path:
+        file_id_by_ref[path] = file_id
+    if entry.get("id"):
+        file_id_by_ref["id:" + entry.get("id")] = file_id
+    return file_id
+
+def _xcode_xcproj_lookup_xcconfig(file_id_by_ref, xcconfig_path):
+    # `specialized-configurations[].file` names an xcconfig by its path. The
+    # entry may have been referenced through a group with its own path prefix
+    # ("Pods"), so try progressively shortening the prefix.
+    if not xcconfig_path:
+        return None
+    if xcconfig_path in file_id_by_ref:
+        return file_id_by_ref[xcconfig_path]
+    trimmed = xcconfig_path
+    for _ in range(8):
+        slash = trimmed.find("/")
+        if slash < 0:
+            break
+        trimmed = trimmed[slash + 1:]
+        if trimmed in file_id_by_ref:
+            return file_id_by_ref[trimmed]
+    return None
+
+def _xcode_xcproj_emit_target_configs(state, target, tree_info, project_configurations, project_default_config, objects):
+    default_config = project_default_config
+    configurations = project_configurations
+    target_settings = target.get("build-settings") or {}
+    per_config_settings = _xcode_xcproj_split_settings_by_config(target_settings, configurations)
+    # Map specialized-configurations (per-config xcconfig files) to base refs.
+    xcconfig_by_config = {}
+    for spec in target.get("specialized-configurations") or []:
+        cname = spec.get("name")
+        cfile = spec.get("file")
+        if cname and cfile:
+            file_id = _xcode_xcproj_lookup_xcconfig(tree_info["file_id_by_ref"], cfile)
+            if file_id:
+                xcconfig_by_config[cname] = file_id
+    build_config_ids = []
+    for name in configurations:
+        bc_id = _xcode_xcproj_new_id(state, "BC_" + (target.get("name") or "T") + "_" + name)
+        obj = {"isa": "XCBuildConfiguration", "name": name, "buildSettings": per_config_settings.get(name) or {}}
+        base_ref = xcconfig_by_config.get(name)
+        if base_ref:
+            obj["baseConfigurationReference"] = base_ref
+        objects[bc_id] = obj
+        build_config_ids.append(bc_id)
+    config_list_id = _xcode_xcproj_new_id(state, "CFGLIST_" + (target.get("name") or "T"))
+    objects[config_list_id] = {"isa": "XCConfigurationList", "buildConfigurations": build_config_ids, "defaultConfigurationName": default_config}
+    return config_list_id
+
+_XCPROJ_PHASE_ISA = {
+    "compile-sources": "PBXSourcesBuildPhase",
+    "frameworks": "PBXFrameworksBuildPhase",
+    "resources": "PBXResourcesBuildPhase",
+    "headers": "PBXHeadersBuildPhase",
+}
+
+def _xcode_xcproj_emit_target_phases(state, target, tree_info, objects):
+    target_name = target.get("name") or ""
+    memberships = tree_info["memberships"].get(target_name) or {}
+    phase_ids = []
+    for phase in target.get("build-phases") or []:
+        if type(phase) == "string":
+            isa = _XCPROJ_PHASE_ISA.get(phase)
+            if not isa:
+                continue
+            build_file_ids = []
+            for member in memberships.get(phase) or []:
+                bf_id = _xcode_xcproj_new_id(state, "BF_" + target_name + "_" + phase)
+                bf_obj = {"isa": "PBXBuildFile", "fileRef": member["id"]}
+                if member.get("settings"):
+                    bf_obj["settings"] = member["settings"]
+                objects[bf_id] = bf_obj
+                build_file_ids.append(bf_id)
+            phase_id = _xcode_xcproj_new_id(state, "PH_" + target_name + "_" + phase)
+            objects[phase_id] = {"isa": isa, "files": build_file_ids}
+            phase_ids.append(phase_id)
+        elif type(phase) == "dict":
+            pkind = phase.get("kind") or ""
+            phase_id = _xcode_xcproj_new_id(state, "PH_" + target_name + "_" + pkind)
+            if pkind == "script":
+                script = phase.get("script")
+                if type(script) == "list":
+                    script = "\n".join(script)
+                obj = {
+                    "isa": "PBXShellScriptBuildPhase",
+                    "shellPath": phase.get("shell") or "/bin/sh",
+                    "shellScript": script or "",
+                    "inputPaths": phase.get("input-paths") or [],
+                    "outputPaths": phase.get("output-paths") or [],
+                    "inputFileListPaths": phase.get("input-file-list-paths") or [],
+                    "outputFileListPaths": phase.get("output-file-list-paths") or [],
+                    "showEnvVarsInLog": phase.get("log-environment-variables") or False,
+                    "alwaysOutOfDate": phase.get("always-out-of-date") or False,
+                    "name": phase.get("name") or "",
+                    "files": [],
+                }
+                objects[phase_id] = obj
+                phase_ids.append(phase_id)
+            elif pkind == "copy":
+                obj = {
+                    "isa": "PBXCopyFilesBuildPhase",
+                    "name": phase.get("name") or "",
+                    "dstPath": phase.get("destination-path") or "",
+                    "dstSubfolderSpec": str(phase.get("destination-subfolder-spec") or ""),
+                    "files": [],
+                }
+                objects[phase_id] = obj
+                phase_ids.append(phase_id)
+    return phase_ids
+
+def _xcode_xcproj_emit_packages(project, state, objects):
+    # Emit XCRemoteSwiftPackageReference / XCLocalSwiftPackageReference for
+    # every entry in `packages` and return a name→id map used later to bind
+    # `package-product-members` to their package.
+    package_ids_by_repo = {}
+    package_ids_by_name = {}
+    ids = []
+    for pkg in project.get("packages") or []:
+        kind = pkg.get("kind") or "remote"
+        if kind == "remote":
+            pid = _xcode_xcproj_new_id(state, "PKG_REMOTE")
+            requirement = pkg.get("version") or {}
+            # Translate xcproj shorthand into the classic XCRemoteSwiftPackageReference requirement dict.
+            classic_req = {}
+            if "up-to-next-major-version" in requirement:
+                classic_req = {"kind": "upToNextMajorVersion", "minimumVersion": requirement.get("up-to-next-major-version")}
+            elif "up-to-next-minor-version" in requirement:
+                classic_req = {"kind": "upToNextMinorVersion", "minimumVersion": requirement.get("up-to-next-minor-version")}
+            elif "exact-version" in requirement:
+                classic_req = {"kind": "exactVersion", "version": requirement.get("exact-version")}
+            elif "revision" in requirement:
+                classic_req = {"kind": "revision", "revision": requirement.get("revision")}
+            elif "branch" in requirement:
+                classic_req = {"kind": "branch", "branch": requirement.get("branch")}
+            elif "version-range" in requirement:
+                vr = requirement.get("version-range") or {}
+                classic_req = {"kind": "versionRange", "minimumVersion": vr.get("minimum-version"), "maximumVersion": vr.get("maximum-version")}
+            objects[pid] = {
+                "isa": "XCRemoteSwiftPackageReference",
+                "repositoryURL": pkg.get("repository") or "",
+                "requirement": classic_req,
+            }
+            package_ids_by_repo[pkg.get("repository") or ""] = pid
+            ids.append(pid)
+        else:
+            pid = _xcode_xcproj_new_id(state, "PKG_LOCAL")
+            objects[pid] = {
+                "isa": "XCLocalSwiftPackageReference",
+                "relativePath": pkg.get("path") or pkg.get("relative-path") or "",
+            }
+            ids.append(pid)
+    return {"ids": ids, "by_repo": package_ids_by_repo, "by_name": package_ids_by_name}
+
+def _xcode_xcproj_target_dependencies(state, target, target_id_by_name, root_project_id, objects):
+    # Each dependency is either a bare target name or an object with a
+    # `target` field (plus optional platform filters). Emit the classic
+    # PBXContainerItemProxy + PBXTargetDependency pair.
+    dep_ids = []
+    for dep in target.get("dependencies") or []:
+        dep_name = ""
+        if type(dep) == "string":
+            dep_name = dep
+        elif type(dep) == "dict":
+            dep_name = dep.get("target") or ""
+        if not dep_name:
+            continue
+        remote_id = target_id_by_name.get(dep_name)
+        if not remote_id:
+            continue
+        proxy_id = _xcode_xcproj_new_id(state, "PROXY_" + dep_name)
+        objects[proxy_id] = {
+            "isa": "PBXContainerItemProxy",
+            "containerPortal": root_project_id,
+            "proxyType": "1",
+            "remoteGlobalIDString": remote_id,
+            "remoteInfo": dep_name,
+        }
+        dep_id = _xcode_xcproj_new_id(state, "DEP_" + dep_name)
+        objects[dep_id] = {
+            "isa": "PBXTargetDependency",
+            "target": remote_id,
+            "targetProxy": proxy_id,
+        }
+        dep_ids.append(dep_id)
+    return dep_ids
+
+def _xcode_xcproj_target_package_products(state, target, packages_info, objects, phase_ids_by_kind):
+    # `package-product-members[].product-name` gives the product name. The
+    # xcproj format doesn't record which package it belongs to, so leave
+    # `package` unset; the downstream local-package resolver identifies it by
+    # name against the project's declared packages.
+    product_ids = []
+    for member in target.get("package-product-members") or []:
+        product_name = member.get("product-name") or ""
+        if not product_name:
+            continue
+        pd_id = _xcode_xcproj_new_id(state, "SPMPROD_" + product_name)
+        objects[pd_id] = {
+            "isa": "XCSwiftPackageProductDependency",
+            "productName": product_name,
+        }
+        product_ids.append(pd_id)
+        # Also add a PBXBuildFile into the target's frameworks phase so the
+        # classic reader picks the product up as a link input.
+        build_phase_kind = ((member.get("build-phase") or {}).get("build-phase")) or "frameworks"
+        phase_id = phase_ids_by_kind.get(build_phase_kind)
+        if phase_id:
+            phase = objects.get(phase_id)
+            if phase:
+                bf_id = _xcode_xcproj_new_id(state, "BF_SPM_" + product_name)
+                objects[bf_id] = {"isa": "PBXBuildFile", "productRef": pd_id}
+                phase["files"] = (phase.get("files") or []) + [bf_id]
+    return product_ids
+
+def _xcode_xcproj_to_pbxproj(project, project_dir = ""):
+    state = {"next": 0}
+    objects = {}
+
+    raw_configurations = project.get("configurations") or ["Debug", "Release"]
+    configurations = []
+    proj_xcconfig_by_config = {}
+    for entry in raw_configurations:
+        if type(entry) == "string":
+            configurations.append(entry)
+        elif type(entry) == "dict":
+            name = entry.get("name") or ""
+            if name:
+                configurations.append(name)
+                if entry.get("file"):
+                    proj_xcconfig_by_config[name] = entry.get("file")
+    if not configurations:
+        configurations = ["Debug", "Release"]
+    default_config = project.get("default-configuration") or configurations[-1]
+
+    # File tree first, so project-level xcconfig baseConfigurationReferences
+    # can resolve to a real PBXFileReference id.
+    tree_info = _xcode_xcproj_emit_file_tree(project, state)
+    for oid, obj in tree_info["objects"].items():
+        objects[oid] = obj
+
+    # Project-level build settings.
+    proj_settings = project.get("build-settings") or {}
+    proj_per_config = _xcode_xcproj_split_settings_by_config(proj_settings, configurations)
+    proj_build_config_ids = []
+    for name in configurations:
+        bc_id = _xcode_xcproj_new_id(state, "BC_PROJ_" + name)
+        obj = {"isa": "XCBuildConfiguration", "name": name, "buildSettings": proj_per_config[name]}
+        xcconfig_file = proj_xcconfig_by_config.get(name)
+        if xcconfig_file:
+            base_ref = _xcode_xcproj_lookup_xcconfig(tree_info["file_id_by_ref"], xcconfig_file)
+            if base_ref:
+                obj["baseConfigurationReference"] = base_ref
+        objects[bc_id] = obj
+        proj_build_config_ids.append(bc_id)
+    proj_config_list_id = _xcode_xcproj_new_id(state, "CFGLIST_PROJ")
+    objects[proj_config_list_id] = {"isa": "XCConfigurationList", "buildConfigurations": proj_build_config_ids, "defaultConfigurationName": default_config}
+
+    # Reserve target ids first so dependencies and product references resolve.
+    target_id_by_name = {}
+    for target in project.get("targets") or []:
+        target_id_by_name[target.get("name") or ""] = _xcode_xcproj_new_id(state, "TGT_" + (target.get("name") or "T"))
+
+    # Root PBXProject id (needed by container item proxies).
+    root_id = _xcode_xcproj_new_id(state, "PROJECT")
+
+    # Packages.
+    packages_info = _xcode_xcproj_emit_packages(project, state, objects)
+    # Xcode 27.2 xcproj only lists remote packages under `packages`. Local
+    # packages live in `files` as bare `{path}` entries whose directory holds
+    # a `Package.swift`. Detect and emit XCLocalSwiftPackageReference so the
+    # downstream Swift package resolver picks them up.
+    for local_path in _xcode_xcproj_detect_local_packages(project, project_dir):
+        pid = _xcode_xcproj_new_id(state, "PKG_LOCAL_" + local_path)
+        objects[pid] = {"isa": "XCLocalSwiftPackageReference", "relativePath": local_path}
+        packages_info["ids"].append(pid)
+
+    # Emit each target.
+    for target in project.get("targets") or []:
+        target_name = target.get("name") or ""
+        target_id = target_id_by_name[target_name]
+
+        # Configuration list.
+        config_list_id = _xcode_xcproj_emit_target_configs(state, target, tree_info, configurations, default_config, objects)
+
+        # Build phases.
+        phase_ids = _xcode_xcproj_emit_target_phases(state, target, tree_info, objects)
+        phase_ids_by_kind = {}
+        for pid in phase_ids:
+            phase = objects.get(pid) or {}
+            if phase.get("isa") == "PBXSourcesBuildPhase":
+                phase_ids_by_kind["compile-sources"] = pid
+            elif phase.get("isa") == "PBXFrameworksBuildPhase":
+                phase_ids_by_kind["frameworks"] = pid
+            elif phase.get("isa") == "PBXResourcesBuildPhase":
+                phase_ids_by_kind["resources"] = pid
+            elif phase.get("isa") == "PBXHeadersBuildPhase":
+                phase_ids_by_kind["headers"] = pid
+
+        # Swift package product references (link into frameworks phase).
+        product_ids = _xcode_xcproj_target_package_products(state, target, packages_info, objects, phase_ids_by_kind)
+
+        # Target dependencies.
+        dep_ids = _xcode_xcproj_target_dependencies(state, target, target_id_by_name, root_id, objects)
+
+        # Product reference (`product: "id:..."` or `product: "Path/..."`).
+        product_ref = None
+        product = target.get("product") or ""
+        if product.startswith("id:"):
+            product_ref = tree_info["file_id_by_ref"].get(product)
+            if product_ref == None:
+                product_ref = tree_info["file_id_by_ref"].get("id:" + product[3:])
+        elif product:
+            product_ref = tree_info["file_id_by_ref"].get(product)
+
+        # File-system synchronized groups this target owns.
+        synced = tree_info["synced_owners"].get(target_name) or []
+
+        target_node = {
+            "isa": "PBXNativeTarget",
+            "name": target_name,
+            "productType": _xcode_xcproj_product_type(target.get("product-type") or ""),
+            "buildConfigurationList": config_list_id,
+            "buildPhases": phase_ids,
+            "dependencies": dep_ids,
+            "packageProductDependencies": product_ids,
+        }
+        if product_ref:
+            target_node["productReference"] = product_ref
+        if synced:
+            target_node["fileSystemSynchronizedGroups"] = synced
+        objects[target_id] = target_node
+
+    # Resolve exception-set target-name back-references to their target ids.
+    for exception_id, target_name, group_id in tree_info["exception_sets"]:
+        tid = target_id_by_name.get(target_name)
+        exc = objects.get(exception_id)
+        if tid and exc:
+            exc["target"] = tid
+
+    # Synthesize a mainGroup that owns every top-level file entry so the
+    # existing group walker resolves package-relative paths.
+    main_group_id = _xcode_xcproj_new_id(state, "GRP_MAIN")
+    objects[main_group_id] = {
+        "isa": "PBXGroup",
+        "sourceTree": "<group>",
+        "children": tree_info["top_children"],
+    }
+
+    # Root project.
+    objects[root_id] = {
+        "isa": "PBXProject",
+        "targets": [target_id_by_name[t.get("name") or ""] for t in project.get("targets") or []],
+        "buildConfigurationList": proj_config_list_id,
+        "mainGroup": main_group_id,
+        "packageReferences": packages_info["ids"],
+        "attributes": {},
+    }
+
+    return {"objects": objects, "rootObject": root_id, "archiveVersion": "1"}
+
 
 # ---------------------------------------------------------------------------
 # Build settings: layering, .xcconfig flattening, and variable expansion
@@ -1605,7 +2387,7 @@ def _xcode_pins_match_package_refs(pins, package_refs):
 
 def _xcode_package_resolved_pins(ctx, entry_path, project_path, package_refs):
     bundle = project_path
-    if _ends_with(bundle, "/project.pbxproj"):
+    if _ends_with(bundle, "/project.pbxproj") or _ends_with(bundle, "/project.xcproj"):
         bundle = _parent_dir(bundle)
     candidates = []
     if _xcode_is_workspace(entry_path):
@@ -4259,6 +5041,12 @@ xcode_workspace = target_kind(
             path = "examples/xcode-generated-source-e2e",
             platforms = ["macos"],
         ),
+        example(
+            "xcode-workspace-new-format",
+            name = "Xcode new-format (Xcode 27.2 project.xcproj)",
+            use_when = "Use this when the project stores its manifest as the Xcode 27.2 JSON-based project.xcproj instead of the classic project.pbxproj.",
+            platforms = ["macos"],
+        ),
     ],
     impl = _xcode_workspace_impl,
 )
@@ -4274,5 +5062,19 @@ xcode = native_project(
     on_match = "all",
     max_depth = 16,
     requires_tools = ["plutil", "xcrun"],
+    owns_descendants = True,
+)
+
+xcode_new_format = native_project(
+    target_kind = "xcode_workspace",
+    name = "xcode_new_format",
+    target_name = "xcode",
+    docs = "Recognizes a native Xcode project from the Xcode 27.2 JSON `*.xcodeproj/project.xcproj` manifest.",
+    markers = ["*.xcodeproj/project.xcproj"],
+    inputs = ["*.xcodeproj/**/*.xcscheme", "*.xcworkspace/contents.xcworkspacedata", "**/*.xcconfig"],
+    exclude = _native_project_generated_dirs() + ["Pods", "Carthage", "DerivedData", "node_modules"],
+    on_match = "all",
+    max_depth = 16,
+    requires_tools = ["xcrun"],
     owns_descendants = True,
 )
