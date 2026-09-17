@@ -660,7 +660,7 @@ def _xcode_xcproj_emit_target_phases(state, target, tree_info, objects):
                     script = "\n".join(script)
                 obj = {
                     "isa": "PBXShellScriptBuildPhase",
-                    "shellPath": phase.get("shell") or "/bin/sh",
+                    "shellPath": phase.get("shell") or "",
                     "shellScript": script or "",
                     "inputPaths": phase.get("input-paths") or [],
                     "outputPaths": phase.get("output-paths") or [],
