@@ -3828,6 +3828,18 @@ def _apple_framework_impl(ctx):
     alwayslink_archives = _apple_collect_alwayslink_archives(deps)
     runtime_framework_bundles = _apple_collect_runtime_framework_bundles(deps)
 
+    enable_testing = attrs.get("enable_testing") or False
+    swift_testing = attrs.get("swift_testing") or False
+    xctest_support = attrs.get("xctest_support") or False
+    testing_framework_dir = ""
+    testing_usr_lib_dir = ""
+    if swift_testing or xctest_support:
+        if xcode_developer_dir:
+            testing_platform_path = _developer_platform_path(xcode_developer_dir, swiftc["sdk_name"])
+        else:
+            testing_platform_path = host_command([host_which("xcrun"), "--sdk", swiftc["sdk_name"], "--show-sdk-platform-path"], env = swiftc["env"]).strip()
+        testing_framework_dir = testing_platform_path + "/Developer/Library/Frameworks"
+        testing_usr_lib_dir = testing_platform_path + "/Developer/usr/lib"
     swift_argv = list(swiftc["argv"]) + [
         "-emit-library",
         "-emit-module",
@@ -3846,6 +3858,24 @@ def _apple_framework_impl(ctx):
         "-o",
         dylib,
     ]
+    if testing_framework_dir:
+        # A framework that itself imports XCTest (Quick, Nimble, RxTest, etc.)
+        # needs the platform's Developer/Library/Frameworks on the framework
+        # search path and the Developer usr/lib on the linker search path,
+        # exactly as `apple_library` does when it declares the same attrs.
+        swift_argv.extend([
+            "-F", testing_framework_dir,
+            "-Xlinker", "-rpath", "-Xlinker", testing_framework_dir,
+            "-L", testing_usr_lib_dir,
+            "-Xlinker", "-rpath", "-Xlinker", testing_usr_lib_dir,
+        ])
+    if enable_testing:
+        # Match rules_swift and Swift Build: `-enable-testing` on the compile
+        # invocation embeds the testability information in the emitted
+        # .swiftmodule so hosted test bundles can `@testable import` the
+        # module. Without it, swiftc rejects the import with
+        # `module '<Name>' was not compiled for testing`.
+        swift_argv.append("-enable-testing")
     for d in compile_swiftmodule_dirs:
         swift_argv.extend(["-I", d])
     for hdir in compile_header_dirs:
