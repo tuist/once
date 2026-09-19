@@ -4,6 +4,6 @@
   "private": true,
   "workspaces": ["apps/*", "libs/*"],
   "devDependencies": {
-    "nx": "^19.8.4"
+    "nx": "^22.7.2"
   }
 }
