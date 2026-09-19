@@ -1214,8 +1214,7 @@ fn single_star_does_not_cross_path_separators() {
     std::fs::write(package.join("root.swift"), "").unwrap();
     std::fs::write(package.join("sub/nested.swift"), "").unwrap();
 
-    let matches =
-        expand_globs(workspace.path(), "packages/app", &["*.swift".to_string()]).unwrap();
+    let matches = expand_globs(workspace.path(), "packages/app", &["*.swift".to_string()]).unwrap();
 
     assert_eq!(matches, vec!["packages/app/root.swift".to_string()]);
 }

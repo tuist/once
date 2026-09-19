@@ -1811,9 +1811,7 @@ pub fn expansion_could_differ(
             return false;
         };
         match &compiled {
-            Some(patterns) => patterns
-                .iter()
-                .any(|pattern| pattern.matches_with(relative, GLOB_MATCH_OPTIONS)),
+            Some(patterns) => patterns.iter().any(|p| pattern_matches(p, relative)),
             None => patterns.iter().any(|root| {
                 let root = root.strip_prefix("./").unwrap_or(root);
                 relative == root || relative.starts_with(&format!("{root}/"))
@@ -2056,6 +2054,13 @@ pub(super) const GLOB_MATCH_OPTIONS: glob::MatchOptions = glob::MatchOptions {
     require_literal_leading_dot: false,
 };
 
+/// Shorthand for `pattern.matches_with(path, GLOB_MATCH_OPTIONS)` so call
+/// sites stay readable when they inline several checks against the same
+/// pattern list.
+fn pattern_matches(pattern: &glob::Pattern, path: &str) -> bool {
+    pattern.matches_with(path, GLOB_MATCH_OPTIONS)
+}
+
 #[cfg(test)]
 pub(super) fn expand_globs(
     workspace_root: &Path,
@@ -2224,12 +2229,8 @@ fn collect_glob_matches(
                 return true;
             };
             let package_relative = workspace_path_relative_to_package(package, &ws_rel);
-            !excludes.iter().any(|pattern| {
-                pattern.matches_with(
-                    &format!("{package_relative}/__once_glob_descendant__"),
-                    GLOB_MATCH_OPTIONS,
-                )
-            })
+            let descendant = format!("{package_relative}/__once_glob_descendant__");
+            !excludes.iter().any(|p| pattern_matches(p, &descendant))
         });
     for entry in walker {
         let entry = entry.with_context(|| {
@@ -2257,27 +2258,18 @@ fn collect_glob_matches(
         let ws_rel = normalize_logical_workspace_path(logical)?;
         let package_relative = workspace_path_relative_to_package(package, &ws_rel);
         let symlink_tree = metadata.file_type().is_symlink() && path.is_dir();
-        let matches = patterns.iter().any(|pattern| {
-            pattern.matches_with(&package_relative, GLOB_MATCH_OPTIONS)
-                || symlink_tree
-                    && pattern.matches_with(
-                        &format!("{package_relative}/__once_glob_descendant__"),
-                        GLOB_MATCH_OPTIONS,
-                    )
+        let descendant = format!("{package_relative}/__once_glob_descendant__");
+        let matches = patterns.iter().any(|p| {
+            pattern_matches(p, &package_relative) || symlink_tree && pattern_matches(p, &descendant)
         });
         if !matches {
             continue;
         }
         let is_excluded = excludes
             .iter()
-            .any(|pattern| pattern.matches_with(&package_relative, GLOB_MATCH_OPTIONS));
-        let excluded_symlink_tree = symlink_tree
-            && excludes.iter().any(|pattern| {
-                pattern.matches_with(
-                    &format!("{package_relative}/__once_glob_descendant__"),
-                    GLOB_MATCH_OPTIONS,
-                )
-            });
+            .any(|p| pattern_matches(p, &package_relative));
+        let excluded_symlink_tree =
+            symlink_tree && excludes.iter().any(|p| pattern_matches(p, &descendant));
         if is_excluded || excluded_symlink_tree {
             continue;
         }
