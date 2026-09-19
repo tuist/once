@@ -193,6 +193,41 @@ result = repr(_unique_args(
 }
 
 #[test]
+fn prelude_apple_module_scan_uses_whole_module_optimization() {
+    // Swift 6.3's `-scan-dependencies` refuses to accept a compile invocation
+    // with several `.swift` sources unless it is also passed `-wmo` (whole-
+    // module optimization). Without `-wmo` the driver treats each source as
+    // its own translation unit and complains that a single `-o` cannot
+    // receive multiple outputs. `apple_test_bundle` almost always hits this,
+    // because Once appends a generated `OnceTestEntryPoint.swift` alongside
+    // the user's test sources. Adding `-wmo` to the scan argv is a no-op for
+    // single-file scans and unblocks multi-file ones.
+    let source = include_str!("../prelude/apple_modules.star");
+    assert!(
+        source.contains("\"-scan-dependencies\", \"-wmo\"")
+            || source.contains("\"-scan-dependencies\", \"-whole-module-optimization\""),
+        "apple_module_scan_argv must pass `-wmo` alongside `-scan-dependencies` to keep Swift 6.3+ swiftc happy on multi-source scans"
+    );
+}
+
+#[test]
+fn prelude_apple_module_host_roots_trust_platform_frameworks() {
+    // Swift Testing and XCTest ship as frameworks under the Xcode platform's
+    // `Developer/Library/Frameworks` directory. When an `apple_test_bundle`
+    // uses `explicit_modules = true` the dependency scan references the
+    // `_Testing_Foundation.swiftmodule` in that framework, and the module
+    // input check must recognise the platform's Library/Frameworks root as
+    // part of the trusted toolchain surface. Without this the test bundle
+    // fails with "Explicit module input is outside the workspace and
+    // identified toolchain".
+    let source = include_str!("../prelude/apple_modules.star");
+    assert!(
+        source.contains("\"/Library/Frameworks\""),
+        "apple_module_host_roots must include the platform's Developer/Library/Frameworks so Swift Testing and XCTest resolve under explicit modules"
+    );
+}
+
+#[test]
 fn prelude_apple_merges_link_options_as_complete_argument_groups() {
     let source = include_str!("../prelude/apple.star");
     assert!(
