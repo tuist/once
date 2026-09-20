@@ -34,6 +34,7 @@ These tables are read only from the root manifest:
 | --- | --- |
 | `[workspace]` | Limits manifest discovery with `include` and `exclude`. |
 | `[workspace.configuration]` | Selects the target operating system, architecture, and additional configuration tokens. |
+| `[reporting]` | Controls whether workspace names may appear in live run argument telemetry. |
 | `[modules]` | Loads project target-kind modules from `paths`. |
 | `[infrastructures.<name>]` | Declares a named infrastructure provider. |
 | `[infrastructure.cache]` | Chooses the shared cache provider. |
@@ -45,6 +46,17 @@ the same definitions.
 
 See [Modules](/reference/modules/) and [Infrastructure](/guide/infrastructure/)
 for the contracts owned by those tables.
+
+Argument values are hashed by default. To allow names declared in the workspace
+graph to appear as readable values in live run telemetry, opt in explicitly:
+
+```toml
+[reporting]
+argv_privacy = "workspace"
+```
+
+Use `argv_privacy = "strict"` to keep the default. This setting does not make
+arbitrary command arguments readable.
 
 The target configuration defaults to the host. Set it explicitly when
 analysis and dependency selection should describe another platform:

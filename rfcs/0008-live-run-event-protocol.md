@@ -2,13 +2,16 @@
 
 ## Status
 
-Accepted (v0.21). Open decisions tracked below are non-blocking for the first-slice implementation.
+Accepted design. Implementation gaps and the requirements for freezing the public contract are tracked in [the live run protocol design review](0010-live-run-protocol-hardening.md).
+The versioned wire definition is authoritative for shipped fields and numbers;
+the website generates its event reference directly from that definition at build
+time. Illustrative shapes in this design document are not a separate schema.
 
 ## Motivation
 
 Once has no server-facing event stream. A local axum endpoint publishes a
 full run snapshot over Server-Sent Events for whichever local UI is attached,
-but nothing reaches the Tuist server, and per-test-case completion is not a
+but nothing reaches a remote event service, and per-test-case completion is not a
 discrete fire-point. Test results land as a normalized JSON blob written
 after a whole test target finishes, with a JUnit report attached as an
 artifact.
@@ -22,7 +25,7 @@ Execution phases are opaque: BEP reports queued and completed but not what
 happened in between, so slow steps show up as slow targets with no
 breakdown.
 
-Tuist should render runs live and it should be materially better than BEP
+The dashboard should render runs live and be materially better than BEP
 at what a build dashboard is actually for: showing what happened, why it
 happened, and where time went. That requires first-class per-case,
 per-target, per-phase, and per-cache-decision events on the wire while the
@@ -102,13 +105,10 @@ fields never override it.
 ## Naming and package layout
 
 Emitter-scoped: `once.events.v1`. Once owns the vocabulary and evolves
-it on Once's release cadence. The Tuist server hosts a projector that
-maps this vocabulary into the shared run-state model, alongside a
-separate projector for Bazel BEP.
-
-Cross-tool query and admin services owned by Tuist itself live under
-`tuist.<domain>.v1`. Those describe platform concerns and are not scoped
-to a single emitter.
+it on Once's release cadence. A compatible server projects this vocabulary
+into its run-state model alongside other ingest protocols. Platform query
+and administration services belong to the server and are outside this
+emitter-scoped package.
 
 Version lives in the package name. A breaking change becomes
 `once.events.v2` on the same server for a deprecation window. `v1` is
@@ -279,16 +279,12 @@ set of intervals. This set is data on the client, not events;
 because it lives outside the sequence space it does not need to
 reserve or collide with any assigned sequence number.
 
-On each `RunEventBatch` send the client atomically drains the
-current set into the batch's `gap_advances` list, coalescing any
-adjacent or overlapping intervals into a canonical sorted
-non-overlapping form. New loss that occurs after that drain but
-before acknowledgement is recorded as a fresh interval in the set
-and is included in the next batch. There is no ordering constraint
-between the in-flight batch and further loss: the in-flight batch
-either succeeds (server advances past its declared intervals) or is
-rejected (client re-adds its intervals to the set and reissues on
-resend).
+On each `RunEventBatch` send the client snapshots its unresolved loss
+intervals, coalescing adjacent intervals into a canonical sorted form. Sending
+does not remove them. Only a validated durable acknowledgement removes or
+trims an interval. This makes stream failures and lost acknowledgements safe
+without requiring reconstruction from an in-flight batch. New loss is merged
+into the same pending set and is included in the next applicable batch.
 
 Late arrivals from the server perspective (events inside a declared
 interval that the server has since advanced past) are stale by
@@ -482,7 +478,7 @@ Version, ownership, and distribution:
 
 - The list is owned by the Once maintainers and lives in the Once
   source tree as a single authoritative file. It is baked into the
-  Once client binary at compile time and consumed by the Tuist
+  Once client binary at compile time and consumed by compatible
   server from the same file, published as a small versioned data
   package. Client and server always read the same source.
 - Each release of the list carries a monotonic version string
@@ -792,7 +788,7 @@ disabled it offers projection only.
    does not need reserved event capacity), resume via `GetRunAck` on
    reconnect, bounded final drain with `run.finalizing` intent.
    Behind an opt-in configuration key.
-4. Land the ingest service on the Tuist side, the projectors, and
+4. Land a compatible ingest service, projectors, and
    the LiveView dashboard.
 
 ## Open decisions

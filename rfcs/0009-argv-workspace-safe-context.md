@@ -9,7 +9,7 @@ Draft.
 The v1 argv normalization algorithm defined in [RFC 0008][0008] is
 defensive-first. Everything outside a small frozen allowlist of tool
 and subcommand names hashes to `OpaqueValue`, so a normal invocation
-like `once build my-app --features telemetry` reaches the Tuist
+like `once build my-app --features telemetry` reaches a shared
 dashboard as `once build ⟨opaque⟩ --features ⟨opaque⟩`. The dashboard
 renders the opaque positions as `[redacted]` because it has no
 plaintext to show.
@@ -24,20 +24,17 @@ extension it left room for:
 > per-project setting; the schema shape for `ArgvToken` does not need
 > to change to add them.
 
-The current default is now costing us more than it protects. A shared
+The strict default has a readability cost. A shared
 dashboard for a team run is only useful when a viewer can read the
 run: what target ran, which features were on, which profile was
 selected. Redacting every one of those turns the run detail into a
 "something happened" counter, and every question a viewer would ask
 of the dashboard needs the terminal that ran the command.
 
-The protection the current default gives is also narrower than it
-looks. Every token this RFC proposes to reclassify as safe is already
-present in the workspace manifest checked into git and is therefore
-already visible to anyone who can view the dashboard's project — a
-target name, a declared feature, a profile listed in `once.toml`.
-None of those are secrets on the same trust boundary the dashboard
-lives inside.
+looks. Workspace names may already appear in checked-in manifests, but
+their occurrence in an arbitrary argument position can still disclose a
+credential or another private value. Readability therefore needs a conscious
+workspace decision and server-side authorization.
 
 ## Decision
 
@@ -48,10 +45,10 @@ appears in that context emits `SafeLiteral` instead of `OpaqueValue`
 or the value half of a `NamedValue`. All other tokens follow the
 existing rules unchanged.
 
-The workspace safe context is opt-out, not opt-in: a workspace that
-declares `[reporting] argv_privacy = "strict"` in its root
-`once.toml` skips the context and gets the v1 defensive-first
-behaviour verbatim. Nothing else about the wire protocol changes.
+The workspace safe context is opt-in. A workspace that declares
+`[reporting] argv_privacy = "workspace"` in its root `once.toml` permits
+recognized graph target names to be emitted as readable literals. Strict
+redaction remains the default. Nothing else about the wire changes.
 
 ## Workspace Safe Context
 
@@ -61,13 +58,8 @@ the run's lifetime. It contains:
 - **Target labels** exposed by the loaded workspace graph (both the
   fully-qualified `<package>/<name>` label id and the bare `<name>`
   form so `once build my-app` classifies `my-app` verbatim).
-- **Declared feature names** from `[[target]]` `attrs.features` and
-  the equivalent in ecosystem manifests the graph loader consumed
-  (`Cargo.toml` `[features]`, `Package.swift` `traits`, …).
-- **Profile names** declared in `[[profile]]` sections of `once.toml`
-  and equivalents (`Cargo.toml` `[profile.*]`).
-- **Configuration keys** from `[configuration]` sections of
-  `once.toml`.
+Additional feature names, profile names, and configuration keys require
+their own disclosure analysis before being included.
 
 Everything in the context is data already present in the repository
 under source control, or in a manifest the repository imports.
@@ -96,12 +88,12 @@ Root `once.toml` gains one optional section:
 
 ```toml
 [reporting]
-argv_privacy = "show"   # default. Emits SafeLiteral for every match.
-argv_privacy = "strict" # opts back into the v1 defensive-first default.
+argv_privacy = "workspace" # opt in to readable graph target names
+# argv_privacy = "strict"   # default, hashes values outside the fixed allowlist
 ```
 
 No other keys are introduced in this RFC. Fine-grained per-token
-policies are a follow-up if `strict` and `show` prove insufficient.
+policies are a follow-up if `strict` and `workspace` prove insufficient.
 
 ## Compatibility
 
@@ -115,9 +107,10 @@ policies are a follow-up if `strict` and `show` prove insufficient.
 - **Older clients**: unchanged behaviour. Their runs continue to
   emit under the v1 allowlist and render with the same opaque
   positions.
-- **Older servers**: reject the new allowlist version they do not
-  know. Clients degrade to the v1 model when the server declares an
-  older version in `ServerCapabilities.safe_literal_allowlist_version`.
+- **Older servers**: a server advertising the baseline version receives only
+  the fixed safe literals and their baseline version. Unknown versions reject
+  preflight before any arguments are sent. Readable workspace names require
+  the matching version on both ends.
 
 ## Non-Goals
 
@@ -134,8 +127,7 @@ policies are a follow-up if `strict` and `show` prove insufficient.
 1. Land the client change behind a new allowlist version.
 2. Land the server-side allowlist checker for the new version.
 3. Ship both together; older clients keep working under the old
-   version and older servers reject the new version, so no run
-   silently downgrades or is quarantined.
+   version. Keep the strict default when server validation is unavailable.
 4. Document the `[reporting] argv_privacy` key in the workspace
    manifest reference.
 
