@@ -102,6 +102,8 @@ pub enum ManifestSchemaError {
     ConfigurationTokenEmpty,
     #[error("module paths are only loaded from the root once.toml")]
     ModulePathsInPackage,
+    #[error("reporting settings are only loaded from the root once.toml")]
+    ReportingInPackage,
     #[error("use either [modules] or [rules], not both")]
     ModulesAndRulesBothSet,
     #[error("target name is required")]

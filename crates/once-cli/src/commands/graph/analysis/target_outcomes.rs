@@ -26,8 +26,8 @@ use std::path::{Path, PathBuf};
 
 use once_cas::{ActionResult, Digest};
 use once_core::{EvidenceCacheState, InputFingerprintManifest, SandboxMode};
-use once_frontend::GraphTarget;
 use once_frontend::analysis::{AnalysisObservations, Observation};
+use once_frontend::GraphTarget;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
@@ -35,7 +35,7 @@ use super::source_digest_cache::KnownChanges;
 use super::{AvailableInput, BuildOutcome};
 use crate::commands::change_tracker::ChangePosition;
 
-const SCHEMA: &str = "once.target-outcomes.v3";
+const SCHEMA: &str = "once.target-outcomes.v4";
 
 /// A pattern set one target's analysis expanded, and where it was anchored.
 ///

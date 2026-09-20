@@ -13,22 +13,22 @@ mod configuration;
 mod contract;
 mod lint;
 
-pub use contract::{ActionContractValidation, validate_action_contracts};
+pub use contract::{validate_action_contracts, ActionContractValidation};
 
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use once_cas::{CacheProvider, Digest};
 use once_core::{EvidenceCacheState, LintSeverity, ResourceLimits, RunEventBus, SandboxMode};
-use once_frontend::GraphTarget;
 use once_frontend::analysis::AnalysisOptions;
+use once_frontend::GraphTarget;
 
 pub use self::capability::load_graph_for_capability_with_configuration;
 use self::capability::{
-    CapabilityRunRecord, build_target, ensure_capability, record_capability_run,
-    run_target_capability, write_record,
+    build_target, ensure_capability, record_capability_run, run_target_capability, write_record,
+    CapabilityRunRecord,
 };
 use self::lint::{
     lint_provider_output_path, persist_lint_results, validate_lint_provider, write_lint_results,
@@ -497,7 +497,7 @@ fn cache_provider_account(workspace: &std::path::Path) -> Option<String> {
     let xdg = once_core::Xdg::from_env();
     match crate::cache_provider::resolve_config(workspace, &xdg).ok()? {
         crate::cache_provider::ResolvedCacheProviderConfig::Tuist(config) => config.account,
-        _ => None,
+        crate::cache_provider::ResolvedCacheProviderConfig::Local => None,
     }
 }
 
@@ -506,7 +506,7 @@ fn cache_provider_project(workspace: &std::path::Path) -> Option<String> {
     let xdg = once_core::Xdg::from_env();
     match crate::cache_provider::resolve_config(workspace, &xdg).ok()? {
         crate::cache_provider::ResolvedCacheProviderConfig::Tuist(config) => config.project,
-        _ => None,
+        crate::cache_provider::ResolvedCacheProviderConfig::Local => None,
     }
 }
 
@@ -829,21 +829,20 @@ pub async fn test_with_filters(
     // Fan the normalized test-results blob out as
     // `TestSuiteStarted` / `TestCaseCompleted` / `TestSuiteCompleted`
     // events on the bus so the server projector can persist per-case
-    // rows. The blob is batched at end today (Bazel-style) — the
-    // Once server side ingests each event as it arrives, so migrating
-    // to truly-streaming emission is a client-side change only.
-    eprintln!(
-        "once-debug: test_results is_some={} for target {}",
-        test_results.is_some(),
-        target_id
+    // rows. These cases are retrospective because this runner supplies a
+    // report only after execution. Streaming-capable runners publish live
+    // starts and completions directly from their output observer.
+    tracing::debug!(
+        has_test_results = test_results.is_some(),
+        target = target_id,
+        "publishing test results"
     );
     if let Some(results) = &test_results {
         let n = results
             .get("cases")
             .and_then(serde_json::Value::as_array)
-            .map(std::vec::Vec::len)
-            .unwrap_or(0);
-        eprintln!("once-debug: publishing {} test cases for {}", n, target_id);
+            .map_or(0, std::vec::Vec::len);
+        tracing::debug!(cases = n, target = target_id, "publishing test cases");
         publish_test_results_events(&bus, target_id, results);
     }
     let duration_ms: u64 = started_at
@@ -883,14 +882,8 @@ pub async fn test_with_filters(
 // one `TestCaseCompleted` per attempt of each case, and a closing
 // `TestSuiteCompleted` with the aggregated totals.
 //
-// The current wire proto's `TestCaseCompleted` predates Once's
-// native protocol — it identifies the case by a synthetic
-// `test_case_execution_id` and expects the server to remember the
-// matching `TestCaseStarted` for name/suite metadata. The server's
-// projector accepts our shape as-is (the composite id becomes the
-// `case_id`), and we plan to extend the wire event with
-// self-describing `name`/`suite_id`/`attempt` fields so the server
-// no longer needs the join.
+// Retrospective results carry their own case, suite, and attempt identity.
+// They do not invent a start time when the test runner only exposes a report.
 fn publish_test_results_events(
     bus: &once_core::RunEventBus,
     target_id: &str,
@@ -900,19 +893,18 @@ fn publish_test_results_events(
 
     let now = bus_events::now_ms();
 
-    let cases = results
-        .get("cases")
-        .and_then(serde_json::Value::as_array);
+    let cases = results.get("cases").and_then(serde_json::Value::as_array);
 
-    let case_count = cases.map(|c| c.len()).unwrap_or(0);
+    let case_count = cases.map_or(0, std::vec::Vec::len);
 
     bus.publish(RunEvent::TestSuiteStarted {
         at_epoch_ms: now,
         target_id: target_id.to_string(),
-        planned_case_count: Some(case_count as u32),
+        planned_case_count: Some(u32::try_from(case_count).unwrap_or(u32::MAX)),
     });
 
     let mut totals = TestTotals {
+        unknown: 0,
         passed: 0,
         failed: 0,
         skipped: 0,
@@ -931,9 +923,11 @@ fn publish_test_results_events(
                 .get("name")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or(case_id);
-            let attempts = case
-                .get("attempts")
-                .and_then(serde_json::Value::as_array);
+            let suite_id = case
+                .get("suite")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let attempts = case.get("attempts").and_then(serde_json::Value::as_array);
             if attempts.is_none() || case_id.is_empty() {
                 continue;
             }
@@ -943,24 +937,29 @@ fn publish_test_results_events(
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("passed");
                 let result = match status {
-                    "passed" | "pass" | "ok" => TestCaseResult::Passed,
-                    "failed" | "fail" | "failure" | "error" => TestCaseResult::Failed,
+                    "failed" | "fail" | "failure" => TestCaseResult::Failed,
                     "skipped" | "ignored" | "pending" => TestCaseResult::Skipped,
-                    "errored" => TestCaseResult::Errored,
+                    "errored" | "error" => TestCaseResult::Errored,
                     "timed_out" | "timeout" => TestCaseResult::TimedOut,
                     "cancelled" | "canceled" => TestCaseResult::Cancelled,
-                    _ => TestCaseResult::Passed,
+                    "passed" | "pass" | "ok" => TestCaseResult::Passed,
+                    _ => TestCaseResult::Unknown,
                 };
                 let duration_ms = attempt
                     .get("duration_ms")
                     .and_then(serde_json::Value::as_i64)
                     .unwrap_or(0);
+                let duration_known = attempt
+                    .get("duration_ms")
+                    .and_then(serde_json::Value::as_i64)
+                    .is_some();
                 let failure_message = attempt
                     .get("failure")
                     .and_then(|v| v.get("message"))
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string);
                 match result {
+                    TestCaseResult::Unknown => totals.unknown += 1,
                     TestCaseResult::Passed => totals.passed += 1,
                     TestCaseResult::Failed => totals.failed += 1,
                     TestCaseResult::Skipped => totals.skipped += 1,
@@ -968,20 +967,18 @@ fn publish_test_results_events(
                     TestCaseResult::TimedOut => totals.timed_out += 1,
                     TestCaseResult::Cancelled => totals.cancelled += 1,
                 }
-                // Suffix `case_id` with the attempt index so the
-                // wire's composite `test_case_execution_id`
-                // (`target#case#attempt`) stays unique per attempt.
-                let case_id_with_attempt =
-                    if idx == 0 { case_id.to_string() } else { format!("{case_id}#{}", idx + 1) };
                 bus.publish(RunEvent::TestCaseCompleted {
                     at_epoch_ms: bus_events::now_ms(),
                     target_id: target_id.to_string(),
-                    case_id: case_id_with_attempt,
+                    case_id: case_id.to_string(),
+                    name: name.to_string(),
+                    suite_id: suite_id.to_string(),
+                    attempt: u32::try_from(idx + 1).unwrap_or(u32::MAX),
                     result,
                     duration_ms,
+                    duration_known,
                     failure_message,
                 });
-                let _ = name; // Name is currently dropped by the wire; kept as an anchor for future protocol iteration.
             }
         }
     }
@@ -1095,6 +1092,52 @@ mod tests {
     use super::*;
     use once_cas::ActionResult;
     use once_frontend::{Capability, TargetLabel};
+
+    #[test]
+    fn retrospective_cases_preserve_unknown_status_and_attempt_identity() {
+        let bus = once_core::RunEventBus::new(16);
+        let mut receiver = bus.subscribe();
+        let results = serde_json::json!({
+            "cases": [{
+                "id": "parser::case",
+                "name": "case",
+                "suite": "parser",
+                "attempts": [{"status": "unknown"}, {"status": "passed"}]
+            }]
+        });
+        publish_test_results_events(&bus, "tests", &results);
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            once_core::RunEvent::TestSuiteStarted {
+                planned_case_count: Some(1),
+                ..
+            }
+        ));
+        assert!(
+            matches!(receiver.try_recv().unwrap(), once_core::RunEvent::TestCaseCompleted {
+            case_id, name, suite_id, attempt: 1, result: once_core::TestCaseResult::Unknown, ..
+        } if case_id == "parser::case" && name == "case" && suite_id == "parser")
+        );
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            once_core::RunEvent::TestCaseCompleted {
+                attempt: 2,
+                result: once_core::TestCaseResult::Passed,
+                ..
+            }
+        ));
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            once_core::RunEvent::TestSuiteCompleted {
+                totals: once_core::TestTotals {
+                    unknown: 1,
+                    passed: 1,
+                    ..
+                },
+                ..
+            }
+        ));
+    }
 
     fn action_result() -> ActionResult {
         ActionResult {

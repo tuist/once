@@ -91,8 +91,7 @@ impl<'a> BuildScheduler<'a> {
                     "materialize_outputs",
                     materialize_worker.worker_id(),
                     materialize_started_at_ms,
-                    u64::try_from(materialize_started_at.elapsed().as_millis())
-                        .unwrap_or(u64::MAX),
+                    u64::try_from(materialize_started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
                 );
             }
             drop(materialize_worker);

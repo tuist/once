@@ -44,6 +44,27 @@ pub enum RunEvent {
         was_cached: bool,
         duration_ms: i64,
     },
+    /// A worker began preparing one attempt of a declared action.
+    ActionAttemptStarted {
+        at_epoch_ms: i64,
+        target_id: String,
+        capability: String,
+        action_index: u32,
+        attempt: u32,
+        worker_id: String,
+    },
+    /// One attempt ended; the logical action outcome selects an attempt.
+    ActionAttemptCompleted {
+        at_epoch_ms: i64,
+        target_id: String,
+        capability: String,
+        action_index: u32,
+        attempt: u32,
+        result: TargetResult,
+        exit_code: i32,
+        duration_ms: i64,
+        was_cached: bool,
+    },
     /// One declared action inside a target finished. Emitted per
     /// action so a subscriber can render the internal task list of a
     /// target (Bazel's actions view: "Compiling foo.cc", "Linking
@@ -83,6 +104,9 @@ pub enum RunEvent {
         // key Once probed. Empty string when unknown (a failure that
         // never reached the cache probe).
         cache_key: String,
+        /// Selected attempt number, or zero for a retained action outcome
+        /// with no execution attempt in this run.
+        selected_attempt: u32,
     },
     /// A single content blob crossed the cache boundary — either
     /// pulled down from the remote tier ("download") or pushed up
@@ -140,8 +164,12 @@ pub enum RunEvent {
         at_epoch_ms: i64,
         target_id: String,
         case_id: String,
+        name: String,
+        suite_id: String,
+        attempt: u32,
         result: TestCaseResult,
         duration_ms: i64,
+        duration_known: bool,
         failure_message: Option<String>,
     },
     /// Periodic host-resource sample published while a run executes so
@@ -150,6 +178,7 @@ pub enum RunEvent {
     /// background task while the run is live.
     SystemSampled {
         at_epoch_ms: i64,
+        interval_ms: u32,
         cpu_percent: f32,
         memory_bytes: u64,
         network_in_bytes_per_second: u64,
@@ -188,6 +217,7 @@ pub enum Phase {
 /// Terminal status of a test case.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TestCaseResult {
+    Unknown,
     Passed,
     Failed,
     Skipped,
@@ -199,6 +229,7 @@ pub enum TestCaseResult {
 /// Aggregate totals for a test suite.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TestTotals {
+    pub unknown: u32,
     pub passed: u32,
     pub failed: u32,
     pub skipped: u32,

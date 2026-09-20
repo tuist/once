@@ -46,26 +46,26 @@ pub fn spawn_system_sampler(bus: &once_core::RunEventBus) -> SystemSamplerHandle
 
         // sysinfo's CPU usage needs two refreshes to compute a delta.
         system.refresh_cpu_usage();
-        tokio::time::sleep(std::time::Duration::from_millis(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL.as_millis() as u64 + 50)).await;
+        tokio::time::sleep(
+            sysinfo::MINIMUM_CPU_UPDATE_INTERVAL + std::time::Duration::from_millis(50),
+        )
+        .await;
 
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut previous_sample = std::time::Instant::now();
 
         loop {
             tokio::select! {
                 _ = interval.tick() => {
+                    let now = std::time::Instant::now();
+                    let interval_ms = u32::try_from(now.duration_since(previous_sample).as_millis()).unwrap_or(u32::MAX);
+                    previous_sample = now;
                     system.refresh_cpu_usage();
                     system.refresh_memory();
                     networks.refresh(true);
 
-                    let cpu_percent = {
-                        let cpus = system.cpus();
-                        if cpus.is_empty() {
-                            0.0
-                        } else {
-                            cpus.iter().map(|cpu| cpu.cpu_usage()).sum::<f32>() / cpus.len() as f32
-                        }
-                    };
+                    let cpu_percent = system.global_cpu_usage();
                     let memory_bytes = system.used_memory();
                     let (network_in, network_out) = networks
                         .iter()
@@ -75,10 +75,11 @@ pub fn spawn_system_sampler(bus: &once_core::RunEventBus) -> SystemSamplerHandle
 
                     bus.publish(RunEvent::SystemSampled {
                         at_epoch_ms: now_epoch_ms(),
+                        interval_ms,
                         cpu_percent,
                         memory_bytes,
-                        network_in_bytes_per_second: network_in,
-                        network_out_bytes_per_second: network_out,
+                        network_in_bytes_per_second: network_in.saturating_mul(1000) / u64::from(interval_ms.max(1)),
+                        network_out_bytes_per_second: network_out.saturating_mul(1000) / u64::from(interval_ms.max(1)),
                     });
                 }
                 _ = &mut shutdown_rx => break,
@@ -192,7 +193,7 @@ impl Drop for WorkerGuard {
 }
 
 /// Emit a completed span for one of the coarse target-level phases
-/// (analysis, materialize_outputs, ...) that consume most of the wall
+/// (analysis, `materialize_outputs`, ...) that consume most of the wall
 /// clock on cache-hit builds but never show up as declared actions.
 /// Rides the existing `ActionCompleted` shape so it lands on the same
 /// worker lane in the flame graph; the server projector treats a
@@ -221,6 +222,7 @@ pub fn target_phase_completed(
         prepare_ms: 0,
         execute_ms: 0,
         cache_key: String::new(),
+        selected_attempt: 0,
     });
 }
 
@@ -403,6 +405,7 @@ pub fn action_completed(
     // `action_digest`). Empty when unknown (a failure that couldn't
     // even compute one).
     cache_key: &str,
+    selected_attempt: u32,
 ) {
     let result = if exit_code == 0 {
         TargetResult::Succeeded
@@ -425,6 +428,50 @@ pub fn action_completed(
         prepare_ms,
         execute_ms,
         cache_key: cache_key.to_string(),
+        selected_attempt,
+    });
+}
+
+pub fn action_attempt_started(
+    bus: &RunEventBus,
+    target_id: &str,
+    capability: &str,
+    action_index: u32,
+    worker_id: &str,
+) {
+    bus.publish(RunEvent::ActionAttemptStarted {
+        at_epoch_ms: now_epoch_ms(),
+        target_id: target_id.to_string(),
+        capability: capability.to_string(),
+        action_index,
+        attempt: 1,
+        worker_id: worker_id.to_string(),
+    });
+}
+
+pub fn action_attempt_completed(
+    bus: &RunEventBus,
+    target_id: &str,
+    capability: &str,
+    action_index: u32,
+    duration_ms: u64,
+    was_cached: bool,
+    exit_code: i32,
+) {
+    bus.publish(RunEvent::ActionAttemptCompleted {
+        at_epoch_ms: now_epoch_ms(),
+        target_id: target_id.to_string(),
+        capability: capability.to_string(),
+        action_index,
+        attempt: 1,
+        result: if exit_code == 0 {
+            TargetResult::Succeeded
+        } else {
+            TargetResult::Failed
+        },
+        exit_code,
+        duration_ms: i64::try_from(duration_ms).unwrap_or(i64::MAX),
+        was_cached,
     });
 }
 
@@ -468,15 +515,17 @@ impl ActionOutputObserver for BusOutputObserver {
         if bytes.is_empty() {
             return;
         }
-        self.bus.publish(RunEvent::LogChunk {
-            at_epoch_ms: now_epoch_ms(),
-            target_id: self.target_id.clone(),
-            stream: match stream {
-                ActionOutputStream::Stdout => LogStream::Stdout,
-                ActionOutputStream::Stderr => LogStream::Stderr,
-            },
-            bytes: bytes.to_vec(),
-        });
+        for chunk in bytes.chunks(16 * 1024) {
+            self.bus.publish(RunEvent::LogChunk {
+                at_epoch_ms: now_epoch_ms(),
+                target_id: self.target_id.clone(),
+                stream: match stream {
+                    ActionOutputStream::Stdout => LogStream::Stdout,
+                    ActionOutputStream::Stderr => LogStream::Stderr,
+                },
+                bytes: chunk.to_vec(),
+            });
+        }
     }
 }
 

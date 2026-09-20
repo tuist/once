@@ -55,6 +55,7 @@ pub fn parse_line(target_id: &str, line: &str, emit: &mut impl FnMut(RunEvent)) 
                 at_epoch_ms: at,
                 target_id: target_id.to_string(),
                 totals: TestTotals {
+                    unknown: 0,
                     passed: record.passed.unwrap_or(0),
                     failed: record.failed.unwrap_or(0),
                     skipped: record.ignored.unwrap_or(0),
@@ -80,9 +81,13 @@ pub fn parse_line(target_id: &str, line: &str, emit: &mut impl FnMut(RunEvent)) 
                 emit(RunEvent::TestCaseCompleted {
                     at_epoch_ms: at,
                     target_id: target_id.to_string(),
-                    case_id: name,
+                    case_id: name.clone(),
+                    name,
+                    suite_id: String::new(),
+                    attempt: 1,
                     result: TestCaseResult::Passed,
                     duration_ms: seconds_to_millis(record.exec_time),
+                    duration_known: record.exec_time.is_some(),
                     failure_message: None,
                 });
             }
@@ -92,9 +97,13 @@ pub fn parse_line(target_id: &str, line: &str, emit: &mut impl FnMut(RunEvent)) 
                 emit(RunEvent::TestCaseCompleted {
                     at_epoch_ms: at,
                     target_id: target_id.to_string(),
-                    case_id: name,
+                    case_id: name.clone(),
+                    name,
+                    suite_id: String::new(),
+                    attempt: 1,
                     result: TestCaseResult::Failed,
                     duration_ms: seconds_to_millis(record.exec_time),
+                    duration_known: record.exec_time.is_some(),
                     failure_message: record.stdout,
                 });
             }
@@ -104,9 +113,13 @@ pub fn parse_line(target_id: &str, line: &str, emit: &mut impl FnMut(RunEvent)) 
                 emit(RunEvent::TestCaseCompleted {
                     at_epoch_ms: at,
                     target_id: target_id.to_string(),
-                    case_id: name,
+                    case_id: name.clone(),
+                    name,
+                    suite_id: String::new(),
+                    attempt: 1,
                     result: TestCaseResult::Skipped,
                     duration_ms: 0,
+                    duration_known: false,
                     failure_message: None,
                 });
             }
@@ -202,6 +215,7 @@ mod tests {
             events[3],
             RunEvent::TestSuiteCompleted {
                 totals: TestTotals {
+                    unknown: 0,
                     passed: 1,
                     failed: 0,
                     ..

@@ -35,15 +35,15 @@ use once_core::{
     ActionOutputObserver, EvidenceCacheState, InputFingerprintManifest, ResourceLimits,
     ResourcePool, SandboxMode,
 };
-use once_frontend::ConfigurationOverrides;
-use once_frontend::GraphTarget;
 use once_frontend::analysis::{
     AnalysisEngine, AnalysisOptions, CachedToolCommand, CommandPolicy, UnchangedWorkspace,
 };
+use once_frontend::ConfigurationOverrides;
+use once_frontend::GraphTarget;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
-use self::actions::{DeclaredActionValidation, run_declared_actions, validate_declared_actions};
+use self::actions::{run_declared_actions, validate_declared_actions, DeclaredActionValidation};
 use self::analysis_memo::AnalysisMemo;
 use self::resolution_cache::ResolutionCache;
 use self::scheduler::{BuildScheduler, DependencyInputs};
@@ -51,8 +51,8 @@ use self::source_digest_cache::{KnownChanges, SourceDigestCache};
 use self::target_outcomes::TargetOutcomes;
 use crate::commands::change_tracker::{ChangePosition, ChangeSnapshot};
 
-pub(super) use self::source_digest_cache::SourceDigestCache as RecordedDigests;
 pub(super) use self::source_digest_cache::stored_position as recorded_digest_position;
+pub(super) use self::source_digest_cache::SourceDigestCache as RecordedDigests;
 
 /// Turn a watcher snapshot into a statement about the recorded digests.
 ///
@@ -152,6 +152,7 @@ pub(super) struct BuildOutcome {
 /// A single declared action's terminal state, as observed by the runner.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(super) struct PerActionOutcome {
+    pub action_digest: Digest,
     pub identifier: Option<String>,
     pub index: u32,
     pub cache_state: EvidenceCacheState,
@@ -519,6 +520,8 @@ impl BuildSession {
                 available_inputs,
             } = self.analyze_capability(target, capability).await?;
             validate_provider(target, &analysis.provider)?;
+            let workers =
+                crate::bus_events::WorkerSlots::new(self.resources.max_parallel_actions());
             let outcome = run_declared_actions(
                 Some(&self.analyzer),
                 &self.workspace,
@@ -755,8 +758,7 @@ impl BuildSession {
         // ceiling, actions would sometimes wait on the WorkerSlots
         // pool instead of the ResourcePool; if it had more, some
         // slots would never be picked.
-        let workers =
-            crate::bus_events::WorkerSlots::new(self.resources.max_parallel_actions());
+        let workers = crate::bus_events::WorkerSlots::new(self.resources.max_parallel_actions());
         BuildContext {
             workspace: self.workspace.clone(),
             cache: self.cache.clone(),
@@ -1344,66 +1346,20 @@ async fn build_one(
                     u64::try_from(build_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
                 let was_cached = matches!(outcome.cache_state, once_core::EvidenceCacheState::Hit);
                 for action in &outcome.per_action_outcomes {
-                    // Cached-replay actions have no real per-action
-                    // timing, but the wall-clock start still exists.
-                    // Stagger each action by a millisecond so they
-                    // don't stack on the same tick and become
-                    // invisible zero-width dashes on the flame graph.
-                    let started_at = build_started_at_epoch_ms
-                        .saturating_add(i64::from(action.index));
-                    // Rotate through the worker pool one replay at a
-                    // time so the flame graph spreads cached-replay
-                    // actions across lanes instead of piling them all
-                    // on `worker-0`.
-                    let worker = workers.acquire().await;
-                    // The per-target `outcome.action_digest` is the
-                    // aggregated key across all declared actions in
-                    // that target — the closest analog to a per-action
-                    // cache key on the reuse path (individual action
-                    // digests aren't stored on the outcome record).
-                    let cache_key = outcome.action_digest.to_string();
                     crate::bus_events::action_completed(
                         bus,
                         &target_id,
                         "build",
                         action.index,
                         action.identifier.as_deref(),
-                        1,
+                        0,
                         true,
                         action.exit_code,
-                        started_at,
-                        worker.worker_id(),
+                        build_started_at_epoch_ms,
+                        "",
                         0,
                         0,
-                        &cache_key,
-                    );
-                }
-                // Emit one CacheContentTransferred per unique output
-                // blob so the Cache tab's Content Objects view fills
-                // in even for target-outcome-reused runs, which
-                // bypass `materialize_cached_outputs`. Merge digests
-                // from both the aggregated `result.outputs` and each
-                // `cached_results[*].outputs` because either may be
-                // populated depending on how the outcome was recorded.
-                let mut seen = std::collections::HashSet::new();
-                let mut digests: Vec<once_cas::Digest> =
-                    outcome.result.outputs.values().copied().collect();
-                for result in &outcome.cached_results {
-                    for digest in result.outputs.values() {
-                        digests.push(*digest);
-                    }
-                }
-                for digest in digests {
-                    if !seen.insert(digest) {
-                        continue;
-                    }
-                    let size = cache.blob_size(&digest).await.unwrap_or(0);
-                    crate::bus_events::cache_content_transferred(
-                        bus,
-                        "download",
-                        &target_id,
-                        &digest.to_string(),
-                        size,
+                        &action.action_digest.to_string(),
                         0,
                     );
                 }

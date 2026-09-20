@@ -11,7 +11,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use once_cas::{TUIST_OAUTH_CLIENT_ID_ENV, TuistAuth, TuistCacheConfig};
+use once_cas::{TuistAuth, TuistCacheConfig, TUIST_OAUTH_CLIENT_ID_ENV};
 use once_core::{RunEventBus, Xdg};
 use once_events_client::{
     EventClient, ReconnectPolicy, SessionLimits, TransportConfig, TransportError,
@@ -21,7 +21,7 @@ use tokio::task::JoinHandle;
 use tonic::transport::{Channel, Endpoint};
 
 use crate::argv_normalize::SafeContext;
-use crate::cache_provider::{ResolvedCacheProviderConfig, credentials_root, resolve_config};
+use crate::cache_provider::{credentials_root, resolve_config, ResolvedCacheProviderConfig};
 use crate::discovery;
 
 /// Handle to a spawned live reporter. Await [`Self::finish`] before the
@@ -59,6 +59,7 @@ impl LiveRunReporter {
 /// Establish reporting with a bounded preflight, then stream in the background.
 /// Missing configuration or a connection failure is logged without failing
 /// the build.
+#[allow(clippy::too_many_lines)]
 pub async fn spawn(
     bus: &RunEventBus,
     workspace: &Path,
@@ -85,12 +86,9 @@ pub async fn spawn(
             let account = account.unwrap_or_default();
             let project = project.unwrap_or_default();
 
-            let (endpoint_url, live_url_template) = match resolve_events(&workspace, &xdg).await {
-                Some(resolved) => resolved,
-                None => {
-                    tracing::debug!("Once live reporter: no events endpoint configured");
-                    return Ok(0);
-                }
+            let Some(endpoint_url) = resolve_events(&workspace, &xdg).await else {
+                tracing::debug!("Once live reporter: no events endpoint configured");
+                return Ok(0);
             };
 
             let Some(token) = auth_token(&workspace, &xdg) else {
@@ -106,17 +104,6 @@ pub async fn spawn(
                 }
             };
 
-            // Print the live URL as soon as we have it. Best-effort: skip
-            // when the template is missing (the server did not advertise
-            // one) rather than fail the build.
-            if let Some(template) = live_url_template.as_deref() {
-                let live_url = template
-                    .replace("{account}", &account)
-                    .replace("{project}", &project)
-                    .replace("{run_id}", &run_id);
-                eprintln!("\n  ↗ Once live: {live_url}\n");
-            }
-
             let client = EventClient::authenticated(
                 channel,
                 TransportConfig {
@@ -131,20 +118,35 @@ pub async fn spawn(
                 tracing::debug!("Once live reporter: invalid authorization metadata");
                 return Ok(0);
             };
-            let key = client.argv_hash_key(format!("{account}/{project}")).await?;
+            let caps = tokio::time::timeout(Duration::from_secs(5), client.capabilities())
+                .await
+                .map_err(|_| TransportError::PreflightTimeout)??;
+            let allowlist_version = match caps.safe_literal_allowlist_version.as_str() {
+                crate::argv_normalize::SAFE_LITERAL_ALLOWLIST_VERSION => {
+                    crate::argv_normalize::SAFE_LITERAL_ALLOWLIST_VERSION
+                }
+                crate::argv_normalize::BASE_SAFE_LITERAL_ALLOWLIST_VERSION => {
+                    crate::argv_normalize::BASE_SAFE_LITERAL_ALLOWLIST_VERSION
+                }
+                _ => return Err(TransportError::UnsupportedCapabilities),
+            };
+            let key = tokio::time::timeout(
+                Duration::from_secs(5),
+                client.argv_hash_key(format!("{account}/{project}")),
+            )
+            .await
+            .map_err(|_| TransportError::PreflightTimeout)??;
             let mut argv: Vec<String> = std::env::args().collect();
             if let Some(command) = argv.first_mut() {
                 *command = "once".to_string();
             }
-            let git_rev = std::process::Command::new("git")
-                .args(["rev-parse", "HEAD"])
-                .current_dir(&workspace)
-                .output()
-                .ok()
-                .filter(|output| output.status.success())
-                .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-                .unwrap_or_default();
-            let safe_context = build_safe_context(&workspace);
+            let git_rev = git_revision(&workspace);
+            let safe_context =
+                if allowlist_version == crate::argv_normalize::SAFE_LITERAL_ALLOWLIST_VERSION {
+                    build_safe_context(&workspace)
+                } else {
+                    SafeContext::empty()
+                };
             let metadata = once_events_client::proto::RunStarted {
                 // `ONCE_VERSION` is stamped by `crates/once-cli/build.rs`
                 // from `ONCE_RELEASE_VERSION` at release time and
@@ -162,8 +164,7 @@ pub async fn spawn(
                 ),
                 argv_hash_key_id: key.key_id,
                 cwd_relative: crate::argv_normalize::cwd_relative(&workspace, &workspace),
-                safe_literal_allowlist_version:
-                    crate::argv_normalize::SAFE_LITERAL_ALLOWLIST_VERSION.to_string(),
+                safe_literal_allowlist_version: allowlist_version.to_string(),
                 project_id: format!("{account}/{project}"),
                 ..Default::default()
             };
@@ -171,6 +172,7 @@ pub async fn spawn(
             let _ = ready_tx.send(());
             client
                 .with_metadata(metadata)
+                .with_dashboard_link(|link| eprintln!("\n  ↗ Once live: {link}\n"))
                 .run_with_reconnect(bus_rx, shutdown_rx, ReconnectPolicy::default())
                 .await
         })
@@ -184,7 +186,7 @@ pub async fn spawn(
     }
 }
 
-async fn resolve_events(workspace: &Path, xdg: &Xdg) -> Option<(String, Option<String>)> {
+async fn resolve_events(workspace: &Path, xdg: &Xdg) -> Option<String> {
     let ResolvedCacheProviderConfig::Tuist(config) = resolve_config(workspace, xdg).ok()? else {
         return None;
     };
@@ -192,15 +194,16 @@ async fn resolve_events(workspace: &Path, xdg: &Xdg) -> Option<(String, Option<S
     let base = config.url.trim_end_matches('/').to_string();
     match discovery::fetch(&base).await {
         Ok(Some(doc)) => {
-            let url = doc.events.first_url()?.to_string();
-            Some((url, doc.live_url_template))
+            let url = doc.events.first()?.clone();
+            Some(url)
         }
         _ => None,
     }
 }
 
 async fn build_channel(url: &str) -> Result<Channel, tonic::transport::Error> {
-    let endpoint = Endpoint::from_shared(normalize_grpc_url(url))?;
+    let endpoint =
+        Endpoint::from_shared(normalize_grpc_url(url))?.connect_timeout(Duration::from_secs(5));
     endpoint.connect().await
 }
 
@@ -233,28 +236,23 @@ fn read_token(config: &TuistCacheConfig, xdg: &Xdg) -> Option<String> {
 
 /// Build the workspace safe context for RFC 0009 argv classification.
 ///
-/// Reads the loaded graph's target labels and honours a workspace
-/// opt-out. `[reporting] argv_privacy = "strict"` in root `once.toml`
-/// returns an empty context, which reproduces the RFC 0008 behaviour
-/// verbatim. Any failure to load the graph or read the manifest also
-/// returns an empty context: widening classification is a
-/// best-effort readability improvement, never a correctness
-/// guarantee.
+/// Reads target labels only when the workspace explicitly opts in with
+/// `[reporting] argv_privacy = "workspace"` in root `once.toml`.
+/// Unknown or unreadable configuration retains strict redaction.
 fn build_safe_context(workspace: &Path) -> SafeContext {
-    if is_strict_mode(workspace) {
+    if !workspace_disclosure_enabled(workspace) {
         return SafeContext::empty();
     }
     let mut context = SafeContext::empty();
     if let Ok(targets) = once_frontend::load_graph_workspace(workspace) {
         for target in targets {
-            context.insert(target.label.id.clone());
-            context.insert(target.label.name.clone());
+            context.extend([target.label.id.clone(), target.label.name.clone()]);
         }
     }
     context
 }
 
-fn is_strict_mode(workspace: &Path) -> bool {
+fn workspace_disclosure_enabled(workspace: &Path) -> bool {
     let manifest_path = workspace.join("once.toml");
     let Ok(source) = std::fs::read_to_string(&manifest_path) else {
         return false;
@@ -266,7 +264,7 @@ fn is_strict_mode(workspace: &Path) -> bool {
         .get("reporting")
         .and_then(|table| table.get("argv_privacy"))
         .and_then(|v| v.as_str())
-        .is_some_and(|mode| mode.eq_ignore_ascii_case("strict"))
+        .is_some_and(|mode| mode.eq_ignore_ascii_case("workspace"))
 }
 
 fn new_run_id() -> String {
@@ -274,11 +272,45 @@ fn new_run_id() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or_default();
-    let non_negative = now_ms.min(u128::from(u64::MAX)) as u64;
+    let non_negative = u64::try_from(now_ms).unwrap_or(u64::MAX);
     let uuid = uuid::Uuid::new_v7(uuid::Timestamp::from_unix(
         uuid::NoContext,
         non_negative / 1000,
         u32::try_from((non_negative % 1000) * 1_000_000).unwrap_or(0),
     ));
     format!("run-{uuid}")
+}
+
+fn git_revision(workspace: &Path) -> String {
+    std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(workspace)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::workspace_disclosure_enabled;
+
+    #[test]
+    fn argument_disclosure_requires_explicit_workspace_setting() {
+        let workspace = tempfile::tempdir().unwrap();
+        assert!(!workspace_disclosure_enabled(workspace.path()));
+        std::fs::write(
+            workspace.path().join("once.toml"),
+            "[reporting]\nargv_privacy = 'strict'\n",
+        )
+        .unwrap();
+        assert!(!workspace_disclosure_enabled(workspace.path()));
+        std::fs::write(
+            workspace.path().join("once.toml"),
+            "[reporting]\nargv_privacy = 'workspace'\n",
+        )
+        .unwrap();
+        assert!(workspace_disclosure_enabled(workspace.path()));
+    }
 }

@@ -7,12 +7,9 @@
 //!
 //! * A token on the frozen safe-literal allowlist emits `SafeLiteral`.
 //! * A token whose exact value appears in the caller-supplied
-//!   [`SafeContext`] (target labels, feature names, profile names,
-//!   configuration keys — everything already public in the workspace
-//!   manifest) also emits `SafeLiteral`. RFC 0008 reserved this
-//!   extension explicitly; RFC 0009 lands it under a new allowlist
-//!   version so the server can distinguish clients that widened their
-//!   classifier from clients that did not.
+//!   [`SafeContext`] (currently opted-in graph target labels) also
+//!   emits `SafeLiteral`. RFC 0009 defines the opt-in policy and
+//!   stamps a new allowlist version.
 //! * `--flag` / `-x` boolean flags emit `FlagKey`.
 //! * `--key=value` combined form splits, hashing `value` under a
 //!   project-scoped BLAKE3 key. If the value is in the [`SafeContext`],
@@ -42,31 +39,84 @@ use std::collections::HashSet;
 /// server accepts them under this version only. Older clients keep
 /// declaring `v1` and continue to hash those tokens.
 pub const SAFE_LITERAL_ALLOWLIST_VERSION: &str = "2026.09.15-v2";
+pub const BASE_SAFE_LITERAL_ALLOWLIST_VERSION: &str = "2026.09.03-v1";
 
 /// The v1 safe-literal allowlist. `Never contains a value that could
 /// carry secrets`; only tool names and generic subcommands.
 pub const SAFE_LITERALS: &[&str] = &[
     // Build/package tools.
-    "cargo", "rustc", "clippy", "rustfmt", "swift", "swiftc", "xcodebuild", "go", "gofmt",
-    "npm", "pnpm", "yarn", "node", "tsc", "python", "python3", "pip", "uv", "ruby", "bundle",
-    "mise", "make", "ninja", "cmake", "bazel", "buck2", "pants", "gradle", "mvn", "once",
+    "cargo",
+    "rustc",
+    "clippy",
+    "rustfmt",
+    "swift",
+    "swiftc",
+    "xcodebuild",
+    "go",
+    "gofmt",
+    "npm",
+    "pnpm",
+    "yarn",
+    "node",
+    "tsc",
+    "python",
+    "python3",
+    "pip",
+    "uv",
+    "ruby",
+    "bundle",
+    "mise",
+    "make",
+    "ninja",
+    "cmake",
+    "bazel",
+    "buck2",
+    "pants",
+    "gradle",
+    "mvn",
+    "once",
     // Compilers and linkers.
-    "gcc", "g++", "clang", "clang++", "ld", "lld", "mold",
+    "gcc",
+    "g++",
+    "clang",
+    "clang++",
+    "ld",
+    "lld",
+    "mold",
     // Common subcommands.
-    "build", "test", "run", "check", "install", "update", "lint", "format", "fmt", "bench",
-    "doc", "clean", "add", "remove", "publish", "release", "debug",
+    "build",
+    "test",
+    "run",
+    "check",
+    "install",
+    "update",
+    "lint",
+    "format",
+    "fmt",
+    "bench",
+    "doc",
+    "clean",
+    "add",
+    "remove",
+    "publish",
+    "release",
+    "debug",
     // Framework and analyzer invocations.
-    "eslint", "prettier", "ruff", "mypy", "pyright", "black", "pytest", "jest", "vitest",
-    "rspec", "phpunit",
+    "eslint",
+    "prettier",
+    "ruff",
+    "mypy",
+    "pyright",
+    "black",
+    "pytest",
+    "jest",
+    "vitest",
+    "rspec",
+    "phpunit",
 ];
 
-/// Set of workspace-declared strings the client will emit verbatim as
-/// `SafeLiteral` in addition to the frozen allowlist. Everything in
-/// here is expected to come from data already checked into the
-/// workspace (target labels from `once.toml`, feature names declared
-/// in package manifests, profile and configuration keys). Nothing
-/// from environment or filesystem outside the workspace should enter
-/// this set.
+/// Set of explicitly opted-in workspace target labels the client can
+/// emit verbatim as `SafeLiteral` in addition to the frozen allowlist.
 ///
 /// See RFC 0009 §Workspace Safe Context.
 #[derive(Debug, Clone, Default)]
@@ -114,12 +164,11 @@ impl SafeContext {
 /// bytes are the response of `RunEventService::GetArgvHashKey` for the
 /// current project; callers cache it for the run's lifetime.
 ///
-/// Callers that have loaded the workspace graph should prefer
-/// [`normalize_argv_with_context`] so target labels, feature names,
-/// and other manifest-derived tokens emit as `SafeLiteral` per RFC
-/// 0009. This function is preserved for callers with no workspace
-/// context; it is equivalent to
+/// Callers with explicit disclosure policy may use
+/// [`normalize_argv_with_context`] for graph target labels. Without
+/// that policy, this function is equivalent to
 /// `normalize_argv_with_context(argv, key_bytes, &SafeContext::empty())`.
+#[cfg(test)]
 pub fn normalize_argv<T: AsRef<str>>(argv: &[T], key_bytes: &[u8]) -> Vec<ArgvToken> {
     normalize_argv_with_context(argv, key_bytes, &SafeContext::empty())
 }
@@ -152,7 +201,10 @@ fn is_unsafe_workspace_token(value: &str) -> bool {
     // target labels, not paths.
     if let Some((prefix, rest)) = value.split_once(':') {
         if prefix.len() == 1
-            && prefix.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+            && prefix
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic())
             && (rest.starts_with('/') || rest.starts_with('\\'))
         {
             return true;
@@ -293,11 +345,8 @@ mod tests {
     #[test]
     fn workspace_known_positional_emits_safe_literal() {
         let context = context_with(["once-core", "my-app"]);
-        let tokens = normalize_argv_with_context(
-            &["cargo", "test", "-p", "once-core"],
-            &key(),
-            &context,
-        );
+        let tokens =
+            normalize_argv_with_context(&["cargo", "test", "-p", "once-core"], &key(), &context);
         assert!(matches!(tokens[2].token, Some(Token::FlagKey(ref k)) if k == "-p"));
         assert!(
             matches!(tokens[3].token, Some(Token::SafeLiteral(ref v)) if v == "once-core"),
@@ -329,7 +378,7 @@ mod tests {
             Some(Token::SafeLiteral(value)) => {
                 assert_eq!(value, "--features=telemetry");
             }
-            other => panic!("expected SafeLiteral, got {:?}", other),
+            other => panic!("expected SafeLiteral, got {other:?}"),
         }
     }
 

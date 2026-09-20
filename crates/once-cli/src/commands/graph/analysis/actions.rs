@@ -31,7 +31,7 @@ use tokio::process::Command;
 
 use super::output_state;
 use super::source_digest_cache::SourceDigestCache;
-use super::{AvailableInput, BuildOutcome};
+use super::{AvailableInput, BuildOutcome, PerActionOutcome};
 
 mod runner;
 mod scheduling;
@@ -70,7 +70,7 @@ struct DeclaredActionOutcome {
     /// consumed the wall clock instead of a 1 ms dash.
     prepare_ms: i64,
     /// Wall time spent inside cache probe + (on a miss) command
-    /// execution. On a hit this is dominated by the remote GetActionResult
+    /// execution. On a hit this is dominated by the remote `GetActionResult`
     /// round-trip; on a miss it's the command itself plus output upload.
     execute_ms: i64,
 }
@@ -609,6 +609,7 @@ fn aggregate_declared_action_cache_state(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActionOutcome> {
     let DeclaredActionRun {
         workspace,
@@ -2571,11 +2572,9 @@ mod tests {
             panic!("command declaration should lower to RunCommand");
         };
         assert_eq!(argv, vec!["tool".to_string(), "--version".to_string()]);
-        assert!(
-            inputs
-                .iter()
-                .any(|input| input.as_str() == ".once/tmp/work")
-        );
+        assert!(inputs
+            .iter()
+            .any(|input| input.as_str() == ".once/tmp/work"));
     }
 
     #[test]
@@ -3282,6 +3281,8 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
                 SandboxMode::default(),
                 test_resources(),
                 None,
+                None,
+                test_workers(),
             )
             .await
             .unwrap();
@@ -3685,11 +3686,9 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
         records: &[EvidenceRecord],
         aggregate: Option<InputFingerprintManifest>,
     ) {
-        assert!(
-            records
-                .iter()
-                .all(|record| record.input_fingerprint.is_some())
-        );
+        assert!(records
+            .iter()
+            .all(|record| record.input_fingerprint.is_some()));
         assert!(records.iter().any(|record| {
             record
                 .input_fingerprint
@@ -3723,12 +3722,10 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
                 })
         }));
         let aggregate = aggregate.expect("multi-action outcome should aggregate fingerprints");
-        assert!(
-            aggregate
-                .components
-                .iter()
-                .any(|component| component.label.starts_with("action:1:"))
-        );
+        assert!(aggregate
+            .components
+            .iter()
+            .any(|component| component.label.starts_with("action:1:")));
         let encoded = serde_json::to_string(&records).unwrap();
         assert!(!encoded.contains("printf one"));
         assert!(!encoded.contains("printf two"));
@@ -3817,21 +3814,15 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             .await
             .unwrap();
         assert_eq!(records.len(), 2);
-        assert!(
-            records
-                .iter()
-                .all(|record| record.subject.matches("tools/demo:build"))
-        );
-        assert!(
-            records
-                .iter()
-                .any(|record| record.outputs.contains_key(".once/out/one.txt"))
-        );
-        assert!(
-            records
-                .iter()
-                .any(|record| record.outputs.contains_key(".once/out/two.txt"))
-        );
+        assert!(records
+            .iter()
+            .all(|record| record.subject.matches("tools/demo:build")));
+        assert!(records
+            .iter()
+            .any(|record| record.outputs.contains_key(".once/out/one.txt")));
+        assert!(records
+            .iter()
+            .any(|record| record.outputs.contains_key(".once/out/two.txt")));
         assert_declared_action_fingerprints(&records, outcome.input_fingerprint);
     }
 
@@ -4100,11 +4091,10 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             ("environment", "declared"),
             ("source", "input.txt"),
         ] {
-            assert!(
-                fingerprint.components.iter().any(|component| {
-                    component.category == category && component.label == label
-                })
-            );
+            assert!(fingerprint
+                .components
+                .iter()
+                .any(|component| { component.category == category && component.label == label }));
         }
         let encoded = serde_json::to_string(&fingerprint).unwrap();
         assert!(!encoded.contains("command-secret"));
@@ -4475,6 +4465,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
         let bus = once_core::RunEventBus::new(8);
         let mut rx = bus.subscribe();
         let error = run_declared_actions(
+            None,
             workspace.path(),
             &cache,
             module_digest(),
@@ -4494,14 +4485,48 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
         .await
         .unwrap_err();
         assert!(error.to_string().contains("exit code 7"));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            once_core::RunEvent::ActionAttemptStarted {
+                action_index: 0,
+                attempt: 1,
+                ..
+            }
+        ));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            once_core::RunEvent::ActionAttemptCompleted {
+                action_index: 0,
+                attempt: 1,
+                exit_code: 0,
+                ..
+            }
+        ));
         assert!(
             matches!(rx.try_recv().unwrap(), once_core::RunEvent::ActionCompleted {
-            action_index: 0, identifier: Some(id), exit_code: 0, ..
+            action_index: 0, identifier: Some(id), exit_code: 0, selected_attempt: 1, ..
         } if id == "prepare")
         );
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            once_core::RunEvent::ActionAttemptStarted {
+                action_index: 1,
+                attempt: 1,
+                ..
+            }
+        ));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            once_core::RunEvent::ActionAttemptCompleted {
+                action_index: 1,
+                attempt: 1,
+                exit_code: 7,
+                ..
+            }
+        ));
         assert!(
             matches!(rx.try_recv().unwrap(), once_core::RunEvent::ActionCompleted {
-            action_index: 1, identifier: Some(id), exit_code: 7, ..
+            action_index: 1, identifier: Some(id), exit_code: 7, selected_attempt: 1, ..
         } if id == "compile")
         );
         assert!(rx.try_recv().is_err());
