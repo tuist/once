@@ -7996,6 +7996,8 @@ def host_which(name):
         return "/bin/sh"
     if name == "find":
         return "/usr/bin/find"
+    if name == "awk":
+        return "/usr/bin/awk"
     fail("unexpected host_which: " + name)
 
 def host_command(argv, env = None, merge_stderr = None):
@@ -8422,6 +8424,8 @@ def host_which(name):
         return "/usr/bin/codesign"
     if name == "sh":
         return "/bin/sh"
+    if name == "awk":
+        return "/usr/bin/awk"
     fail("unexpected host_which: " + name)
 
 def host_command(argv, env = None, merge_stderr = None):
