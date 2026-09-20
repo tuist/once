@@ -1201,6 +1201,54 @@ fn glob_ignores_once_runtime_state() {
 }
 
 #[test]
+fn single_star_does_not_cross_path_separators() {
+    // A `srcs = ["*.swift"]` pattern at a package root should return the swift
+    // files at that root only, not swift files buried in subdirectories.
+    // Historically the glob crate's default made `*` absorb `/` too, so a
+    // parent package's `*.swift` would silently pull in a subpackage's
+    // sources. Locking single-segment `*` semantics keeps package boundaries
+    // predictable.
+    let workspace = TempDir::new().unwrap();
+    let package = workspace.path().join("packages/app");
+    std::fs::create_dir_all(package.join("sub")).unwrap();
+    std::fs::write(package.join("root.swift"), "").unwrap();
+    std::fs::write(package.join("sub/nested.swift"), "").unwrap();
+
+    let matches = expand_globs(workspace.path(), "packages/app", &["*.swift".to_string()]).unwrap();
+
+    assert_eq!(matches, vec!["packages/app/root.swift".to_string()]);
+}
+
+#[test]
+fn double_star_still_crosses_path_separators() {
+    // The `**` glob keeps its recursive meaning; only bare `*` is
+    // single-segment. Users who want cross-directory matching write `**`
+    // explicitly, which is the shell/gitignore/rsync convention.
+    let workspace = TempDir::new().unwrap();
+    let package = workspace.path().join("packages/app");
+    std::fs::create_dir_all(package.join("sub/deep")).unwrap();
+    std::fs::write(package.join("root.swift"), "").unwrap();
+    std::fs::write(package.join("sub/nested.swift"), "").unwrap();
+    std::fs::write(package.join("sub/deep/leaf.swift"), "").unwrap();
+
+    let matches = expand_globs(
+        workspace.path(),
+        "packages/app",
+        &["**/*.swift".to_string()],
+    )
+    .unwrap();
+
+    assert_eq!(
+        matches,
+        vec![
+            "packages/app/root.swift".to_string(),
+            "packages/app/sub/deep/leaf.swift".to_string(),
+            "packages/app/sub/nested.swift".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn glob_returns_no_matches_for_a_missing_package_directory() {
     let workspace = TempDir::new().unwrap();
 

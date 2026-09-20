@@ -1811,7 +1811,7 @@ pub fn expansion_could_differ(
             return false;
         };
         match &compiled {
-            Some(patterns) => patterns.iter().any(|pattern| pattern.matches(relative)),
+            Some(patterns) => patterns.iter().any(|p| pattern_matches(p, relative)),
             None => patterns.iter().any(|root| {
                 let root = root.strip_prefix("./").unwrap_or(root);
                 relative == root || relative.starts_with(&format!("{root}/"))
@@ -2041,6 +2041,26 @@ fn host_os_str() -> &'static str {
 /// Windows junctions are not exercised by tests yet; the `canonicalize` call
 /// covers them in production but a dedicated Windows test should land
 /// alongside Windows CI.
+///
+/// Glob match options used across `srcs`, `exclude`, and change-tracking
+/// pattern checks. `require_literal_separator` gives `*` and `?` shell-like
+/// semantics: a single `*` matches one path segment only, and matching across
+/// path separators requires `**`. Without this, `*.swift` at a package root
+/// silently absorbs every `.swift` file in every descendant directory,
+/// including files that belong to another package with its own `once.toml`.
+pub(super) const GLOB_MATCH_OPTIONS: glob::MatchOptions = glob::MatchOptions {
+    case_sensitive: true,
+    require_literal_separator: true,
+    require_literal_leading_dot: false,
+};
+
+/// Shorthand for `pattern.matches_with(path, GLOB_MATCH_OPTIONS)` so call
+/// sites stay readable when they inline several checks against the same
+/// pattern list.
+fn pattern_matches(pattern: &glob::Pattern, path: &str) -> bool {
+    pattern.matches_with(path, GLOB_MATCH_OPTIONS)
+}
+
 #[cfg(test)]
 pub(super) fn expand_globs(
     workspace_root: &Path,
@@ -2209,9 +2229,8 @@ fn collect_glob_matches(
                 return true;
             };
             let package_relative = workspace_path_relative_to_package(package, &ws_rel);
-            !excludes.iter().any(|pattern| {
-                pattern.matches(&format!("{package_relative}/__once_glob_descendant__"))
-            })
+            let descendant = format!("{package_relative}/__once_glob_descendant__");
+            !excludes.iter().any(|p| pattern_matches(p, &descendant))
         });
     for entry in walker {
         let entry = entry.with_context(|| {
@@ -2239,21 +2258,18 @@ fn collect_glob_matches(
         let ws_rel = normalize_logical_workspace_path(logical)?;
         let package_relative = workspace_path_relative_to_package(package, &ws_rel);
         let symlink_tree = metadata.file_type().is_symlink() && path.is_dir();
-        let matches = patterns.iter().any(|pattern| {
-            pattern.matches(&package_relative)
-                || symlink_tree
-                    && pattern.matches(&format!("{package_relative}/__once_glob_descendant__"))
+        let descendant = format!("{package_relative}/__once_glob_descendant__");
+        let matches = patterns.iter().any(|p| {
+            pattern_matches(p, &package_relative) || symlink_tree && pattern_matches(p, &descendant)
         });
         if !matches {
             continue;
         }
         let is_excluded = excludes
             .iter()
-            .any(|pattern| pattern.matches(&package_relative));
-        let excluded_symlink_tree = symlink_tree
-            && excludes.iter().any(|pattern| {
-                pattern.matches(&format!("{package_relative}/__once_glob_descendant__"))
-            });
+            .any(|p| pattern_matches(p, &package_relative));
+        let excluded_symlink_tree =
+            symlink_tree && excludes.iter().any(|p| pattern_matches(p, &descendant));
         if is_excluded || excluded_symlink_tree {
             continue;
         }

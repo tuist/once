@@ -1,5 +1,9 @@
 def _apple_module_scan_argv(argv, cache_path):
-    result = [argv[0], "-scan-dependencies"]
+    # Swift 6.3's swiftc rejects `-scan-dependencies ... -o file.json` when the
+    # invocation carries more than one .swift source, because it wants one output
+    # per file. Whole-module mode collapses the sources into a single scan output
+    # and is a no-op for single-file scans, so it is safe to add unconditionally.
+    result = [argv[0], "-scan-dependencies", "-wmo"]
     skip = False
     remove_values = ["-o", "-emit-module-path", "-emit-module-doc-path", "-emit-objc-header-path", "-output-file-map", "-module-cache-path", "-emit-module-interface-path", "-emit-private-module-interface-path", "-Xlinker"]
     remove_flags = ["-c", "-emit-module", "-emit-library", "-emit-executable", "-emit-objc-header", "-static", "-incremental"]
@@ -19,10 +23,19 @@ def _apple_module_scan_argv(argv, cache_path):
 def _apple_module_host_roots(swiftc):
     if not swiftc.get("sdk_path"):
         return []
+    platform_developer = _parent_dir(_parent_dir(swiftc["sdk_path"]))
     return [
         swiftc["sdk_path"],
         _swift_toolchain_dir(swiftc["swiftc_path"]) + "/usr/lib",
-        _parent_dir(_parent_dir(swiftc["sdk_path"])) + "/usr/lib/swift/host",
+        platform_developer + "/usr/lib/swift/host",
+        # Platform-provided frameworks such as XCTest and Testing (including
+        # `_Testing_Foundation.framework`) live under the platform's
+        # `Developer/Library/Frameworks`. `apple_test_bundle` links against
+        # them by passing `-F <platform>/Developer/Library/Frameworks`, and
+        # the explicit-modules dependency scan then references their
+        # `swiftinterface` files. Without this root the check rejects any
+        # test target that uses Swift Testing or XCTest.
+        platform_developer + "/Library/Frameworks",
     ]
 
 def _apple_module_toolchain_identity(swiftc):
