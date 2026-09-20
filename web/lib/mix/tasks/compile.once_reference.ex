@@ -68,70 +68,78 @@ defmodule Mix.Tasks.Compile.OnceReference do
   end
 
   defp render_definition_line(raw, {lines, section, depth, comments}) do
-    text = String.trim(raw)
+    case String.trim(raw) do
+      "//" <> comment ->
+        {lines, section, depth, comments ++ [String.trim(comment)]}
 
-    cond do
-      String.starts_with?(text, "//") ->
-        {lines, section, depth, comments ++ [String.trim_leading(text, "//") |> String.trim()]}
-
-      text == "" ->
+      "" ->
         {lines, section, depth, []}
 
-      true ->
-        [code | inline] = String.split(text, "//", parts: 2)
-        code = String.trim(code)
-        note = inline |> List.first("") |> String.trim()
+      text ->
+        render_code_line(text, {lines, section, depth, comments})
+    end
+  end
 
-        case Regex.run(~r/^(service|message|enum)\s+(\w+)\s*\{/, code) do
-          [_, kind, name] ->
-            description = if comments == [], do: [], else: [Enum.join(comments, " "), ""]
+  defp render_code_line(text, state) do
+    [code | inline] = String.split(text, "//", parts: 2)
+    code = String.trim(code)
+    note = inline |> List.first("") |> String.trim()
 
-            heading =
-              ["## #{kind} `#{name}`", ""] ++
-                description ++
-                ["| Name | Type | Number | Description |", "| --- | --- | ---: | --- |"]
+    case Regex.run(~r/^(service|message|enum)\s+(\w+)\s*\{/, code) do
+      [_, kind, name] -> render_definition_header(code, kind, name, state)
+      _ -> render_definition_member(code, note, state)
+    end
+  end
 
-            inner =
-              code |> String.split("{", parts: 2) |> List.last() |> String.split("}") |> hd()
+  defp render_definition_header(code, kind, name, {lines, _section, depth, comments}) do
+    description = if comments == [], do: [], else: [Enum.join(comments, " "), ""]
 
-            inline_fields =
-              inner
-              |> String.split(";", trim: true)
-              |> Enum.map(&render_field(&1, kind, ""))
-              |> Enum.reject(&is_nil/1)
+    heading =
+      ["## #{kind} `#{name}`", ""] ++
+        description ++
+        ["| Name | Type | Number | Description |", "| --- | --- | ---: | --- |"]
 
-            new_depth = depth + brace_delta(code)
+    inline_fields =
+      code
+      |> String.split("{", parts: 2)
+      |> List.last()
+      |> String.split("}")
+      |> hd()
+      |> String.split(";", trim: true)
+      |> Enum.map(&render_field(&1, kind, ""))
+      |> Enum.reject(&is_nil/1)
 
-            {lines ++ heading ++ inline_fields ++ if(new_depth == 0, do: [""], else: []),
-             if(new_depth != 0, do: kind), new_depth, []}
+    new_depth = depth + brace_delta(code)
 
-          _ ->
-            entry =
-              cond do
-                section == "service" and String.starts_with?(code, "rpc ") ->
-                  "| `#{String.trim_trailing(code, ";")}` | call | | #{note} |"
+    {lines ++ heading ++ inline_fields ++ if(new_depth == 0, do: [""], else: []),
+     if(new_depth != 0, do: kind), new_depth, []}
+  end
 
-                String.starts_with?(code, "oneof ") ->
-                  "| *#{code |> String.trim_leading("oneof ") |> String.trim_trailing("{") |> String.trim()}* | one of | | |"
+  defp render_definition_member(code, note, {lines, section, depth, comments}) do
+    entry = definition_entry(code, note, section, comments)
+    validate_definition_entry(code, section, entry)
+    new_depth = max(0, depth + brace_delta(code))
+    end_lines = if depth > 0 and new_depth == 0, do: [""], else: []
 
-                section in ["message", "enum"] ->
-                  render_field(code, section, Enum.join(comments ++ [note], " "))
+    {lines ++ if(entry, do: [entry], else: []) ++ end_lines, if(new_depth != 0, do: section),
+     new_depth, []}
+  end
 
-                true ->
-                  nil
-              end
+  defp definition_entry("rpc " <> call, note, "service", _comments),
+    do: "| `rpc #{String.trim_trailing(call, ";")}` | call | | #{note} |"
 
-            new_depth = max(0, depth + brace_delta(code))
-            end_lines = if depth > 0 and new_depth == 0, do: [""], else: []
+  defp definition_entry("oneof " <> field, _note, _section, _comments),
+    do: "| *#{field |> String.trim_trailing("{") |> String.trim()}* | one of | | |"
 
-            if section in ["message", "enum"] and String.contains?(code, "=") and is_nil(entry) and
-                 not String.starts_with?(code, "reserved ") do
-              Mix.raise("Unsupported protocol field in generated reference: #{code}")
-            end
+  defp definition_entry(code, note, section, comments) when section in ["message", "enum"],
+    do: render_field(code, section, Enum.join(comments ++ [note], " "))
 
-            {lines ++ if(entry, do: [entry], else: []) ++ end_lines,
-             if(new_depth != 0, do: section), new_depth, []}
-        end
+  defp definition_entry(_code, _note, _section, _comments), do: nil
+
+  defp validate_definition_entry(code, section, entry) do
+    if section in ["message", "enum"] and String.contains?(code, "=") and is_nil(entry) and
+         not String.starts_with?(code, "reserved ") do
+      Mix.raise("Unsupported protocol field in generated reference: #{code}")
     end
   end
 
