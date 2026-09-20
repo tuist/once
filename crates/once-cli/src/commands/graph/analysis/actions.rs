@@ -64,6 +64,15 @@ struct DeclaredActionOutcome {
     cache_state: EvidenceCacheState,
     result: ActionResult,
     evidence_record: Option<EvidenceRecord>,
+    /// Wall time spent hashing inputs, writing arg files, and
+    /// building the action digest (the "prepare" phase). Rendered as
+    /// a distinct sub-span so cache-hit runs still show what
+    /// consumed the wall clock instead of a 1 ms dash.
+    prepare_ms: i64,
+    /// Wall time spent inside cache probe + (on a miss) command
+    /// execution. On a hit this is dominated by the remote GetActionResult
+    /// round-trip; on a miss it's the command itself plus output upload.
+    execute_ms: i64,
 }
 
 struct DeclaredActionsState {
@@ -77,6 +86,7 @@ struct DeclaredActionsState {
     result: ActionResult,
     cached_results: Vec<ActionResult>,
     evidence_records: Vec<EvidenceRecord>,
+    per_action_outcomes: Vec<PerActionOutcome>,
 }
 
 impl DeclaredActionsState {
@@ -97,6 +107,7 @@ impl DeclaredActionsState {
             },
             cached_results: Vec::new(),
             evidence_records: Vec::new(),
+            per_action_outcomes: Vec::new(),
         }
     }
 
@@ -114,7 +125,13 @@ impl DeclaredActionsState {
         input_digests
     }
 
-    fn record(&mut self, outcome: DeclaredActionOutcome, streams: bool) {
+    fn record(
+        &mut self,
+        outcome: DeclaredActionOutcome,
+        streams: bool,
+        per_action: PerActionOutcome,
+    ) {
+        self.per_action_outcomes.push(per_action);
         self.prior_actions_digest = Some(extend_prior_actions_digest(
             self.prior_actions_digest,
             self.action_digests.len(),
@@ -183,6 +200,7 @@ impl DeclaredActionsState {
             cache_state,
             result: self.result,
             cached_results: self.cached_results,
+            per_action_outcomes: self.per_action_outcomes,
         }
     }
 }
@@ -203,6 +221,14 @@ struct DeclaredActionContext<'a> {
     record_success_evidence: bool,
     resources: &'a Arc<ResourcePool>,
     output_observer: Option<&'a dyn ActionOutputObserver>,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+struct ActionExecutionFailure {
+    message: String,
+    exit_code: i32,
+    was_cached: bool,
 }
 
 struct DeclaredActionFailure<'a> {
@@ -619,6 +645,7 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         outputs = declared.outputs.len(),
         "preparing declared graph action"
     );
+    let prepare_started = std::time::Instant::now();
     materialize_declared_arg_files(workspace, &declared.arg_files).with_context(|| {
         format!("writing arg files for action {index} for {target_id} ({identifier_for_error})")
     })?;
@@ -632,6 +659,7 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         sandbox,
     )
     .with_context(|| format!("building action {index} for {target_id} ({identifier_for_error})"))?;
+    let prepare_ms = i64::try_from(prepare_started.elapsed().as_millis()).unwrap_or(i64::MAX);
     let action = prepared.action;
     let context = DeclaredActionContext {
         workspace,
@@ -651,7 +679,8 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         output_observer,
     };
 
-    if cacheable {
+    let execute_started = std::time::Instant::now();
+    let outcome = if cacheable {
         run_cacheable_declared_action(context, action, &declared).await
     } else {
         materialize_prior_cached_results(
@@ -680,7 +709,13 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
                 format!("preparing action {index} for {target_id} ({identifier_for_error})")
             })?;
         run_uncacheable_declared_action(context, action, declared.inherit_parent_env).await
-    }
+    };
+    let execute_ms = i64::try_from(execute_started.elapsed().as_millis()).unwrap_or(i64::MAX);
+    outcome.map(|mut o| {
+        o.prepare_ms = prepare_ms;
+        o.execute_ms = execute_ms;
+        o
+    })
 }
 
 async fn prepare_declared_command_paths(workspace: &Path, declared: &DeclaredAction) -> Result<()> {
@@ -732,9 +767,8 @@ async fn run_cacheable_declared_action(
             &outcome.result,
         )
         .await;
-        anyhow::bail!(
-            "{}",
-            declared_action_failure_message(DeclaredActionFailure {
+        return Err(ActionExecutionFailure {
+            message: declared_action_failure_message(DeclaredActionFailure {
                 cache: context.cache,
                 identifier: context.identifier,
                 index: context.index,
@@ -744,8 +778,11 @@ async fn run_cacheable_declared_action(
                 arg_files: context.arg_files,
                 result: &outcome.result,
             })
-            .await
-        );
+            .await,
+            exit_code,
+            was_cached: matches!(outcome.cache, once_core::CacheState::Hit),
+        }
+        .into());
     }
     let cache_tag = crate::commands::util::cache_tag(outcome.cache);
     let cache_state = EvidenceCacheState::from(outcome.cache);
@@ -778,6 +815,10 @@ async fn run_cacheable_declared_action(
         cache_state,
         result: outcome.result,
         evidence_record,
+        // The outer `run_declared_action` fills these in after
+        // observing prepare + execute spans from the outside.
+        prepare_ms: 0,
+        execute_ms: 0,
     })
 }
 
@@ -1079,9 +1120,8 @@ async fn run_uncacheable_declared_action(
             &result,
         )
         .await;
-        anyhow::bail!(
-            "{}",
-            declared_action_failure_message(DeclaredActionFailure {
+        return Err(ActionExecutionFailure {
+            message: declared_action_failure_message(DeclaredActionFailure {
                 cache: context.cache,
                 identifier: context.identifier,
                 index: context.index,
@@ -1091,8 +1131,11 @@ async fn run_uncacheable_declared_action(
                 arg_files: context.arg_files,
                 result: &result,
             })
-            .await
-        );
+            .await,
+            exit_code,
+            was_cached: false,
+        }
+        .into());
     }
     tracing::debug!(
         target = %context.target_id,
@@ -1122,6 +1165,8 @@ async fn run_uncacheable_declared_action(
         cache_state: EvidenceCacheState::Bypass,
         result,
         evidence_record,
+        prepare_ms: 0,
+        execute_ms: 0,
     })
 }
 
@@ -2419,6 +2464,12 @@ mod tests {
         &RESOURCES
     }
 
+    fn test_workers() -> &'static crate::bus_events::WorkerSlots {
+        static WORKERS: std::sync::LazyLock<crate::bus_events::WorkerSlots> =
+            std::sync::LazyLock::new(|| crate::bus_events::WorkerSlots::new(256));
+        &WORKERS
+    }
+
     #[test]
     fn missing_declared_inputs_reports_only_absent_paths() {
         let workspace = tempfile::tempdir().unwrap();
@@ -2520,9 +2571,11 @@ mod tests {
             panic!("command declaration should lower to RunCommand");
         };
         assert_eq!(argv, vec!["tool".to_string(), "--version".to_string()]);
-        assert!(inputs
-            .iter()
-            .any(|input| input.as_str() == ".once/tmp/work"));
+        assert!(
+            inputs
+                .iter()
+                .any(|input| input.as_str() == ".once/tmp/work")
+        );
     }
 
     #[test]
@@ -3133,6 +3186,8 @@ mod tests {
             SandboxMode::default(),
             test_resources(),
             None,
+            None,
+            test_workers(),
         )
         .await
         .unwrap();
@@ -3308,6 +3363,8 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             SandboxMode::default(),
             test_resources(),
             None,
+            None,
+            test_workers(),
         )
         .await
         .unwrap();
@@ -3351,6 +3408,8 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             SandboxMode::default(),
             test_resources(),
             None,
+            None,
+            test_workers(),
         )
         .await
         .unwrap();
@@ -3416,6 +3475,8 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             SandboxMode::default(),
             test_resources(),
             None,
+            None,
+            test_workers(),
         )
         .await
         .unwrap();
@@ -3469,6 +3530,8 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             SandboxMode::default(),
             test_resources(),
             None,
+            None,
+            test_workers(),
         )
         .await
         .unwrap();
@@ -3507,6 +3570,8 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             SandboxMode::default(),
             test_resources(),
             None,
+            None,
+            test_workers(),
         )
         .await
         .unwrap();
@@ -3530,6 +3595,8 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             SandboxMode::default(),
             test_resources(),
             None,
+            None,
+            test_workers(),
         )
         .await
         .unwrap();
@@ -3554,6 +3621,8 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             SandboxMode::default(),
             test_resources(),
             None,
+            None,
+            test_workers(),
         )
         .await
         .unwrap();
@@ -3616,9 +3685,11 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
         records: &[EvidenceRecord],
         aggregate: Option<InputFingerprintManifest>,
     ) {
-        assert!(records
-            .iter()
-            .all(|record| record.input_fingerprint.is_some()));
+        assert!(
+            records
+                .iter()
+                .all(|record| record.input_fingerprint.is_some())
+        );
         assert!(records.iter().any(|record| {
             record
                 .input_fingerprint
@@ -3652,10 +3723,12 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
                 })
         }));
         let aggregate = aggregate.expect("multi-action outcome should aggregate fingerprints");
-        assert!(aggregate
-            .components
-            .iter()
-            .any(|component| component.label.starts_with("action:1:")));
+        assert!(
+            aggregate
+                .components
+                .iter()
+                .any(|component| component.label.starts_with("action:1:"))
+        );
         let encoded = serde_json::to_string(&records).unwrap();
         assert!(!encoded.contains("printf one"));
         assert!(!encoded.contains("printf two"));
@@ -3730,6 +3803,8 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             SandboxMode::default(),
             test_resources(),
             None,
+            None,
+            test_workers(),
         )
         .await
         .unwrap();
@@ -3742,15 +3817,21 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             .await
             .unwrap();
         assert_eq!(records.len(), 2);
-        assert!(records
-            .iter()
-            .all(|record| record.subject.matches("tools/demo:build")));
-        assert!(records
-            .iter()
-            .any(|record| record.outputs.contains_key(".once/out/one.txt")));
-        assert!(records
-            .iter()
-            .any(|record| record.outputs.contains_key(".once/out/two.txt")));
+        assert!(
+            records
+                .iter()
+                .all(|record| record.subject.matches("tools/demo:build"))
+        );
+        assert!(
+            records
+                .iter()
+                .any(|record| record.outputs.contains_key(".once/out/one.txt"))
+        );
+        assert!(
+            records
+                .iter()
+                .any(|record| record.outputs.contains_key(".once/out/two.txt"))
+        );
         assert_declared_action_fingerprints(&records, outcome.input_fingerprint);
     }
 
@@ -3855,6 +3936,8 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             SandboxMode::default(),
             test_resources(),
             None,
+            None,
+            test_workers(),
         )
         .await
         .unwrap();
@@ -3875,6 +3958,8 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             SandboxMode::default(),
             test_resources(),
             None,
+            None,
+            test_workers(),
         )
         .await
         .unwrap();
@@ -4015,10 +4100,11 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             ("environment", "declared"),
             ("source", "input.txt"),
         ] {
-            assert!(fingerprint
-                .components
-                .iter()
-                .any(|component| { component.category == category && component.label == label }));
+            assert!(
+                fingerprint.components.iter().any(|component| {
+                    component.category == category && component.label == label
+                })
+            );
         }
         let encoded = serde_json::to_string(&fingerprint).unwrap();
         assert!(!encoded.contains("command-secret"));
@@ -4368,5 +4454,56 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
 
         assert_eq!(original, same);
         assert_ne!(original, reordered);
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn emits_each_action_before_a_later_action_fails() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        std::fs::write(workspace.path().join("input.txt"), "input").unwrap();
+        let target = cached_test_target();
+        let mut analysis = cached_test_analysis("input.txt");
+        analysis.actions[0].identifier = Some("prepare".to_string());
+        let mut failure = analysis.actions[0].clone();
+        failure.identifier = Some("compile".to_string());
+        failure.argv = vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "exit 7".to_string(),
+        ];
+        analysis.actions.push(failure);
+        let bus = once_core::RunEventBus::new(8);
+        let mut rx = bus.subscribe();
+        let error = run_declared_actions(
+            workspace.path(),
+            &cache,
+            module_digest(),
+            &target,
+            "build",
+            analysis,
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            None,
+            SandboxMode::default(),
+            test_resources(),
+            None,
+            Some(&bus),
+            test_workers(),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("exit code 7"));
+        assert!(
+            matches!(rx.try_recv().unwrap(), once_core::RunEvent::ActionCompleted {
+            action_index: 0, identifier: Some(id), exit_code: 0, ..
+        } if id == "prepare")
+        );
+        assert!(
+            matches!(rx.try_recv().unwrap(), once_core::RunEvent::ActionCompleted {
+            action_index: 1, identifier: Some(id), exit_code: 7, ..
+        } if id == "compile")
+        );
+        assert!(rx.try_recv().is_err());
     }
 }

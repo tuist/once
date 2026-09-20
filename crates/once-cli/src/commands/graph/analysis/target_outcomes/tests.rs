@@ -2,12 +2,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use once_cas::{ActionResult, Digest};
 use once_core::{EvidenceCacheState, SandboxMode};
-use once_frontend::analysis::{AnalysisObservations, Observation};
 use once_frontend::Target;
+use once_frontend::analysis::{AnalysisObservations, Observation};
 use tempfile::TempDir;
 
-use super::super::source_digest_cache::KnownChanges;
 use super::super::BuildOutcome;
+use super::super::source_digest_cache::KnownChanges;
 use super::TargetOutcomes;
 use crate::commands::change_tracker::ChangePosition;
 
@@ -44,6 +44,7 @@ fn outcome(outputs: &[&str]) -> BuildOutcome {
             outputs: BTreeMap::new(),
         },
         cached_results: Vec::new(),
+        per_action_outcomes: Vec::new(),
     }
 }
 
@@ -133,9 +134,11 @@ fn editing_a_file_the_target_declared_visits_it_again() {
         );
     });
 
-    assert!(reopened
-        .reuse(&target, "key", &changed(&["apps/tool/src/lib.rs"], &[]))
-        .is_none());
+    assert!(
+        reopened
+            .reuse(&target, "key", &changed(&["apps/tool/src/lib.rs"], &[]))
+            .is_none()
+    );
 }
 
 /// A file that did not exist when the record was written is in no list of
@@ -154,9 +157,11 @@ fn a_file_appearing_under_an_expanded_pattern_visits_it_again() {
         );
     });
 
-    assert!(reopened
-        .reuse(&target, "key", &changed(&["apps/tool/src/added.rs"], &[]))
-        .is_none());
+    assert!(
+        reopened
+            .reuse(&target, "key", &changed(&["apps/tool/src/added.rs"], &[]))
+            .is_none()
+    );
 }
 
 #[test]
@@ -173,9 +178,11 @@ fn a_changed_output_visits_it_again() {
         );
     });
 
-    assert!(reopened
-        .reuse(&target, "key", &changed(&[], &[".once/out/tool/tool"]))
-        .is_none());
+    assert!(
+        reopened
+            .reuse(&target, "key", &changed(&[], &[".once/out/tool/tool"]))
+            .is_none()
+    );
 }
 
 #[test]
@@ -216,9 +223,11 @@ fn a_different_name_is_a_different_build() {
         );
     });
 
-    assert!(reopened
-        .reuse(&target, "a-dependency-rebuilt", &changed(&[], &[]))
-        .is_none());
+    assert!(
+        reopened
+            .reuse(&target, "a-dependency-rebuilt", &changed(&[], &[]))
+            .is_none()
+    );
 }
 
 /// An outcome that declined to be cached has to run every time, so it is never
@@ -289,9 +298,11 @@ fn an_unknown_window_reuses_nothing() {
         );
     });
 
-    assert!(reopened
-        .reuse(&target, "key", &KnownChanges::Unknown)
-        .is_none());
+    assert!(
+        reopened
+            .reuse(&target, "key", &KnownChanges::Unknown)
+            .is_none()
+    );
 }
 
 /// A walk owns everything under its directory, so a file dropped in there is a
@@ -311,13 +322,15 @@ fn a_file_appearing_under_a_walked_directory_visits_it_again() {
         );
     });
 
-    assert!(reopened
-        .reuse(
-            &target,
-            "key",
-            &changed(&["apps/Hello/Sources/Extra.h"], &[])
-        )
-        .is_none());
+    assert!(
+        reopened
+            .reuse(
+                &target,
+                "key",
+                &changed(&["apps/Hello/Sources/Extra.h"], &[])
+            )
+            .is_none()
+    );
 }
 
 /// Reusing a record means this invocation did no work, so it reports a hit even
@@ -329,6 +342,15 @@ fn a_reused_outcome_reports_a_hit_however_it_was_produced() {
     let mut compiled = outcome(&[".once/out/tool/tool"]);
     compiled.cache_state = EvidenceCacheState::Miss;
     compiled.cache_tag = "miss";
+    compiled.per_action_outcomes = (0..2)
+        .map(|index| super::super::PerActionOutcome {
+            identifier: Some(format!("action-{index}")),
+            index,
+            cache_state: EvidenceCacheState::Miss,
+            duration_ms: 42,
+            exit_code: 0,
+        })
+        .collect();
     let reopened = round_trip(&workspace, |outcomes| {
         outcomes.record(
             &target,
@@ -345,4 +367,14 @@ fn a_reused_outcome_reports_a_hit_however_it_was_produced() {
 
     assert_eq!(reused.cache_state, EvidenceCacheState::Hit);
     assert_eq!(reused.cache_tag, "hit");
+    assert_eq!(reused.per_action_outcomes.len(), 2);
+    for (index, action) in reused.per_action_outcomes.iter().enumerate() {
+        assert_eq!(
+            action.identifier.as_deref(),
+            Some(format!("action-{index}").as_str())
+        );
+        assert_eq!(action.index as usize, index);
+        assert_eq!(action.cache_state, EvidenceCacheState::Hit);
+        assert_eq!(action.duration_ms, 0);
+    }
 }

@@ -16,15 +16,16 @@ use tonic::transport::{Channel, Server, Uri};
 use tonic::{Request, Response, Status, Streaming};
 
 use once_events_client::proto::{
-    run_event_service_server::{RunEventService, RunEventServiceServer},
     AckDisposition, ArgvHashKey, BatchAck, GetArgvHashKeyRequest, GetRunAckRequest,
     GetServerCapabilitiesRequest, RunEventAck, RunEventBatch, RunFinalization, ServerCapabilities,
+    run_event_service_server::{RunEventService, RunEventServiceServer},
 };
 
 #[derive(Default)]
 struct RecordedRun {
     batches: Vec<RunEventBatch>,
     expected_next_seq: u64,
+    authorizations: Vec<String>,
 }
 
 #[derive(Default, Clone)]
@@ -39,6 +40,7 @@ impl RunEventService for TestServer {
         _req: Request<GetServerCapabilitiesRequest>,
     ) -> Result<Response<ServerCapabilities>, Status> {
         Ok(Response::new(ServerCapabilities {
+            live_url_template: String::new(),
             supported_protocol_versions: vec!["1.0".into()],
             max_batch_bytes: 65_536,
             max_event_bytes: 8_192,
@@ -55,8 +57,15 @@ impl RunEventService for TestServer {
 
     async fn get_argv_hash_key(
         &self,
-        _req: Request<GetArgvHashKeyRequest>,
+        req: Request<GetArgvHashKeyRequest>,
     ) -> Result<Response<ArgvHashKey>, Status> {
+        self.recorded.lock().await.authorizations.push(
+            req.metadata()
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default()
+                .to_string(),
+        );
         Ok(Response::new(ArgvHashKey {
             key_id: "test-key".into(),
             key_bytes: vec![0; 32],
@@ -72,8 +81,20 @@ impl RunEventService for TestServer {
         &self,
         req: Request<Streaming<RunEventBatch>>,
     ) -> Result<Response<Self::PublishRunEventsStream>, Status> {
+        self.recorded.lock().await.authorizations.push(
+            req.metadata()
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default()
+                .to_string(),
+        );
         let recorded = self.recorded.clone();
         let mut inbound = req.into_inner();
+        let first = inbound
+            .message()
+            .await?
+            .ok_or_else(|| Status::invalid_argument("missing first batch"))?;
+        let mut inbound = tokio_stream::once(Ok(first)).chain(inbound);
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<BatchAck, Status>>(32);
         tokio::spawn(async move {
             while let Some(item) = inbound.next().await {
@@ -226,5 +247,98 @@ async fn delivers_run_lifecycle_and_target_events() {
     assert!(
         last_expected >= 4,
         "expected_next_seq was {last_expected}; batches {batch_count}; seqs {all_seqs:?}"
+    );
+}
+
+#[tokio::test]
+async fn authenticated_shutdown_drains_individual_actions_and_metadata() {
+    use once_events_client::proto::{RunStarted, run_event::Payload};
+    let (channel, recorded) = start_server().await;
+    let mut client = EventClient::authenticated(
+        channel,
+        TransportConfig {
+            run_id: "action-run".into(),
+            batch_flush: std::time::Duration::from_millis(5),
+            ..TransportConfig::default()
+        },
+        "test-token",
+    )
+    .unwrap();
+    assert_eq!(
+        client
+            .argv_hash_key("owner/project".into())
+            .await
+            .unwrap()
+            .key_id,
+        "test-key"
+    );
+    let client = client.with_metadata(RunStarted {
+        once_version: "test-version".into(),
+        ..Default::default()
+    });
+    let bus = RunEventBus::new(16);
+    let rx = bus.subscribe();
+    bus.publish(RunEvent::RunStarted { at_epoch_ms: 100 });
+    for index in 0..2 {
+        bus.publish(RunEvent::ActionCompleted {
+            at_epoch_ms: 200 + i64::from(index),
+            target_id: "target".into(),
+            capability: "build".into(),
+            action_index: index,
+            identifier: Some(format!("action-{index}")),
+            result: once_core::TargetResult::Succeeded,
+            was_cached: index == 0,
+            duration_ms: 15,
+            exit_code: 0,
+            start_at_epoch_ms: 200 + i64::from(index) - 15,
+            worker_id: format!("worker-{index}"),
+        });
+    }
+    bus.publish(RunEvent::RunCompleted {
+        at_epoch_ms: 300,
+        exit_status: 0,
+    });
+    let (tx, shutdown) = tokio::sync::oneshot::channel();
+    tx.send(()).unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        client.run_until_shutdown(rx, shutdown),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let recorded = recorded.lock().await;
+    assert_eq!(
+        recorded.authorizations,
+        ["Bearer test-token", "Bearer test-token"]
+    );
+    let unique: std::collections::BTreeMap<_, _> = recorded
+        .batches
+        .iter()
+        .flat_map(|b| &b.events)
+        .map(|e| (e.seq, e))
+        .collect();
+    let events: Vec<_> = unique.values().filter_map(|e| e.payload.as_ref()).collect();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Payload::RunStarted(s) if s.once_version == "test-version"))
+    );
+    let actions: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            Payload::ActionCompleted(a) => Some(a),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(actions.len(), 2);
+    assert_eq!(actions[0].identifier, "action-0");
+    assert!(actions[0].was_cached);
+    assert_eq!(actions[1].identifier, "action-1");
+    assert!(!actions[1].was_cached);
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Payload::RunCompleted(c) if c.wall_ms == 200))
     );
 }

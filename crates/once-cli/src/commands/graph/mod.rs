@@ -13,22 +13,22 @@ mod configuration;
 mod contract;
 mod lint;
 
-pub use contract::{validate_action_contracts, ActionContractValidation};
+pub use contract::{ActionContractValidation, validate_action_contracts};
 
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use once_cas::{CacheProvider, Digest};
 use once_core::{EvidenceCacheState, LintSeverity, ResourceLimits, RunEventBus, SandboxMode};
-use once_frontend::analysis::AnalysisOptions;
 use once_frontend::GraphTarget;
+use once_frontend::analysis::AnalysisOptions;
 
 pub use self::capability::load_graph_for_capability_with_configuration;
 use self::capability::{
-    build_target, ensure_capability, record_capability_run, run_target_capability, write_record,
-    CapabilityRunRecord,
+    CapabilityRunRecord, build_target, ensure_capability, record_capability_run,
+    run_target_capability, write_record,
 };
 use self::lint::{
     lint_provider_output_path, persist_lint_results, validate_lint_provider, write_lint_results,
@@ -125,6 +125,15 @@ pub async fn build(
     let bus = RunEventBus::new(EVENT_BUS_CAPACITY);
     let command_label = format!("build {target_id}");
     let reporter = spawn_reporter(&bus, output, &command_label);
+    #[cfg(feature = "events-ingest")]
+    let live_reporter = crate::live_run_reporter::spawn(
+        &bus,
+        workspace,
+        once_core::Xdg::from_env(),
+        cache_provider_account(workspace),
+        cache_provider_project(workspace),
+    )
+    .await;
     bus_events::run_started(&bus, target_id, bus_events::now_ms());
 
     let ui_server = if ui {
@@ -236,6 +245,8 @@ pub async fn build(
         bus_events::target_finished(&bus, target_id, duration_ms, &record.cache, 0);
         write_record(output, &record).await?;
         write_runs_report(workspace, ui_server.as_ref()).await;
+        #[cfg(feature = "events-ingest")]
+        finish_live_reporter(live_reporter).await;
         finish_reporter(reporter).await;
         return Ok(ExitCode::SUCCESS);
     }
@@ -269,6 +280,8 @@ pub async fn build(
             }
             bus_events::target_failed(&bus, target_id, duration_ms);
             write_runs_report(workspace, ui_server.as_ref()).await;
+            #[cfg(feature = "events-ingest")]
+            finish_live_reporter(live_reporter).await;
             finish_reporter(reporter).await;
             return Err(error);
         }
@@ -303,6 +316,8 @@ pub async fn build(
             }
             bus_events::target_failed(&bus, target_id, duration_ms);
             write_runs_report(workspace, ui_server.as_ref()).await;
+            #[cfg(feature = "events-ingest")]
+            finish_live_reporter(live_reporter).await;
             finish_reporter(reporter).await;
             return Err(error);
         }
@@ -331,6 +346,8 @@ pub async fn build(
             }
             bus_events::target_failed(&bus, target_id, duration_ms);
             write_runs_report(workspace, ui_server.as_ref()).await;
+            #[cfg(feature = "events-ingest")]
+            finish_live_reporter(live_reporter).await;
             finish_reporter(reporter).await;
             return Err(error);
         }
@@ -368,6 +385,8 @@ pub async fn build(
         );
         write_record(output, &record).await?;
         write_runs_report(workspace, ui_server.as_ref()).await;
+        #[cfg(feature = "events-ingest")]
+        finish_live_reporter(live_reporter).await;
         finish_reporter(reporter).await;
         return Ok(ExitCode::SUCCESS);
     }
@@ -448,6 +467,8 @@ pub async fn build(
     }
     write_runs_report(workspace, ui_server.as_ref()).await;
     emit_capability_completion_sounds(&record);
+    #[cfg(feature = "events-ingest")]
+    finish_live_reporter(live_reporter).await;
     finish_reporter(reporter).await;
     Ok(ExitCode::SUCCESS)
 }
@@ -457,6 +478,35 @@ pub async fn build(
 async fn finish_reporter(reporter: Option<TerminalReporter>) {
     if let Some(reporter) = reporter {
         reporter.finish().await;
+    }
+}
+
+/// Await the HTTP run reporter so any pending per-target invocation POST has
+/// a chance to complete before the CLI returns. Best-effort - the reporter
+/// Drain the live gRPC reporter. Idempotent on a `Some` value.
+#[cfg(feature = "events-ingest")]
+async fn finish_live_reporter(reporter: crate::live_run_reporter::LiveRunReporter) {
+    reporter.finish().await;
+}
+
+/// The Tuist account this workspace's cache is configured against.
+///
+/// Read from the resolved cache provider config so the live URL and the
+/// gRPC target the CLI prints match the credentials the build is using.
+fn cache_provider_account(workspace: &std::path::Path) -> Option<String> {
+    let xdg = once_core::Xdg::from_env();
+    match crate::cache_provider::resolve_config(workspace, &xdg).ok()? {
+        crate::cache_provider::ResolvedCacheProviderConfig::Tuist(config) => config.account,
+        _ => None,
+    }
+}
+
+/// The Tuist project this workspace's cache is configured against.
+fn cache_provider_project(workspace: &std::path::Path) -> Option<String> {
+    let xdg = once_core::Xdg::from_env();
+    match crate::cache_provider::resolve_config(workspace, &xdg).ok()? {
+        crate::cache_provider::ResolvedCacheProviderConfig::Tuist(config) => config.project,
+        _ => None,
     }
 }
 
@@ -608,6 +658,15 @@ pub async fn test_with_filters(
     let bus = RunEventBus::new(EVENT_BUS_CAPACITY);
     let command_label = format!("test {target_id}");
     let reporter = spawn_reporter(&bus, output, &command_label);
+    #[cfg(feature = "events-ingest")]
+    let live_reporter = crate::live_run_reporter::spawn(
+        &bus,
+        workspace,
+        once_core::Xdg::from_env(),
+        cache_provider_account(workspace),
+        cache_provider_project(workspace),
+    )
+    .await;
     bus_events::run_started(&bus, target_id, bus_events::now_ms());
 
     let ui_server = if ui {
@@ -671,6 +730,8 @@ pub async fn test_with_filters(
             }
             bus_events::target_failed(&bus, target_id, duration_ms);
             write_runs_report(workspace, ui_server.as_ref()).await;
+            #[cfg(feature = "events-ingest")]
+            finish_live_reporter(live_reporter).await;
             finish_reporter(reporter).await;
             return Err(error).context("loading graph");
         }
@@ -765,6 +826,26 @@ pub async fn test_with_filters(
     }
     let test_results =
         load_test_results_for_runs(workspace, target_id, record.test_results.as_deref());
+    // Fan the normalized test-results blob out as
+    // `TestSuiteStarted` / `TestCaseCompleted` / `TestSuiteCompleted`
+    // events on the bus so the server projector can persist per-case
+    // rows. The blob is batched at end today (Bazel-style) — the
+    // Once server side ingests each event as it arrives, so migrating
+    // to truly-streaming emission is a client-side change only.
+    eprintln!(
+        "once-debug: test_results is_some={} for target {}",
+        test_results.is_some(),
+        target_id
+    );
+    if let Some(results) = &test_results {
+        let n = results
+            .get("cases")
+            .and_then(serde_json::Value::as_array)
+            .map(std::vec::Vec::len)
+            .unwrap_or(0);
+        eprintln!("once-debug: publishing {} test cases for {}", n, target_id);
+        publish_test_results_events(&bus, target_id, results);
+    }
     let duration_ms: u64 = started_at
         .elapsed()
         .as_millis()
@@ -791,8 +872,125 @@ pub async fn test_with_filters(
     write_record(output, &record).await?;
     write_runs_report(workspace, ui_server.as_ref()).await;
     emit_capability_completion_sounds(&record);
+    #[cfg(feature = "events-ingest")]
+    finish_live_reporter(live_reporter).await;
     finish_reporter(reporter).await;
     Ok(ExitCode::SUCCESS)
+}
+
+// Fan the normalized `once.test_results.v1` blob out onto the event
+// bus. Emits one `TestSuiteStarted` (with the total case count),
+// one `TestCaseCompleted` per attempt of each case, and a closing
+// `TestSuiteCompleted` with the aggregated totals.
+//
+// The current wire proto's `TestCaseCompleted` predates Once's
+// native protocol — it identifies the case by a synthetic
+// `test_case_execution_id` and expects the server to remember the
+// matching `TestCaseStarted` for name/suite metadata. The server's
+// projector accepts our shape as-is (the composite id becomes the
+// `case_id`), and we plan to extend the wire event with
+// self-describing `name`/`suite_id`/`attempt` fields so the server
+// no longer needs the join.
+fn publish_test_results_events(
+    bus: &once_core::RunEventBus,
+    target_id: &str,
+    results: &serde_json::Value,
+) {
+    use once_core::{RunEvent, TestCaseResult, TestTotals};
+
+    let now = bus_events::now_ms();
+
+    let cases = results
+        .get("cases")
+        .and_then(serde_json::Value::as_array);
+
+    let case_count = cases.map(|c| c.len()).unwrap_or(0);
+
+    bus.publish(RunEvent::TestSuiteStarted {
+        at_epoch_ms: now,
+        target_id: target_id.to_string(),
+        planned_case_count: Some(case_count as u32),
+    });
+
+    let mut totals = TestTotals {
+        passed: 0,
+        failed: 0,
+        skipped: 0,
+        errored: 0,
+        timed_out: 0,
+        cancelled: 0,
+    };
+
+    if let Some(cases) = cases {
+        for case in cases {
+            let case_id = case
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let name = case
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(case_id);
+            let attempts = case
+                .get("attempts")
+                .and_then(serde_json::Value::as_array);
+            if attempts.is_none() || case_id.is_empty() {
+                continue;
+            }
+            for (idx, attempt) in attempts.unwrap().iter().enumerate() {
+                let status = attempt
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("passed");
+                let result = match status {
+                    "passed" | "pass" | "ok" => TestCaseResult::Passed,
+                    "failed" | "fail" | "failure" | "error" => TestCaseResult::Failed,
+                    "skipped" | "ignored" | "pending" => TestCaseResult::Skipped,
+                    "errored" => TestCaseResult::Errored,
+                    "timed_out" | "timeout" => TestCaseResult::TimedOut,
+                    "cancelled" | "canceled" => TestCaseResult::Cancelled,
+                    _ => TestCaseResult::Passed,
+                };
+                let duration_ms = attempt
+                    .get("duration_ms")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or(0);
+                let failure_message = attempt
+                    .get("failure")
+                    .and_then(|v| v.get("message"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string);
+                match result {
+                    TestCaseResult::Passed => totals.passed += 1,
+                    TestCaseResult::Failed => totals.failed += 1,
+                    TestCaseResult::Skipped => totals.skipped += 1,
+                    TestCaseResult::Errored => totals.errored += 1,
+                    TestCaseResult::TimedOut => totals.timed_out += 1,
+                    TestCaseResult::Cancelled => totals.cancelled += 1,
+                }
+                // Suffix `case_id` with the attempt index so the
+                // wire's composite `test_case_execution_id`
+                // (`target#case#attempt`) stays unique per attempt.
+                let case_id_with_attempt =
+                    if idx == 0 { case_id.to_string() } else { format!("{case_id}#{}", idx + 1) };
+                bus.publish(RunEvent::TestCaseCompleted {
+                    at_epoch_ms: bus_events::now_ms(),
+                    target_id: target_id.to_string(),
+                    case_id: case_id_with_attempt,
+                    result,
+                    duration_ms,
+                    failure_message,
+                });
+                let _ = name; // Name is currently dropped by the wire; kept as an anchor for future protocol iteration.
+            }
+        }
+    }
+
+    bus.publish(RunEvent::TestSuiteCompleted {
+        at_epoch_ms: bus_events::now_ms(),
+        target_id: target_id.to_string(),
+        totals,
+    });
 }
 
 fn load_test_results_for_runs(

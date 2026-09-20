@@ -19,12 +19,14 @@ use once_core::{RunEvent as CoreEvent, RunEventBus};
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
-use tokio::time::{sleep, timeout, Instant};
-use tokio_stream::{wrappers::ReceiverStream, StreamExt};
+use tokio::time::{Instant, sleep, timeout};
+use tokio_stream::{StreamExt, wrappers::ReceiverStream};
+use tonic::metadata::{Ascii, MetadataValue};
+use tonic::service::{Interceptor, interceptor::InterceptedService};
 use tonic::transport::Channel;
 use tonic::{Request, Streaming};
 
-use crate::bridge::{translate, Translated};
+use crate::bridge::{Translated, translate};
 use crate::proto::run_event_service_client::RunEventServiceClient;
 use crate::proto::{BatchAck, GetServerCapabilitiesRequest, RunEventBatch, ServerCapabilities};
 use crate::session::{AckAction, EventSession, SessionLimits};
@@ -64,8 +66,24 @@ pub enum TransportError {
 
 /// Live transport bound to a specific gRPC channel and run.
 pub struct EventClient {
-    client: RunEventServiceClient<Channel>,
+    client: RunEventServiceClient<InterceptedService<Channel, Authorization>>,
     config: TransportConfig,
+    metadata: Option<crate::proto::RunStarted>,
+    started_at_ms: Option<i64>,
+}
+
+#[derive(Clone, Default)]
+struct Authorization(Option<MetadataValue<Ascii>>);
+
+impl Interceptor for Authorization {
+    fn call(&mut self, mut request: Request<()>) -> Result<Request<()>, tonic::Status> {
+        if let Some(value) = &self.0 {
+            request
+                .metadata_mut()
+                .insert("authorization", value.clone());
+        }
+        Ok(request)
+    }
 }
 
 /// Reconnect strategy configuration.
@@ -95,9 +113,45 @@ impl EventClient {
     /// responsible for TLS, auth interceptors, and connection reuse.
     pub fn new(channel: Channel, config: TransportConfig) -> Self {
         Self {
-            client: RunEventServiceClient::new(channel),
+            client: RunEventServiceClient::with_interceptor(channel, Authorization::default()),
             config,
+            metadata: None,
+            started_at_ms: None,
         }
+    }
+
+    pub fn authenticated(
+        channel: Channel,
+        config: TransportConfig,
+        token: &str,
+    ) -> Result<Self, tonic::metadata::errors::InvalidMetadataValue> {
+        let mut authorization: MetadataValue<Ascii> = format!("Bearer {token}").parse()?;
+        authorization.set_sensitive(true);
+        Ok(Self {
+            client: RunEventServiceClient::with_interceptor(
+                channel,
+                Authorization(Some(authorization)),
+            ),
+            config,
+            metadata: None,
+            started_at_ms: None,
+        })
+    }
+
+    pub fn with_metadata(mut self, metadata: crate::proto::RunStarted) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
+    pub async fn argv_hash_key(
+        &mut self,
+        project_id: String,
+    ) -> Result<crate::proto::ArgvHashKey, TransportError> {
+        Ok(self
+            .client
+            .get_argv_hash_key(crate::proto::GetArgvHashKeyRequest { project_id })
+            .await?
+            .into_inner())
     }
 
     /// One-shot preflight against the server.
@@ -199,6 +253,14 @@ impl EventClient {
         mut shutdown: Option<oneshot::Receiver<()>>,
     ) -> Result<u64, TransportError> {
         let (batch_tx, batch_rx) = mpsc::channel::<RunEventBatch>(32);
+        prime_stream(
+            session,
+            bus_rx,
+            &self.metadata,
+            &mut self.started_at_ms,
+            &batch_tx,
+        )
+        .await?;
         let outgoing = ReceiverStream::new(batch_rx);
         let mut ack_stream: Streaming<BatchAck> = self
             .client
@@ -214,7 +276,10 @@ impl EventClient {
             if let Some(mut rx) = shutdown.take() {
                 match rx.try_recv() {
                     Err(oneshot::error::TryRecvError::Empty) => shutdown = Some(rx),
-                    Ok(()) | Err(oneshot::error::TryRecvError::Closed) => bus_open = false,
+                    Ok(()) | Err(oneshot::error::TryRecvError::Closed) => {
+                        drain_bus(session, bus_rx, &self.metadata, &mut self.started_at_ms);
+                        bus_open = false;
+                    }
                 }
             }
             tokio::select! {
@@ -249,7 +314,7 @@ impl EventClient {
                     }
                 },
                 bus_msg = bus_rx.recv(), if bus_open => match bus_msg {
-                    Ok(event) => enqueue_event(session, event),
+                    Ok(event) => enqueue_event(session, event, &self.metadata, &mut self.started_at_ms),
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         tracing::debug!(lagged_by = n, "bus receiver lagged");
                     }
@@ -295,6 +360,14 @@ impl EventClient {
     ) -> Result<u64, TransportError> {
         let mut session = EventSession::new(self.config.run_id.clone(), self.config.limits);
         let (batch_tx, batch_rx) = mpsc::channel::<RunEventBatch>(32);
+        prime_stream(
+            &mut session,
+            &mut bus_rx,
+            &self.metadata,
+            &mut self.started_at_ms,
+            &batch_tx,
+        )
+        .await?;
         let outgoing = ReceiverStream::new(batch_rx);
         let mut ack_stream: Streaming<BatchAck> = self
             .client
@@ -318,6 +391,12 @@ impl EventClient {
                         shutdown = Some(rx);
                     }
                     Ok(()) | Err(oneshot::error::TryRecvError::Closed) => {
+                        drain_bus(
+                            &mut session,
+                            &mut bus_rx,
+                            &self.metadata,
+                            &mut self.started_at_ms,
+                        );
                         bus_open = false;
                     }
                 }
@@ -363,7 +442,7 @@ impl EventClient {
                 },
                 // Consume bus events while the bus is open.
                 bus_msg = bus_rx.recv(), if bus_open => match bus_msg {
-                    Ok(event) => enqueue_event(&mut session, event),
+                    Ok(event) => enqueue_event(&mut session, event, &self.metadata, &mut self.started_at_ms),
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         tracing::debug!(lagged_by = n, "bus receiver lagged");
                     }
@@ -399,21 +478,75 @@ impl EventClient {
     }
 }
 
-fn enqueue_event(session: &mut EventSession, event: CoreEvent) {
+async fn prime_stream(
+    session: &mut EventSession,
+    bus_rx: &mut broadcast::Receiver<CoreEvent>,
+    metadata: &Option<crate::proto::RunStarted>,
+    started_at_ms: &mut Option<i64>,
+    batch_tx: &mpsc::Sender<RunEventBatch>,
+) -> Result<(), TransportError> {
+    // Some servers send response headers only after receiving the first batch.
+    loop {
+        if let Some(batch) = session.next_batch() {
+            return batch_tx
+                .send(batch)
+                .await
+                .map_err(|_| TransportError::AckStreamClosed);
+        }
+        match bus_rx.recv().await {
+            Ok(event) => enqueue_event(session, event, metadata, started_at_ms),
+            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(broadcast::error::RecvError::Closed) => {
+                return Err(TransportError::AckStreamClosed);
+            }
+        }
+    }
+}
+
+fn drain_bus(
+    session: &mut EventSession,
+    bus_rx: &mut broadcast::Receiver<CoreEvent>,
+    metadata: &Option<crate::proto::RunStarted>,
+    started_at_ms: &mut Option<i64>,
+) {
+    loop {
+        match bus_rx.try_recv() {
+            Ok(event) => enqueue_event(session, event, metadata, started_at_ms),
+            Err(broadcast::error::TryRecvError::Lagged(_)) => continue,
+            Err(_) => break,
+        }
+    }
+}
+
+fn enqueue_event(
+    session: &mut EventSession,
+    event: CoreEvent,
+    metadata: &Option<crate::proto::RunStarted>,
+    started_at_ms: &mut Option<i64>,
+) {
     let mono_ns = 0; // Producers do not thread monotonic timing yet; RFC allows zero.
     match translate(event, mono_ns) {
         Translated::Ordinary {
-            payload,
+            mut payload,
             epoch_ms,
             mono_ns,
         } => {
+            if matches!(payload, crate::proto::run_event::Payload::RunStarted(_)) {
+                *started_at_ms = Some(epoch_ms);
+                if let Some(metadata) = metadata {
+                    payload = crate::proto::run_event::Payload::RunStarted(metadata.clone());
+                }
+            }
             session.push_ordinary(payload, epoch_ms, mono_ns);
         }
         Translated::Terminal {
-            result,
+            mut result,
             epoch_ms,
             mono_ns,
         } => {
+            if let Some(start) = started_at_ms {
+                result.wall_ms = epoch_ms.saturating_sub(*start).max(0);
+            }
             session.push_terminal(result, epoch_ms, mono_ns);
         }
         Translated::Skip => {}

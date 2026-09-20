@@ -8,7 +8,9 @@ use once_frontend::GraphTarget;
 use serde_json::Value as JsonValue;
 use tokio::task::JoinSet;
 
-use super::{build_one, materialize_cached_outputs, AvailableInput, BuildContext, BuildOutcome};
+use super::{
+    build_one, materialize_cached_outputs_with_events, AvailableInput, BuildContext, BuildOutcome,
+};
 
 pub(super) struct BuildScheduler<'a> {
     root_id: &'a str,
@@ -63,14 +65,37 @@ impl<'a> BuildScheduler<'a> {
                 .await
                 .context("build task set ended unexpectedly")?;
             let (target_id, outcome) = joined.context("joining graph build task")??;
-            materialize_cached_outputs(
+            // Time output materialization so the flame graph shows
+            // where cache-hit builds actually spend the wall clock:
+            // walking the cache manifest and hardlinking blobs into
+            // the workspace per target. Cheap probes make the action
+            // sub-spans tiny; this is the fat block that fills the
+            // otherwise-empty lane.
+            let materialize_worker = self.context.workers.acquire().await;
+            let materialize_started_at_ms = crate::bus_events::now_ms();
+            let materialize_started_at = std::time::Instant::now();
+            materialize_cached_outputs_with_events(
                 &outcome,
+                &target_id,
                 &self.context.workspace,
                 &self.context.cache,
                 Some(&self.context.source_digest_cache),
+                self.context.event_bus.as_ref(),
             )
             .await
             .with_context(|| format!("materializing outputs for {target_id}"))?;
+            if let Some(bus) = &self.context.event_bus {
+                crate::bus_events::target_phase_completed(
+                    bus,
+                    &target_id,
+                    "materialize_outputs",
+                    materialize_worker.worker_id(),
+                    materialize_started_at_ms,
+                    u64::try_from(materialize_started_at.elapsed().as_millis())
+                        .unwrap_or(u64::MAX),
+                );
+            }
+            drop(materialize_worker);
             tracing::trace!(
                 target = %target_id,
                 cache = outcome.cache_tag,

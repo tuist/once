@@ -44,6 +44,69 @@ pub enum RunEvent {
         was_cached: bool,
         duration_ms: i64,
     },
+    /// One declared action inside a target finished. Emitted per
+    /// action so a subscriber can render the internal task list of a
+    /// target (Bazel's actions view: "Compiling foo.cc", "Linking
+    /// libfoo.a") instead of only the target rollup. `identifier` is
+    /// the Starlark-declared identity of the action within its target;
+    /// `capability` names the capability the action was declared under
+    /// (`build`, `test`, ...). `action_index` is the position within
+    /// that target's ordered action list.
+    ActionCompleted {
+        at_epoch_ms: i64,
+        target_id: String,
+        capability: String,
+        action_index: u32,
+        identifier: Option<String>,
+        result: TargetResult,
+        was_cached: bool,
+        duration_ms: i64,
+        exit_code: i32,
+        // Wall-clock start of the action. When zero the projector
+        // derives it from `at_epoch_ms - duration_ms`.
+        start_at_epoch_ms: i64,
+        // Stable id of the worker (tokio task / OS thread) that ran
+        // this action, so the dashboard can render one flame-graph
+        // row per worker in the same way Bazel groups by thread.
+        worker_id: String,
+        // Split of the action's wall time. `prepare_ms` covers arg
+        // files, input fingerprinting, and action digest; `execute_ms`
+        // covers cache probe + (on a miss) command execution and
+        // output upload. Their sum can be less than `duration_ms` on
+        // a cache hit because we intentionally leave the small
+        // outer bookkeeping out. Zero for cached-replay actions.
+        prepare_ms: i64,
+        execute_ms: i64,
+        // Content-address digest (hex) of this action's cached
+        // result — Bazel's action_digest. Persisted on the server so
+        // the Cache tab's Cacheable Actions rows can show the exact
+        // key Once probed. Empty string when unknown (a failure that
+        // never reached the cache probe).
+        cache_key: String,
+    },
+    /// A single content blob crossed the cache boundary — either
+    /// pulled down from the remote tier ("download") or pushed up
+    /// after a miss ("upload"). Emitted once per unique blob per run
+    /// so the dashboard's Content Objects view lists real digests +
+    /// sizes, and the Cache Summary can total `content_downloaded` /
+    /// `content_uploaded` bytes.
+    CacheContentTransferred {
+        at_epoch_ms: i64,
+        // "download" (cache → workspace) or "upload" (workspace → cache).
+        kind: String,
+        // Target execution that requested the transfer, so the row can
+        // link back to its action row on the Cache tab.
+        target_id: String,
+        // Content-address digest (hex string) of the blob.
+        content_hash: String,
+        // Size of the blob in bytes.
+        size_bytes: i64,
+        // Wall time observed for this transfer. Zero when Once merely
+        // hardlinked a blob that was already local (a replay), so the
+        // dashboard can distinguish a real network fetch from a
+        // near-instant local restore.
+        duration_ms: i64,
+    },
     /// A slice of subprocess output. Scope is a target for now; the
     /// RFC's `LogScope` union arrives with the per-case fire-points.
     LogChunk {
@@ -80,6 +143,17 @@ pub enum RunEvent {
         result: TestCaseResult,
         duration_ms: i64,
         failure_message: Option<String>,
+    },
+    /// Periodic host-resource sample published while a run executes so
+    /// the dashboard's timeline can plot CPU, memory, and network
+    /// usage over wall-clock. Published at 1 Hz from a single
+    /// background task while the run is live.
+    SystemSampled {
+        at_epoch_ms: i64,
+        cpu_percent: f32,
+        memory_bytes: u64,
+        network_in_bytes_per_second: u64,
+        network_out_bytes_per_second: u64,
     },
 }
 

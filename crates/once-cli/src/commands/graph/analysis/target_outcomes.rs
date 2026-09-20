@@ -26,8 +26,8 @@ use std::path::{Path, PathBuf};
 
 use once_cas::{ActionResult, Digest};
 use once_core::{EvidenceCacheState, InputFingerprintManifest, SandboxMode};
-use once_frontend::analysis::{AnalysisObservations, Observation};
 use once_frontend::GraphTarget;
+use once_frontend::analysis::{AnalysisObservations, Observation};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
@@ -35,7 +35,7 @@ use super::source_digest_cache::KnownChanges;
 use super::{AvailableInput, BuildOutcome};
 use crate::commands::change_tracker::ChangePosition;
 
-const SCHEMA: &str = "once.target-outcomes.v2";
+const SCHEMA: &str = "once.target-outcomes.v3";
 
 /// A pattern set one target's analysis expanded, and where it was anchored.
 ///
@@ -69,6 +69,7 @@ struct Record {
     cache_state: EvidenceCacheState,
     result: ActionResult,
     cached_results: Vec<ActionResult>,
+    per_action_outcomes: Vec<super::PerActionOutcome>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -184,6 +185,16 @@ impl TargetOutcomes {
             cache_state: EvidenceCacheState::Hit,
             result: record.result.clone(),
             cached_results: record.cached_results.clone(),
+            per_action_outcomes: record
+                .per_action_outcomes
+                .iter()
+                .cloned()
+                .map(|mut action| {
+                    action.cache_state = EvidenceCacheState::Hit;
+                    action.duration_ms = 0;
+                    action
+                })
+                .collect(),
         })
     }
 
@@ -237,6 +248,7 @@ impl TargetOutcomes {
             cache_state: outcome.cache_state,
             result: outcome.result.clone(),
             cached_results: outcome.cached_results.clone(),
+            per_action_outcomes: outcome.per_action_outcomes.clone(),
         };
         self.learned
             .lock()

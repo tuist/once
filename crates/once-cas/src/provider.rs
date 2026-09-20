@@ -161,6 +161,16 @@ impl CacheProvider {
         Ok((bytes, truncated))
     }
 
+    /// Size in bytes of a locally-held blob. Callers that want the
+    /// size after a remote fetch should call [`get_blob`](Self::get_blob)
+    /// first so the blob is present in the local tier.
+    pub async fn blob_size(&self, digest: &Digest) -> Result<u64> {
+        match self {
+            Self::Local(cas) => cas.blob_size(digest).await,
+            Self::Tuist(cache) => cache.local().blob_size(digest).await,
+        }
+    }
+
     /// True if a content-addressed blob exists. For Tuist this consults
     /// the remote tier on local miss so it mirrors `get_blob`'s reach;
     /// scripts can probe `exists` then `get` without surprises.

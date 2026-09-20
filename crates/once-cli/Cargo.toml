@@ -26,6 +26,7 @@ once-frontend.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 blake3.workspace = true
+hex = "0.4"
 usage.workspace = true
 console.workspace = true
 indicatif.workspace = true
@@ -37,6 +38,7 @@ reqwest.workspace = true
 rodio = { version = "0.20", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
+sysinfo = { workspace = true }
 tempfile.workspace = true
 thiserror.workspace = true
 toml.workspace = true

@@ -12,7 +12,8 @@ use once_core::{
 };
 
 use crate::proto::{
-    log_scope::Scope as LogScopeVariant, run_event::Payload, LogChunk, LogScope,
+    log_scope::Scope as LogScopeVariant, run_event::Payload, ActionCompleted, CacheDownload,
+    CacheUpload, ContentRef, HashAlgorithm, LogChunk, LogScope, SystemSampled,
     Phase as WirePhase, RunCompleted, RunHeartbeat, RunResult as WireRunResult, RunStarted,
     Stream as WireStream, TargetCompleted, TargetPhase, TargetQueued, TargetResult as WireResult,
     TargetStarted, TestCaseCompleted, TestCaseResult as WireCaseResult, TestCaseStarted,
@@ -191,6 +192,40 @@ pub fn translate(event: CoreEvent, mono_ns: i64) -> Translated {
             epoch_ms: at_epoch_ms,
             mono_ns,
         },
+        CoreEvent::ActionCompleted {
+            at_epoch_ms,
+            target_id,
+            capability,
+            action_index,
+            identifier,
+            result,
+            was_cached,
+            duration_ms,
+            exit_code,
+            start_at_epoch_ms,
+            worker_id,
+            prepare_ms,
+            execute_ms,
+            cache_key,
+        } => Translated::Ordinary {
+            payload: Payload::ActionCompleted(ActionCompleted {
+                target_execution_id: target_id,
+                capability,
+                action_index,
+                identifier: identifier.unwrap_or_default(),
+                result: wire_target_result(result) as i32,
+                was_cached,
+                duration_ms,
+                exit_code,
+                start_at_epoch_ms,
+                worker_id,
+                prepare_ms,
+                execute_ms,
+                cache_key,
+            }),
+            epoch_ms: at_epoch_ms,
+            mono_ns,
+        },
         CoreEvent::LogChunk {
             at_epoch_ms,
             target_id,
@@ -208,6 +243,66 @@ pub fn translate(event: CoreEvent, mono_ns: i64) -> Translated {
             epoch_ms: at_epoch_ms,
             mono_ns,
         },
+        CoreEvent::SystemSampled {
+            at_epoch_ms,
+            cpu_percent,
+            memory_bytes,
+            network_in_bytes_per_second,
+            network_out_bytes_per_second,
+        } => Translated::Ordinary {
+            payload: Payload::SystemSampled(SystemSampled {
+                at_epoch_ms,
+                cpu_percent,
+                memory_bytes,
+                network_in_bytes_per_second,
+                network_out_bytes_per_second,
+            }),
+            epoch_ms: at_epoch_ms,
+            mono_ns,
+        },
+        CoreEvent::CacheContentTransferred {
+            at_epoch_ms,
+            kind,
+            target_id,
+            content_hash,
+            size_bytes,
+            duration_ms,
+        } => {
+            let content = ContentRef {
+                hash_algorithm: HashAlgorithm::Blake3 as i32,
+                digest: content_hash.into_bytes(),
+                size_bytes: size_bytes.max(0) as u64,
+                namespace: String::new(),
+                media_type: String::new(),
+            };
+            let bytes = size_bytes.max(0) as u64;
+            let payload = if kind == "upload" {
+                Payload::CacheUpload(CacheUpload {
+                    cache_decision_id: String::new(),
+                    target_execution_id: target_id,
+                    content: Some(content),
+                    tier: "remote".to_string(),
+                    kind: "output".to_string(),
+                    duration_ms,
+                    bytes_transferred: bytes,
+                })
+            } else {
+                Payload::CacheDownload(CacheDownload {
+                    cache_decision_id: String::new(),
+                    target_execution_id: target_id,
+                    content: Some(content),
+                    tier: "remote".to_string(),
+                    kind: "output".to_string(),
+                    duration_ms,
+                    bytes_transferred: bytes,
+                })
+            };
+            Translated::Ordinary {
+                payload,
+                epoch_ms: at_epoch_ms,
+                mono_ns,
+            }
+        }
         _ => Translated::Skip,
     }
 }

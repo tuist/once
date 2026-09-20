@@ -35,15 +35,15 @@ use once_core::{
     ActionOutputObserver, EvidenceCacheState, InputFingerprintManifest, ResourceLimits,
     ResourcePool, SandboxMode,
 };
+use once_frontend::ConfigurationOverrides;
+use once_frontend::GraphTarget;
 use once_frontend::analysis::{
     AnalysisEngine, AnalysisOptions, CachedToolCommand, CommandPolicy, UnchangedWorkspace,
 };
-use once_frontend::ConfigurationOverrides;
-use once_frontend::GraphTarget;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
-use self::actions::{run_declared_actions, validate_declared_actions, DeclaredActionValidation};
+use self::actions::{DeclaredActionValidation, run_declared_actions, validate_declared_actions};
 use self::analysis_memo::AnalysisMemo;
 use self::resolution_cache::ResolutionCache;
 use self::scheduler::{BuildScheduler, DependencyInputs};
@@ -51,8 +51,8 @@ use self::source_digest_cache::{KnownChanges, SourceDigestCache};
 use self::target_outcomes::TargetOutcomes;
 use crate::commands::change_tracker::{ChangePosition, ChangeSnapshot};
 
-pub(super) use self::source_digest_cache::stored_position as recorded_digest_position;
 pub(super) use self::source_digest_cache::SourceDigestCache as RecordedDigests;
+pub(super) use self::source_digest_cache::stored_position as recorded_digest_position;
 
 /// Turn a watcher snapshot into a statement about the recorded digests.
 ///
@@ -142,6 +142,21 @@ pub(super) struct BuildOutcome {
     pub cache_state: EvidenceCacheState,
     pub result: ActionResult,
     pub cached_results: Vec<ActionResult>,
+    /// Per-declared-action outcomes recorded during this build.
+    ///
+    /// One entry per declared action, retained with memoized target outcomes
+    /// so subsequent runs can report each reused action as a cache hit.
+    pub per_action_outcomes: Vec<PerActionOutcome>,
+}
+
+/// A single declared action's terminal state, as observed by the runner.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub(super) struct PerActionOutcome {
+    pub identifier: Option<String>,
+    pub index: u32,
+    pub cache_state: EvidenceCacheState,
+    pub duration_ms: i64,
+    pub exit_code: i32,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -519,6 +534,8 @@ impl BuildSession {
                 self.sandbox,
                 &self.resources,
                 self.output_observer.as_deref(),
+                self.event_bus.as_ref(),
+                &workers,
             )
             .await
             .with_context(|| format!("executing {capability} for {}", target.label.id))?;
@@ -731,6 +748,15 @@ impl BuildSession {
 
     /// Snapshot the per-build values every spawned task needs.
     fn build_context(&self) -> BuildContext {
+        // One executor slot per action the resource pool would let
+        // run concurrently. Keeping the two numbers in lockstep is
+        // what makes a slot equivalent to a real long-lived worker:
+        // if the pool ever had fewer slots than the concurrency
+        // ceiling, actions would sometimes wait on the WorkerSlots
+        // pool instead of the ResourcePool; if it had more, some
+        // slots would never be picked.
+        let workers =
+            crate::bus_events::WorkerSlots::new(self.resources.max_parallel_actions());
         BuildContext {
             workspace: self.workspace.clone(),
             cache: self.cache.clone(),
@@ -746,6 +772,7 @@ impl BuildSession {
             resources: Arc::clone(&self.resources),
             output_observer: self.output_observer.clone(),
             event_bus: self.event_bus.clone(),
+            workers,
         }
     }
 
@@ -808,6 +835,55 @@ async fn materialize_cached_outputs(
             None => once_core::materialize_outputs(result, workspace, cache)
                 .await
                 .map_err(anyhow::Error::from)?,
+        }
+    }
+    Ok(())
+}
+
+/// Like [`materialize_cached_outputs`] but also publishes one
+/// `CacheContentTransferred` event per output blob on the given bus
+/// so the Once Cache tab's Content Objects view fills in with real
+/// digests + sizes. Kept as a wrapper (instead of extending the
+/// original signature) so tests and other callers that don't have an
+/// event bus stay unchanged.
+async fn materialize_cached_outputs_with_events(
+    outcome: &BuildOutcome,
+    target_id: &str,
+    workspace: &Path,
+    cache: &CacheProvider,
+    source_digest_cache: Option<&SourceDigestCache>,
+    event_bus: Option<&once_core::RunEventBus>,
+) -> Result<()> {
+    materialize_cached_outputs(outcome, workspace, cache, source_digest_cache).await?;
+    if let Some(bus) = event_bus {
+        // After materialize succeeds every output blob is present in
+        // the local tier, so `blob_size` is a cheap metadata read.
+        // Look at both the aggregated `result.outputs` (which the
+        // executor populates as it aggregates each declared action's
+        // hit results) and the per-action `cached_results` — either
+        // may be authoritative depending on how the outcome was
+        // assembled. Deduplicate across both so we count a shared
+        // blob once.
+        let mut seen = std::collections::HashSet::new();
+        let mut digests: Vec<once_cas::Digest> = outcome.result.outputs.values().copied().collect();
+        for result in &outcome.cached_results {
+            for digest in result.outputs.values() {
+                digests.push(*digest);
+            }
+        }
+        for digest in digests {
+            if !seen.insert(digest) {
+                continue;
+            }
+            let size = cache.blob_size(&digest).await.unwrap_or(0);
+            crate::bus_events::cache_content_transferred(
+                bus,
+                "download",
+                target_id,
+                &digest.to_string(),
+                size,
+                0,
+            );
         }
     }
     Ok(())
@@ -1132,6 +1208,13 @@ struct BuildContext {
     /// render live per-dependency progress rather than only the
     /// top-level target's phase transitions.
     pub event_bus: Option<once_core::RunEventBus>,
+    /// Bounded pool of executor slots. Each action acquires a slot
+    /// before running and inherits the slot's stable `worker_id` for
+    /// its `ActionCompleted` event. Sized to
+    /// `resources.max_parallel_actions()` so the pool never over- or
+    /// under-provisions relative to the concurrency the runner
+    /// actually allows.
+    pub workers: crate::bus_events::WorkerSlots,
 }
 
 /// Analyse one target, reusing a stored analysis when its recorded answers
@@ -1222,6 +1305,7 @@ async fn build_one(
         resources,
         output_observer,
         event_bus,
+        workers,
     } = context;
     let DependencyInputs {
         providers,
@@ -1233,6 +1317,7 @@ async fn build_one(
     ensure_graph_target_valid(&target)?;
     let target_id = target.label.id.clone();
     let build_started_at = std::time::Instant::now();
+    let build_started_at_epoch_ms = crate::bus_events::now_ms();
     if let Some(bus) = &event_bus {
         crate::bus_events::target_executing(bus, &target_id);
     }
@@ -1258,6 +1343,70 @@ async fn build_one(
                 let duration_ms =
                     u64::try_from(build_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
                 let was_cached = matches!(outcome.cache_state, once_core::EvidenceCacheState::Hit);
+                for action in &outcome.per_action_outcomes {
+                    // Cached-replay actions have no real per-action
+                    // timing, but the wall-clock start still exists.
+                    // Stagger each action by a millisecond so they
+                    // don't stack on the same tick and become
+                    // invisible zero-width dashes on the flame graph.
+                    let started_at = build_started_at_epoch_ms
+                        .saturating_add(i64::from(action.index));
+                    // Rotate through the worker pool one replay at a
+                    // time so the flame graph spreads cached-replay
+                    // actions across lanes instead of piling them all
+                    // on `worker-0`.
+                    let worker = workers.acquire().await;
+                    // The per-target `outcome.action_digest` is the
+                    // aggregated key across all declared actions in
+                    // that target — the closest analog to a per-action
+                    // cache key on the reuse path (individual action
+                    // digests aren't stored on the outcome record).
+                    let cache_key = outcome.action_digest.to_string();
+                    crate::bus_events::action_completed(
+                        bus,
+                        &target_id,
+                        "build",
+                        action.index,
+                        action.identifier.as_deref(),
+                        1,
+                        true,
+                        action.exit_code,
+                        started_at,
+                        worker.worker_id(),
+                        0,
+                        0,
+                        &cache_key,
+                    );
+                }
+                // Emit one CacheContentTransferred per unique output
+                // blob so the Cache tab's Content Objects view fills
+                // in even for target-outcome-reused runs, which
+                // bypass `materialize_cached_outputs`. Merge digests
+                // from both the aggregated `result.outputs` and each
+                // `cached_results[*].outputs` because either may be
+                // populated depending on how the outcome was recorded.
+                let mut seen = std::collections::HashSet::new();
+                let mut digests: Vec<once_cas::Digest> =
+                    outcome.result.outputs.values().copied().collect();
+                for result in &outcome.cached_results {
+                    for digest in result.outputs.values() {
+                        digests.push(*digest);
+                    }
+                }
+                for digest in digests {
+                    if !seen.insert(digest) {
+                        continue;
+                    }
+                    let size = cache.blob_size(&digest).await.unwrap_or(0);
+                    crate::bus_events::cache_content_transferred(
+                        bus,
+                        "download",
+                        &target_id,
+                        &digest.to_string(),
+                        size,
+                        0,
+                    );
+                }
                 crate::bus_events::target_completed(
                     bus,
                     &target_id,
@@ -1331,6 +1480,8 @@ async fn build_one(
         sandbox,
         &resources,
         output_observer.as_deref(),
+        event_bus.as_ref(),
+        &workers,
     )
     .await?;
     if let Some(key) = analysis_key

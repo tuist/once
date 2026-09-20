@@ -95,7 +95,14 @@ impl EventSession {
     /// dropped range in the loss interval set (data on the client,
     /// not an event) so the next batch's `gap_advances` carries it.
     pub fn push_ordinary(&mut self, payload: Payload, epoch_ms: i64, mono_ns: i64) -> u64 {
-        assert!(!self.finalized_locally, "session already finalized");
+        // A straggler event can arrive after the session was
+        // finalized (system sampler ticks that raced past
+        // RunCompleted, late `TargetPhase`s, etc.). Dropping them
+        // silently is preferable to panicking the CLI at exit.
+        if self.finalized_locally {
+            self.loss.record(self.next_seq, self.next_seq, "post_finalize_drop");
+            return self.next_seq;
+        }
         assert!(
             !matches!(payload, Payload::RunCompleted(_)),
             "use push_terminal for RunCompleted",
