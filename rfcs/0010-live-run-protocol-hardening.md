@@ -163,10 +163,11 @@ execution and cannot support claims about compiler time by itself.
    selected outcome.
 5. **Live test cases.** Some runners expose only an end-of-run result report.
    Those case outcomes are retrospective and must not be presented as live
-   progress. On a real NetNewsWire parser test run, 311 discovered cases had
-   unknown per-case status despite an overall passed process. Once now preserves
-   that uncertainty on the wire. Streaming test runners should emit starts and
-   completions at execution time.
+   progress. The Apple test runner now translates observed XCTest and Swift
+   Testing output into per-case verdicts and durations. A real NetNewsWire
+   parser run reported 354 passed cases and no unknown outcomes. Cases absent
+   from native output remain unknown. Streaming test runners should emit starts
+   and completions at execution time.
 6. **Privacy on the server.** Workspace names are disclosed only by explicit
    opt-in and hash-key length and expiry are validated before use. The server
    must validate safe literals against the versioned allowlist and apply its
@@ -217,8 +218,8 @@ Client and producer checks run during this review:
 - The documentation compiler regenerated the event reference from the wire
   definition, and the local documentation pages rendered in headless Chrome.
 - A ripgrep workspace build and its 290-case test target passed. A NetNewsWire
-  parser build and test process passed, but the 311 individual cases had
-  unknown status in the upstream result report. A full NetNewsWire application
+  parser build and test process passed with 354 observed cases reported as
+  passed and no unknown cases. A full NetNewsWire application
   build lacked a generated project secret. Mise workspace discovery passed,
   while its build was blocked by a newer required Mise version.
 

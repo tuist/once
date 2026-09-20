@@ -49,11 +49,13 @@ library records the run and Once turns that record into normalized results, so
 a test that was filtered out, skipped, or never reached is reported as such
 rather than as a pass, and an issue the test marked as known is not a failure.
 
-Where results have to come from the XCTest host instead, that host reports the
-run's outcome and not each test's. Once still lists the cases it finds in the
-sources so a shard can address them, but lists them without a verdict. A
-bundle stays with the XCTest host when it holds XCTest cases, which only that
-host runs, and when it runs anywhere other than macOS.
+Where results come from the XCTest host, Once translates the host's per-case
+completion records into normalized outcomes and durations. This includes Swift
+Testing cases that the host runs alongside XCTest cases. Once also lists cases
+found in sources so a shard can address them; a case without a completion
+record stays unknown rather than being credited with a pass. A bundle stays
+with the XCTest host when it holds XCTest cases, which only that host runs, and
+when it runs anywhere other than macOS.
 
 ## Attributes
 
