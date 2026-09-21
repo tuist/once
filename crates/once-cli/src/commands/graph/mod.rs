@@ -125,7 +125,6 @@ pub async fn build(
     let bus = RunEventBus::new(EVENT_BUS_CAPACITY);
     let command_label = format!("build {target_id}");
     let reporter = spawn_reporter(&bus, output, &command_label);
-    #[cfg(feature = "events-ingest")]
     let live_reporter = crate::live_run_reporter::spawn(
         &bus,
         workspace,
@@ -164,10 +163,7 @@ pub async fn build(
     // Optional live event ingest to a compatible ingest server. Enabled
     // by ONCE_EVENTS_ENDPOINT; failures are logged and never abort the
     // run. Subscribing before publisher.started() ensures RunStarted
-    // is captured. Gated behind the `events-ingest` build feature so
-    // that self-hosted graph builds of the CLI do not require the
-    // once-events-client crate.
-    #[cfg(feature = "events-ingest")]
+    // is captured.
     let mut event_client = if let (Some(server), Some(context)) = (&ui_server, &run_context) {
         match crate::commands::events::try_start(server, context.run_id_string()).await {
             Ok(handle) => handle,
@@ -245,7 +241,6 @@ pub async fn build(
         bus_events::target_finished(&bus, target_id, duration_ms, &record.cache, 0);
         write_record(output, &record).await?;
         write_runs_report(workspace, ui_server.as_ref()).await;
-        #[cfg(feature = "events-ingest")]
         finish_live_reporter(live_reporter).await;
         finish_reporter(reporter).await;
         return Ok(ExitCode::SUCCESS);
@@ -280,7 +275,6 @@ pub async fn build(
             }
             bus_events::target_failed(&bus, target_id, duration_ms);
             write_runs_report(workspace, ui_server.as_ref()).await;
-            #[cfg(feature = "events-ingest")]
             finish_live_reporter(live_reporter).await;
             finish_reporter(reporter).await;
             return Err(error);
@@ -316,7 +310,6 @@ pub async fn build(
             }
             bus_events::target_failed(&bus, target_id, duration_ms);
             write_runs_report(workspace, ui_server.as_ref()).await;
-            #[cfg(feature = "events-ingest")]
             finish_live_reporter(live_reporter).await;
             finish_reporter(reporter).await;
             return Err(error);
@@ -346,7 +339,6 @@ pub async fn build(
             }
             bus_events::target_failed(&bus, target_id, duration_ms);
             write_runs_report(workspace, ui_server.as_ref()).await;
-            #[cfg(feature = "events-ingest")]
             finish_live_reporter(live_reporter).await;
             finish_reporter(reporter).await;
             return Err(error);
@@ -385,7 +377,6 @@ pub async fn build(
         );
         write_record(output, &record).await?;
         write_runs_report(workspace, ui_server.as_ref()).await;
-        #[cfg(feature = "events-ingest")]
         finish_live_reporter(live_reporter).await;
         finish_reporter(reporter).await;
         return Ok(ExitCode::SUCCESS);
@@ -459,7 +450,6 @@ pub async fn build(
     // here to avoid a duplicate completion line.
     bus_events::run_completed(&bus, record.result.exit_code);
     write_record(output, &record).await?;
-    #[cfg(feature = "events-ingest")]
     if let Some(handle) = event_client.take() {
         handle
             .shutdown_with_timeout(std::time::Duration::from_secs(3))
@@ -467,7 +457,6 @@ pub async fn build(
     }
     write_runs_report(workspace, ui_server.as_ref()).await;
     emit_capability_completion_sounds(&record);
-    #[cfg(feature = "events-ingest")]
     finish_live_reporter(live_reporter).await;
     finish_reporter(reporter).await;
     Ok(ExitCode::SUCCESS)
@@ -484,7 +473,6 @@ async fn finish_reporter(reporter: Option<TerminalReporter>) {
 /// Await the HTTP run reporter so any pending per-target invocation POST has
 /// a chance to complete before the CLI returns. Best-effort - the reporter
 /// Drain the live gRPC reporter. Idempotent on a `Some` value.
-#[cfg(feature = "events-ingest")]
 async fn finish_live_reporter(reporter: crate::live_run_reporter::LiveRunReporter) {
     reporter.finish().await;
 }
@@ -658,7 +646,6 @@ pub async fn test_with_filters(
     let bus = RunEventBus::new(EVENT_BUS_CAPACITY);
     let command_label = format!("test {target_id}");
     let reporter = spawn_reporter(&bus, output, &command_label);
-    #[cfg(feature = "events-ingest")]
     let live_reporter = crate::live_run_reporter::spawn(
         &bus,
         workspace,
@@ -730,7 +717,6 @@ pub async fn test_with_filters(
             }
             bus_events::target_failed(&bus, target_id, duration_ms);
             write_runs_report(workspace, ui_server.as_ref()).await;
-            #[cfg(feature = "events-ingest")]
             finish_live_reporter(live_reporter).await;
             finish_reporter(reporter).await;
             return Err(error).context("loading graph");
@@ -875,7 +861,6 @@ pub async fn test_with_filters(
     write_record(output, &record).await?;
     write_runs_report(workspace, ui_server.as_ref()).await;
     emit_capability_completion_sounds(&record);
-    #[cfg(feature = "events-ingest")]
     finish_live_reporter(live_reporter).await;
     finish_reporter(reporter).await;
     Ok(ExitCode::SUCCESS)
