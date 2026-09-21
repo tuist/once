@@ -1,11 +1,8 @@
 //! Mutable set of loss intervals awaiting delivery as `gap_advances`.
 //!
 //! The client accumulates dropped-sequence ranges here in real time.
-//! At batch send it drains the set, coalesces adjacent or overlapping
-//! ranges into a canonical sorted non-overlapping list, and hands
-//! that list to the batch as its `gap_advances`. New loss recorded
-//! after the drain begins a fresh interval in the (now empty) set
-//! and is carried by the next batch.
+//! Loss stays pending until the durable acknowledgement passes it. Sending
+//! a batch only snapshots these intervals so reconnects can replay them.
 //!
 //! No sequence number is consumed by loss: the interval is data on
 //! the client until the moment it is serialized into a batch, at
@@ -28,13 +25,12 @@ pub enum LossPushOutcome {
 ///
 /// Invariants:
 /// - Every interval satisfies `first <= last`.
-/// - No two intervals overlap or touch (touching intervals coalesce
-///   on insert so the canonical shape carries as few `GapAdvance`
-///   records as possible).
+/// - Intervals never overlap. Touching intervals coalesce when their
+///   loss reasons match.
 #[derive(Debug, Default)]
 pub struct LossIntervals {
-    // Keyed by `first`; each value is `last`.
-    intervals: BTreeMap<u64, u64>,
+    // Keyed by `first`; each value contains `last` and the loss reason.
+    intervals: BTreeMap<u64, (u64, String)>,
 }
 
 impl LossIntervals {
@@ -43,16 +39,20 @@ impl LossIntervals {
     }
 
     /// Record a loss range `[first, last]`. Panics if `first > last`.
-    pub fn record(&mut self, first: u64, last: u64, _reason: &str) -> LossPushOutcome {
+    pub fn record(&mut self, first: u64, last: u64, reason: &str) -> LossPushOutcome {
         assert!(first <= last, "loss range must be non-empty");
         let mut new_first = first;
         let mut new_last = last;
         let mut merged = false;
 
-        // Merge with any interval that touches or overlaps the new range
-        // to the left.
-        if let Some((&lo, &hi)) = self.left_neighbour(new_first) {
-            if hi + 1 >= new_first {
+        // Sequence loss is recorded once. Distinct causes may touch but
+        // must not claim the same sequence.
+        if let Some((&lo, &(hi, ref previous_reason))) = self.left_neighbour(new_first) {
+            assert!(
+                hi < new_first || previous_reason == reason,
+                "overlapping loss causes"
+            );
+            if hi.saturating_add(1) >= new_first && previous_reason == reason {
                 new_first = new_first.min(lo);
                 new_last = new_last.max(hi);
                 self.intervals.remove(&lo);
@@ -64,17 +64,24 @@ impl LossIntervals {
         let overlapping: Vec<u64> = self
             .intervals
             .range(new_first..=new_last.saturating_add(1))
-            .map(|(k, _)| *k)
+            .filter_map(|(key, (_, prior_reason))| {
+                assert!(
+                    *key > new_last || prior_reason == reason,
+                    "overlapping loss causes"
+                );
+                (prior_reason == reason).then_some(*key)
+            })
             .collect();
         for key in overlapping {
-            if let Some(hi) = self.intervals.remove(&key) {
+            if let Some((hi, _)) = self.intervals.remove(&key) {
                 new_first = new_first.min(key);
                 new_last = new_last.max(hi);
                 merged = true;
             }
         }
 
-        self.intervals.insert(new_first, new_last);
+        self.intervals
+            .insert(new_first, (new_last, reason.to_string()));
         if merged {
             LossPushOutcome::Merged
         } else {
@@ -84,16 +91,52 @@ impl LossIntervals {
 
     /// Drain the current set into a canonical sorted non-overlapping
     /// list of `GapAdvance` records. Leaves the set empty.
-    pub fn drain(&mut self, reason: &str) -> Vec<GapAdvance> {
+    pub fn drain(&mut self) -> Vec<GapAdvance> {
         let intervals = std::mem::take(&mut self.intervals);
         intervals
             .into_iter()
-            .map(|(first, last)| GapAdvance {
+            .map(|(first, (last, reason))| GapAdvance {
                 first_dropped_seq: first,
                 last_dropped_seq: last,
-                reason: reason.to_string(),
+                reason,
             })
             .collect()
+    }
+
+    pub fn snapshot(&self) -> Vec<GapAdvance> {
+        self.intervals
+            .iter()
+            .map(|(&first, (last, ref reason))| GapAdvance {
+                first_dropped_seq: first,
+                last_dropped_seq: *last,
+                reason: reason.clone(),
+            })
+            .collect()
+    }
+
+    pub fn snapshot_before(&self, before: u64) -> Vec<GapAdvance> {
+        self.intervals
+            .range(..before)
+            .filter(|(_, (last, _))| *last < before)
+            .map(|(&first, (last, ref reason))| GapAdvance {
+                first_dropped_seq: first,
+                last_dropped_seq: *last,
+                reason: reason.clone(),
+            })
+            .collect()
+    }
+
+    pub fn acknowledge_up_to(&mut self, seq: u64) {
+        while let Some((&first, &(last, _))) = self.intervals.first_key_value() {
+            if first > seq {
+                break;
+            }
+            let (_, reason) = self.intervals.remove(&first).expect("loss interval exists");
+            if last > seq {
+                self.intervals.insert(seq + 1, (last, reason));
+                break;
+            }
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -104,7 +147,7 @@ impl LossIntervals {
         self.intervals.len()
     }
 
-    fn left_neighbour(&self, key: u64) -> Option<(&u64, &u64)> {
+    fn left_neighbour(&self, key: u64) -> Option<(&u64, &(u64, String))> {
         self.intervals.range(..key).next_back()
     }
 }
@@ -114,7 +157,7 @@ mod tests {
     use super::*;
 
     fn ranges(set: &LossIntervals) -> Vec<(u64, u64)> {
-        set.intervals.iter().map(|(a, b)| (*a, *b)).collect()
+        set.intervals.iter().map(|(a, (b, _))| (*a, *b)).collect()
     }
 
     #[test]
@@ -138,6 +181,25 @@ mod tests {
         set.record(1, 3, "x");
         assert_eq!(set.record(4, 6, "x"), LossPushOutcome::Merged);
         assert_eq!(ranges(&set), vec![(1, 6)]);
+    }
+
+    #[test]
+    fn adjacent_losses_keep_their_distinct_causes() {
+        let mut set = LossIntervals::new();
+        set.record(3, 3, "oversized_event");
+        set.record(4, 5, "buffer_overflow");
+        let gaps = set.drain();
+        assert_eq!(gaps.len(), 2);
+        assert_eq!(gaps[0].reason, "oversized_event");
+        assert_eq!(gaps[1].reason, "buffer_overflow");
+    }
+
+    #[test]
+    #[should_panic(expected = "overlapping loss causes")]
+    fn conflicting_loss_cannot_duplicate_a_sequence() {
+        let mut set = LossIntervals::new();
+        set.record(3, 5, "oversized_event");
+        set.record(4, 6, "buffer_overflow");
     }
 
     #[test]
@@ -165,7 +227,7 @@ mod tests {
         set.record(100, 200, "x");
         set.record(1, 5, "x");
         set.record(50, 60, "y");
-        let out = set.drain("buffer_overflow");
+        let out = set.drain();
         assert_eq!(out.len(), 3);
         assert_eq!(out[0].first_dropped_seq, 1);
         assert_eq!(out[0].last_dropped_seq, 5);

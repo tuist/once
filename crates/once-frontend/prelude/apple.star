@@ -1501,19 +1501,174 @@ done
         runner_type = runner_type,
     )
 
-def _apple_test_report_script(swift_srcs, cases_file, target, runner_type, selectors = []):
-    # The run's exit status is the one outcome this path can state. The cases it
-    # lists come from the sources, so they are reported without a verdict.
+def _apple_test_results_awk():
+    return """
+function field(record, name, marker, start, rest, stop) {
+    marker = "\\"" name "\\":\\""
+    start = index(record, marker)
+    if (!start) return ""
+    rest = substr(record, start + length(marker))
+    stop = index(rest, "\\"")
+    return stop ? substr(rest, 1, stop - 1) : ""
+}
+function quoted(value, result, i, char, slash) {
+    slash = sprintf("%c", 92)
+    result = "\\""
+    for (i = 1; i <= length(value); i++) {
+        char = substr(value, i, 1)
+        if (char == slash || char == "\\"") result = result slash char
+        else if (char == "\\t") result = result slash "t"
+        else if (char == "\\r") result = result slash "r"
+        else result = result char
+    }
+    return result "\\""
+}
+function observe(name, suite, status, duration, key, source_index) {
+    key = suite "/" name
+    source_index = source_by_key[key]
+    if (source_index) {
+        observed_status[source_index] = status
+        observed_duration[source_index] = duration
+        return
+    }
+    if (!extra_by_key[key]) {
+        extra_by_key[key] = ++extra_count
+        extra_name[extra_count] = name
+        extra_suite[extra_count] = suite
+    }
+    extra_status[extra_by_key[key]] = status
+    extra_duration[extra_by_key[key]] = duration
+}
+function duration_millis(record, duration) {
+    duration = record
+    sub(/^.*(\\(| after )/, "", duration)
+    sub(/ seconds.*$/, "", duration)
+    return sprintf("%.0f", (duration + 0) * 1000)
+}
+function count(status) {
+    if (status == "passed") passed++
+    else if (status == "failed") failed++
+    else if (status == "skipped") skipped++
+    else unknown++
+}
+function output(record) {
+    if (total++) printf ",\\n"
+    printf "%s", record
+}
+FILENAME == source_file {
+    if (!index($0, "\\"id\\":\\"")) next
+    record = $0
+    sub(/^[[:space:],]+/, "", record)
+    sub(/[[:space:],]+$/, "", record)
+    id = field(record, "id")
+    name = field(record, "name")
+    suite = field(record, "suite")
+    if (id == "" || name == "") next
+    source_record[++source_count] = record
+    source_by_key[suite "/" name] = source_count
+    source_name[name] = source_count
+    name_count[name]++
+    next
+}
+{
+    line = $0
+    suite_marker = index(line, " Suite ")
+    if (suite_marker) {
+        suite = substr(line, suite_marker + 7)
+        if (index(line, " started.")) {
+            sub(/ started\\.$/, "", suite)
+            active_suite[suite] = 1
+        } else if (index(line, " passed after ") || index(line, " failed after ")) {
+            sub(/ (passed|failed) after .*$/, "", suite)
+            delete active_suite[suite]
+        }
+        next
+    }
+    if (index(line, "Test Case ") && (index(line, " passed (") || index(line, " failed (") || index(line, " skipped ("))) {
+        start = index(line, "-[")
+        if (!start) next
+        identity = substr(line, start + 2)
+        sub(/].*$/, "", identity)
+        split(identity, parts, " ")
+        suite = parts[1]
+        sub(/^.*\\./, "", suite)
+        name = parts[2]
+        if (name == "") next
+        status = index(line, " passed (") ? "passed" : (index(line, " failed (") ? "failed" : "skipped")
+        observe(name, suite, status, duration_millis(line))
+        next
+    }
+    test_marker = index(line, " Test ")
+    if (!test_marker) next
+    status = index(line, " passed after ") ? "passed" : (index(line, " failed after ") ? "failed" : "")
+    if (status == "") next
+    name = substr(line, test_marker + 6)
+    sub(/ (passed|failed) after .*$/, "", name)
+    sub(/\\(\\)$/, "", name)
+    if (name ~ /^run with /) next
+    if (name == "") next
+    source_index = source_name[name]
+    suite = "Swift Testing"
+    if (source_index && name_count[name] == 1) suite = field(source_record[source_index], "suite")
+    else {
+        matching_suite = ""
+        for (candidate in active_suite) {
+            if (source_by_key[candidate "/" name]) {
+                if (matching_suite != "") {
+                    matching_suite = ""
+                    break
+                }
+                matching_suite = candidate
+            }
+        }
+        if (matching_suite != "") suite = matching_suite
+    }
+    observe(name, suite, status, duration_millis(line))
+}
+END {
+    for (i = 1; i <= source_count; i++) {
+        record = source_record[i]
+        status = observed_status[i]
+        if (status == "") status = "unknown"
+        else {
+            gsub(/\\"status\\":\\"unknown\\"/, "\\"status\\":\\"" status "\\"", record)
+            sub(/\\"attempts\\":\\[\\{/, "\\"attempts\\":[{\\"duration_ms\\":" observed_duration[i] ",", record)
+        }
+        output(record)
+        count(status)
+    }
+    for (i = 1; i <= extra_count; i++) {
+        name = extra_name[i]
+        suite = extra_suite[i]
+        status = extra_status[i]
+        duration = extra_duration[i]
+        record = "{\\"id\\":" quoted(target "::" suite "/" name) ",\\"name\\":" quoted(name) ",\\"suite\\":" quoted(suite) ",\\"status\\":" quoted(status) ",\\"attempts\\":[{\\"status\\":" quoted(status) ",\\"duration_ms\\":" duration "}],\\"runner_metadata\\":{\\"runner\\":" quoted(runner) "}}"
+        output(record)
+        count(status)
+    }
+    printf "%d %d %d %d %d\\n", total, passed, failed, skipped, unknown > counts_file
+}
+"""
+
+def _apple_test_report_script(swift_srcs, cases_file, target, runner_type, selectors = [], awk = "awk"):
     return """{cases_script}
 if [ "$status" -eq 0 ]; then run_status=passed; else run_status=failed; fi
+normalized_cases="$cases_file.observed"
+counts_file="$cases_file.counts"
+{awk} -v source_file="$cases_file" -v counts_file="$counts_file" -v target={target_literal} -v runner={runner_literal} '{parser}' "$cases_file" "$log" > "$normalized_cases" || exit 1
+read -r total passed failed skipped unknown < "$counts_file"
 {{
-  printf '{{"schema":"once.test_results.v1","target":"%s","runner":{{"type":"%s","metadata":{{}}}},"status":"%s","summary":{{"total":%s,"passed":0,"failed":0,"skipped":0,"flaky":0}},"cases":[' "{target}" "{runner_type}" "$run_status" "$total"
-  cat "$cases_file"
+  printf '{{"schema":"once.test_results.v1","target":"%s","runner":{{"type":"%s","metadata":{{}}}},"status":"%s","summary":{{"total":%s,"passed":%s,"failed":%s,"skipped":%s,"flaky":0}},"cases":[' "{target}" "{runner_type}" "$run_status" "$total" "$passed" "$failed" "$skipped"
+  cat "$normalized_cases"
   printf '],"artifacts":{{"logs":["%s"],"native_results":["%s"]}}}}\n' "$log" "$native_results"
 }} > "$results"
 """.format(
         cases_script = _apple_test_cases_script(swift_srcs, cases_file, target, runner_type, selectors),
         cases_file = _shell_literal(cases_file),
+        awk = _shell_literal(awk),
+        target_literal = _shell_literal(target),
+        runner_literal = _shell_literal(runner_type),
+        parser = _apple_test_results_awk(),
         target = target,
         runner_type = runner_type,
     )
@@ -5979,6 +6134,7 @@ exit "$status"
                 ctx["label"]["id"],
                 runner_type,
                 selectors,
+                host_which("awk"),
             ),
         )
         test_inputs = [test_binary, info_plist, test_cs_stamp]

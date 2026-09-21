@@ -19,6 +19,7 @@ fn a_listing_taken_from_sources_reports_no_verdict() {
         "import Testing\nstruct MathSuite {\n  @Test func addsNumbers() {}\n}\n",
     )
     .unwrap();
+    std::fs::write(dir.path().join("run.log"), "").unwrap();
     let output = std::process::Command::new("sh")
         .arg("-c")
         .arg(format!(
@@ -27,7 +28,7 @@ fn a_listing_taken_from_sources_reports_no_verdict() {
         .current_dir(dir.path())
         .output()
         .unwrap();
-    assert!(output.status.success(), "{output:?}");
+    assert!(output.status.success(), "{output:?}\n{script}");
 
     let results = std::fs::read_to_string(dir.path().join("results.json")).unwrap();
     assert!(
@@ -43,6 +44,62 @@ fn a_listing_taken_from_sources_reports_no_verdict() {
         results.contains(r#""status":"passed""#),
         "the run's own outcome is known: {results}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn native_test_output_supplies_case_verdicts_and_durations() {
+    let script = eval_prelude_string_function(
+        "_apple_test_report_script",
+        r#"(["Suite.swift"], "cases.jsonl", "tests/Bundle", "swift_testing")"#,
+    )
+    .unwrap();
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("Suite.swift"),
+        "import XCTest\nclass ParserTests: XCTestCase {\n  func testKnown() {}\n  func testNotReached() {}\n}\nstruct SwiftSuite {\n  @Test func computes() {}\n}\nstruct OtherSuite {\n  @Test func computes() {}\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("run.log"),
+        "Test Case '-[Bundle.ParserTests testKnown]' passed (0.125 seconds).\n◇ Suite SwiftSuite started.\n✘ Test computes() failed after 0.250 seconds.\n✔ Suite SwiftSuite passed after 0.250 seconds.\n◇ Suite OtherSuite started.\n✔ Test computes() passed after 0.040 seconds.\n✔ Suite OtherSuite passed after 0.040 seconds.\n✔ Test generated() passed after 0.010 seconds.\n✔ Test run with 4 tests passed after 0.010 seconds.\n",
+    )
+    .unwrap();
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "status=1\nlog=run.log\nnative_results=native.txt\nresults=results.json\n{script}"
+        ))
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}\n{script}");
+    let results: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("results.json")).unwrap()).unwrap();
+    assert_eq!(results["status"], "failed");
+    assert_eq!(results["summary"]["total"], 5);
+    assert_eq!(results["summary"]["passed"], 3, "{results}");
+    assert_eq!(results["summary"]["failed"], 1);
+    let cases = results["cases"].as_array().unwrap();
+    let named = |name: &str| cases.iter().find(|case| case["name"] == name).unwrap();
+    assert_eq!(named("testKnown")["status"], "passed");
+    assert_eq!(named("testKnown")["attempts"][0]["duration_ms"], 125);
+    assert_eq!(named("testNotReached")["status"], "unknown");
+    assert_eq!(
+        cases
+            .iter()
+            .find(|case| case["suite"] == "SwiftSuite" && case["name"] == "computes")
+            .unwrap()["status"],
+        "failed"
+    );
+    assert_eq!(
+        cases
+            .iter()
+            .find(|case| case["suite"] == "OtherSuite" && case["name"] == "computes")
+            .unwrap()["status"],
+        "passed"
+    );
+    assert_eq!(named("generated")["status"], "passed");
 }
 
 /// Only the `XCTest` host runs `XCTest` cases, so a bundle that has any is left

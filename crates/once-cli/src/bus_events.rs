@@ -24,8 +24,242 @@ use once_core::{
 /// Publish `RunStarted` and `TargetQueued`. Idempotent from the caller's
 /// perspective; the bus itself is a broadcast channel that silently
 /// succeeds when nothing is subscribed.
+/// Spawn a background task that samples host CPU, memory, and network
+/// once per second and publishes each sample on the run event bus.
+/// Returns a handle whose drop stops the sampler and joins the task.
+///
+/// Sampling uses `sysinfo` at whole-host granularity. CPU is averaged
+/// across cores (so full load on a 4-core machine reads as 100%),
+/// memory is `used_memory`, and network is the total bytes-per-second
+/// delta since the previous sample summed across all interfaces.
+pub fn spawn_system_sampler(bus: &once_core::RunEventBus) -> SystemSamplerHandle {
+    let bus = bus.clone();
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
+
+    let handle = tokio::spawn(async move {
+        let mut system = sysinfo::System::new_with_specifics(
+            sysinfo::RefreshKind::nothing()
+                .with_cpu(sysinfo::CpuRefreshKind::nothing().with_cpu_usage())
+                .with_memory(sysinfo::MemoryRefreshKind::nothing().with_ram()),
+        );
+        let mut networks = sysinfo::Networks::new_with_refreshed_list();
+
+        // sysinfo's CPU usage needs two refreshes to compute a delta.
+        system.refresh_cpu_usage();
+        tokio::time::sleep(
+            sysinfo::MINIMUM_CPU_UPDATE_INTERVAL + std::time::Duration::from_millis(50),
+        )
+        .await;
+
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut previous_sample = std::time::Instant::now();
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    let now = std::time::Instant::now();
+                    let interval_ms = u32::try_from(now.duration_since(previous_sample).as_millis()).unwrap_or(u32::MAX);
+                    previous_sample = now;
+                    system.refresh_cpu_usage();
+                    system.refresh_memory();
+                    networks.refresh(true);
+
+                    let cpu_percent = system.global_cpu_usage();
+                    let memory_bytes = system.used_memory();
+                    let (network_in, network_out) = networks
+                        .iter()
+                        .fold((0u64, 0u64), |(inc, out), (_name, data)| {
+                            (inc + data.received(), out + data.transmitted())
+                        });
+
+                    bus.publish(RunEvent::SystemSampled {
+                        at_epoch_ms: now_epoch_ms(),
+                        interval_ms,
+                        cpu_percent,
+                        memory_bytes,
+                        network_in_bytes_per_second: network_in.saturating_mul(1000) / u64::from(interval_ms.max(1)),
+                        network_out_bytes_per_second: network_out.saturating_mul(1000) / u64::from(interval_ms.max(1)),
+                    });
+                }
+                _ = &mut shutdown_rx => break,
+            }
+        }
+    });
+
+    SystemSamplerHandle {
+        shutdown: Some(shutdown_tx),
+        handle: Some(handle),
+    }
+}
+
+/// Handle to a spawned system sampler task. Dropping it (or calling
+/// `stop`) signals the sampler to exit and joins the task.
+pub struct SystemSamplerHandle {
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    handle: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl SystemSamplerHandle {
+    /// Signal the sampler to exit and wait for it to drain.
+    pub async fn stop(mut self) {
+        if let Some(tx) = self.shutdown.take() {
+            let _ = tx.send(());
+        }
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.await;
+        }
+    }
+}
+
+impl Drop for SystemSamplerHandle {
+    fn drop(&mut self) {
+        if let Some(tx) = self.shutdown.take() {
+            let _ = tx.send(());
+        }
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
+    }
+}
+
+/// A bounded pool of executor slots that carry stable `worker_id`s
+/// across the whole run. Each slot is a peer of Bazel's per-thread
+/// Chrome-Trace `tid`: a durable worker identity that many actions
+/// rotate through. Sized to match the runner's action-parallelism
+/// ceiling so the pool never over- or under-provisions relative to
+/// what's actually allowed to run concurrently.
+///
+/// Also the natural seam for remote execution later: a remote worker
+/// is just another slot backed by a remote executor. Local slots
+/// carry `worker_kind: "local"` today; remote slots will carry
+/// `"remote"` once that lands.
+#[derive(Clone)]
+pub struct WorkerSlots {
+    sender: tokio::sync::mpsc::UnboundedSender<String>,
+    receiver: std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<String>>>,
+}
+
+impl WorkerSlots {
+    /// Build a pool of `size` slots. `size` is clamped to at least one
+    /// so `acquire` always eventually returns even under degenerate
+    /// configuration.
+    pub fn new(size: usize) -> Self {
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let n = size.max(1);
+        for i in 0..n {
+            let _ = sender.send(format!("worker-{i}"));
+        }
+        Self {
+            sender,
+            receiver: std::sync::Arc::new(tokio::sync::Mutex::new(receiver)),
+        }
+    }
+
+    /// Await a free slot and take ownership of it for the duration of
+    /// the returned guard. Slot ids are returned to the pool when the
+    /// guard is dropped, so the next waiter picks them up in order.
+    pub async fn acquire(&self) -> WorkerGuard {
+        let id = {
+            let mut rx = self.receiver.lock().await;
+            rx.recv()
+                .await
+                .expect("worker slot channel is never closed by the pool")
+        };
+        WorkerGuard {
+            id,
+            release: self.sender.clone(),
+        }
+    }
+}
+
+/// RAII guard for a slot claimed from [`WorkerSlots`]. Read the id with
+/// [`WorkerGuard::worker_id`]; the slot returns to the pool on drop.
+pub struct WorkerGuard {
+    id: String,
+    release: tokio::sync::mpsc::UnboundedSender<String>,
+}
+
+impl WorkerGuard {
+    pub fn worker_id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Drop for WorkerGuard {
+    fn drop(&mut self) {
+        let _ = self.release.send(std::mem::take(&mut self.id));
+    }
+}
+
+/// Emit a completed span for one of the coarse target-level phases
+/// (analysis, `materialize_outputs`, ...) that consume most of the wall
+/// clock on cache-hit builds but never show up as declared actions.
+/// Rides the existing `ActionCompleted` shape so it lands on the same
+/// worker lane in the flame graph; the server projector treats a
+/// capability starting with `_phase` as a synthetic span that
+/// doesn't roll up into the run's action counters.
+pub fn target_phase_completed(
+    bus: &RunEventBus,
+    target_id: &str,
+    phase: &str,
+    worker_id: &str,
+    start_at_epoch_ms: i64,
+    duration_ms: u64,
+) {
+    bus.publish(RunEvent::ActionCompleted {
+        at_epoch_ms: now_epoch_ms(),
+        start_at_epoch_ms,
+        worker_id: worker_id.to_string(),
+        target_id: target_id.to_string(),
+        capability: "_phase".to_string(),
+        action_index: 0,
+        identifier: Some(phase.to_string()),
+        result: TargetResult::Succeeded,
+        was_cached: false,
+        duration_ms: i64::try_from(duration_ms).unwrap_or(i64::MAX),
+        exit_code: 0,
+        prepare_ms: 0,
+        execute_ms: 0,
+        cache_key: String::new(),
+        selected_attempt: 0,
+    });
+}
+
+/// Emit one content-blob transfer against the cache. Kind is
+/// "download" (blob pulled into the workspace from the cache) or
+/// "upload" (blob pushed from the workspace back into the cache).
+/// The server projects these into `once_cache_events` so the Cache
+/// tab's Content Objects view lists real digests + sizes and the
+/// summary widgets can total `content_downloaded` / `content_uploaded`.
+pub fn cache_content_transferred(
+    bus: &RunEventBus,
+    kind: &str,
+    target_id: &str,
+    content_hash: &str,
+    size_bytes: u64,
+    duration_ms: u64,
+) {
+    bus.publish(RunEvent::CacheContentTransferred {
+        at_epoch_ms: now_epoch_ms(),
+        kind: kind.to_string(),
+        target_id: target_id.to_string(),
+        content_hash: content_hash.to_string(),
+        size_bytes: i64::try_from(size_bytes).unwrap_or(i64::MAX),
+        duration_ms: i64::try_from(duration_ms).unwrap_or(i64::MAX),
+    });
+}
+
 pub fn run_started(bus: &RunEventBus, target_id: &str, at_epoch_ms: i64) {
     bus.publish(RunEvent::RunStarted { at_epoch_ms });
+    target_queued_at(bus, target_id, at_epoch_ms);
+}
+
+pub fn target_queued(bus: &RunEventBus, target_id: &str) {
+    target_queued_at(bus, target_id, now_epoch_ms());
+}
+
+fn target_queued_at(bus: &RunEventBus, target_id: &str, at_epoch_ms: i64) {
     bus.publish(RunEvent::TargetQueued {
         at_epoch_ms,
         target_id: target_id.to_string(),
@@ -143,6 +377,112 @@ pub fn target_finished(
     });
 }
 
+/// Publish `ActionCompleted` for one declared action inside a target.
+///
+/// Called as each declared action finishes, including cache restoration.
+/// Reused targets replay the identities of their retained actions as hits.
+#[allow(clippy::too_many_arguments)]
+pub fn action_completed(
+    bus: &RunEventBus,
+    target_id: &str,
+    capability: &str,
+    action_index: u32,
+    identifier: Option<&str>,
+    duration_ms: u64,
+    was_cached: bool,
+    exit_code: i32,
+    // Captured by the caller at the point the action actually
+    // starts (right before dispatching to the executor). Passing 0
+    // means "unknown"; the server projector then derives the start
+    // from `envelope.epoch_ms - duration_ms`, which is inaccurate
+    // when the reporter drains events long after emission.
+    start_at_epoch_ms: i64,
+    // The stable id of the executor slot that ran this action, from a
+    // [`WorkerSlots`] guard. Bazel's Chrome-Trace uses `tid` the same
+    // way, so the server can lay one lane per worker and stack the
+    // actions each worker ran end-to-end down its column.
+    worker_id: &str,
+    // Wall time spent on setup (arg files, input fingerprinting,
+    // action digest) before the cache probe. Zero when unknown
+    // (cached replay).
+    prepare_ms: i64,
+    // Wall time spent inside cache probe + (on a miss) command
+    // execution and output upload. Zero when unknown (cached replay).
+    execute_ms: i64,
+    // Hex digest of the action's cache lookup key (Bazel calls this
+    // `action_digest`). Empty when unknown (a failure that couldn't
+    // even compute one).
+    cache_key: &str,
+    selected_attempt: u32,
+) {
+    let result = if exit_code == 0 {
+        TargetResult::Succeeded
+    } else {
+        TargetResult::Failed
+    };
+    let finished_ms = now_epoch_ms();
+    bus.publish(RunEvent::ActionCompleted {
+        at_epoch_ms: finished_ms,
+        start_at_epoch_ms,
+        worker_id: worker_id.to_string(),
+        target_id: target_id.to_string(),
+        capability: capability.to_string(),
+        action_index,
+        identifier: identifier.map(str::to_string),
+        result,
+        was_cached,
+        duration_ms: i64::try_from(duration_ms).unwrap_or(i64::MAX),
+        exit_code,
+        prepare_ms,
+        execute_ms,
+        cache_key: cache_key.to_string(),
+        selected_attempt,
+    });
+}
+
+pub fn action_attempt_started(
+    bus: &RunEventBus,
+    target_id: &str,
+    capability: &str,
+    action_index: u32,
+    worker_id: &str,
+) {
+    bus.publish(RunEvent::ActionAttemptStarted {
+        at_epoch_ms: now_epoch_ms(),
+        target_id: target_id.to_string(),
+        capability: capability.to_string(),
+        action_index,
+        attempt: 1,
+        worker_id: worker_id.to_string(),
+    });
+}
+
+pub fn action_attempt_completed(
+    bus: &RunEventBus,
+    target_id: &str,
+    capability: &str,
+    action_index: u32,
+    duration_ms: u64,
+    was_cached: bool,
+    exit_code: i32,
+) {
+    bus.publish(RunEvent::ActionAttemptCompleted {
+        at_epoch_ms: now_epoch_ms(),
+        target_id: target_id.to_string(),
+        capability: capability.to_string(),
+        action_index,
+        attempt: 1,
+        result: if exit_code == 0 {
+            TargetResult::Succeeded
+        } else {
+            TargetResult::Failed
+        },
+        exit_code,
+        duration_ms: i64::try_from(duration_ms).unwrap_or(i64::MAX),
+        was_cached,
+    });
+}
+
 /// Publish `TargetCompleted{Failed}` and `RunCompleted{1}` for a run
 /// that couldn't even reach the action stage (setup failure).
 pub fn target_failed(bus: &RunEventBus, target_id: &str, duration_ms: u64) {
@@ -183,15 +523,17 @@ impl ActionOutputObserver for BusOutputObserver {
         if bytes.is_empty() {
             return;
         }
-        self.bus.publish(RunEvent::LogChunk {
-            at_epoch_ms: now_epoch_ms(),
-            target_id: self.target_id.clone(),
-            stream: match stream {
-                ActionOutputStream::Stdout => LogStream::Stdout,
-                ActionOutputStream::Stderr => LogStream::Stderr,
-            },
-            bytes: bytes.to_vec(),
-        });
+        for chunk in bytes.chunks(16 * 1024) {
+            self.bus.publish(RunEvent::LogChunk {
+                at_epoch_ms: now_epoch_ms(),
+                target_id: self.target_id.clone(),
+                stream: match stream {
+                    ActionOutputStream::Stdout => LogStream::Stdout,
+                    ActionOutputStream::Stderr => LogStream::Stderr,
+                },
+                bytes: chunk.to_vec(),
+            });
+        }
     }
 }
 

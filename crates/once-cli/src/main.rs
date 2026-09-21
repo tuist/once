@@ -2,11 +2,17 @@
 //! to the verb modules under [`commands`], and propagates the
 //! resulting exit code.
 
+#[cfg(feature = "events-ingest")]
+mod argv_normalize;
 mod bus_events;
 mod cache_provider;
 mod cli;
 mod commands;
+#[cfg(feature = "events-ingest")]
+mod discovery;
 mod dispatch;
+#[cfg(feature = "events-ingest")]
+mod live_run_reporter;
 mod logging;
 mod reference;
 mod render;

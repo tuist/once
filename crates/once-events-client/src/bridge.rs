@@ -12,11 +12,13 @@ use once_core::{
 };
 
 use crate::proto::{
-    log_scope::Scope as LogScopeVariant, run_event::Payload, LogChunk, LogScope,
-    Phase as WirePhase, RunCompleted, RunHeartbeat, RunResult as WireRunResult, RunStarted,
-    Stream as WireStream, TargetCompleted, TargetPhase, TargetQueued, TargetResult as WireResult,
-    TargetStarted, TestCaseCompleted, TestCaseResult as WireCaseResult, TestCaseStarted,
-    TestFailure, TestSuiteCompleted, TestSuiteStarted, TestTotals as WireTestTotals,
+    log_scope::Scope as LogScopeVariant, run_event::Payload, ActionAttemptCompleted,
+    ActionAttemptStarted, ActionCompleted, CacheDownload, CacheUpload, ContentRef, HashAlgorithm,
+    LogChunk, LogScope, Phase as WirePhase, ResourceScope, RunCompleted, RunHeartbeat,
+    RunResult as WireRunResult, RunStarted, Stream as WireStream, SystemSampled, TargetCompleted,
+    TargetPhase, TargetQueued, TargetResult as WireResult, TargetStarted, TestCaseCompleted,
+    TestCaseResult as WireCaseResult, TestCaseStarted, TestFailure, TestSuiteCompleted,
+    TestSuiteStarted, TestTotals as WireTestTotals,
 };
 
 /// Result of translating one internal event.
@@ -58,6 +60,7 @@ pub fn translate(event: CoreEvent, mono_ns: i64) -> Translated {
                 cancellation_reason: String::new(),
                 wall_ms: 0,
                 totals: None,
+                producer_dropped_events: 0,
             },
             epoch_ms: at_epoch_ms,
             mono_ns,
@@ -142,7 +145,7 @@ pub fn translate(event: CoreEvent, mono_ns: i64) -> Translated {
                 target_execution_id: target_id,
                 suite_id: String::new(),
                 totals: Some(wire_test_totals(totals)),
-                junit_digest: None,
+                result_report_digest: None,
             }),
             epoch_ms: at_epoch_ms,
             mono_ns,
@@ -155,7 +158,7 @@ pub fn translate(event: CoreEvent, mono_ns: i64) -> Translated {
             attempt,
         } => Translated::Ordinary {
             payload: Payload::TestCaseStarted(TestCaseStarted {
-                test_case_execution_id: format!("{target_id}#{case_id}#{attempt}"),
+                test_case_execution_id: test_case_execution_id(&target_id, &case_id, attempt),
                 target_execution_id: target_id,
                 case_id,
                 name,
@@ -172,15 +175,24 @@ pub fn translate(event: CoreEvent, mono_ns: i64) -> Translated {
             at_epoch_ms,
             target_id,
             case_id,
+            name,
+            suite_id,
+            attempt,
             result,
             duration_ms,
+            duration_known,
             failure_message,
         } => Translated::Ordinary {
             payload: Payload::TestCaseCompleted(TestCaseCompleted {
-                test_case_execution_id: format!("{target_id}#{case_id}#1"),
+                test_case_execution_id: test_case_execution_id(&target_id, &case_id, attempt),
+                case_id,
+                name,
+                suite_id,
+                attempt,
                 result: wire_case_result(result) as i32,
                 was_flaky: false,
                 duration_ms,
+                observed_duration_ms: duration_known.then_some(duration_ms),
                 failure: failure_message.map(|message| TestFailure {
                     message,
                     expected: String::new(),
@@ -188,6 +200,94 @@ pub fn translate(event: CoreEvent, mono_ns: i64) -> Translated {
                     stack_digest: None,
                 }),
             }),
+            epoch_ms: at_epoch_ms,
+            mono_ns,
+        },
+        CoreEvent::ActionAttemptStarted {
+            at_epoch_ms,
+            target_id,
+            capability,
+            action_index,
+            attempt,
+            worker_id,
+        } => Translated::Ordinary {
+            payload: Payload::ActionAttemptStarted(ActionAttemptStarted {
+                target_execution_id: target_id,
+                capability,
+                action_index,
+                attempt,
+                worker_id,
+            }),
+            epoch_ms: at_epoch_ms,
+            mono_ns,
+        },
+        CoreEvent::ActionAttemptCompleted {
+            at_epoch_ms,
+            target_id,
+            capability,
+            action_index,
+            attempt,
+            result,
+            exit_code,
+            duration_ms,
+            was_cached,
+        } => Translated::Ordinary {
+            payload: Payload::ActionAttemptCompleted(ActionAttemptCompleted {
+                target_execution_id: target_id,
+                capability,
+                action_index,
+                attempt,
+                result: wire_target_result(result) as i32,
+                exit_code,
+                duration_ms,
+                was_cached,
+            }),
+            epoch_ms: at_epoch_ms,
+            mono_ns,
+        },
+        CoreEvent::ActionCompleted {
+            at_epoch_ms,
+            target_id,
+            capability,
+            action_index,
+            identifier,
+            result,
+            was_cached,
+            duration_ms,
+            exit_code,
+            start_at_epoch_ms,
+            worker_id,
+            prepare_ms,
+            execute_ms,
+            cache_key,
+            selected_attempt,
+        } => Translated::Ordinary {
+            payload: if capability == "_phase" {
+                Payload::TargetPhaseCompleted(crate::proto::TargetPhaseCompleted {
+                    target_execution_id: target_id,
+                    phase: identifier.unwrap_or_default(),
+                    worker_id,
+                    start_at_epoch_ms,
+                    duration_ms,
+                })
+            } else {
+                Payload::ActionCompleted(ActionCompleted {
+                    target_execution_id: target_id,
+                    capability,
+                    action_index,
+                    identifier: identifier.unwrap_or_default(),
+                    result: wire_target_result(result) as i32,
+                    was_cached,
+                    duration_ms,
+                    exit_code,
+                    start_at_epoch_ms,
+                    worker_id,
+                    prepare_ms,
+                    execute_ms,
+                    cache_key,
+                    selected_attempt,
+                })
+            },
             epoch_ms: at_epoch_ms,
             mono_ns,
         },
@@ -208,14 +308,96 @@ pub fn translate(event: CoreEvent, mono_ns: i64) -> Translated {
             epoch_ms: at_epoch_ms,
             mono_ns,
         },
+        CoreEvent::SystemSampled {
+            at_epoch_ms,
+            interval_ms,
+            cpu_percent,
+            memory_bytes,
+            network_in_bytes_per_second,
+            network_out_bytes_per_second,
+        } => Translated::Ordinary {
+            payload: Payload::SystemSampled(SystemSampled {
+                at_epoch_ms,
+                interval_ms,
+                resource_id: "reporting-host".to_string(),
+                scope: ResourceScope::Host as i32,
+                cpu_percent,
+                memory_bytes,
+                network_in_bytes_per_second,
+                network_out_bytes_per_second,
+            }),
+            epoch_ms: at_epoch_ms,
+            mono_ns,
+        },
+        CoreEvent::CacheContentTransferred {
+            at_epoch_ms,
+            kind,
+            target_id,
+            content_hash,
+            size_bytes,
+            duration_ms,
+        } => {
+            let Some(digest) = decode_digest(&content_hash) else {
+                tracing::warn!("omitting cache transfer with invalid digest");
+                return Translated::Skip;
+            };
+            let content = ContentRef {
+                hash_algorithm: HashAlgorithm::Blake3 as i32,
+                digest,
+                size_bytes: u64::try_from(size_bytes).unwrap_or_default(),
+                namespace: String::new(),
+                media_type: String::new(),
+            };
+            let bytes = u64::try_from(size_bytes).unwrap_or_default();
+            let payload = if kind == "upload" {
+                Payload::CacheUpload(CacheUpload {
+                    cache_decision_id: String::new(),
+                    target_execution_id: target_id,
+                    content: Some(content),
+                    tier: "remote".to_string(),
+                    kind: "output".to_string(),
+                    duration_ms,
+                    bytes_transferred: bytes,
+                })
+            } else {
+                Payload::CacheDownload(CacheDownload {
+                    cache_decision_id: String::new(),
+                    target_execution_id: target_id,
+                    content: Some(content),
+                    tier: "remote".to_string(),
+                    kind: "output".to_string(),
+                    duration_ms,
+                    bytes_transferred: bytes,
+                })
+            };
+            Translated::Ordinary {
+                payload,
+                epoch_ms: at_epoch_ms,
+                mono_ns,
+            }
+        }
         _ => Translated::Skip,
     }
+}
+
+fn decode_digest(value: &str) -> Option<Vec<u8>> {
+    if value.len() != 64 || !value.is_ascii() {
+        return None;
+    }
+    (0..64)
+        .step_by(2)
+        .map(|offset| u8::from_str_radix(&value[offset..offset + 2], 16).ok())
+        .collect()
 }
 
 /// A default heartbeat payload for use by the transport's periodic
 /// keep-alive.
 pub fn heartbeat_payload() -> Payload {
     Payload::RunHeartbeat(RunHeartbeat::default())
+}
+
+fn test_case_execution_id(target: &str, case: &str, attempt: u32) -> String {
+    format!("{}:{target}:{}:{case}:{attempt}", target.len(), case.len())
 }
 
 fn wire_target_result(result: CoreResult) -> WireResult {
@@ -247,6 +429,7 @@ fn wire_phase(phase: CorePhase) -> WirePhase {
 
 fn wire_case_result(result: CoreCaseResult) -> WireCaseResult {
     match result {
+        CoreCaseResult::Unknown => WireCaseResult::Unknown,
         CoreCaseResult::Passed => WireCaseResult::Passed,
         CoreCaseResult::Failed => WireCaseResult::Failed,
         CoreCaseResult::Skipped => WireCaseResult::Skipped,
@@ -258,6 +441,7 @@ fn wire_case_result(result: CoreCaseResult) -> WireCaseResult {
 
 fn wire_test_totals(totals: CoreTestTotals) -> WireTestTotals {
     WireTestTotals {
+        unknown: totals.unknown,
         passed: totals.passed,
         failed: totals.failed,
         skipped: totals.skipped,
@@ -280,6 +464,66 @@ fn wire_result_from_exit(exit_status: i32) -> WireRunResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn content_digest_uses_raw_bytes() {
+        assert_eq!(decode_digest(&"ab".repeat(32)).unwrap(), vec![0xab; 32]);
+        assert!(decode_digest("ab").is_none());
+        assert!(decode_digest(&"zz".repeat(32)).is_none());
+    }
+
+    #[test]
+    fn internal_phases_are_not_declared_actions_on_the_wire() {
+        let translated = translate(
+            CoreEvent::ActionCompleted {
+                at_epoch_ms: 10,
+                target_id: "tool".into(),
+                capability: "_phase".into(),
+                action_index: 0,
+                identifier: Some("analysis".into()),
+                result: CoreResult::Succeeded,
+                was_cached: false,
+                duration_ms: 5,
+                exit_code: 0,
+                start_at_epoch_ms: 5,
+                worker_id: "worker-0".into(),
+                prepare_ms: 0,
+                execute_ms: 0,
+                cache_key: String::new(),
+                selected_attempt: 0,
+            },
+            0,
+        );
+        assert!(
+            matches!(translated, Translated::Ordinary { payload: Payload::TargetPhaseCompleted(phase), .. } if phase.phase == "analysis")
+        );
+    }
+
+    #[test]
+    fn test_case_identity_is_unambiguous_when_names_contain_separators() {
+        assert_ne!(
+            test_case_execution_id("a#b", "c", 1),
+            test_case_execution_id("a", "b#c", 1)
+        );
+    }
+
+    #[test]
+    fn host_sample_has_run_local_scope_and_measurement_interval() {
+        let translated = translate(
+            CoreEvent::SystemSampled {
+                at_epoch_ms: 100,
+                interval_ms: 750,
+                cpu_percent: 25.0,
+                memory_bytes: 1024,
+                network_in_bytes_per_second: 4,
+                network_out_bytes_per_second: 5,
+            },
+            0,
+        );
+        assert!(matches!(translated, Translated::Ordinary {
+            payload: Payload::SystemSampled(sample), ..
+        } if sample.scope == ResourceScope::Host as i32 && sample.resource_id == "reporting-host" && sample.interval_ms == 750));
+    }
 
     #[test]
     fn run_started_translates_to_ordinary() {

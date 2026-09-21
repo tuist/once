@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use once_core::{ActionOutputObserver, ActionOutputStream, LogStream, RunEvent, RunEventBus};
-use once_frontend::{AttrValue, BuildConfiguration};
+use once_frontend::BuildConfiguration;
 use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
 
@@ -458,9 +458,10 @@ impl BuildGraph {
         let display_target = resolved
             .iter()
             .find(|target| target.label.id == target_id)
-            .filter(|target| target.kind == "swift_package_workspace")
-            .and_then(|target| match target.attrs.get("package_name") {
-                Some(AttrValue::String(name)) if !name.is_empty() => Some(name.clone()),
+            .and_then(|target| match target.attrs.get("_display_name") {
+                Some(once_frontend::AttrValue::String(name)) if !name.is_empty() => {
+                    Some(name.clone())
+                }
                 _ => None,
             });
         let resolved_by_id = resolved

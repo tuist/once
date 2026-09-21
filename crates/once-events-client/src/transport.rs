@@ -21,12 +21,14 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::{sleep, timeout, Instant};
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
+use tonic::metadata::{Ascii, MetadataValue};
+use tonic::service::{interceptor::InterceptedService, Interceptor};
 use tonic::transport::Channel;
-use tonic::{Request, Streaming};
+use tonic::Request;
 
 use crate::bridge::{translate, Translated};
 use crate::proto::run_event_service_client::RunEventServiceClient;
-use crate::proto::{BatchAck, GetServerCapabilitiesRequest, RunEventBatch, ServerCapabilities};
+use crate::proto::{GetServerCapabilitiesRequest, RunEventBatch, ServerCapabilities};
 use crate::session::{AckAction, EventSession, SessionLimits};
 
 /// Configuration for a live transport.
@@ -56,16 +58,43 @@ pub enum TransportError {
     Grpc(#[from] tonic::Status),
     #[error("gRPC connection error: {0}")]
     Connect(#[from] tonic::transport::Error),
-    #[error("server rejected batch as invalid; client bug")]
+    #[error("event service returned an invalid batch rejection or acknowledgement")]
     InvalidBatchRejected,
     #[error("server dropped the ack stream before drain completed")]
     AckStreamClosed,
+    #[error("event delivery did not finish within the final drain deadline")]
+    DrainTimeout,
+    #[error("server returned an invalid or expired argument hash key")]
+    InvalidHashKey,
+    #[error("event service preflight timed out")]
+    PreflightTimeout,
+    #[error("event service does not support Once event version 1.0 or its required limits")]
+    UnsupportedCapabilities,
+    #[error("event exceeds the negotiated wire size limit")]
+    EventTooLarge,
 }
 
 /// Live transport bound to a specific gRPC channel and run.
 pub struct EventClient {
-    client: RunEventServiceClient<Channel>,
+    client: RunEventServiceClient<InterceptedService<Channel, Authorization>>,
     config: TransportConfig,
+    metadata: Option<crate::proto::RunStarted>,
+    started_at_ms: Option<i64>,
+    dashboard: crate::dashboard::DashboardLink,
+}
+
+#[derive(Clone, Default)]
+struct Authorization(Option<MetadataValue<Ascii>>);
+
+impl Interceptor for Authorization {
+    fn call(&mut self, mut request: Request<()>) -> Result<Request<()>, tonic::Status> {
+        if let Some(value) = &self.0 {
+            request
+                .metadata_mut()
+                .insert("authorization", value.clone());
+        }
+        Ok(request)
+    }
 }
 
 /// Reconnect strategy configuration.
@@ -95,9 +124,67 @@ impl EventClient {
     /// responsible for TLS, auth interceptors, and connection reuse.
     pub fn new(channel: Channel, config: TransportConfig) -> Self {
         Self {
-            client: RunEventServiceClient::new(channel),
+            client: RunEventServiceClient::with_interceptor(channel, Authorization::default()),
             config,
+            metadata: None,
+            started_at_ms: None,
+            dashboard: crate::dashboard::DashboardLink::default(),
         }
+    }
+
+    pub fn authenticated(
+        channel: Channel,
+        config: TransportConfig,
+        token: &str,
+    ) -> Result<Self, tonic::metadata::errors::InvalidMetadataValue> {
+        let mut authorization: MetadataValue<Ascii> = format!("Bearer {token}").parse()?;
+        authorization.set_sensitive(true);
+        Ok(Self {
+            client: RunEventServiceClient::with_interceptor(
+                channel,
+                Authorization(Some(authorization)),
+            ),
+            config,
+            metadata: None,
+            started_at_ms: None,
+            dashboard: crate::dashboard::DashboardLink::default(),
+        })
+    }
+
+    /// Report a validated dashboard link once, after durable run creation.
+    /// Servers may omit it without affecting delivery.
+    #[must_use]
+    pub fn with_dashboard_link(mut self, handler: impl Fn(&str) + Send + Sync + 'static) -> Self {
+        self.dashboard = crate::dashboard::DashboardLink::new(Box::new(handler));
+        self
+    }
+
+    #[must_use]
+    pub fn with_metadata(mut self, metadata: crate::proto::RunStarted) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
+    pub async fn argv_hash_key(
+        &mut self,
+        project_id: String,
+    ) -> Result<crate::proto::ArgvHashKey, TransportError> {
+        let key = self
+            .client
+            .get_argv_hash_key(crate::proto::GetArgvHashKeyRequest { project_id })
+            .await?
+            .into_inner();
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or_default();
+        if key.key_bytes.len() != 32
+            || key.key_id.is_empty()
+            || i128::from(key.expires_at_epoch_ms) <= i128::try_from(now_ms).unwrap_or(i128::MAX)
+        {
+            return Err(TransportError::InvalidHashKey);
+        }
+        Ok(key)
     }
 
     /// One-shot preflight against the server.
@@ -109,361 +196,383 @@ impl EventClient {
         Ok(response.into_inner())
     }
 
-    /// Drive one run to completion using a bus subscription the
-    /// caller supplies. The caller must have created the receiver
-    /// via `bus.subscribe()` before publishing anything, so no
-    /// events are missed to a subscribe-after-publish race. See
-    /// [`Self::run_with_bus`] for the convenience wrapper.
     pub async fn run(self, bus_rx: broadcast::Receiver<CoreEvent>) -> Result<u64, TransportError> {
-        self.run_impl(bus_rx, None).await
+        self.drive(
+            bus_rx,
+            None,
+            ReconnectPolicy {
+                max_attempts: 1,
+                ..Default::default()
+            },
+        )
+        .await
     }
 
-    /// Subscribe to `bus` synchronously and drive one run to
-    /// completion. Safe from subscribe-after-publish because the
-    /// subscription is created before this method's returned future
-    /// is polled.
-    pub async fn run_with_bus(self, bus: RunEventBus) -> Result<u64, TransportError> {
+    /// Subscribe before returning the future, so publication can begin immediately.
+    pub fn run_with_bus(
+        self,
+        bus: RunEventBus,
+    ) -> impl std::future::Future<Output = Result<u64, TransportError>> {
         let rx = bus.subscribe();
         drop(bus);
-        self.run_impl(rx, None).await
+        self.run(rx)
     }
 
-    /// Drive one run to completion with automatic reconnect on
-    /// transport-level stream failures. On each break the client
-    /// calls `GetRunAck` on a fresh unary call to reconcile the
-    /// server's durable state, then re-opens `PublishRunEvents` and
-    /// resumes from the mirror. Ring buffer and loss intervals
-    /// survive across reconnects because they live in the caller-
-    /// owned session state.
-    ///
-    /// The session is threaded across attempts so events accumulate
-    /// during the backoff window; producers keep publishing through
-    /// the outage without observing it.
     pub async fn run_with_reconnect(
-        mut self,
+        self,
         bus_rx: broadcast::Receiver<CoreEvent>,
         shutdown: oneshot::Receiver<()>,
         policy: ReconnectPolicy,
     ) -> Result<u64, TransportError> {
-        let mut session = EventSession::new(self.config.run_id.clone(), self.config.limits);
-        let mut bus_rx = bus_rx;
-        let mut shutdown = Some(shutdown);
-        let mut attempt: u32 = 0;
-        let mut backoff = policy.initial_backoff;
-        loop {
-            let result = self
-                .run_session(&mut session, &mut bus_rx, shutdown.take())
-                .await;
-            match result {
-                Ok(seq) => return Ok(seq),
-                Err(fatal @ TransportError::InvalidBatchRejected) => {
-                    return Err(fatal);
-                }
-                Err(recoverable) => {
-                    attempt += 1;
-                    if attempt >= policy.max_attempts {
-                        tracing::error!(
-                            attempt,
-                            "event ingest reached max reconnect attempts; giving up: {recoverable}"
-                        );
-                        return Err(recoverable);
+        self.drive(bus_rx, Some(shutdown), policy).await
+    }
+
+    pub async fn run_until_shutdown(
+        self,
+        bus_rx: broadcast::Receiver<CoreEvent>,
+        shutdown: oneshot::Receiver<()>,
+    ) -> Result<u64, TransportError> {
+        self.drive(
+            bus_rx,
+            Some(shutdown),
+            ReconnectPolicy {
+                max_attempts: 1,
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
+    async fn drive(
+        mut self,
+        mut bus_rx: broadcast::Receiver<CoreEvent>,
+        shutdown: Option<oneshot::Receiver<()>>,
+        policy: ReconnectPolicy,
+    ) -> Result<u64, TransportError> {
+        let capabilities = self.capabilities().await?;
+        self.apply_capabilities(&capabilities)?;
+        let stopping = tokio_util::sync::CancellationToken::new();
+        let final_drain = self.config.final_drain;
+        let stop = stopping.clone();
+        let delivery = async {
+            let mut session = EventSession::new(self.config.run_id.clone(), self.config.limits);
+            let mut backoff = policy.initial_backoff;
+            for attempt in 0..policy.max_attempts.max(1) {
+                if attempt > 0 {
+                    // Keep translating during outages, using the session's bounded ring.
+                    let delay = sleep(backoff);
+                    tokio::pin!(delay);
+                    loop {
+                        tokio::select! {
+                            () = &mut delay => break,
+                            event = bus_rx.recv() => match event {
+                                Ok(event) => enqueue_event(&mut session, event, self.metadata.as_ref(), &mut self.started_at_ms),
+                                Err(broadcast::error::RecvError::Lagged(n)) => {
+                                    session.record_producer_loss(n);
+                                    tracing::warn!(lagged_by = n, "run event bus lost events");
+                                },
+                                Err(broadcast::error::RecvError::Closed) => break,
+                            }
+                        }
                     }
-                    tracing::warn!(
-                        attempt,
-                        backoff_ms = backoff.as_millis(),
-                        "event ingest stream broke: {recoverable}; reconnecting"
-                    );
-                    sleep(backoff).await;
                     backoff = (backoff * 2).min(policy.max_backoff);
-                    // Re-sync via GetRunAck so the client's mirror
-                    // matches whatever the server actually has.
                     if let Ok(ack) = self
                         .client
-                        .get_run_ack(Request::new(crate::proto::GetRunAckRequest {
+                        .get_run_ack(crate::proto::GetRunAckRequest {
                             run_id: session.run_id().to_string(),
-                        }))
+                        })
                         .await
-                        .map(tonic::Response::into_inner)
                     {
-                        session.handle_get_run_ack(&ack);
+                        let ack = ack.into_inner();
+                        if session.handle_get_run_ack(&ack) == AckAction::InvalidRejected {
+                            return Err(TransportError::InvalidBatchRejected);
+                        }
+                        if ack.acked_seq >= 1 {
+                            self.dashboard.accepted(&ack.dashboard_url);
+                        }
+                        if session.finalized_locally() && session.is_drained() {
+                            return Ok(session.server_expected_next_seq());
+                        }
+                    }
+                }
+                let result = self.run_session(&mut session, &mut bus_rx, &stopping).await;
+                match result {
+                    Ok(seq) => return Ok(seq),
+                    Err(
+                        error @ (TransportError::InvalidBatchRejected
+                        | TransportError::DrainTimeout),
+                    ) => return Err(error),
+                    Err(error) if attempt + 1 >= policy.max_attempts.max(1) => return Err(error),
+                    Err(error) => {
+                        tracing::warn!(attempt, %error, "event stream failed; reconnecting");
                     }
                 }
             }
+            unreachable!()
+        };
+        tokio::pin!(delivery);
+        let shutdown = async {
+            match shutdown {
+                Some(rx) => {
+                    let _ = rx.await;
+                }
+                None => std::future::pending::<()>().await,
+            }
+        };
+        tokio::select! {
+            result = &mut delivery => result,
+            () = shutdown => {
+                stop.cancel();
+                timeout(final_drain, &mut delivery).await.map_err(|_| TransportError::DrainTimeout)?
+            }
         }
+    }
+
+    fn apply_capabilities(&mut self, caps: &ServerCapabilities) -> Result<(), TransportError> {
+        if !caps
+            .supported_protocol_versions
+            .iter()
+            .any(|version| version == "1.0")
+            || !caps.required_features.is_empty()
+            || caps.max_batch_bytes < 1024
+            || caps.max_event_bytes < 512
+            || caps.max_unacked_events == 0
+            || caps.max_log_chunk_bytes == 0
+        {
+            return Err(TransportError::UnsupportedCapabilities);
+        }
+        let limits = &mut self.config.limits;
+        limits.max_batch_bytes = limits.max_batch_bytes.min(caps.max_batch_bytes as usize);
+        limits.max_event_bytes = limits
+            .max_event_bytes
+            .min(caps.max_event_bytes as usize)
+            .min(limits.max_batch_bytes.saturating_sub(256));
+        limits.max_log_chunk_bytes = limits
+            .max_log_chunk_bytes
+            .min(caps.max_log_chunk_bytes as usize)
+            .min(limits.max_event_bytes.saturating_sub(128));
+        limits.ordinary_capacity = limits
+            .ordinary_capacity
+            .min(caps.max_unacked_events as usize);
+        limits.max_events_per_batch = limits.max_events_per_batch.min(limits.ordinary_capacity);
+        if limits.max_event_bytes < 256
+            || limits.max_log_chunk_bytes == 0
+            || limits.max_unacked_bytes < limits.max_event_bytes
+        {
+            return Err(TransportError::UnsupportedCapabilities);
+        }
+        if let Some(metadata) = &mut self.metadata {
+            if !metadata.safe_literal_allowlist_version.is_empty()
+                && metadata.safe_literal_allowlist_version != caps.safe_literal_allowlist_version
+            {
+                return Err(TransportError::UnsupportedCapabilities);
+            }
+            metadata.protocol_version = "1.0".into();
+            metadata.effective_limits = Some(crate::proto::EffectiveLimits {
+                max_batch_bytes: u32::try_from(limits.max_batch_bytes).unwrap_or(u32::MAX),
+                max_event_bytes: u32::try_from(limits.max_event_bytes).unwrap_or(u32::MAX),
+                max_unacked_events: u32::try_from(limits.ordinary_capacity).unwrap_or(u32::MAX),
+                max_log_chunk_bytes: u32::try_from(limits.max_log_chunk_bytes).unwrap_or(u32::MAX),
+                log_ingestion_enabled: caps.log_ingestion_available,
+                raw_event_retention_enabled: caps.raw_event_retention_available,
+            });
+        }
+        Ok(())
     }
 
     async fn run_session(
         &mut self,
         session: &mut EventSession,
         bus_rx: &mut broadcast::Receiver<CoreEvent>,
-        mut shutdown: Option<oneshot::Receiver<()>>,
+        stopping: &tokio_util::sync::CancellationToken,
     ) -> Result<u64, TransportError> {
-        let (batch_tx, batch_rx) = mpsc::channel::<RunEventBatch>(32);
-        let outgoing = ReceiverStream::new(batch_rx);
-        let mut ack_stream: Streaming<BatchAck> = self
+        let (batch_tx, batch_rx) = mpsc::channel::<RunEventBatch>(1);
+        let mut batch_id = prime_stream(
+            session,
+            bus_rx,
+            self.metadata.as_ref(),
+            &mut self.started_at_ms,
+            &batch_tx,
+            self.config.limits,
+        )
+        .await?;
+        let mut ack_stream = self
             .client
-            .publish_run_events(Request::new(outgoing))
+            .publish_run_events(ReceiverStream::new(batch_rx))
             .await?
             .into_inner();
-        let mut last_flush = Instant::now();
+        let mut in_flight = true;
         let mut bus_open = true;
-        let mut last_expected_next_seq = session.server_expected_next_seq();
+        let mut drain_deadline = None;
+        let mut next_flush = Instant::now() + self.config.batch_flush;
+        let mut heartbeat = tokio::time::interval(Duration::from_secs(5));
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        heartbeat.tick().await;
         loop {
-            let should_flush_now =
-                session_should_flush(session, last_flush, self.config.batch_flush);
-            if let Some(mut rx) = shutdown.take() {
-                match rx.try_recv() {
-                    Err(oneshot::error::TryRecvError::Empty) => shutdown = Some(rx),
-                    Ok(()) | Err(oneshot::error::TryRecvError::Closed) => bus_open = false,
-                }
+            if stopping.is_cancelled() && bus_open {
+                drain_bus(
+                    session,
+                    bus_rx,
+                    self.metadata.as_ref(),
+                    &mut self.started_at_ms,
+                );
+                bus_open = false;
             }
+            if !bus_open || session.finalized_locally() {
+                drain_deadline.get_or_insert_with(|| Instant::now() + self.config.final_drain);
+            }
+            if !bus_open && session.is_drained() {
+                return Ok(session.server_expected_next_seq());
+            }
+            let deadline = async {
+                match drain_deadline {
+                    Some(deadline) => tokio::time::sleep_until(deadline).await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
             tokio::select! {
-                biased;
-                maybe_ack = ack_stream.next() => match maybe_ack {
+                () = deadline => return Err(TransportError::DrainTimeout),
+                () = stopping.cancelled(), if bus_open => {},
+                _ = heartbeat.tick(), if bus_open && !session.finalized_locally() => {
+                    let epoch_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+                        .unwrap_or_default();
+                    session.push_ordinary(crate::bridge::heartbeat_payload(), epoch_ms, 0);
+                },
+                ack = ack_stream.next() => match ack {
                     Some(Ok(ack)) => {
-                        last_expected_next_seq = ack.expected_next_seq;
+                        if !in_flight || ack.batch_id != batch_id {
+                            return Err(TransportError::InvalidBatchRejected);
+                        }
+                        in_flight = false;
                         match session.handle_ack(&ack) {
-                            AckAction::Continue { .. } | AckAction::StaleDropped => {}
-                            AckAction::InvalidRejected => {
-                                return Err(TransportError::InvalidBatchRejected);
+                            AckAction::Continue { retry_after_ms } => {
+                                if ack.acked_seq >= 1 { self.dashboard.accepted(&ack.dashboard_url); }
+                                next_flush = Instant::now() + Duration::from_millis(u64::from(retry_after_ms));
                             }
+                            AckAction::StaleDropped => next_flush = Instant::now(),
+                            AckAction::InvalidRejected => return Err(TransportError::InvalidBatchRejected),
                             AckAction::NeedsResync => {
-                                let resync = self
-                                    .client
-                                    .get_run_ack(Request::new(crate::proto::GetRunAckRequest {
-                                        run_id: session.run_id().to_string(),
-                                    }))
-                                    .await?
-                                    .into_inner();
-                                last_expected_next_seq = resync.expected_next_seq;
-                                session.handle_get_run_ack(&resync);
+                                // Reopen the stream before resending, fencing old responses.
+                                return Err(TransportError::Grpc(tonic::Status::aborted("event stream needs resynchronization")));
                             }
                         }
                     }
-                    Some(Err(status)) => return Err(TransportError::Grpc(status)),
-                    None => {
-                        if session.is_drained() && !bus_open {
-                            return Ok(last_expected_next_seq);
-                        }
-                        return Err(TransportError::AckStreamClosed);
-                    }
+                    Some(Err(status)) => return Err(status.into()),
+                    None => return Err(TransportError::AckStreamClosed),
                 },
-                bus_msg = bus_rx.recv(), if bus_open => match bus_msg {
-                    Ok(event) => enqueue_event(session, event),
+                event = bus_rx.recv(), if bus_open => match event {
+                    Ok(event) => enqueue_event(session, event, self.metadata.as_ref(), &mut self.started_at_ms),
                     Err(broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::debug!(lagged_by = n, "bus receiver lagged");
-                    }
-                    Err(broadcast::error::RecvError::Closed) => {
-                        bus_open = false;
-                    }
+                        session.record_producer_loss(n);
+                        tracing::warn!(lagged_by = n, "run event bus lost events");
+                    },
+                    Err(broadcast::error::RecvError::Closed) => bus_open = false,
                 },
-                () = sleep_until_or_immediate(should_flush_now, self.config.batch_flush) => {
+                () = tokio::time::sleep_until(next_flush), if !in_flight => {
                     if let Some(batch) = session.next_batch() {
-                        if batch_tx.send(batch).await.is_err() {
-                            return Err(TransportError::AckStreamClosed);
+                        if prost::Message::encoded_len(&batch) > self.config.limits.max_batch_bytes
+                            || batch.events.iter().any(|event| prost::Message::encoded_len(event) > self.config.limits.max_event_bytes) {
+                            return Err(TransportError::EventTooLarge);
                         }
-                        last_flush = Instant::now();
+                        batch_id.clone_from(&batch.batch_id);
+                        batch_tx.send(batch).await.map_err(|_| TransportError::AckStreamClosed)?;
+                        in_flight = true;
                     }
-                    if !bus_open && session.is_drained() {
-                        drop(batch_tx);
-                        let deadline = self.config.final_drain;
-                        return await_final_ack(&mut ack_stream, session, deadline)
-                            .await
-                            .map(|()| last_expected_next_seq);
-                    }
-                }
-            }
-        }
-    }
-
-    /// Like [`Self::run`] but also treats a fired shutdown signal
-    /// as "no more events; drain and exit." Useful when the bus
-    /// itself outlives the run (for example, a long-lived UI store
-    /// that other publishers hold references to).
-    pub async fn run_until_shutdown(
-        self,
-        bus_rx: broadcast::Receiver<CoreEvent>,
-        shutdown: oneshot::Receiver<()>,
-    ) -> Result<u64, TransportError> {
-        self.run_impl(bus_rx, Some(shutdown)).await
-    }
-
-    async fn run_impl(
-        mut self,
-        mut bus_rx: broadcast::Receiver<CoreEvent>,
-        mut shutdown: Option<oneshot::Receiver<()>>,
-    ) -> Result<u64, TransportError> {
-        let mut session = EventSession::new(self.config.run_id.clone(), self.config.limits);
-        let (batch_tx, batch_rx) = mpsc::channel::<RunEventBatch>(32);
-        let outgoing = ReceiverStream::new(batch_rx);
-        let mut ack_stream: Streaming<BatchAck> = self
-            .client
-            .publish_run_events(Request::new(outgoing))
-            .await?
-            .into_inner();
-
-        let mut last_flush = Instant::now();
-        let mut bus_open = true;
-        let mut last_expected_next_seq = 0;
-
-        loop {
-            let should_flush_now =
-                session_should_flush(&session, last_flush, self.config.batch_flush);
-
-            // Poll a taken shutdown receiver once per loop; a fired
-            // signal is treated as "no more events, drain."
-            if let Some(mut rx) = shutdown.take() {
-                match rx.try_recv() {
-                    Err(oneshot::error::TryRecvError::Empty) => {
-                        shutdown = Some(rx);
-                    }
-                    Ok(()) | Err(oneshot::error::TryRecvError::Closed) => {
-                        bus_open = false;
-                    }
-                }
-            }
-
-            tokio::select! {
-                biased;
-                // Deliver acks as fast as they arrive.
-                maybe_ack = ack_stream.next() => match maybe_ack {
-                    Some(Ok(ack)) => {
-                        tracing::trace!(
-                            acked_seq = ack.acked_seq,
-                            expected_next = ack.expected_next_seq,
-                            disposition = ack.disposition,
-                            "batch ack",
-                        );
-                        last_expected_next_seq = ack.expected_next_seq;
-                        match session.handle_ack(&ack) {
-                            AckAction::Continue { .. } | AckAction::StaleDropped => {}
-                            AckAction::InvalidRejected => {
-                                return Err(TransportError::InvalidBatchRejected);
-                            }
-                            AckAction::NeedsResync => {
-                                let resync = self
-                                    .client
-                                    .get_run_ack(Request::new(crate::proto::GetRunAckRequest {
-                                        run_id: session.run_id().to_string(),
-                                    }))
-                                    .await?
-                                    .into_inner();
-                                last_expected_next_seq = resync.expected_next_seq;
-                                session.handle_get_run_ack(&resync);
-                            }
-                        }
-                    }
-                    Some(Err(status)) => return Err(TransportError::Grpc(status)),
-                    None => {
-                        if session.is_drained() && !bus_open {
-                            return Ok(last_expected_next_seq);
-                        }
-                        return Err(TransportError::AckStreamClosed);
-                    }
-                },
-                // Consume bus events while the bus is open.
-                bus_msg = bus_rx.recv(), if bus_open => match bus_msg {
-                    Ok(event) => enqueue_event(&mut session, event),
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::debug!(lagged_by = n, "bus receiver lagged");
-                    }
-                    Err(broadcast::error::RecvError::Closed) => {
-                        bus_open = false;
-                    }
-                },
-                // Periodic flush.
-                () = sleep_until_or_immediate(should_flush_now, self.config.batch_flush) => {
-                    if let Some(batch) = session.next_batch() {
-                        tracing::trace!(
-                            batch_id = %batch.batch_id,
-                            seq_from = batch.seq_from,
-                            events = batch.events.len(),
-                            gaps = batch.gap_advances.len(),
-                            "sending batch",
-                        );
-                        if batch_tx.send(batch).await.is_err() {
-                            return Err(TransportError::AckStreamClosed);
-                        }
-                        last_flush = Instant::now();
-                    }
-                    if !bus_open && session.is_drained() {
-                        drop(batch_tx);
-                        // Await terminal ack up to the drain deadline.
-                        let deadline = self.config.final_drain;
-                        return await_final_ack(&mut ack_stream, &mut session, deadline).await
-                            .map(|()| last_expected_next_seq);
-                    }
+                    next_flush = Instant::now() + self.config.batch_flush;
                 }
             }
         }
     }
 }
 
-fn enqueue_event(session: &mut EventSession, event: CoreEvent) {
+async fn prime_stream(
+    session: &mut EventSession,
+    bus_rx: &mut broadcast::Receiver<CoreEvent>,
+    metadata: Option<&crate::proto::RunStarted>,
+    started_at_ms: &mut Option<i64>,
+    batch_tx: &mpsc::Sender<RunEventBatch>,
+    limits: SessionLimits,
+) -> Result<String, TransportError> {
+    // Some servers send response headers only after receiving the first batch.
+    loop {
+        if let Some(batch) = session.next_batch() {
+            if prost::Message::encoded_len(&batch) > limits.max_batch_bytes
+                || batch
+                    .events
+                    .iter()
+                    .any(|event| prost::Message::encoded_len(event) > limits.max_event_bytes)
+            {
+                return Err(TransportError::EventTooLarge);
+            }
+            let batch_id = batch.batch_id.clone();
+            batch_tx
+                .send(batch)
+                .await
+                .map_err(|_| TransportError::AckStreamClosed)?;
+            return Ok(batch_id);
+        }
+        match bus_rx.recv().await {
+            Ok(event) => enqueue_event(session, event, metadata, started_at_ms),
+            Err(broadcast::error::RecvError::Lagged(n)) => session.record_producer_loss(n),
+            Err(broadcast::error::RecvError::Closed) => {
+                return Err(TransportError::AckStreamClosed);
+            }
+        }
+    }
+}
+
+fn drain_bus(
+    session: &mut EventSession,
+    bus_rx: &mut broadcast::Receiver<CoreEvent>,
+    metadata: Option<&crate::proto::RunStarted>,
+    started_at_ms: &mut Option<i64>,
+) {
+    loop {
+        match bus_rx.try_recv() {
+            Ok(event) => enqueue_event(session, event, metadata, started_at_ms),
+            Err(broadcast::error::TryRecvError::Lagged(n)) => session.record_producer_loss(n),
+            Err(_) => break,
+        }
+    }
+}
+
+fn enqueue_event(
+    session: &mut EventSession,
+    event: CoreEvent,
+    metadata: Option<&crate::proto::RunStarted>,
+    started_at_ms: &mut Option<i64>,
+) {
+    if started_at_ms.is_none() && !matches!(event, CoreEvent::RunStarted { .. }) {
+        return;
+    }
     let mono_ns = 0; // Producers do not thread monotonic timing yet; RFC allows zero.
     match translate(event, mono_ns) {
         Translated::Ordinary {
-            payload,
+            mut payload,
             epoch_ms,
             mono_ns,
         } => {
+            if matches!(payload, crate::proto::run_event::Payload::RunStarted(_)) {
+                *started_at_ms = Some(epoch_ms);
+                if let Some(metadata) = metadata {
+                    payload = crate::proto::run_event::Payload::RunStarted(metadata.clone());
+                }
+            }
             session.push_ordinary(payload, epoch_ms, mono_ns);
         }
         Translated::Terminal {
-            result,
+            mut result,
             epoch_ms,
             mono_ns,
         } => {
+            if let Some(start) = started_at_ms {
+                result.wall_ms = epoch_ms.saturating_sub(*start).max(0);
+            }
+            result.producer_dropped_events = session.producer_dropped_events();
             session.push_terminal(result, epoch_ms, mono_ns);
         }
         Translated::Skip => {}
-    }
-}
-
-fn session_should_flush(session: &EventSession, last_flush: Instant, period: Duration) -> bool {
-    // Immediate flush if we have any pending state and either the
-    // period has elapsed or the session is finalized (drain hurry).
-    let has_pending = session.next_seq() > 1 && !session.is_drained();
-    let period_elapsed = last_flush.elapsed() >= period;
-    let finalizing = session.finalized_locally();
-    has_pending && (period_elapsed || finalizing)
-}
-
-async fn sleep_until_or_immediate(should_flush_now: bool, period: Duration) {
-    if should_flush_now {
-        // Yield to let other select! branches drain first, then return.
-        tokio::task::yield_now().await;
-    } else {
-        sleep(period).await;
-    }
-}
-
-async fn await_final_ack(
-    ack_stream: &mut Streaming<BatchAck>,
-    session: &mut EventSession,
-    deadline: Duration,
-) -> Result<(), TransportError> {
-    let fut = async {
-        while !session.is_drained() {
-            match ack_stream.next().await {
-                Some(Ok(ack)) => match session.handle_ack(&ack) {
-                    AckAction::Continue { .. } | AckAction::StaleDropped => {}
-                    AckAction::InvalidRejected => {
-                        return Err(TransportError::InvalidBatchRejected);
-                    }
-                    AckAction::NeedsResync => {
-                        // Best-effort: no time to renegotiate.
-                        return Ok(());
-                    }
-                },
-                Some(Err(status)) => return Err(TransportError::Grpc(status)),
-                None => return Ok(()),
-            }
-        }
-        Ok(())
-    };
-    match timeout(deadline, fut).await {
-        Ok(res) => res,
-        Err(_) => Ok(()), // Drain deadline elapsed; caller may inspect finalization state on projection.
     }
 }

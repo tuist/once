@@ -105,6 +105,11 @@ jobs:
         run: mise run release:package --target "${{ matrix.target }}" --version "${{ needs.detect.outputs.next-version }}"
         env:
           GH_TOKEN: ${{ github.token }}
+          # Stamped into the once-cli binary by `crates/once-cli/build.rs`
+          # so runtime `ActionCompleted.once_version` reports the version
+          # this workflow is publishing, not the placeholder in
+          # `Cargo.toml`.
+          ONCE_RELEASE_VERSION: ${{ needs.detect.outputs.next-version }}
       - name: Upload release assets
         uses: actions/upload-artifact@v7
         with:
@@ -131,6 +136,9 @@ jobs:
         run: mise run release:package-xcframework --version "${{ needs.detect.outputs.next-version }}"
         env:
           GH_TOKEN: ${{ github.token }}
+          # Keeps the XCFramework's embedded binary reporting the
+          # same version the release workflow published.
+          ONCE_RELEASE_VERSION: ${{ needs.detect.outputs.next-version }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_DEVELOPER_ID_CERTIFICATE_ENCRYPTION_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_ENCRYPTION_PASSWORD }}
           APPLE_DEVELOPER_ID_CERTIFICATE_NAME: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_NAME }}

@@ -280,3 +280,7 @@ mise exec -- target/release/once exec -- /bin/sh -c 'printf hello'
 
 `mise exec --` is required because the project's toolchain is mise-managed;
 calling `cargo` directly will miss the pinned rustc.
+
+## Live action reporting
+
+Subscribe before publishing the first run event and drain queued completions before shutting down the reporter. Authentication applies to every event service call. Target summaries must not stand in for declared actions: persist per-action identity with reusable target outcomes and replay each as a cache hit. Cover transport delivery in `once-events-client/tests/end_to_end.rs` and retained action identity in the graph target-outcome tests.

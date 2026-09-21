@@ -1,4 +1,4 @@
-use once_frontend::GraphTarget;
+use once_frontend::{AttrValue, GraphTarget};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Command {
@@ -45,20 +45,24 @@ impl Invocation {
     pub(super) fn package(graph: &[GraphTarget]) -> Option<NativePackage> {
         let workspaces = graph
             .iter()
-            .filter(|target| target.kind == "cargo_workspace" && has_capability(target, "build"))
+            .filter(|target| {
+                has_capability(target, "build")
+                    && uses_executable(target, "cargo")
+                    && target.attrs.contains_key("_default_test_roots")
+            })
             .collect::<Vec<_>>();
         let [workspace] = workspaces.as_slice() else {
             return None;
         };
-        let test_targets = graph
-            .iter()
-            .filter(|target| {
-                target.kind == "rust_test"
-                    && has_capability(target, "test")
-                    && is_first_party_target(target, workspace)
-            })
-            .map(|target| target.label.id.clone())
-            .collect();
+        let test_targets = default_test_roots(workspace).unwrap_or_else(|| {
+            graph
+                .iter()
+                .filter(|target| {
+                    has_capability(target, "test") && is_first_party_target(target, workspace)
+                })
+                .map(|target| target.label.id.clone())
+                .collect()
+        });
         Some(NativePackage {
             build_target: workspace.label.id.clone(),
             test_targets,
@@ -104,6 +108,27 @@ fn has_capability(target: &GraphTarget, capability: &str) -> bool {
         .any(|candidate| candidate.name == capability)
 }
 
+fn uses_executable(target: &GraphTarget, executable: &str) -> bool {
+    target.tools.iter().any(|tool| {
+        tool.executables
+            .iter()
+            .any(|candidate| candidate == executable)
+    })
+}
+
+fn default_test_roots(target: &GraphTarget) -> Option<Vec<String>> {
+    match target.attrs.get("_default_test_roots")? {
+        AttrValue::List(values) => values
+            .iter()
+            .map(|value| match value {
+                AttrValue::String(value) => Some(value.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => None,
+    }
+}
+
 fn is_first_party_target(target: &GraphTarget, workspace: &GraphTarget) -> bool {
     let package_prefix = if workspace.label.package.is_empty() {
         String::new()
@@ -131,6 +156,14 @@ mod tests {
         srcs: &[&str],
         capabilities: &[&str],
     ) -> GraphTarget {
+        let attrs = if kind == "cargo_workspace" {
+            BTreeMap::from([(
+                "_default_test_roots".to_string(),
+                AttrValue::List(Vec::new()),
+            )])
+        } else {
+            BTreeMap::new()
+        };
         GraphTarget {
             label: TargetLabel {
                 package: package.to_string(),
@@ -142,7 +175,7 @@ mod tests {
             dependency_edges: BTreeMap::new(),
             srcs: srcs.iter().map(ToString::to_string).collect(),
             visibility: Vec::new(),
-            attrs: BTreeMap::new(),
+            attrs,
             capabilities: capabilities
                 .iter()
                 .map(|name| Capability {
@@ -152,7 +185,13 @@ mod tests {
                 })
                 .collect(),
             providers: Vec::new(),
-            tools: Vec::new(),
+            tools: (kind == "cargo_workspace")
+                .then(|| once_frontend::ToolRequirement {
+                    name: "test-toolchain".to_string(),
+                    executables: vec!["cargo".to_string()],
+                })
+                .into_iter()
+                .collect(),
             diagnostics: Vec::new(),
         }
     }
@@ -218,8 +257,15 @@ mod tests {
 
     #[test]
     fn selects_only_first_party_tests_from_one_native_workspace() {
+        let mut workspace = target("cargo", "", "cargo_workspace", &[], &["build"]);
+        workspace.attrs.insert(
+            "_default_test_roots".to_string(),
+            AttrValue::List(vec![AttrValue::String(
+                "cargo_hello_bin_hello_unit_tests".to_string(),
+            )]),
+        );
         let graph = vec![
-            target("cargo", "", "cargo_workspace", &[], &["build"]),
+            workspace,
             target(
                 "cargo_hello_bin_hello_unit_tests",
                 "",

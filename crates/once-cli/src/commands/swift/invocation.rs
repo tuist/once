@@ -2,7 +2,7 @@ use std::path::Path;
 use std::process::Command as ProcessCommand;
 
 use anyhow::{bail, Context, Result};
-use once_frontend::GraphTarget;
+use once_frontend::{AttrValue, GraphTarget};
 use serde_json::Value;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,21 +54,23 @@ impl Invocation {
         let workspaces = graph
             .iter()
             .filter(|target| {
-                target.kind == "swift_package_workspace" && has_capability(target, "build")
+                has_capability(target, "build")
+                    && uses_executable(target, "swift")
+                    && target.attrs.contains_key("_default_test_roots")
             })
             .collect::<Vec<_>>();
         let [workspace] = workspaces.as_slice() else {
             return None;
         };
-        let test_targets = graph
-            .iter()
-            .filter(|target| {
-                target.kind == "apple_test_bundle"
-                    && has_capability(target, "test")
-                    && is_first_party_target(target, workspace)
-            })
-            .map(|target| target.label.id.clone())
-            .collect();
+        let test_targets = default_test_roots(workspace).unwrap_or_else(|| {
+            graph
+                .iter()
+                .filter(|target| {
+                    has_capability(target, "test") && is_first_party_target(target, workspace)
+                })
+                .map(|target| target.label.id.clone())
+                .collect()
+        });
         Some(NativePackage {
             build_target: workspace.label.id.clone(),
             test_targets,
@@ -146,6 +148,27 @@ fn has_capability(target: &GraphTarget, capability: &str) -> bool {
         .any(|candidate| candidate.name == capability)
 }
 
+fn uses_executable(target: &GraphTarget, executable: &str) -> bool {
+    target.tools.iter().any(|tool| {
+        tool.executables
+            .iter()
+            .any(|candidate| candidate == executable)
+    })
+}
+
+fn default_test_roots(target: &GraphTarget) -> Option<Vec<String>> {
+    match target.attrs.get("_default_test_roots")? {
+        AttrValue::List(values) => values
+            .iter()
+            .map(|value| match value {
+                AttrValue::String(value) => Some(value.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => None,
+    }
+}
+
 fn is_first_party_target(target: &GraphTarget, workspace: &GraphTarget) -> bool {
     let package_prefix = if workspace.label.package.is_empty() {
         String::new()
@@ -174,6 +197,14 @@ mod tests {
         srcs: &[&str],
         capabilities: &[&str],
     ) -> GraphTarget {
+        let attrs = if kind == "swift_package_workspace" {
+            BTreeMap::from([(
+                "_default_test_roots".to_string(),
+                AttrValue::List(Vec::new()),
+            )])
+        } else {
+            BTreeMap::new()
+        };
         GraphTarget {
             label: TargetLabel {
                 package: package.to_string(),
@@ -185,7 +216,7 @@ mod tests {
             dependency_edges: BTreeMap::new(),
             srcs: srcs.iter().map(ToString::to_string).collect(),
             visibility: Vec::new(),
-            attrs: BTreeMap::new(),
+            attrs,
             capabilities: capabilities
                 .iter()
                 .map(|name| Capability {
@@ -195,7 +226,13 @@ mod tests {
                 })
                 .collect(),
             providers: Vec::new(),
-            tools: Vec::new(),
+            tools: (kind == "swift_package_workspace")
+                .then(|| once_frontend::ToolRequirement {
+                    name: "test-toolchain".to_string(),
+                    executables: vec!["swift".to_string()],
+                })
+                .into_iter()
+                .collect(),
             diagnostics: Vec::new(),
         }
     }
@@ -240,14 +277,21 @@ mod tests {
 
     #[test]
     fn selects_only_first_party_tests_from_one_native_package() {
+        let mut workspace = target(
+            "swift_package",
+            "",
+            "swift_package_workspace",
+            &[],
+            &["build"],
+        );
+        workspace.attrs.insert(
+            "_default_test_roots".to_string(),
+            AttrValue::List(vec![AttrValue::String(
+                "SwiftPackage_NIO_NIOTests".to_string(),
+            )]),
+        );
         let graph = vec![
-            target(
-                "swift_package",
-                "",
-                "swift_package_workspace",
-                &[],
-                &["build"],
-            ),
+            workspace,
             target(
                 "SwiftPackage_NIO_NIOTests",
                 "",

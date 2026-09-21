@@ -342,6 +342,51 @@ async fn independent_dependencies_run_in_parallel() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn suppressed_root_lifecycle_keeps_dependency_lifecycles_balanced() {
+    let workspace = tempfile::tempdir().unwrap();
+    let cache = CacheProvider::open_local(workspace.path().join(".once/cache"));
+    let graph = vec![
+        test_target("Root", &["Leaf"], "printf root > \"$1\""),
+        test_target("Leaf", &[], "printf leaf > \"$1\""),
+    ];
+    let analyzer = AnalysisEngine::from_source(GRAPH_TEST_PRELUDE).unwrap();
+    let bus = once_core::RunEventBus::new(64);
+    let mut events = bus.subscribe();
+    let session = BuildSession::new_with_analyzer(
+        workspace.path(),
+        &cache,
+        graph.clone(),
+        analyzer,
+        SandboxMode::default(),
+    )
+    .with_event_bus(bus)
+    .suppress_target_lifecycle("Root");
+
+    session
+        .build_with_analysis(&graph[0])
+        .await
+        .unwrap()
+        .unwrap();
+
+    let mut queued = Vec::new();
+    let mut started = Vec::new();
+    let mut completed = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        match event {
+            once_core::RunEvent::TargetQueued { target_id, .. } => queued.push(target_id),
+            once_core::RunEvent::TargetStarted { target_id, .. } => started.push(target_id),
+            once_core::RunEvent::TargetCompleted { target_id, .. } => completed.push(target_id),
+            _ => {}
+        }
+    }
+
+    assert_eq!(queued, ["Leaf"]);
+    assert_eq!(started, ["Leaf"]);
+    assert_eq!(completed, ["Leaf"]);
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn configuration_path_suffix_scopes_build_outputs() {
     let workspace = tempfile::tempdir().unwrap();
     let cache = CacheProvider::open_local(workspace.path().join(".once/cache"));

@@ -10,8 +10,7 @@
 //! the bounded final drain.
 //!
 //! The types map from the internal [`once_core::RunEvent`] bus onto
-//! the wire proto. Server-side ingest and the projector live in the
-//! Tuist server repository.
+//! the wire proto. Any compatible service can ingest and project it.
 
 /// Generated Rust bindings for the wire proto.
 #[allow(
@@ -24,6 +23,8 @@
 pub mod proto {
     tonic::include_proto!("once.events.v1");
 }
+
+mod dashboard;
 
 mod bridge;
 mod buffer;

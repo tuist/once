@@ -41,7 +41,7 @@ notify = "8.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
-sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+sysinfo = { version = "0.39.6", default-features = false, features = ["system", "network"] }
 starlark = "0.14.2"
 toml = "1.0"
 toon-rust = { package = "toon-format", version = "0.5", default-features = false }

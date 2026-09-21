@@ -10,6 +10,10 @@ tests into the existing Apple target kinds. The package manifest remains
 authoritative for products, target dependencies, source layout, compiler
 settings, resources, and platform constraints.
 
+The resolved package name becomes the display label in generic run reporting.
+The reporting layer reads resolver metadata and does not identify this target
+kind by name.
+
 Executable products are linked into Apple application bundles, so their
 compiled executable is a declared build output alongside the bundle metadata.
 

@@ -44,6 +44,7 @@ fn outcome(outputs: &[&str]) -> BuildOutcome {
             outputs: BTreeMap::new(),
         },
         cached_results: Vec::new(),
+        per_action_outcomes: Vec::new(),
     }
 }
 
@@ -329,6 +330,16 @@ fn a_reused_outcome_reports_a_hit_however_it_was_produced() {
     let mut compiled = outcome(&[".once/out/tool/tool"]);
     compiled.cache_state = EvidenceCacheState::Miss;
     compiled.cache_tag = "miss";
+    compiled.per_action_outcomes = (0..2)
+        .map(|index| super::super::PerActionOutcome {
+            action_digest: Digest::of_bytes(format!("action-{index}").as_bytes()),
+            identifier: Some(format!("action-{index}")),
+            index,
+            cache_state: EvidenceCacheState::Miss,
+            duration_ms: 42,
+            exit_code: 0,
+        })
+        .collect();
     let reopened = round_trip(&workspace, |outcomes| {
         outcomes.record(
             &target,
@@ -345,4 +356,18 @@ fn a_reused_outcome_reports_a_hit_however_it_was_produced() {
 
     assert_eq!(reused.cache_state, EvidenceCacheState::Hit);
     assert_eq!(reused.cache_tag, "hit");
+    assert_eq!(reused.per_action_outcomes.len(), 2);
+    for (index, action) in reused.per_action_outcomes.iter().enumerate() {
+        assert_eq!(
+            action.identifier.as_deref(),
+            Some(format!("action-{index}").as_str())
+        );
+        assert_eq!(action.index as usize, index);
+        assert_eq!(
+            action.action_digest,
+            Digest::of_bytes(format!("action-{index}").as_bytes())
+        );
+        assert_eq!(action.cache_state, EvidenceCacheState::Hit);
+        assert_eq!(action.duration_ms, 0);
+    }
 }

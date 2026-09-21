@@ -42,7 +42,13 @@ impl Invocation {
     pub(super) fn target(&self, graph: &[GraphTarget]) -> Option<String> {
         let workspaces = graph
             .iter()
-            .filter(|target| target.kind == "xcode_workspace")
+            .filter(|target| {
+                target.tools.iter().any(|tool| {
+                    tool.executables
+                        .iter()
+                        .any(|executable| executable == "xcrun")
+                }) && target.attrs.contains_key("_default_test_roots")
+            })
             .collect::<Vec<_>>();
         let [workspace] = workspaces.as_slice() else {
             return None;
@@ -222,6 +228,14 @@ mod tests {
     use once_frontend::{Capability, TargetLabel};
 
     fn target(id: &str, kind: &str, deps: &[&str], capabilities: &[&str]) -> GraphTarget {
+        let attrs = if kind == "xcode_workspace" {
+            BTreeMap::from([(
+                "_default_test_roots".to_string(),
+                once_frontend::AttrValue::List(Vec::new()),
+            )])
+        } else {
+            BTreeMap::new()
+        };
         GraphTarget {
             label: TargetLabel {
                 package: String::new(),
@@ -233,7 +247,7 @@ mod tests {
             dependency_edges: BTreeMap::new(),
             srcs: Vec::new(),
             visibility: Vec::new(),
-            attrs: BTreeMap::new(),
+            attrs,
             capabilities: capabilities
                 .iter()
                 .map(|name| Capability {
@@ -243,7 +257,13 @@ mod tests {
                 })
                 .collect(),
             providers: Vec::new(),
-            tools: Vec::new(),
+            tools: (kind == "xcode_workspace")
+                .then(|| once_frontend::ToolRequirement {
+                    name: "test-toolchain".to_string(),
+                    executables: vec!["xcrun".to_string()],
+                })
+                .into_iter()
+                .collect(),
             diagnostics: Vec::new(),
         }
     }

@@ -2,15 +2,18 @@
 
 ## Status
 
-Accepted (v0.21). Open decisions tracked below are non-blocking for the first-slice implementation.
+Accepted design. Implementation gaps and the requirements for freezing the public contract are tracked in [the live run protocol design review](0010-live-run-protocol-hardening.md).
+The versioned wire definition is authoritative for shipped fields and numbers;
+the website generates its event reference directly from that definition at build
+time. Illustrative shapes in this design document are not a separate schema.
 
 ## Motivation
 
 Once has no server-facing event stream. A local axum endpoint publishes a
 full run snapshot over Server-Sent Events for whichever local UI is attached,
-but nothing reaches the Tuist server, and per-test-case completion is not a
+but nothing reaches a remote event service, and per-test-case completion is not a
 discrete fire-point. Test results land as a normalized JSON blob written
-after a whole test target finishes, with a JUnit report attached as an
+after a whole test target finishes, with a normalized result report attached as an
 artifact.
 
 This shape is close to what Bazel's Build Event Protocol produces, and it
@@ -22,7 +25,7 @@ Execution phases are opaque: BEP reports queued and completed but not what
 happened in between, so slow steps show up as slow targets with no
 breakdown.
 
-Tuist should render runs live and it should be materially better than BEP
+The dashboard should render runs live and be materially better than BEP
 at what a build dashboard is actually for: showing what happened, why it
 happened, and where time went. That requires first-class per-case,
 per-target, per-phase, and per-cache-decision events on the wire while the
@@ -102,13 +105,10 @@ fields never override it.
 ## Naming and package layout
 
 Emitter-scoped: `once.events.v1`. Once owns the vocabulary and evolves
-it on Once's release cadence. The Tuist server hosts a projector that
-maps this vocabulary into the shared run-state model, alongside a
-separate projector for Bazel BEP.
-
-Cross-tool query and admin services owned by Tuist itself live under
-`tuist.<domain>.v1`. Those describe platform concerns and are not scoped
-to a single emitter.
+it on Once's release cadence. A compatible server projects this vocabulary
+into its run-state model alongside other ingest protocols. Platform query
+and administration services belong to the server and are outside this
+emitter-scoped package.
 
 Version lives in the package name. A breaking change becomes
 `once.events.v2` on the same server for a deprecation window. `v1` is
@@ -279,16 +279,12 @@ set of intervals. This set is data on the client, not events;
 because it lives outside the sequence space it does not need to
 reserve or collide with any assigned sequence number.
 
-On each `RunEventBatch` send the client atomically drains the
-current set into the batch's `gap_advances` list, coalescing any
-adjacent or overlapping intervals into a canonical sorted
-non-overlapping form. New loss that occurs after that drain but
-before acknowledgement is recorded as a fresh interval in the set
-and is included in the next batch. There is no ordering constraint
-between the in-flight batch and further loss: the in-flight batch
-either succeeds (server advances past its declared intervals) or is
-rejected (client re-adds its intervals to the set and reissues on
-resend).
+On each `RunEventBatch` send the client snapshots its unresolved loss
+intervals, coalescing adjacent intervals into a canonical sorted form. Sending
+does not remove them. Only a validated durable acknowledgement removes or
+trims an interval. This makes stream failures and lost acknowledgements safe
+without requiring reconstruction from an in-flight batch. New loss is merged
+into the same pending set and is included in the next applicable batch.
 
 Late arrivals from the server perspective (events inside a declared
 interval that the server has since advanced past) are stale by
@@ -385,8 +381,8 @@ The schema exposes only the sanitized shapes:
 argument list left-to-right and emits one `ArgvToken` per position:
 
 1. If the token matches the safe literal allowlist (a small,
-   explicitly enumerated set of tool and subcommand names such as
-   `cargo`, `build`, `test`, `swift`, `xcodebuild`), emit
+   explicitly enumerated set of Once command words such as `once`,
+   `build`, and `test`), emit
    `SafeLiteral{value}`. The allowlist is maintained by Once and can
    never contain a value that could carry secrets.
 2. If the token matches a boolean flag shape (`--flag`, `-x`), emit
@@ -400,11 +396,11 @@ argument list left-to-right and emits one `ArgvToken` per position:
    never infers that an opaque value token belongs to the preceding
    flag key; tool-specific parsing is out of scope for v1.
 
-The algorithm is deliberately conservative. Readable positional
-values (package names, target names) show up as `OpaqueValue` unless
-the specific literal appears on the allowlist. A future v1.x may
-introduce tool-specific parsers behind a per-project setting; the
-schema shape for `ArgvToken` does not need to change to add them.
+The algorithm is deliberately conservative. Tool names, package names,
+target names, and other readable positional values show up as
+`OpaqueValue` unless the specific literal appears in the explicit workspace
+safe context. Target kinds do not extend this list, and adding a target kind
+never requires a Rust or protocol change.
 
 **Worked examples against the v1 allowlist.** All four variants
 appear in normal Once and Cargo invocations:
@@ -412,15 +408,15 @@ appear in normal Once and Cargo invocations:
 1. `once build //foo:bar` →
    `[SafeLiteral("once"), SafeLiteral("build"), OpaqueValue(hash("//foo:bar"))]`.
    The target name is never on the allowlist; it hashes.
-2. `cargo test -p once-core --release` →
-   `[SafeLiteral("cargo"), SafeLiteral("test"), FlagKey("-p"), OpaqueValue(hash("once-core")), FlagKey("--release")]`.
+2. `toolchain-command test -p package --release` →
+   `[OpaqueValue(hash("toolchain-command")), SafeLiteral("test"), FlagKey("-p"), OpaqueValue(hash("package")), FlagKey("--release")]`.
    The client does not infer that `once-core` belongs to `-p`; it
    hashes as its own opaque positional. The projector renders this
-   run as `cargo test -p ⟨opaque⟩ --release` with the opaque token
+   run as `⟨opaque⟩ test -p ⟨opaque⟩ --release` with the opaque token
    as a stable identifier that clusters across runs with the same
    package value.
-3. `cargo build --target=aarch64-apple-darwin` →
-   `[SafeLiteral("cargo"), SafeLiteral("build"), NamedValue(key="--target", value_shape_hash=hash("aarch64-apple-darwin"))]`.
+3. `toolchain-command build --target=target-triple` →
+   `[OpaqueValue(hash("toolchain-command")), SafeLiteral("build"), NamedValue(key="--target", value_shape_hash=hash("target-triple"))]`.
    The `--key=value` combined form is the only case where the
    client asserts a value belongs to a key; all other positional
    values hash as `OpaqueValue`.
@@ -482,41 +478,28 @@ Version, ownership, and distribution:
 
 - The list is owned by the Once maintainers and lives in the Once
   source tree as a single authoritative file. It is baked into the
-  Once client binary at compile time and consumed by the Tuist
+  Once client binary at compile time and consumed by compatible
   server from the same file, published as a small versioned data
   package. Client and server always read the same source.
 - Each release of the list carries a monotonic version string
   `YYYY.MM.DD-vN`. The client and server reject or downgrade a
   mismatch through the projection quarantine path above; they do
   not attempt to synthesize allowlist content from either side.
-- The list contains only tokens that are safe to render verbatim
-  in dashboards and that cannot plausibly carry secrets: the names
-  of build tools and their common subcommands. It never contains
-  path fragments, package names, target names, or user identifiers.
+- The list contains only tokens that are safe to render verbatim in
+  dashboards and that cannot plausibly carry secrets. It contains Once's
+  own command vocabulary and never contains target-kind, toolchain,
+  framework, path, package, target, or user names.
 
-The frozen v1 initial version is `2026.09.03-v1` and contains
-exactly the following tokens:
+The current client emits these fixed literals:
 
-- Build/package tools: `cargo`, `rustc`, `clippy`, `rustfmt`,
-  `swift`, `swiftc`, `xcodebuild`, `go`, `gofmt`, `npm`, `pnpm`,
-  `yarn`, `node`, `tsc`, `python`, `python3`, `pip`, `uv`,
-  `ruby`, `bundle`, `mise`, `make`, `ninja`, `cmake`, `bazel`,
-  `buck2`, `pants`, `gradle`, `mvn`, `once`.
-- Compilers and linkers: `gcc`, `g++`, `clang`, `clang++`, `ld`,
-  `lld`, `mold`.
-- Common subcommands: `build`, `test`, `run`, `check`, `install`,
+- Once and its generic command words: `once`, `build`, `test`, `run`, `check`, `install`,
   `update`, `lint`, `format`, `fmt`, `bench`, `doc`, `clean`,
   `add`, `remove`, `publish`, `release`, `debug`.
-- Frameworks and analyzers with subcommand-like invocations:
-  `eslint`, `prettier`, `ruff`, `mypy`, `pyright`, `black`,
-  `pytest`, `jest`, `vitest`, `rspec`, `phpunit`.
 
-Additions to the list follow the normal Once release cycle and
-must not include anything that could carry variable content. A
-future safe-literal addition of, say, `xcresulttool` is a schema
-non-event: existing runs recorded under older versions continue to
-render correctly because the version stamp on each run pins the
-list that produced its `safe_literal` values.
+Earlier allowlist versions remain accepted for compatibility with clients
+that emitted tool names. New target-kind and toolchain names remain opaque.
+Existing runs continue to render according to the version stamp that produced
+their `safe_literal` values.
 
 Log content is inherently arbitrary text and is off by default. A
 project must explicitly opt in to log ingestion and the projection
@@ -766,7 +749,7 @@ write into the same tables (runs, run targets, run target instances,
 run target executions, run test cases, run test case executions, run
 logs, run cache decisions, run cache operations, run artifacts).
 LiveView subscribes to the projected state, never to the raw event
-stream. Bazel runs render at target granularity with a JUnit link;
+stream. Imported runs can render at target granularity with a result-report link;
 Once runs render with per-case tree updates, per-phase bars, and
 per-cache-decision detail in real time.
 
@@ -792,7 +775,7 @@ disabled it offers projection only.
    does not need reserved event capacity), resume via `GetRunAck` on
    reconnect, bounded final drain with `run.finalizing` intent.
    Behind an opt-in configuration key.
-4. Land the ingest service on the Tuist side, the projectors, and
+4. Land a compatible ingest service, projectors, and
    the LiveView dashboard.
 
 ## Open decisions
@@ -1152,7 +1135,7 @@ message TestSuiteCompleted {
   string target_execution_id = 1;
   string suite_id = 2;
   TestTotals totals = 3;
-  ContentRef junit_digest = 4;
+  ContentRef result_report_digest = 4;
 }
 
 message TestTotals {
@@ -1324,7 +1307,7 @@ message CacheUpload {
   string target_execution_id = 2;
   ContentRef content = 3;
   string tier = 4;
-  string kind = 5;                 // "evidence", "junit", "output", "user"
+  string kind = 5;                 // "evidence", "test_report", "output", "user"
   int64 duration_ms = 6;
   uint64 bytes_transferred = 7;
 }
