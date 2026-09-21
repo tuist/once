@@ -27,7 +27,6 @@
 //! quarantine unrecognised safe literals from an older client under a
 //! projection warning without breaking ingestion.
 
-#![cfg(feature = "events-ingest")]
 
 use blake3::Hasher;
 use once_events_client::proto::{argv_token::Token, ArgvToken, NamedValue};

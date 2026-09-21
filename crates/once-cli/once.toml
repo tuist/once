@@ -14,7 +14,6 @@ srcs = ["src/**/*.rs"]
 crate_name = "once"
 crate_root = "src/main.rs"
 edition = "2021"
-features = ["events-ingest"]
 
 [target.attrs.rustc_env]
 CARGO_MANIFEST_DIR = "crates/once-cli"

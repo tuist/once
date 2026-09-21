@@ -6,7 +6,6 @@
 //! network progress. Finishing the reporter drains queued action completions
 //! and the terminal run event before the process exits.
 
-#![cfg(feature = "events-ingest")]
 
 use std::path::Path;
 use std::time::Duration;
