@@ -1202,14 +1202,14 @@ mod tests {
 
     #[test]
     fn ensure_capability_returns_matching_capability() {
-        let target = graph_target("apple_application", &["build", "run"]);
+        let target = graph_target("custom_application", &["build", "run"]);
         let capability = ensure_capability(&target, "run").unwrap();
         assert_eq!(capability.name, "run");
     }
 
     #[test]
     fn graph_supports_finds_a_capability_in_a_preloaded_graph() {
-        let graph = vec![graph_target("apple_application", &["build", "run"])];
+        let graph = vec![graph_target("custom_application", &["build", "run"])];
 
         assert!(graph_supports(&graph, "apps/ios/App", "run"));
         assert!(!graph_supports(&graph, "apps/ios/App", "test"));
@@ -1218,7 +1218,7 @@ mod tests {
 
     #[test]
     fn unsupported_capability_lists_available_capabilities() {
-        let target = graph_target("apple_application", &["build", "run"]);
+        let target = graph_target("custom_application", &["build", "run"]);
         let err = ensure_capability(&target, "test").unwrap_err().to_string();
         assert!(err.contains("does not expose `test`"));
         assert!(err.contains("Available capabilities: build, run"));
@@ -1235,7 +1235,7 @@ mod tests {
     fn render_human_includes_requires_and_paths() {
         let record = CapabilityRunRecord {
             target: "apps/ios/App".to_string(),
-            kind: "apple_application".to_string(),
+            kind: "custom_application".to_string(),
             capability: "run".to_string(),
             status: "completed".to_string(),
             action_digest: "deadbeef".to_string(),
@@ -1252,7 +1252,7 @@ mod tests {
 
         let rendered = render_human(&record);
 
-        assert!(rendered.contains("once: run apps/ios/App (apple_application) cache miss, exit=0"));
+        assert!(rendered.contains("once: run apps/ios/App (custom_application) cache miss, exit=0"));
         assert!(rendered.contains("outputs: default"));
         assert!(rendered.contains("requires: bundle"));
         assert!(rendered.contains("  .once/out/apps/ios/App/run"));
@@ -1262,7 +1262,7 @@ mod tests {
     fn render_human_reports_no_output_groups() {
         let record = CapabilityRunRecord {
             target: "apps/ios/App".to_string(),
-            kind: "apple_application".to_string(),
+            kind: "custom_application".to_string(),
             capability: "build".to_string(),
             status: "completed".to_string(),
             action_digest: "deadbeef".to_string(),

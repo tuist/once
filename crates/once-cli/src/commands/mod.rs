@@ -22,7 +22,6 @@ pub mod runtime;
 pub mod sound_seed;
 pub mod surface;
 pub mod swift;
-pub mod test_events_cargo;
 pub mod test_schedule;
 pub mod toolchain;
 pub mod ui;

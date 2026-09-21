@@ -242,10 +242,14 @@ without bound.
 
 Built-in native workspace resolvers record first-party test target names in
 the non-configurable `_default_test_roots` attribute. Targetless `once test`
-uses that metadata to avoid running test suites that belong only to resolved
-dependencies. A custom resolver can use the same convention by declaring the
-attribute as `list<string>` on its seed target kind and returning the generated
-test names through `attrs`.
+and native command compatibility adapters use that metadata to avoid running
+test suites that belong only to resolved dependencies. A custom resolver can
+use the same convention by declaring the attribute as `list<string>` on its
+seed target kind and returning the generated test names through `attrs`.
+
+A resolver can also return a non-configurable `_display_name` string for the
+owner. Generic run reporting uses it as the user-facing label without knowing
+which target kind produced it. When absent, reporting uses the target label.
 
 Resolvers should preserve the ecosystem's authoritative lockfile and source
 selection. They may invoke the native package manager when a missing lockfile
