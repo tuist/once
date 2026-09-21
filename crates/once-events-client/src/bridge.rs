@@ -145,7 +145,7 @@ pub fn translate(event: CoreEvent, mono_ns: i64) -> Translated {
                 target_execution_id: target_id,
                 suite_id: String::new(),
                 totals: Some(wire_test_totals(totals)),
-                junit_digest: None,
+                result_report_digest: None,
             }),
             epoch_ms: at_epoch_ms,
             mono_ns,

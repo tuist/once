@@ -206,6 +206,10 @@ alone does not establish that advantage.
 
 Client and producer checks run during this review:
 
+- Generic Rust event and graph paths were audited for built-in target-kind
+  names. The unused toolchain-specific test parser was removed, and argument
+  privacy no longer embeds toolchain or test-framework names. Target kinds
+  communicate test cases only through the normalized test-results contract.
 - `mise exec -- cargo test -p once-events-client -p once-cli -p once-frontend`
   passed, including transport replay, attempt identity, privacy configuration,
   retained action keys, and target-kind examples.

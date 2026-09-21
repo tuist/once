@@ -457,7 +457,7 @@ Observed target-level work, excluded from declared-action counts. Phase names ar
 | `target_execution_id` | `string` | 1 |  |
 | `suite_id` | `string` | 2 |  |
 | `totals` | `TestTotals` | 3 |  |
-| `junit_digest` | `ContentRef` | 4 |  |
+| `result_report_digest` | `ContentRef` | 4 |  |
 
 ## message `TestTotals`
 

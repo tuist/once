@@ -403,7 +403,7 @@ message TestSuiteCompleted {
   string target_execution_id = 1;
   string suite_id = 2;
   TestTotals totals = 3;
-  ContentRef junit_digest = 4;
+  ContentRef result_report_digest = 4;
 }
 
 message TestTotals {

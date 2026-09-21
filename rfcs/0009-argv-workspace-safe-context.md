@@ -7,8 +7,8 @@ Draft.
 ## Motivation
 
 The v1 argv normalization algorithm defined in [RFC 0008][0008] is
-defensive-first. Everything outside a small frozen allowlist of tool
-and subcommand names hashes to `OpaqueValue`, so a normal invocation
+defensive-first. Everything outside a small frozen allowlist of Once
+command words hashes to `OpaqueValue`, so a normal invocation
 like `once build my-app --features telemetry` reaches a shared
 dashboard as `once build ⟨opaque⟩ --features ⟨opaque⟩`. The dashboard
 renders the opaque positions as `[redacted]` because it has no

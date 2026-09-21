@@ -41,78 +41,14 @@ use std::collections::HashSet;
 pub const SAFE_LITERAL_ALLOWLIST_VERSION: &str = "2026.09.15-v2";
 pub const BASE_SAFE_LITERAL_ALLOWLIST_VERSION: &str = "2026.09.03-v1";
 
-/// The v1 safe-literal allowlist. `Never contains a value that could
-/// carry secrets`; only tool names and generic subcommands.
+/// The safe literals owned by Once's generic command surface.
+///
+/// Toolchain and test-framework names deliberately stay opaque. A target kind
+/// can introduce a tool without requiring the Rust event client and the event
+/// service to learn that tool's name.
 pub const SAFE_LITERALS: &[&str] = &[
-    // Build/package tools.
-    "cargo",
-    "rustc",
-    "clippy",
-    "rustfmt",
-    "swift",
-    "swiftc",
-    "xcodebuild",
-    "go",
-    "gofmt",
-    "npm",
-    "pnpm",
-    "yarn",
-    "node",
-    "tsc",
-    "python",
-    "python3",
-    "pip",
-    "uv",
-    "ruby",
-    "bundle",
-    "mise",
-    "make",
-    "ninja",
-    "cmake",
-    "bazel",
-    "buck2",
-    "pants",
-    "gradle",
-    "mvn",
-    "once",
-    // Compilers and linkers.
-    "gcc",
-    "g++",
-    "clang",
-    "clang++",
-    "ld",
-    "lld",
-    "mold",
-    // Common subcommands.
-    "build",
-    "test",
-    "run",
-    "check",
-    "install",
-    "update",
-    "lint",
-    "format",
-    "fmt",
-    "bench",
-    "doc",
-    "clean",
-    "add",
-    "remove",
-    "publish",
-    "release",
-    "debug",
-    // Framework and analyzer invocations.
-    "eslint",
-    "prettier",
-    "ruff",
-    "mypy",
-    "pyright",
-    "black",
-    "pytest",
-    "jest",
-    "vitest",
-    "rspec",
-    "phpunit",
+    "once", "build", "test", "run", "check", "install", "update", "lint", "format", "fmt", "bench",
+    "doc", "clean", "add", "remove", "publish", "release", "debug",
 ];
 
 /// Set of explicitly opted-in workspace target labels the client can
@@ -329,15 +265,15 @@ mod tests {
     }
 
     #[test]
-    fn safe_literal_is_preserved() {
-        let tokens = normalize_argv(&["cargo", "build"], &key());
-        assert!(matches!(tokens[0].token, Some(Token::SafeLiteral(ref v)) if v == "cargo"));
+    fn once_vocabulary_is_preserved_without_knowing_the_toolchain() {
+        let tokens = normalize_argv(&["toolchain-command", "build"], &key());
+        assert!(matches!(tokens[0].token, Some(Token::OpaqueValueHash(_))));
         assert!(matches!(tokens[1].token, Some(Token::SafeLiteral(ref v)) if v == "build"));
     }
 
     #[test]
     fn positional_after_flag_hashes_as_opaque_without_context() {
-        let tokens = normalize_argv(&["cargo", "test", "-p", "once-core"], &key());
+        let tokens = normalize_argv(&["toolchain-command", "test", "-p", "once-core"], &key());
         assert!(matches!(tokens[2].token, Some(Token::FlagKey(ref k)) if k == "-p"));
         assert!(matches!(tokens[3].token, Some(Token::OpaqueValueHash(_))));
     }
@@ -345,8 +281,11 @@ mod tests {
     #[test]
     fn workspace_known_positional_emits_safe_literal() {
         let context = context_with(["once-core", "my-app"]);
-        let tokens =
-            normalize_argv_with_context(&["cargo", "test", "-p", "once-core"], &key(), &context);
+        let tokens = normalize_argv_with_context(
+            &["toolchain-command", "test", "-p", "once-core"],
+            &key(),
+            &context,
+        );
         assert!(matches!(tokens[2].token, Some(Token::FlagKey(ref k)) if k == "-p"));
         assert!(
             matches!(tokens[3].token, Some(Token::SafeLiteral(ref v)) if v == "once-core"),
@@ -370,7 +309,7 @@ mod tests {
     fn combined_named_value_with_workspace_known_value_emits_safe_literal() {
         let context = context_with(["telemetry"]);
         let tokens = normalize_argv_with_context(
-            &["cargo", "build", "--features=telemetry"],
+            &["toolchain-command", "build", "--features=telemetry"],
             &key(),
             &context,
         );
@@ -400,7 +339,10 @@ mod tests {
 
     #[test]
     fn combined_named_value_splits() {
-        let tokens = normalize_argv(&["cargo", "build", "--target=aarch64-apple-darwin"], &key());
+        let tokens = normalize_argv(
+            &["toolchain-command", "build", "--target=target-triple"],
+            &key(),
+        );
         match tokens[2].token.as_ref() {
             Some(Token::NamedValue(nv)) => {
                 assert_eq!(nv.key, "--target");
@@ -412,8 +354,8 @@ mod tests {
 
     #[test]
     fn same_value_same_hash_under_same_key() {
-        let a = normalize_argv(&["mise", "run", "prod"], &key());
-        let b = normalize_argv(&["mise", "run", "prod"], &key());
+        let a = normalize_argv(&["toolchain-command", "run", "prod"], &key());
+        let b = normalize_argv(&["toolchain-command", "run", "prod"], &key());
         match (a[2].token.as_ref(), b[2].token.as_ref()) {
             (Some(Token::OpaqueValueHash(h1)), Some(Token::OpaqueValueHash(h2))) => {
                 assert_eq!(h1, h2);
@@ -424,8 +366,8 @@ mod tests {
 
     #[test]
     fn same_value_different_hash_under_different_key() {
-        let a = normalize_argv(&["mise", "run", "prod"], &key());
-        let b = normalize_argv(&["mise", "run", "prod"], b"different-key");
+        let a = normalize_argv(&["toolchain-command", "run", "prod"], &key());
+        let b = normalize_argv(&["toolchain-command", "run", "prod"], b"different-key");
         match (a[2].token.as_ref(), b[2].token.as_ref()) {
             (Some(Token::OpaqueValueHash(h1)), Some(Token::OpaqueValueHash(h2))) => {
                 assert_ne!(h1, h2);
