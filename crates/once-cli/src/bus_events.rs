@@ -252,6 +252,14 @@ pub fn cache_content_transferred(
 
 pub fn run_started(bus: &RunEventBus, target_id: &str, at_epoch_ms: i64) {
     bus.publish(RunEvent::RunStarted { at_epoch_ms });
+    target_queued_at(bus, target_id, at_epoch_ms);
+}
+
+pub fn target_queued(bus: &RunEventBus, target_id: &str) {
+    target_queued_at(bus, target_id, now_epoch_ms());
+}
+
+fn target_queued_at(bus: &RunEventBus, target_id: &str, at_epoch_ms: i64) {
     bus.publish(RunEvent::TargetQueued {
         at_epoch_ms,
         target_id: target_id.to_string(),

@@ -757,7 +757,8 @@ pub async fn test_with_filters(
     )
     .await?
     .with_resource_limits(resource_limits)
-    .with_event_bus(bus.clone());
+    .with_event_bus(bus.clone())
+    .suppress_target_lifecycle(target_id);
     let session = match (&live_output, &bus_observer) {
         (Some(live_output), _) => session.with_output_observer(live_output.observer()),
         (None, Some(observer)) => session.with_output_observer(observer.clone()),
@@ -864,10 +865,13 @@ pub async fn test_with_filters(
             )
             .await;
     }
-    // The scheduler already fired `TargetCompleted` for the top-level
-    // target from `build_one`; publish only the outer `RunCompleted`
-    // here to avoid a duplicate completion line.
-    bus_events::run_completed(&bus, record.result.exit_code);
+    bus_events::target_finished(
+        &bus,
+        target_id,
+        duration_ms,
+        &record.cache,
+        record.result.exit_code,
+    );
     write_record(output, &record).await?;
     write_runs_report(workspace, ui_server.as_ref()).await;
     emit_capability_completion_sounds(&record);

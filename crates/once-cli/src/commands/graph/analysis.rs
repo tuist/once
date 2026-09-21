@@ -211,6 +211,7 @@ pub(super) struct BuildSession {
     /// `TargetStarted` / `TargetCompleted` per graph target while it
     /// walks the dependency closure.
     event_bus: Option<once_core::RunEventBus>,
+    suppressed_target_lifecycle: Arc<HashSet<String>>,
 }
 
 struct Resolution {
@@ -365,6 +366,7 @@ impl BuildSession {
             sandbox,
             output_observer: None,
             event_bus: None,
+            suppressed_target_lifecycle: Arc::new(HashSet::new()),
         }
     }
 
@@ -387,6 +389,11 @@ impl BuildSession {
     /// events fire.
     pub(super) fn with_event_bus(mut self, bus: once_core::RunEventBus) -> Self {
         self.event_bus = Some(bus);
+        self
+    }
+
+    pub(super) fn suppress_target_lifecycle(mut self, target_id: &str) -> Self {
+        Arc::make_mut(&mut self.suppressed_target_lifecycle).insert(target_id.to_string());
         self
     }
 
@@ -774,6 +781,7 @@ impl BuildSession {
             resources: Arc::clone(&self.resources),
             output_observer: self.output_observer.clone(),
             event_bus: self.event_bus.clone(),
+            suppressed_target_lifecycle: Arc::clone(&self.suppressed_target_lifecycle),
             workers,
         }
     }
@@ -1210,6 +1218,7 @@ struct BuildContext {
     /// render live per-dependency progress rather than only the
     /// top-level target's phase transitions.
     pub event_bus: Option<once_core::RunEventBus>,
+    pub suppressed_target_lifecycle: Arc<HashSet<String>>,
     /// Bounded pool of executor slots. Each action acquires a slot
     /// before running and inherits the slot's stable `worker_id` for
     /// its `ActionCompleted` event. Sized to
@@ -1307,6 +1316,7 @@ async fn build_one(
         resources,
         output_observer,
         event_bus,
+        suppressed_target_lifecycle,
         workers,
     } = context;
     let DependencyInputs {
@@ -1320,8 +1330,11 @@ async fn build_one(
     let target_id = target.label.id.clone();
     let build_started_at = std::time::Instant::now();
     let build_started_at_epoch_ms = crate::bus_events::now_ms();
-    if let Some(bus) = &event_bus {
-        crate::bus_events::target_executing(bus, &target_id);
+    let publish_lifecycle = !suppressed_target_lifecycle.contains(&target.label.id);
+    if publish_lifecycle {
+        if let Some(bus) = &event_bus {
+            crate::bus_events::target_executing(bus, &target_id);
+        }
     }
     // Names this build: the same target definition, reached through the same
     // dependency outcomes, analysed by the same code against the same
@@ -1363,13 +1376,15 @@ async fn build_one(
                         0,
                     );
                 }
-                crate::bus_events::target_completed(
-                    bus,
-                    &target_id,
-                    duration_ms,
-                    was_cached,
-                    outcome.result.exit_code,
-                );
+                if publish_lifecycle {
+                    crate::bus_events::target_completed(
+                        bus,
+                        &target_id,
+                        duration_ms,
+                        was_cached,
+                        outcome.result.exit_code,
+                    );
+                }
             }
             return Ok((target_id, outcome));
         }
@@ -1448,16 +1463,19 @@ async fn build_one(
             target_outcomes.record(&target, key, &observations, &declared_inputs, &outcome);
         }
     }
-    if let Some(bus) = &event_bus {
-        let duration_ms = u64::try_from(build_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let was_cached = matches!(outcome.cache_state, once_core::EvidenceCacheState::Hit);
-        crate::bus_events::target_completed(
-            bus,
-            &target_id,
-            duration_ms,
-            was_cached,
-            outcome.result.exit_code,
-        );
+    if publish_lifecycle {
+        if let Some(bus) = &event_bus {
+            let duration_ms =
+                u64::try_from(build_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+            let was_cached = matches!(outcome.cache_state, once_core::EvidenceCacheState::Hit);
+            crate::bus_events::target_completed(
+                bus,
+                &target_id,
+                duration_ms,
+                was_cached,
+                outcome.result.exit_code,
+            );
+        }
     }
     Ok((target_id, outcome))
 }

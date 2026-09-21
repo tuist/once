@@ -125,6 +125,16 @@ impl<'a> BuildScheduler<'a> {
                     .with_context(|| format!("target `{target_id}` vanished from graph"))?,
             );
             let inputs = state.dependency_inputs(&target, self.reachable)?;
+            if target_id != self.root_id
+                && !self
+                    .context
+                    .suppressed_target_lifecycle
+                    .contains(&target_id)
+            {
+                if let Some(bus) = &self.context.event_bus {
+                    crate::bus_events::target_queued(bus, &target_id);
+                }
+            }
             tracing::trace!(
                 target = %target_id,
                 deps = inputs.providers.len(),
