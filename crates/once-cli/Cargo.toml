@@ -12,9 +12,14 @@ path = "src/main.rs"
 
 [features]
 default = ["events-ingest"]
-# Wire the RFC 0008 live event ingest client. Off in the Once graph
-# release build so that self-hosted builds do not need the extra
-# crate; on by default for cargo builds.
+# Wire the RFC 0008 live event ingest client. Enabled by default in
+# both the Once graph release build (via
+# `crates/once-cli/once.toml`) and cargo builds so `once` reports the
+# run it just ran to whichever server it authenticated against.
+# Self-hosted builds that do not want the ingest client can turn the
+# feature off; the runtime already degrades to a no-op reporter when
+# no events endpoint is configured, so the runtime cost of leaving it
+# on is bounded to the client crate compiling.
 events-ingest = ["dep:once-events-client", "dep:tonic"]
 
 [dependencies]
