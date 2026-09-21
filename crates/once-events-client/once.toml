@@ -15,6 +15,7 @@ srcs = [
 crate_name = "once_events_client"
 crate_root = "src/lib.rs"
 edition = "2021"
+build_script = "build.rs"
 
 [target.attrs.rustc_env]
 CARGO_MANIFEST_DIR = "crates/once-events-client"
