@@ -5,6 +5,7 @@ deps = [
   "crates/once-cas/once_cas",
   "crates/once-host-tree/once_host_tree",
   "crates/once-core/once_core",
+  "crates/once-events-client/once_events_client",
   "crates/once-frontend/once_frontend",
   "cargo_dependencies",
 ]
