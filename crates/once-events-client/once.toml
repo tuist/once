@@ -1,0 +1,22 @@
+[[target]]
+name = "once_events_client"
+kind = "rust_library"
+deps = [
+  "crates/once-core/once_core",
+  "cargo_dependencies",
+]
+srcs = [
+  "src/**/*.rs",
+  "proto/**/*.proto",
+  "build.rs",
+]
+
+[target.attrs]
+crate_name = "once_events_client"
+crate_root = "src/lib.rs"
+edition = "2021"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/once-events-client"
+CARGO_PKG_NAME = "once-events-client"
+CARGO_PKG_VERSION = "0.0.0"
