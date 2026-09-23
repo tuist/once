@@ -169,6 +169,10 @@ message RunStarted {
   ContentRef root_graph_digest = 11;
   string project_id = 12;
   EffectiveLimits effective_limits = 13;
+  // Whether the run happened on CI rather than a developer machine. The
+  // dashboard splits runs on this the way it does for the other build
+  // systems, which all report the same distinction.
+  bool is_ci = 14;
 }
 
 message ArgvToken {

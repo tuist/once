@@ -197,6 +197,7 @@ The client publishes ordered batches and the service acknowledges the contiguous
 | `root_graph_digest` | `ContentRef` | 11 |  |
 | `project_id` | `string` | 12 |  |
 | `effective_limits` | `EffectiveLimits` | 13 |  |
+| `is_ci` | `bool` | 14 | Whether the run happened on CI rather than a developer machine. The dashboard splits runs on this the way it does for the other build systems, which all report the same distinction. |
 
 ## message `ArgvToken`
 
