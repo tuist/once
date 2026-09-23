@@ -24,6 +24,8 @@ pub mod proto {
     tonic::include_proto!("once.events.v1");
 }
 
+pub mod environment;
+
 mod dashboard;
 
 mod bridge;

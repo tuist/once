@@ -164,6 +164,7 @@ pub async fn spawn(
                 cwd_relative: crate::argv_normalize::cwd_relative(&workspace, &workspace),
                 safe_literal_allowlist_version: allowlist_version.to_string(),
                 project_id: format!("{account}/{project}"),
+                is_ci: once_events_client::environment::is_ci(),
                 ..Default::default()
             };
 
