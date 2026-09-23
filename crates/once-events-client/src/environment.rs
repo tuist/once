@@ -99,7 +99,7 @@ mod tests {
     fn with_clean_env<T>(vars: &[(&str, &str)], body: impl FnOnce() -> T) -> T {
         let guard = ENV_LOCK
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let tracked: Vec<&'static str> = CI_PROVIDER_VARIABLES
             .iter()
@@ -193,19 +193,34 @@ mod tests {
         }
     }
 
+    /// Restoration is what keeps these cases from leaking into each other,
+    /// including when a body panics, since unwinding still runs `Drop`.
+    ///
+    /// The guard is exercised directly rather than through
+    /// `catch_unwind(with_clean_env(..))`: that would have to touch the
+    /// environment outside the lock to plant a value to check, which races
+    /// another case's restore, and it would assume `GITHUB_RUN_ID` is unset
+    /// in the test process, which is false on GitHub Actions.
     #[test]
-    fn the_environment_is_restored_even_when_the_body_panics() {
-        std::env::set_var("CI", "sentinel");
+    fn the_restore_guard_puts_the_environment_back() {
+        let guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = std::env::var_os("GITHUB_RUN_ID");
 
-        let panicked = std::panic::catch_unwind(|| {
-            with_clean_env(&[("GITHUB_RUN_ID", "1")], || panic!("boom"));
-        })
-        .is_err();
+        {
+            let _restore = RestoreEnv {
+                previous: vec![("GITHUB_RUN_ID", before.clone())],
+                _guard: guard,
+            };
 
-        assert!(panicked);
-        assert_eq!(std::env::var("CI").ok().as_deref(), Some("sentinel"));
-        assert!(std::env::var_os("GITHUB_RUN_ID").is_none());
+            std::env::set_var("GITHUB_RUN_ID", "temporary");
+            assert_eq!(
+                std::env::var("GITHUB_RUN_ID").ok().as_deref(),
+                Some("temporary")
+            );
+        }
 
-        std::env::remove_var("CI");
+        assert_eq!(std::env::var_os("GITHUB_RUN_ID"), before);
     }
 }
