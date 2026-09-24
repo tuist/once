@@ -198,6 +198,7 @@ The client publishes ordered batches and the service acknowledges the contiguous
 | `project_id` | `string` | 12 |  |
 | `effective_limits` | `EffectiveLimits` | 13 |  |
 | `is_ci` | `bool` | 14 | Whether the run happened on CI rather than a developer machine. The dashboard splits runs on this the way it does for the other build systems, which all report the same distinction. |
+| `git_branch` | `string` | 15 | The branch the run was built from, empty when it cannot be determined. CI checkouts are usually on a detached HEAD, where git alone reports "HEAD" rather than a name, so the provider's own branch variable is preferred over asking git. |
 
 ## message `ArgvToken`
 

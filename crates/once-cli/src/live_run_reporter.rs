@@ -139,6 +139,7 @@ pub async fn spawn(
                 *command = "once".to_string();
             }
             let git_rev = git_revision(&workspace);
+            let git_branch = git_branch(&workspace);
             let safe_context =
                 if allowlist_version == crate::argv_normalize::SAFE_LITERAL_ALLOWLIST_VERSION {
                     build_safe_context(&workspace)
@@ -155,6 +156,7 @@ pub async fn spawn(
                 protocol_version: "1.0".to_string(),
                 host_class: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
                 git_rev,
+                git_branch,
                 argv_normalized: crate::argv_normalize::normalize_argv_with_context(
                     &argv,
                     &key.key_bytes,
@@ -278,6 +280,28 @@ fn new_run_id() -> String {
         u32::try_from((non_negative % 1000) * 1_000_000).unwrap_or(0),
     ));
     format!("run-{uuid}")
+}
+
+/// The branch the run was built from, empty when nothing can determine it.
+///
+/// The provider's own variable wins because a CI checkout is normally on a
+/// detached HEAD, where git reports the literal "HEAD" instead of a name.
+fn git_branch(workspace: &Path) -> String {
+    if let Some(branch) = once_events_client::environment::ci_branch() {
+        return branch;
+    }
+
+    std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(workspace)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        // Detached HEAD outside CI: a name is genuinely unavailable, and
+        // "HEAD" would be reported as though it were a branch.
+        .filter(|branch| !branch.is_empty() && branch != "HEAD")
+        .unwrap_or_default()
 }
 
 fn git_revision(workspace: &Path) -> String {

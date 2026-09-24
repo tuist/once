@@ -39,6 +39,57 @@ const JENKINS_JOB_VARIABLES: &[&str] = &["JENKINS_URL", "BUILD_NUMBER"];
 /// Values of `CI` that mean yes, compared without regard to case.
 const CI_TRUTHY_VALUES: &[&str] = &["1", "true", "yes", "on"];
 
+/// Where each provider puts the branch being built.
+///
+/// A CI checkout is normally on a detached HEAD, so `git rev-parse
+/// --abbrev-ref HEAD` answers "HEAD" rather than a name. These are the
+/// authoritative answer when they are present.
+///
+/// `GITHUB_HEAD_REF` comes first because on a pull request build
+/// `GITHUB_REF_NAME` is the synthetic merge ref (`123/merge`) while
+/// `GITHUB_HEAD_REF` is the branch the pull request came from. It is empty
+/// for ordinary pushes, which is why order alone is not enough and empty
+/// values have to be skipped.
+const CI_BRANCH_VARIABLES: &[&str] = &[
+    // GitHub Actions
+    "GITHUB_HEAD_REF",
+    "GITHUB_REF_NAME",
+    // GitLab, CircleCI, Buildkite, Bitrise
+    "CI_COMMIT_REF_NAME",
+    "CIRCLE_BRANCH",
+    "BUILDKITE_BRANCH",
+    "BITRISE_GIT_BRANCH",
+    // Azure Pipelines, TeamCity, AWS CodeBuild
+    "BUILD_SOURCEBRANCHNAME",
+    "TEAMCITY_BUILD_BRANCH",
+    "CODEBUILD_SOURCE_VERSION",
+    // Travis (pull requests report the target in TRAVIS_BRANCH), AppVeyor,
+    // Drone, Bitbucket Pipelines, Jenkins
+    "TRAVIS_PULL_REQUEST_BRANCH",
+    "TRAVIS_BRANCH",
+    "APPVEYOR_REPO_BRANCH",
+    "DRONE_BRANCH",
+    "BITBUCKET_BRANCH",
+    "GIT_BRANCH",
+];
+
+/// The branch the provider says it is building, if any.
+///
+/// Returns `None` rather than an empty string so a caller can fall back to
+/// asking git, and trims the value because some providers pad it.
+pub fn ci_branch() -> Option<String> {
+    CI_BRANCH_VARIABLES.iter().find_map(|name| {
+        let value = std::env::var(name).ok()?;
+        let value = value.trim();
+
+        if value.is_empty() || value == "HEAD" {
+            None
+        } else {
+            Some(value.to_string())
+        }
+    })
+}
+
 /// Whether this run is happening on continuous integration.
 ///
 /// Note that `once-cas` keeps its own, deliberately looser, check for
@@ -104,6 +155,7 @@ mod tests {
         let tracked: Vec<&'static str> = CI_PROVIDER_VARIABLES
             .iter()
             .chain(JENKINS_JOB_VARIABLES.iter())
+            .chain(CI_BRANCH_VARIABLES.iter())
             .copied()
             .chain(std::iter::once("CI"))
             .collect();
@@ -191,6 +243,70 @@ mod tests {
         for value in ["false", "FALSE", "0", "no", "off", ""] {
             assert!(!with_clean_env(&[("CI", value)], is_ci), "CI={value:?}");
         }
+    }
+
+    #[test]
+    fn a_developer_machine_reports_no_ci_branch() {
+        assert_eq!(with_clean_env(&[], ci_branch), None);
+    }
+
+    #[test]
+    fn each_provider_branch_variable_is_read() {
+        for name in CI_BRANCH_VARIABLES {
+            assert_eq!(
+                with_clean_env(&[(name, "feature/x")], ci_branch).as_deref(),
+                Some("feature/x"),
+                "{name} should be read"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pull_request_reports_the_source_branch_not_the_merge_ref() {
+        // On a GitHub pull request `GITHUB_REF_NAME` is the synthetic
+        // `123/merge` ref while `GITHUB_HEAD_REF` is the branch it came from.
+        assert_eq!(
+            with_clean_env(
+                &[
+                    ("GITHUB_HEAD_REF", "feature/x"),
+                    ("GITHUB_REF_NAME", "123/merge")
+                ],
+                ci_branch
+            )
+            .as_deref(),
+            Some("feature/x")
+        );
+
+        // On an ordinary push `GITHUB_HEAD_REF` is exported but empty, so
+        // being first in the list must not shadow the real value.
+        assert_eq!(
+            with_clean_env(
+                &[("GITHUB_HEAD_REF", ""), ("GITHUB_REF_NAME", "main")],
+                ci_branch
+            )
+            .as_deref(),
+            Some("main")
+        );
+    }
+
+    #[test]
+    fn a_detached_head_marker_is_not_a_branch_name() {
+        assert_eq!(
+            with_clean_env(&[("CI_COMMIT_REF_NAME", "HEAD")], ci_branch),
+            None
+        );
+        assert_eq!(
+            with_clean_env(&[("CI_COMMIT_REF_NAME", "  ")], ci_branch),
+            None
+        );
+    }
+
+    #[test]
+    fn a_padded_branch_is_trimmed() {
+        assert_eq!(
+            with_clean_env(&[("DRONE_BRANCH", "  main\n")], ci_branch).as_deref(),
+            Some("main")
+        );
     }
 
     /// Restoration is what keeps these cases from leaking into each other,
