@@ -13,7 +13,7 @@ use std::time::Duration;
 use once_events_client::{EventClient, TransportConfig, TransportError};
 use tokio::sync::{broadcast, oneshot};
 use tokio::task::JoinHandle;
-use tonic::transport::{Channel, Uri};
+use tonic::transport::Uri;
 use tracing::{debug, warn};
 
 use crate::commands::ui::UiServer;
@@ -56,9 +56,8 @@ pub async fn try_start(
     let Ok(endpoint) = env::var(ENDPOINT_ENV) else {
         return Ok(None);
     };
-    let uri: Uri = endpoint.parse().map_err(|_| StartError::InvalidEndpoint)?;
-    let channel = Channel::builder(uri)
-        .connect()
+    let _: Uri = endpoint.parse().map_err(|_| StartError::InvalidEndpoint)?;
+    let channel = crate::live_run_reporter::build_channel(&endpoint)
         .await
         .map_err(StartError::Connect)?;
 

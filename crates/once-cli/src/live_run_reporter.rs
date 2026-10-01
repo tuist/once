@@ -97,7 +97,10 @@ pub async fn spawn(
             let channel = match build_channel(&endpoint_url).await {
                 Ok(channel) => channel,
                 Err(error) => {
-                    tracing::debug!(%error, "Once live reporter: gRPC connect failed");
+                    tracing::debug!(
+                        error = %error_chain(&error),
+                        "Once live reporter: gRPC connect failed"
+                    );
                     return Ok(0);
                 }
             };
@@ -200,13 +203,27 @@ async fn resolve_events(workspace: &Path, xdg: &Xdg) -> Option<String> {
     }
 }
 
-async fn build_channel(url: &str) -> Result<Channel, tonic::transport::Error> {
-    let url = normalize_grpc_url(url);
-    let mut endpoint = Endpoint::from_shared(url.clone())?.connect_timeout(Duration::from_secs(5));
-    if url.starts_with("https://") {
+pub(crate) async fn build_channel(url: &str) -> Result<Channel, tonic::transport::Error> {
+    let mut endpoint =
+        Endpoint::from_shared(normalize_grpc_url(url))?.connect_timeout(Duration::from_secs(5));
+    // The parsed URI lowercases the scheme, so `HTTPS://` is matched too.
+    if endpoint.uri().scheme_str() == Some("https") {
         endpoint = endpoint.tls_config(ClientTlsConfig::new().with_enabled_roots())?;
     }
     endpoint.connect().await
+}
+
+// tonic reports a failed connect as a bare "transport error" and keeps the
+// reason in the source chain, so log every cause instead of only the outermost.
+fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        message.push_str(": ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    message
 }
 
 // gRPC targets in `/.well-known/once` are advertised as
@@ -300,28 +317,90 @@ mod tests {
 
     use tokio::io::AsyncReadExt;
 
-    use super::{build_channel, workspace_disclosure_enabled};
+    use super::{build_channel, error_chain, workspace_disclosure_enabled};
+
+    // Dials a plain TCP listener through `build_channel` and returns the first
+    // byte the client sent. Both waits are bounded so a client that never dials
+    // fails the test instead of hanging it.
+    async fn first_byte_sent_by(url: impl FnOnce(u16) -> String) -> Option<u8> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let first_byte = tokio::spawn(async move {
+            let (mut socket, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+                .await
+                .ok()?
+                .ok()?;
+            let mut byte = [0_u8; 1];
+            tokio::time::timeout(Duration::from_secs(5), socket.read_exact(&mut byte))
+                .await
+                .ok()?
+                .ok()?;
+            Some(byte[0])
+        });
+
+        let _ = build_channel(&url(port)).await;
+
+        first_byte.await.unwrap()
+    }
+
+    // 0x16 is the TLS handshake record type, the first byte of a ClientHello.
+    const TLS_HANDSHAKE: u8 = 0x16;
 
     // Without a TLS config the channel gave up right after the TCP connect and
     // never sent a byte, so `once` could not stream to any `grpcs://` server.
     #[tokio::test]
     async fn grpcs_endpoints_open_with_a_tls_handshake() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let first_byte = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut byte = [0_u8; 1];
-            tokio::time::timeout(Duration::from_secs(5), socket.read_exact(&mut byte))
-                .await
-                .ok()
-                .and_then(Result::ok)
-                .map(|_| byte[0])
-        });
+        let first = first_byte_sent_by(|port| format!("grpcs://127.0.0.1:{port}")).await;
+        assert_eq!(first, Some(TLS_HANDSHAKE));
+    }
 
-        let _ = build_channel(&format!("grpcs://127.0.0.1:{port}")).await;
+    #[tokio::test]
+    async fn the_https_scheme_is_matched_case_insensitively() {
+        let first = first_byte_sent_by(|port| format!("HTTPS://127.0.0.1:{port}")).await;
+        assert_eq!(first, Some(TLS_HANDSHAKE));
+    }
 
-        // 0x16 is the TLS handshake record type, the first byte of a ClientHello.
-        assert_eq!(first_byte.await.unwrap(), Some(0x16));
+    // A plaintext HTTP/2 client opens with the connection preface, which starts
+    // with `P`, so local `grpc://` servers keep working without TLS.
+    #[tokio::test]
+    async fn grpc_endpoints_stay_plaintext() {
+        let first = first_byte_sent_by(|port| format!("grpc://127.0.0.1:{port}")).await;
+        assert_eq!(first, Some(b'P'));
+    }
+
+    #[derive(Debug)]
+    struct Layered(&'static str, Option<Box<Layered>>);
+
+    impl std::fmt::Display for Layered {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str(self.0)
+        }
+    }
+
+    impl std::error::Error for Layered {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.1
+                .as_deref()
+                .map(|cause| cause as &(dyn std::error::Error + 'static))
+        }
+    }
+
+    // tonic reports connect failures as a bare "transport error" and keeps the
+    // reason in the source chain, which is what hid the missing TLS config.
+    #[test]
+    fn error_chain_includes_every_cause() {
+        let error = Layered(
+            "transport error",
+            Some(Box::new(Layered(
+                "tls handshake",
+                Some(Box::new(Layered("unknown issuer", None))),
+            ))),
+        );
+
+        assert_eq!(
+            error_chain(&error),
+            "transport error: tls handshake: unknown issuer"
+        );
     }
 
     #[test]
