@@ -16,7 +16,7 @@ use once_events_client::{
 };
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
-use tonic::transport::{Channel, Endpoint};
+use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 
 use crate::argv_normalize::SafeContext;
 use crate::cache_provider::{credentials_root, resolve_config, ResolvedCacheProviderConfig};
@@ -201,8 +201,11 @@ async fn resolve_events(workspace: &Path, xdg: &Xdg) -> Option<String> {
 }
 
 async fn build_channel(url: &str) -> Result<Channel, tonic::transport::Error> {
-    let endpoint =
-        Endpoint::from_shared(normalize_grpc_url(url))?.connect_timeout(Duration::from_secs(5));
+    let url = normalize_grpc_url(url);
+    let mut endpoint = Endpoint::from_shared(url.clone())?.connect_timeout(Duration::from_secs(5));
+    if url.starts_with("https://") {
+        endpoint = endpoint.tls_config(ClientTlsConfig::new().with_enabled_roots())?;
+    }
     endpoint.connect().await
 }
 
@@ -293,7 +296,33 @@ fn git_revision(workspace: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::workspace_disclosure_enabled;
+    use std::time::Duration;
+
+    use tokio::io::AsyncReadExt;
+
+    use super::{build_channel, workspace_disclosure_enabled};
+
+    // Without a TLS config the channel gave up right after the TCP connect and
+    // never sent a byte, so `once` could not stream to any `grpcs://` server.
+    #[tokio::test]
+    async fn grpcs_endpoints_open_with_a_tls_handshake() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let first_byte = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut byte = [0_u8; 1];
+            tokio::time::timeout(Duration::from_secs(5), socket.read_exact(&mut byte))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .map(|_| byte[0])
+        });
+
+        let _ = build_channel(&format!("grpcs://127.0.0.1:{port}")).await;
+
+        // 0x16 is the TLS handshake record type, the first byte of a ClientHello.
+        assert_eq!(first_byte.await.unwrap(), Some(0x16));
+    }
 
     #[test]
     fn argument_disclosure_requires_explicit_workspace_setting() {
