@@ -26,6 +26,7 @@ struct RecordedRun {
     batches: Vec<RunEventBatch>,
     expected_next_seq: u64,
     authorizations: Vec<String>,
+    projects: Vec<String>,
     stall: bool,
     break_first_stream: bool,
     invalid_hash_key: bool,
@@ -42,13 +43,22 @@ impl RunEventService for TestServer {
         &self,
         req: Request<GetServerCapabilitiesRequest>,
     ) -> Result<Response<ServerCapabilities>, Status> {
-        self.recorded.lock().await.authorizations.push(
+        let project = req
+            .metadata()
+            .get("x-once-project")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        let mut recorded = self.recorded.lock().await;
+        recorded.projects.push(project);
+        recorded.authorizations.push(
             req.metadata()
                 .get("authorization")
                 .and_then(|value| value.to_str().ok())
                 .unwrap_or_default()
                 .to_string(),
         );
+        drop(recorded);
         Ok(Response::new(ServerCapabilities {
             supported_protocol_versions: vec!["1.0".into()],
             max_batch_bytes: 65_536,
@@ -229,6 +239,36 @@ async fn start_server() -> (Channel, Arc<Mutex<RecordedRun>>) {
         .await
         .unwrap();
     (channel, recorded)
+}
+
+#[tokio::test]
+async fn names_the_project_on_every_call_when_built_for_one() {
+    let (channel, recorded) = start_server().await;
+    let mut client = EventClient::authenticated_for_project(
+        channel,
+        TransportConfig::default(),
+        "session-token",
+        "tuist/once",
+    )
+    .unwrap();
+    client.capabilities().await.unwrap();
+
+    let recorded = recorded.lock().await;
+    assert_eq!(recorded.projects, vec!["tuist/once".to_string()]);
+    assert_eq!(
+        recorded.authorizations,
+        vec!["Bearer session-token".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn sends_no_project_header_when_none_is_given() {
+    let (channel, recorded) = start_server().await;
+    let mut client =
+        EventClient::authenticated(channel, TransportConfig::default(), "session-token").unwrap();
+    client.capabilities().await.unwrap();
+
+    assert_eq!(recorded.lock().await.projects, vec![String::new()]);
 }
 
 #[tokio::test]

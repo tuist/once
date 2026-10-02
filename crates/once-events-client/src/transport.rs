@@ -84,14 +84,22 @@ pub struct EventClient {
 }
 
 #[derive(Clone, Default)]
-struct Authorization(Option<MetadataValue<Ascii>>);
+struct Authorization {
+    token: Option<MetadataValue<Ascii>>,
+    project: Option<MetadataValue<Ascii>>,
+}
 
 impl Interceptor for Authorization {
     fn call(&mut self, mut request: Request<()>) -> Result<Request<()>, tonic::Status> {
-        if let Some(value) = &self.0 {
+        if let Some(value) = &self.token {
             request
                 .metadata_mut()
                 .insert("authorization", value.clone());
+        }
+        if let Some(value) = &self.project {
+            request
+                .metadata_mut()
+                .insert("x-once-project", value.clone());
         }
         Ok(request)
     }
@@ -137,12 +145,38 @@ impl EventClient {
         config: TransportConfig,
         token: &str,
     ) -> Result<Self, tonic::metadata::errors::InvalidMetadataValue> {
+        Self::with_credentials(channel, config, token, None)
+    }
+
+    /// Like [`EventClient::authenticated`], and names the project (`account/project`)
+    /// the run reports to on every call. A signed-in user or an account token does
+    /// not identify a project by itself, so the server needs it; a project token
+    /// already does and ignores a matching name.
+    pub fn authenticated_for_project(
+        channel: Channel,
+        config: TransportConfig,
+        token: &str,
+        project: &str,
+    ) -> Result<Self, tonic::metadata::errors::InvalidMetadataValue> {
+        Self::with_credentials(channel, config, token, Some(project))
+    }
+
+    fn with_credentials(
+        channel: Channel,
+        config: TransportConfig,
+        token: &str,
+        project: Option<&str>,
+    ) -> Result<Self, tonic::metadata::errors::InvalidMetadataValue> {
         let mut authorization: MetadataValue<Ascii> = format!("Bearer {token}").parse()?;
         authorization.set_sensitive(true);
+        let project = project.map(str::parse).transpose()?;
         Ok(Self {
             client: RunEventServiceClient::with_interceptor(
                 channel,
-                Authorization(Some(authorization)),
+                Authorization {
+                    token: Some(authorization),
+                    project,
+                },
             ),
             config,
             metadata: None,

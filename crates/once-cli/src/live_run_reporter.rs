@@ -105,16 +105,22 @@ pub async fn spawn(
                 }
             };
 
-            let client = EventClient::authenticated(
-                channel,
-                TransportConfig {
-                    run_id: run_id.clone(),
-                    batch_flush: Duration::from_millis(150),
-                    final_drain: Duration::from_secs(2),
-                    limits: SessionLimits::default(),
-                },
-                &token,
-            );
+            let config = TransportConfig {
+                run_id: run_id.clone(),
+                batch_flush: Duration::from_millis(150),
+                final_drain: Duration::from_secs(2),
+                limits: SessionLimits::default(),
+            };
+            let client = if account.is_empty() || project.is_empty() {
+                EventClient::authenticated(channel, config, &token)
+            } else {
+                EventClient::authenticated_for_project(
+                    channel,
+                    config,
+                    &token,
+                    &format!("{account}/{project}"),
+                )
+            };
             let Ok(mut client) = client else {
                 tracing::debug!("Once live reporter: invalid authorization metadata");
                 return Ok(0);
