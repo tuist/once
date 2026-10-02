@@ -357,6 +357,14 @@ Project or repository identity is supplied in `run.started` as an
 opaque project id and is validated against the token's authorized set.
 The server rejects a run whose project is not authorized.
 
+A reconnect resumes with only the unacknowledged events, so `run.started`
+is not always in the first batch of a stream. Clients therefore also send
+the same project id in the `once-project-id` call metadata on every
+RPC, next to the bearer token. The id is opaque to the client and the
+transport; its format belongs to the server. Servers whose tokens already
+identify a project may ignore it. It is optional on the wire, so older
+servers that do not know the key are unaffected.
+
 `user_id` is derived server-side from the token; the field is not
 carried on the wire.
 

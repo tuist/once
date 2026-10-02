@@ -31,6 +31,21 @@ use crate::proto::run_event_service_client::RunEventServiceClient;
 use crate::proto::{GetServerCapabilitiesRequest, RunEventBatch, ServerCapabilities};
 use crate::session::{AckAction, EventSession, SessionLimits};
 
+/// Per-call metadata key carrying the opaque project id, the same value the
+/// client reports in `RunStarted.project_id`. RFC 0008 defines it.
+pub const PROJECT_ID_METADATA: &str = "once-project-id";
+
+const MAX_PROJECT_ID_LEN: usize = 256;
+
+/// Credentials that cannot be sent as gRPC metadata.
+#[derive(Debug, thiserror::Error)]
+pub enum CredentialsError {
+    #[error("authorization token is not valid metadata")]
+    Token(#[from] tonic::metadata::errors::InvalidMetadataValue),
+    #[error("project id must be 1 to {MAX_PROJECT_ID_LEN} visible ASCII characters")]
+    ProjectId,
+}
+
 /// Configuration for a live transport.
 #[derive(Clone, Debug)]
 pub struct TransportConfig {
@@ -99,7 +114,7 @@ impl Interceptor for Authorization {
         if let Some(value) = &self.project {
             request
                 .metadata_mut()
-                .insert("x-once-project", value.clone());
+                .insert(PROJECT_ID_METADATA, value.clone());
         }
         Ok(request)
     }
@@ -145,31 +160,41 @@ impl EventClient {
         config: TransportConfig,
         token: &str,
     ) -> Result<Self, tonic::metadata::errors::InvalidMetadataValue> {
-        Self::with_credentials(channel, config, token, None)
+        Self::with_credentials(channel, config, token, None).map_err(|error| match error {
+            CredentialsError::Token(error) => error,
+            CredentialsError::ProjectId => unreachable!("no project id was given"),
+        })
     }
 
-    /// Like [`EventClient::authenticated`], and names the project (`account/project`)
-    /// the run reports to on every call. A signed-in user or an account token does
-    /// not identify a project by itself, so the server needs it; a project token
-    /// already does and ignores a matching name.
-    pub fn authenticated_for_project(
+    /// Like [`EventClient::authenticated`], and sends the opaque `project_id` in
+    /// [`PROJECT_ID_METADATA`] on every call. The server validates it against
+    /// what the token may report to; the format is the server's own.
+    pub fn authenticated_with_project_id(
         channel: Channel,
         config: TransportConfig,
         token: &str,
-        project: &str,
-    ) -> Result<Self, tonic::metadata::errors::InvalidMetadataValue> {
-        Self::with_credentials(channel, config, token, Some(project))
+        project_id: &str,
+    ) -> Result<Self, CredentialsError> {
+        Self::with_credentials(channel, config, token, Some(project_id))
     }
 
     fn with_credentials(
         channel: Channel,
         config: TransportConfig,
         token: &str,
-        project: Option<&str>,
-    ) -> Result<Self, tonic::metadata::errors::InvalidMetadataValue> {
+        project_id: Option<&str>,
+    ) -> Result<Self, CredentialsError> {
         let mut authorization: MetadataValue<Ascii> = format!("Bearer {token}").parse()?;
         authorization.set_sensitive(true);
-        let project = project.map(str::parse).transpose()?;
+        let project = project_id
+            .map(|id| {
+                let visible = id.bytes().all(|byte| byte.is_ascii_graphic());
+                if id.is_empty() || id.len() > MAX_PROJECT_ID_LEN || !visible {
+                    return Err(CredentialsError::ProjectId);
+                }
+                id.parse().map_err(|_| CredentialsError::ProjectId)
+            })
+            .transpose()?;
         Ok(Self {
             client: RunEventServiceClient::with_interceptor(
                 channel,

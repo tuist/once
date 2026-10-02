@@ -32,6 +32,14 @@ struct RecordedRun {
     invalid_hash_key: bool,
 }
 
+fn project_id_header(metadata: &tonic::metadata::MetadataMap) -> String {
+    metadata
+        .get(once_events_client::PROJECT_ID_METADATA)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string()
+}
+
 #[derive(Default, Clone)]
 struct TestServer {
     recorded: Arc<Mutex<RecordedRun>>,
@@ -43,12 +51,7 @@ impl RunEventService for TestServer {
         &self,
         req: Request<GetServerCapabilitiesRequest>,
     ) -> Result<Response<ServerCapabilities>, Status> {
-        let project = req
-            .metadata()
-            .get("x-once-project")
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default()
-            .to_string();
+        let project = project_id_header(req.metadata());
         let mut recorded = self.recorded.lock().await;
         recorded.projects.push(project);
         recorded.authorizations.push(
@@ -104,13 +107,17 @@ impl RunEventService for TestServer {
         &self,
         req: Request<Streaming<RunEventBatch>>,
     ) -> Result<Response<Self::PublishRunEventsStream>, Status> {
-        self.recorded.lock().await.authorizations.push(
-            req.metadata()
-                .get("authorization")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or_default()
-                .to_string(),
-        );
+        {
+            let mut state = self.recorded.lock().await;
+            state.authorizations.push(
+                req.metadata()
+                    .get("authorization")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or_default()
+                    .to_string(),
+            );
+            state.projects.push(project_id_header(req.metadata()));
+        }
         let recorded = self.recorded.clone();
         let mut inbound = req.into_inner();
         let first = inbound
@@ -208,6 +215,7 @@ impl RunEventService for TestServer {
             .to_string();
         let mut state = self.recorded.lock().await;
         state.authorizations.push(authorization);
+        state.projects.push(project_id_header(req.metadata()));
         Ok(Response::new(RunEventAck {
             run_id: req.into_inner().run_id,
             acked_seq: state.expected_next_seq.saturating_sub(1),
@@ -242,19 +250,19 @@ async fn start_server() -> (Channel, Arc<Mutex<RecordedRun>>) {
 }
 
 #[tokio::test]
-async fn names_the_project_on_every_call_when_built_for_one() {
+async fn sends_the_project_id_with_the_credentials_on_a_call() {
     let (channel, recorded) = start_server().await;
-    let mut client = EventClient::authenticated_for_project(
+    let mut client = EventClient::authenticated_with_project_id(
         channel,
         TransportConfig::default(),
         "session-token",
-        "tuist/once",
+        "some-project-id",
     )
     .unwrap();
     client.capabilities().await.unwrap();
 
     let recorded = recorded.lock().await;
-    assert_eq!(recorded.projects, vec!["tuist/once".to_string()]);
+    assert_eq!(recorded.projects, vec!["some-project-id".to_string()]);
     assert_eq!(
         recorded.authorizations,
         vec!["Bearer session-token".to_string()]
@@ -262,13 +270,93 @@ async fn names_the_project_on_every_call_when_built_for_one() {
 }
 
 #[tokio::test]
-async fn sends_no_project_header_when_none_is_given() {
+async fn sends_no_project_id_when_none_is_given() {
     let (channel, recorded) = start_server().await;
     let mut client =
         EventClient::authenticated(channel, TransportConfig::default(), "session-token").unwrap();
     client.capabilities().await.unwrap();
 
     assert_eq!(recorded.lock().await.projects, vec![String::new()]);
+}
+
+#[tokio::test]
+async fn names_the_project_on_every_call_across_a_reconnect() {
+    let (channel, recorded) = start_server().await;
+    recorded.lock().await.break_first_stream = true;
+    let client = EventClient::authenticated_with_project_id(
+        channel,
+        TransportConfig {
+            run_id: "reconnect-project".into(),
+            ..Default::default()
+        },
+        "reconnect-token",
+        "some-project-id",
+    )
+    .unwrap();
+    let bus = RunEventBus::new(16);
+    let rx = bus.subscribe();
+    bus.publish(RunEvent::RunStarted { at_epoch_ms: 1 });
+    bus.publish(RunEvent::RunCompleted {
+        at_epoch_ms: 2,
+        exit_status: 0,
+    });
+    let (tx, shutdown) = tokio::sync::oneshot::channel();
+    tx.send(()).unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        client.run_with_reconnect(
+            rx,
+            shutdown,
+            once_events_client::ReconnectPolicy {
+                initial_backoff: std::time::Duration::from_millis(5),
+                ..Default::default()
+            },
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    let recorded = recorded.lock().await;
+    assert!(
+        recorded.authorizations.len() >= 3,
+        "capabilities, two streams and a run ack"
+    );
+    assert_eq!(recorded.projects.len(), recorded.authorizations.len());
+    assert!(recorded
+        .projects
+        .iter()
+        .all(|project| project == "some-project-id"));
+}
+
+#[tokio::test]
+async fn rejects_project_ids_that_are_not_valid_metadata() {
+    let (channel, _) = start_server().await;
+    for invalid in [
+        "",
+        "has space",
+        "line\nbreak",
+        "caf\u{e9}",
+        &"x".repeat(257),
+    ] {
+        let result = EventClient::authenticated_with_project_id(
+            channel.clone(),
+            TransportConfig::default(),
+            "token",
+            invalid,
+        );
+        assert!(
+            matches!(result, Err(once_events_client::CredentialsError::ProjectId)),
+            "{invalid:?} should be rejected"
+        );
+    }
+    assert!(EventClient::authenticated_with_project_id(
+        channel,
+        TransportConfig::default(),
+        "token",
+        &"x".repeat(256),
+    )
+    .is_ok());
 }
 
 #[tokio::test]

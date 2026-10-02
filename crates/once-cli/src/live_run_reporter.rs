@@ -12,7 +12,7 @@ use std::time::Duration;
 use once_cas::{TuistAuth, TuistCacheConfig, TUIST_OAUTH_CLIENT_ID_ENV};
 use once_core::{RunEventBus, Xdg};
 use once_events_client::{
-    EventClient, ReconnectPolicy, SessionLimits, TransportConfig, TransportError,
+    CredentialsError, EventClient, ReconnectPolicy, SessionLimits, TransportConfig, TransportError,
 };
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -111,19 +111,24 @@ pub async fn spawn(
                 final_drain: Duration::from_secs(2),
                 limits: SessionLimits::default(),
             };
-            let client = if account.is_empty() || project.is_empty() {
-                EventClient::authenticated(channel, config, &token)
-            } else {
-                EventClient::authenticated_for_project(
-                    channel,
-                    config,
-                    &token,
-                    &format!("{account}/{project}"),
-                )
+            let project_id = tuist_project_id(&account, &project);
+            let client = match project_id.as_deref() {
+                Some(project_id) => {
+                    EventClient::authenticated_with_project_id(channel, config, &token, project_id)
+                }
+                None => EventClient::authenticated(channel, config, &token)
+                    .map_err(CredentialsError::from),
             };
-            let Ok(mut client) = client else {
-                tracing::debug!("Once live reporter: invalid authorization metadata");
-                return Ok(0);
+            let mut client = match client {
+                Ok(client) => client,
+                Err(CredentialsError::Token(_)) => {
+                    tracing::debug!("Once live reporter: invalid authorization metadata");
+                    return Ok(0);
+                }
+                Err(CredentialsError::ProjectId) => {
+                    tracing::debug!("Once live reporter: project id is not valid metadata");
+                    return Ok(0);
+                }
             };
             let caps = tokio::time::timeout(Duration::from_secs(5), client.capabilities())
                 .await
@@ -139,7 +144,7 @@ pub async fn spawn(
             };
             let key = tokio::time::timeout(
                 Duration::from_secs(5),
-                client.argv_hash_key(format!("{account}/{project}")),
+                client.argv_hash_key(project_id.clone().unwrap_or_default()),
             )
             .await
             .map_err(|_| TransportError::PreflightTimeout)??;
@@ -172,7 +177,7 @@ pub async fn spawn(
                 argv_hash_key_id: key.key_id,
                 cwd_relative: crate::argv_normalize::cwd_relative(&workspace, &workspace),
                 safe_literal_allowlist_version: allowlist_version.to_string(),
-                project_id: format!("{account}/{project}"),
+                project_id: project_id.unwrap_or_default(),
                 is_ci: once_events_client::environment::is_ci(),
                 ..Default::default()
             };
@@ -192,6 +197,16 @@ pub async fn spawn(
         shutdown: Some(shutdown_tx),
         system_sampler: Some(system_sampler),
     }
+}
+
+/// The project id this provider's server expects. It is the only place the
+/// `account/project` shape lives; the transport and the protocol treat the id
+/// as opaque.
+fn tuist_project_id(account: &str, project: &str) -> Option<String> {
+    if account.is_empty() || project.is_empty() {
+        return None;
+    }
+    Some(format!("{account}/{project}"))
 }
 
 async fn resolve_events(workspace: &Path, xdg: &Xdg) -> Option<String> {
@@ -323,7 +338,18 @@ mod tests {
 
     use tokio::io::AsyncReadExt;
 
-    use super::{build_channel, error_chain, workspace_disclosure_enabled};
+    use super::{build_channel, error_chain, tuist_project_id, workspace_disclosure_enabled};
+
+    #[test]
+    fn the_project_id_needs_both_halves() {
+        assert_eq!(
+            tuist_project_id("tuist", "once").as_deref(),
+            Some("tuist/once")
+        );
+        assert_eq!(tuist_project_id("tuist", ""), None);
+        assert_eq!(tuist_project_id("", "once"), None);
+        assert_eq!(tuist_project_id("", ""), None);
+    }
 
     // Dials a plain TCP listener through `build_channel` and returns the first
     // byte the client sent. Both waits are bounded so a client that never dials
