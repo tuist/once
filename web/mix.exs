@@ -53,7 +53,7 @@ defmodule OnceSite.MixProject do
       {:bandit, "~> 1.5"},
       {:mdex, "~> 0.9"},
       {:nimble_publisher, "~> 2.0", runtime: false},
-      {:flop, "~> 0.26.4"},
+      {:flop, "~> 0.29.0"},
       {:lumis, "~> 0.6"},
       {:floki, ">= 0.30.0"},
       {:noora, "~> 0.84"},
