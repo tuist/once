@@ -25,7 +25,8 @@ use tonic::{Code, Request, Status};
 use uuid::Uuid;
 
 use super::{
-    join_url, remote_status_message, TuistAuth, TuistCacheConfig, ENDPOINTS_PATH, PROVIDER_NAME,
+    env_token, join_url, remote_status_message, TuistAuth, TuistCacheConfig, ENDPOINTS_PATH,
+    PROVIDER_NAME,
 };
 use crate::{ActionResult, Cas, Digest, Error, Result};
 
@@ -38,6 +39,11 @@ use crate::{ActionResult, Cas, Digest, Error, Result};
 const MAX_CONCURRENT_BLOB_TRANSFERS: usize = 16;
 
 const ENDPOINT_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Cache endpoint that replaces server-side endpoint discovery, matching the
+/// Tuist CLI and Gradle plugin. Tuist runners set it to the in-cluster Kura
+/// service, which their network policy allows, while the public Kura ingress
+/// that discovery returns can be unreachable from inside the runner network.
+const TUIST_CACHE_ENDPOINT_ENV: &str = "TUIST_CACHE_ENDPOINT";
 const GRPC_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const BATCH_BLOB_LIMIT: usize = 2 * 1024 * 1024;
 const BATCH_BLOB_LIMIT_I64: i64 = 2 * 1024 * 1024;
@@ -65,6 +71,7 @@ pub struct TuistCache {
     transfer_limit: Arc<Semaphore>,
     auth: TuistAuth,
     auth_token_cache: Arc<OnceCell<std::result::Result<String, CachedRemoteError>>>,
+    endpoint_override: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -132,6 +139,7 @@ impl TuistCache {
             transfer_limit: Arc::new(Semaphore::new(MAX_PARALLEL_TRANSFERS)),
             auth,
             auth_token_cache: Arc::new(OnceCell::new()),
+            endpoint_override: env_token(TUIST_CACHE_ENDPOINT_ENV),
         })
     }
 
@@ -1139,6 +1147,10 @@ impl TuistCache {
     }
 
     async fn data_plane_endpoint(&self) -> Result<String> {
+        if let Some(endpoint) = &self.endpoint_override {
+            tracing::debug!(endpoint = %endpoint, "using Tuist cache endpoint override");
+            return Ok(endpoint.clone());
+        }
         let endpoints = self.fetch_endpoints().await?;
         match endpoints.as_slice() {
             [] => Err(Error::Remote {
@@ -1778,6 +1790,18 @@ mod tests {
             },
         )
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn data_plane_endpoint_prefers_the_override_over_discovery() {
+        let temp = TempDir::new().unwrap();
+        let mut cache = tuist_cache(&temp, Some("once"));
+        cache.config.url = "http://127.0.0.1:9".to_string();
+        cache.endpoint_override = Some("http://kura.kura.svc.cluster.local:4000".to_string());
+
+        let endpoint = cache.data_plane_endpoint().await.unwrap();
+
+        assert_eq!(endpoint, "http://kura.kura.svc.cluster.local:4000");
     }
 
     #[test]

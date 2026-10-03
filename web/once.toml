@@ -209,12 +209,7 @@ deps = ["./application_test"]
 
 [target.attrs]
 cacheable = false
-setup_tasks = [
-  ["ecto.create", "--quiet", "--no-compile", "--no-deps-check"],
-  ["ecto.migrate", "--quiet", "--no-compile", "--no-deps-check"],
-]
 config = ["config/**/*.exs"]
-data = ["priv/repo/migrations/**/*"]
 
 [[target]]
 name = "application_prod"

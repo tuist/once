@@ -13,3 +13,22 @@ edition = "2021"
 CARGO_MANIFEST_DIR = "crates/once-host-tree"
 CARGO_PKG_NAME = "once-host-tree"
 CARGO_PKG_VERSION = "0.0.0"
+
+# Tests
+
+[[target]]
+name = "once_host_tree_unit_tests"
+kind = "rust_test"
+deps = ["cargo_dependencies"]
+srcs = ["src/**/*.rs"]
+
+[target.attrs]
+crate_name = "once_host_tree"
+crate_root = "src/lib.rs"
+edition = "2021"
+cargo_package = "once-host-tree"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/once-host-tree"
+CARGO_PKG_NAME = "once-host-tree"
+CARGO_PKG_VERSION = "0.0.0"

@@ -183,8 +183,20 @@ pub async fn spawn(
             };
 
             let _ = ready_tx.send(());
+            let renewal_workspace = workspace.clone();
+            let renewal_xdg = xdg.clone();
             client
                 .with_metadata(metadata)
+                .with_token_provider(move || {
+                    let workspace = renewal_workspace.clone();
+                    let xdg = renewal_xdg.clone();
+                    async move {
+                        tokio::task::spawn_blocking(move || auth_token(&workspace, &xdg))
+                            .await
+                            .ok()
+                            .flatten()
+                    }
+                })
                 .with_dashboard_link(|link| eprintln!("\n  ↗ Once live: {link}\n"))
                 .run_with_reconnect(bus_rx, shutdown_rx, ReconnectPolicy::default())
                 .await

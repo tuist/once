@@ -94,6 +94,37 @@ result = repr(True)
     assert!(second.cacheable);
     assert_eq!(second.sandbox.as_deref(), Some("off"));
     assert!(second.inputs.contains(&".once/out/App/App.app".to_string()));
+    assert_eq!(second.outputs, [".once/out/App/App.app/observed.txt"]);
+}
+
+#[test]
+fn cached_scripts_capture_product_outputs_through_the_product_tree() {
+    let workspace = TempDir::new().unwrap();
+    let source = format!(
+        r#"{}
+ctx = {{"label": {{"id": "App"}}, "attr": {{}}, "build_dir": ".once/out/App"}}
+result = repr(_apple_run_prepackage_actions(ctx, {{"prepackage_actions": [
+    _json_encode({{"id": "fixtures", "shell": "/bin/sh", "script": "copy-only-for-ui-tests", "inputs": ["Fixtures"], "outputs": [".once/out/App/App.app/Fixtures", ".once/out/App/Generated.swift"], "cacheable": True}}),
+]}}, [".once/out/App/App.app/App"], ".once/out/App/App.app"))
+"#,
+        apple_prelude_source()
+    );
+    let (store, result) = with_active_store(store_for(workspace.path(), ""), || {
+        eval_prelude_source_to_repr(source)
+    });
+    assert_eq!(
+        result.unwrap(),
+        r#"[".once/out/App/App.app", ".once/out/App/Generated.swift"]"#
+    );
+    let action = action_by_identifier(&store, "prepackage_action:App:fixtures");
+    assert!(action.cacheable);
+    assert_eq!(
+        action.outputs,
+        vec![
+            ".once/out/App/Generated.swift".to_string(),
+            ".once/out/App/App.app".to_string(),
+        ]
+    );
 }
 
 #[test]

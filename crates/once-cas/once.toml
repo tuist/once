@@ -13,3 +13,42 @@ edition = "2021"
 CARGO_MANIFEST_DIR = "crates/once-cas"
 CARGO_PKG_NAME = "once-cas"
 CARGO_PKG_VERSION = "0.0.0"
+
+# Tests
+
+[[target]]
+name = "once_cas_unit_tests"
+kind = "rust_test"
+deps = ["cargo_dependencies"]
+srcs = ["src/**/*.rs"]
+
+[target.attrs]
+crate_name = "once_cas"
+crate_root = "src/lib.rs"
+edition = "2021"
+cargo_package = "once-cas"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/once-cas"
+CARGO_PKG_NAME = "once-cas"
+CARGO_PKG_VERSION = "0.0.0"
+
+[[target]]
+name = "persistence_tests"
+kind = "rust_test"
+deps = [
+  "crates/once-cas/once_cas",
+  "cargo_dependencies",
+]
+srcs = ["tests/persistence.rs"]
+
+[target.attrs]
+crate_name = "persistence"
+crate_root = "tests/persistence.rs"
+edition = "2021"
+cargo_package = "once-cas"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/once-cas"
+CARGO_PKG_NAME = "once-cas"
+CARGO_PKG_VERSION = "0.0.0"

@@ -39,7 +39,7 @@ binary exit status to Once.
 | `crate_aliases` | map&lt;string, string&gt; | no | `{}` | Map dependency label, package name, or crate name to the local extern crate name |
 | `aliases` | map&lt;string, string&gt; | no | `{}` | Bazel-compatible alias map from dependency label or crate name to local extern crate name |
 | `named_deps` | map&lt;string, string&gt; | no | `{}` | Buck-compatible alias map from local extern crate name to dependency label or crate name |
-| `cargo_package` | string | no | empty | Cargo package name used to select direct external deps from a `cargo_dependencies` dependency set |
+| `cargo_package` | string | no | empty | Cargo package name used to select direct external deps, including dev-dependencies, from a `cargo_dependencies` dependency set |
 | `build_script` | string | no | empty | Package-relative Cargo build script path run before `rustc` |
 | `build_script_tools` | list&lt;string&gt; | no | `[]` | Host tool names the build script invokes; each is resolved on the search path during graph loading |
 | `cargo_config_env` | map&lt;string, string&gt; | no | `{}` | Environment declared by Cargo configuration, applied below `env`, `rustc_env`, and `test_env` |
@@ -51,6 +51,7 @@ binary exit status to Once.
 | `use_libtest_harness` | bool | no | `true` | Whether to use the Rust libtest harness. Only `true` is supported |
 | `labels` | list&lt;string&gt; | no | `[]` | Labels exposed through `once_test_info` for test discovery |
 | `timeout_ms` | int | no |  | Optional test timeout in milliseconds |
+| `cacheable` | bool | no | `true` | Whether successful test results may be restored from the action cache. Disable it for tests whose outcome depends on host tools or configuration that are not declared inputs, such as tests that inherit `PATH` or `HOME` through `env_inherit`. Compilation stays cacheable |
 
 Accepted but unsupported attributes: `default_deps`, `doc_deps`, `doc_env`, `doc_link_style`,
 `doc_linker_flags`, `doc_named_deps`, `link_deps`, `link_style`,
