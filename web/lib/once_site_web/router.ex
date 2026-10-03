@@ -15,6 +15,14 @@ defmodule OnceSiteWeb.Router do
     plug :accepts, ["json"]
   end
 
+  pipeline :mcp do
+    plug OnceSiteWeb.Plugs.RateLimit
+  end
+
+  pipeline :image do
+    plug OnceSiteWeb.Plugs.RateLimit
+  end
+
   # Feeds are served to clients that may not send an HTML Accept header, so they
   # skip the `:accepts ["html"]` check but keep rate limiting.
   pipeline :feed do
@@ -35,9 +43,28 @@ defmodule OnceSiteWeb.Router do
   end
 
   scope "/", OnceSiteWeb do
+    pipe_through :image
+
+    get "/og/zero-to-once.jpg", PassportController, :og_image
+    get "/og/zero-to-once-campaign.jpg", PassportController, :campaign_og_image
+  end
+
+  scope "/" do
+    pipe_through :mcp
+
+    forward "/mcp", EMCP.Transport.StreamableHTTP, server: OnceSite.MCP.Server
+  end
+
+  scope "/", OnceSiteWeb do
     pipe_through :browser
 
     get "/", PageController, :home
+    get "/zero-to-once/github", PassportController, :github_login
+    get "/zero-to-once/github/callback", PassportController, :github_callback
+    get "/github.com/:account/:repository", PassportController, :show
+    get "/github.com/:account/:repository/integrate", PassportController, :integration
+    post "/github.com/:account/:repository/integrate", PassportController, :create_integration
+    post "/github.com/:account/:repository/share", PassportController, :share
 
     get "/changelog", ChangelogController, :index
     get "/changelog/:slug", ChangelogController, :show
@@ -45,6 +72,10 @@ defmodule OnceSiteWeb.Router do
     get "/blog/:slug", BlogController, :show
 
     get "/docs-markdown/*path", DocsMarkdownController, :show
+
+    live_session :zero_to_once, session: {OnceSiteWeb.ZeroToOnceSession, :session, []} do
+      live "/zero-to-once/", PassportLive, :index
+    end
 
     live_session :docs, root_layout: {OnceSiteWeb.Docs.Layouts, :root} do
       live "/docs", DocsLive, :index

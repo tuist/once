@@ -6,6 +6,11 @@ defmodule OnceSiteWeb.PageHTML do
   """
   use OnceSiteWeb, :html
 
+  alias Noora.Badge
+  alias Noora.Banner
+  alias Noora.Button
+  alias Noora.Card
+
   embed_templates "page_html/*"
 
   @icons_path Path.join([File.cwd!(), "deps", "noora", "lib", "noora", "icons"])

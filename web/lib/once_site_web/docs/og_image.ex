@@ -11,7 +11,7 @@ defmodule OnceSiteWeb.Docs.OgImage do
   @max_title_length 60
   @max_description_length 120
   @width 1920
-  @height 960
+  @height 1080
 
   def width, do: @width
   def height, do: @height

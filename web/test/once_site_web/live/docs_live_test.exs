@@ -9,7 +9,7 @@ defmodule OnceSiteWeb.DocsLiveTest do
     assert html =~ "id=\"docs-layout\""
     assert html =~ ~s(data-part="feature-card")
     assert html =~ ~s(property="og:image:width" content="1920")
-    assert html =~ ~s(property="og:image:height" content="960")
+    assert html =~ ~s(property="og:image:height" content="1080")
     assert html =~ ~s(name="twitter:image:alt" content="Documentation")
   end
 

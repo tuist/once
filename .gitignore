@@ -11,6 +11,7 @@
 /packages/ruby/*.gem
 *.swp
 .DS_Store
+web/.env
 
 # Shellspec writes worker progress to ./file under --jobs > 1, and
 # leaves the others on failure. They're transient.
