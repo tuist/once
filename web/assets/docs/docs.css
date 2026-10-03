@@ -1,5 +1,6 @@
 @import "./fonts.css";
 @import "noora/noora.css";
+@import "./shared/theme.css";
 @import "./shared/prose.css";
 @import "./shared/code-window.css";
 @import "./shared/code-group.css";
