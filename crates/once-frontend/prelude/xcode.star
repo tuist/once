@@ -3021,6 +3021,9 @@ def _xcode_swift_package_target_flags(target, platform, default_language_mode, e
             experimental = (kind.get("enableExperimentalFeature") or {}).get("_0") or ""
             if experimental:
                 swift_flags.extend(["-enable-experimental-feature", experimental])
+            isolation = (kind.get("defaultIsolation") or {}).get("_0") or ""
+            if isolation:
+                swift_flags.extend(["-default-isolation", isolation])
         elif setting.get("tool") in ["c", "cxx"]:
             clang_flags.extend(flags)
             definition = (kind.get("define") or {}).get("_0") or ""

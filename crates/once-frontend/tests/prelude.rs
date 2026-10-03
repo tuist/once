@@ -15007,6 +15007,25 @@ result = repr([
 }
 
 #[test]
+fn prelude_xcode_lowers_package_default_isolation_settings() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+main_actor = {{"settings": [{{"tool": "swift", "kind": {{"defaultIsolation": {{"_0": "MainActor"}}}}}}]}}
+nonisolated = {{"settings": [{{"tool": "swift", "kind": {{"defaultIsolation": {{"_0": "nonisolated"}}}}}}]}}
+result = repr([
+    _xcode_swift_package_target_flags(main_actor, "ios", "5")["swift"],
+    _xcode_swift_package_target_flags(nonisolated, "ios", "6")["swift"],
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["-default-isolation", "MainActor"], ["-default-isolation", "nonisolated"]]"#
+    );
+}
+
+#[test]
 fn prelude_xcode_lowers_swift_macros_as_transitive_host_tools() {
     let prelude = xcode_prelude_source();
     let source = format!(
