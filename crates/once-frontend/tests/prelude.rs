@@ -10840,6 +10840,107 @@ result = repr(_cargo_dependencies_impl(ctx))
 }
 
 #[test]
+fn prelude_cargo_workspace_dependency_names_keep_roles_and_renames_apart() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+metadata = {{
+    "workspace_members": ["path+file:///ws#app@0.1.0"],
+    "packages": [
+        {{"id": "path+file:///ws#app@0.1.0", "name": "app", "source": None}},
+        {{"id": "registry+index#foo@1.0.0", "name": "foo", "source": "registry+index"}},
+        {{"id": "registry+index#bar@1.0.0", "name": "bar", "source": "registry+index"}},
+    ],
+    "resolve": {{"nodes": [{{
+        "id": "path+file:///ws#app@0.1.0",
+        "deps": [
+            {{"pkg": "registry+index#foo@1.0.0", "name": "normal_name", "dep_kinds": [{{"kind": None}}]}},
+            {{"pkg": "registry+index#foo@1.0.0", "name": "build_name", "dep_kinds": [{{"kind": "build"}}]}},
+            {{"pkg": "registry+index#bar@1.0.0", "name": "test_name", "dep_kinds": [{{"kind": "dev"}}]}},
+        ],
+    }}]}},
+}}
+names = {{"registry+index#foo@1.0.0": "foo-1.0.0", "registry+index#bar@1.0.0": "bar-1.0.0"}}
+result = repr(_cargo_workspace_dependency_names(metadata, names, names))
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert!(
+        out.contains("\"deps\": {\"app\": [\"foo-1.0.0\"]}"),
+        "{out}"
+    );
+    assert!(
+        out.contains("\"dev_deps\": {\"app\": [\"bar-1.0.0\"]}"),
+        "{out}"
+    );
+    assert!(
+        out.contains("\"build_deps\": {\"app\": [\"foo-1.0.0\"]}"),
+        "{out}"
+    );
+    assert!(
+        out.contains("\"dep_aliases\": {\"app\": {\"foo-1.0.0\": \"normal_name\"}}"),
+        "{out}"
+    );
+    assert!(
+        out.contains("\"dev_dep_aliases\": {\"app\": {\"bar-1.0.0\": \"test_name\"}}"),
+        "{out}"
+    );
+    assert!(
+        out.contains("\"build_dep_aliases\": {\"app\": {\"foo-1.0.0\": \"build_name\"}}"),
+        "{out}"
+    );
+}
+
+#[test]
+fn prelude_cargo_dependencies_exposes_dev_and_build_roles_per_package() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{
+        "package": "",
+        "name": "cargo_dependencies",
+        "id": "cargo_dependencies",
+    }},
+    "attr": {{
+        "_cargo_resolved": True,
+        "_cargo_workspace_deps": {{"app": ["foo-1.0.0"]}},
+        "_cargo_workspace_dev_deps": {{"app": ["bar-1.0.0"]}},
+        "_cargo_workspace_build_deps": {{"app": ["foo-1.0.0"]}},
+        "_cargo_workspace_dep_aliases": {{"app": {{"foo-1.0.0": "normal_name"}}}},
+        "_cargo_workspace_build_dep_aliases": {{"app": {{"foo-1.0.0": "build_name"}}}},
+    }},
+    "deps": [
+        {{
+            "label_id": "cargo_dependencies/foo-1.0.0",
+            "package_name": "foo",
+            "crate_name": "foo",
+            "rlib": ".once/out/cargo_dependencies/foo-1.0.0/libfoo.rlib",
+        }},
+        {{
+            "label_id": "cargo_dependencies/bar-1.0.0",
+            "package_name": "bar",
+            "crate_name": "bar",
+            "rlib": ".once/out/cargo_dependencies/bar-1.0.0/libbar.rlib",
+        }},
+    ],
+    "srcs": [],
+}}
+provider = _cargo_dependencies_impl(ctx)
+result = repr([
+    [dep.get("extern_name") for dep in provider["workspace_deps"]["app"]],
+    [dep["crate_name"] for dep in provider["workspace_dev_deps"]["app"]],
+    [dep.get("extern_name") for dep in provider["workspace_build_deps"]["app"]],
+])
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert_eq!(out, "[[\"normal_name\"], [\"bar\"], [\"build_name\"]]");
+}
+
+#[test]
 fn prelude_cargo_metadata_targets_normalize_windows_build_script_paths() {
     let prelude = all_prelude_source();
     let source = format!(

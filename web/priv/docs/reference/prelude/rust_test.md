@@ -51,6 +51,7 @@ binary exit status to Once.
 | `use_libtest_harness` | bool | no | `true` | Whether to use the Rust libtest harness. Only `true` is supported |
 | `labels` | list&lt;string&gt; | no | `[]` | Labels exposed through `once_test_info` for test discovery |
 | `timeout_ms` | int | no |  | Optional test timeout in milliseconds |
+| `cacheable` | bool | no | `true` | Whether successful test results may be restored from the action cache. Disable it for tests whose outcome depends on host tools or configuration that are not declared inputs, such as tests that inherit `PATH` or `HOME` through `env_inherit`. Compilation stays cacheable |
 
 Accepted but unsupported attributes: `default_deps`, `doc_deps`, `doc_env`, `doc_link_style`,
 `doc_linker_flags`, `doc_named_deps`, `link_deps`, `link_style`,

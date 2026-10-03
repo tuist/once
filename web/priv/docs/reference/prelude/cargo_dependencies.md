@@ -61,6 +61,8 @@ package without synthetic target collisions.
 | `_cargo_workspace_dev_deps` | map&lt;string, list&lt;string&gt;&gt; | resolver-owned | `{}` | Records generated direct dev-dependency target names by workspace package, excluding packages that are also normal dependencies. Only `rust_test` targets link them |
 | `_cargo_workspace_build_deps` | map&lt;string, list&lt;string&gt;&gt; | resolver-owned | `{}` | Records generated execution-host build-dependency target names by workspace package. Only targets that declare a `build_script` link them |
 | `_cargo_workspace_dep_aliases` | map&lt;string, map&lt;string, string&gt;&gt; | resolver-owned | `{}` | Records Cargo dependency renames by workspace package and generated target |
+| `_cargo_workspace_dev_dep_aliases` | map&lt;string, map&lt;string, string&gt;&gt; | resolver-owned | `{}` | Records Cargo dev-dependency renames by workspace package and generated target |
+| `_cargo_workspace_build_dep_aliases` | map&lt;string, map&lt;string, string&gt;&gt; | resolver-owned | `{}` | Records Cargo build-dependency renames by workspace package and generated target |
 
 The underscore-prefixed attributes are part of the typed resolver contract.
 They are produced by Once and should not be set in `once.toml`.

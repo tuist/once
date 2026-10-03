@@ -94,6 +94,13 @@ crate_name = "test_architecture"
 crate_root = "tests/test_architecture.rs"
 edition = "2021"
 cargo_package = "once-cli"
+# The architecture tests read production sources at run time.
+data = [
+  "src/**/*.rs",
+  "../once-core/src/**/*.rs",
+  "../once-events-client/src/**/*.rs",
+  "../once-frontend/src/**/*.rs",
+]
 
 [target.attrs.rustc_env]
 CARGO_MANIFEST_DIR = "crates/once-cli"
