@@ -6,6 +6,8 @@ use tonic::Response;
 #[derive(Clone)]
 struct BlobServer {
     chunks: Vec<std::result::Result<bytestream::ReadResponse, Status>>,
+    failures: Vec<Status>,
+    reads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[tonic::async_trait]
@@ -25,6 +27,12 @@ impl ByteStream for BlobServer {
             request.metadata().get("authorization").unwrap(),
             "Bearer test-token"
         );
+        let read = self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Some(failure) = self.failures.get(read) {
+            return Ok(Response::new(Box::pin(stream::iter(vec![Err(
+                failure.clone()
+            )]))));
+        }
         Ok(Response::new(Box::pin(stream::iter(self.chunks.clone()))))
     }
 
@@ -48,6 +56,26 @@ async fn cache_for_stream(
     digest: Digest,
     chunks: Vec<std::result::Result<bytestream::ReadResponse, Status>>,
 ) -> (TuistCache, tokio::task::JoinHandle<()>) {
+    let (cache, server, _) = cache_for_failing_stream(temp, digest, chunks, Vec::new()).await;
+    (cache, server)
+}
+
+async fn cache_for_failing_stream(
+    temp: &tempfile::TempDir,
+    digest: Digest,
+    chunks: Vec<std::result::Result<bytestream::ReadResponse, Status>>,
+    failures: Vec<Status>,
+) -> (
+    TuistCache,
+    tokio::task::JoinHandle<()>,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) {
+    let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let service = BlobServer {
+        chunks,
+        failures,
+        reads: reads.clone(),
+    };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let incoming = stream::unfold(listener, |listener| async {
@@ -55,7 +83,7 @@ async fn cache_for_stream(
     });
     let server = tokio::spawn(async move {
         tonic::transport::Server::builder()
-            .add_service(ByteStreamServer::new(BlobServer { chunks }))
+            .add_service(ByteStreamServer::new(service))
             .serve_with_incoming(incoming)
             .await
             .unwrap();
@@ -86,7 +114,7 @@ async fn cache_for_stream(
         .lock()
         .await
         .insert(digest, sha256_digest(b"test mapping").unwrap());
-    (cache, server)
+    (cache, server, reads)
 }
 
 #[tokio::test]
@@ -143,4 +171,51 @@ async fn remote_stream_errors_and_digest_mismatches_do_not_restore_requested_blo
             assert!(scratch.next_entry().await.unwrap().is_none());
         }
     }
+}
+
+#[tokio::test]
+async fn transient_stream_failures_are_retried_on_a_fresh_read() {
+    let bytes = vec![7; 100_000];
+    let temp = tempfile::TempDir::new().unwrap();
+    let digest = Digest::of_bytes(&bytes);
+    let chunks = vec![Ok(bytestream::ReadResponse {
+        data: bytes.clone(),
+    })];
+    let (cache, server, reads) = cache_for_failing_stream(
+        &temp,
+        digest,
+        chunks,
+        vec![
+            Status::internal("h2 protocol error: http2 error"),
+            Status::cancelled("operation was canceled"),
+        ],
+    )
+    .await;
+    let result =
+        tokio::time::timeout(Duration::from_secs(5), cache.ensure_blob_local(&digest)).await;
+    server.abort();
+    result.expect("retried restoration must finish").unwrap();
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 3);
+    assert_eq!(cache.local.get_blob(&digest).await.unwrap(), bytes);
+}
+
+#[tokio::test]
+async fn non_transient_stream_failures_are_not_retried() {
+    let bytes = b"blob".to_vec();
+    let temp = tempfile::TempDir::new().unwrap();
+    let digest = Digest::of_bytes(&bytes);
+    let chunks = vec![Ok(bytestream::ReadResponse { data: bytes })];
+    let (cache, server, reads) = cache_for_failing_stream(
+        &temp,
+        digest,
+        chunks,
+        vec![Status::permission_denied("no access")],
+    )
+    .await;
+    let result =
+        tokio::time::timeout(Duration::from_secs(5), cache.ensure_blob_local(&digest)).await;
+    server.abort();
+    assert!(result.expect("failed restoration must terminate").is_err());
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(!cache.local.has_blob(&digest).await.unwrap());
 }
