@@ -20,3 +20,82 @@ edition = "2021"
 CARGO_MANIFEST_DIR = "crates/once-cli"
 CARGO_PKG_NAME = "once-cli"
 CARGO_PKG_VERSION = "0.0.0"
+ONCE_VERSION = "0.0.0"
+
+# Tests
+
+[[target]]
+name = "once_unit_tests"
+kind = "rust_test"
+deps = [
+  "crates/once-cas/once_cas",
+  "crates/once-host-tree/once_host_tree",
+  "crates/once-core/once_core",
+  "crates/once-events-client/once_events_client",
+  "crates/once-frontend/once_frontend",
+  "cargo_dependencies",
+]
+srcs = ["src/**/*.rs"]
+
+[target.attrs]
+crate_name = "once"
+crate_root = "src/main.rs"
+edition = "2021"
+cargo_package = "once-cli"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/once-cli"
+CARGO_PKG_NAME = "once-cli"
+CARGO_PKG_VERSION = "0.0.0"
+ONCE_VERSION = "0.0.0"
+
+[[target]]
+name = "lint_tests"
+kind = "rust_test"
+deps = [
+  "crates/once-cas/once_cas",
+  "crates/once-host-tree/once_host_tree",
+  "crates/once-core/once_core",
+  "crates/once-events-client/once_events_client",
+  "crates/once-frontend/once_frontend",
+  "cargo_dependencies",
+]
+srcs = ["tests/lint.rs"]
+
+[target.dependencies]
+bin_deps = ["crates/once-cli/once"]
+
+[target.attrs]
+crate_name = "lint"
+crate_root = "tests/lint.rs"
+edition = "2021"
+cargo_package = "once-cli"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/once-cli"
+CARGO_PKG_NAME = "once-cli"
+CARGO_PKG_VERSION = "0.0.0"
+
+[[target]]
+name = "test_architecture_tests"
+kind = "rust_test"
+deps = [
+  "crates/once-cas/once_cas",
+  "crates/once-host-tree/once_host_tree",
+  "crates/once-core/once_core",
+  "crates/once-events-client/once_events_client",
+  "crates/once-frontend/once_frontend",
+  "cargo_dependencies",
+]
+srcs = ["tests/test_architecture.rs"]
+
+[target.attrs]
+crate_name = "test_architecture"
+crate_root = "tests/test_architecture.rs"
+edition = "2021"
+cargo_package = "once-cli"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/once-cli"
+CARGO_PKG_NAME = "once-cli"
+CARGO_PKG_VERSION = "0.0.0"

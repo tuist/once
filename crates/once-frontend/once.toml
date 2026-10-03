@@ -16,3 +16,99 @@ edition = "2021"
 CARGO_MANIFEST_DIR = "crates/once-frontend"
 CARGO_PKG_NAME = "once-frontend"
 CARGO_PKG_VERSION = "0.0.0"
+
+# Tests
+
+[[target]]
+name = "once_frontend_unit_tests"
+kind = "rust_test"
+deps = [
+  "crates/once-host-tree/once_host_tree",
+  "cargo_dependencies",
+]
+srcs = [
+  "src/**/*.rs",
+  "prelude/**/*.star",
+  "prelude/examples/**",
+]
+
+[target.attrs]
+crate_name = "once_frontend"
+crate_root = "src/lib.rs"
+edition = "2021"
+cargo_package = "once-frontend"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/once-frontend"
+CARGO_PKG_NAME = "once-frontend"
+CARGO_PKG_VERSION = "0.0.0"
+
+[[target]]
+name = "cmake_tests"
+kind = "rust_test"
+deps = [
+  "crates/once-frontend/once_frontend",
+  "crates/once-host-tree/once_host_tree",
+  "cargo_dependencies",
+]
+srcs = ["tests/cmake.rs"]
+
+[target.attrs]
+crate_name = "cmake"
+crate_root = "tests/cmake.rs"
+edition = "2021"
+cargo_package = "once-frontend"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/once-frontend"
+CARGO_PKG_NAME = "once-frontend"
+CARGO_PKG_VERSION = "0.0.0"
+
+[[target]]
+name = "examples_tests"
+kind = "rust_test"
+deps = [
+  "crates/once-frontend/once_frontend",
+  "crates/once-host-tree/once_host_tree",
+  "cargo_dependencies",
+]
+srcs = ["tests/examples.rs"]
+
+[target.attrs]
+crate_name = "examples"
+crate_root = "tests/examples.rs"
+edition = "2021"
+cargo_package = "once-frontend"
+# These tests load and build examples with the host toolchains on PATH.
+env_inherit = ["PATH", "HOME"]
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/once-frontend"
+CARGO_PKG_NAME = "once-frontend"
+CARGO_PKG_VERSION = "0.0.0"
+
+[[target]]
+name = "prelude_tests"
+kind = "rust_test"
+deps = [
+  "crates/once-frontend/once_frontend",
+  "crates/once-host-tree/once_host_tree",
+  "cargo_dependencies",
+]
+srcs = [
+  "tests/prelude.rs",
+  "tests/prelude/**/*.rs",
+]
+
+[target.attrs]
+crate_name = "prelude"
+crate_root = "tests/prelude.rs"
+edition = "2021"
+cargo_package = "once-frontend"
+# These tests load and build examples with the host toolchains on PATH.
+env_inherit = ["PATH", "HOME"]
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/once-frontend"
+CARGO_PKG_NAME = "once-frontend"
+CARGO_PKG_VERSION = "0.0.0"

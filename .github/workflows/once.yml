@@ -104,6 +104,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust_ci == 'true'
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -126,7 +129,28 @@ jobs:
           shared-key: tests-${{ matrix.os }}
           cache-on-failure: true
           cache-bin: false
-      - run: mise exec -- cargo test --workspace --all-targets
+      # The tests exercise this change's target kinds, so they run through a
+      # Once built from the checked-out source rather than the latest release.
+      - name: Resolve bootstrap Once
+        id: bootstrap
+        run: echo "bin=$(./mise/tasks/release/bootstrap-once.sh)" >> "$GITHUB_OUTPUT"
+        env:
+          ONCE_BOOTSTRAP_SOURCE: source
+      - name: Materialize Rust graph dependencies
+        run: ./mise/tasks/release/prepare-rust-graph-deps.sh
+      # Fork pull requests cannot mint an OpenID Connect token, so they
+      # fall back to the local cache and skip run reporting.
+      - name: Authenticate with Tuist
+        id: once-cache-auth
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
+        run: '"${{ steps.bootstrap.outputs.bin }}" auth login --provider tuist --no-browser'
+      # Selecting by the `crates` path schedules every Rust test target in
+      # one run and leaves the website tests to the web workflow.
+      - name: Test with Once
+        run: '"${{ steps.bootstrap.outputs.bin }}" test --changed-path crates'
+        env:
+          ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
 
   release-build:
     name: release build (${{ matrix.os }})

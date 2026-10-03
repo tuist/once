@@ -803,12 +803,24 @@ def _rust_dependency_role(ctx, name):
     return (ctx.get("deps_by_role") or {}).get(name) or []
 
 def _rust_build_deps(ctx):
-    return _rust_dependency_role(ctx, "build_deps")
+    deps = []
+    seen = {}
+    for dep in _rust_dependency_role(ctx, "build_deps"):
+        _rust_append_unique_dep(deps, seen, dep)
+    package = _rust_cargo_package_name(ctx)
+    if not package or not _rust_attr(ctx, "build_script", ""):
+        return deps
+    for dependency_set in _rust_declared_deps(ctx):
+        if not dependency_set.get("dependency_set"):
+            continue
+        for dep in (dependency_set.get("workspace_build_deps") or {}).get(package) or []:
+            _rust_append_unique_dep(deps, seen, dep)
+    return deps
 
 def _rust_declared_deps(ctx):
     return ctx["deps"] + _rust_dependency_role(ctx, "proc_macro_deps") + _rust_dependency_role(ctx, "link_deps")
 
-def _rust_resolved_deps(ctx):
+def _rust_resolved_deps(ctx, include_dev = False):
     direct = []
     dependency_sets = []
     seen = {}
@@ -827,6 +839,9 @@ def _rust_resolved_deps(ctx):
             matched_package = True
             for dep in workspace_deps.get(package) or []:
                 _rust_append_unique_dep(direct, seen, dep)
+            if include_dev:
+                for dep in (dependency_set.get("workspace_dev_deps") or {}).get(package) or []:
+                    _rust_append_unique_dep(direct, seen, dep)
     if not matched_package:
         for dependency_set in dependency_sets:
             if dependency_set.get("workspace_deps"):
@@ -1601,7 +1616,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name, test = False, prov
     srcs = _rust_sources(ctx, crate_root, materialized_sources)
     output = declare_output(_rust_declared_output(ctx, _rust_compile_output_name(ctx, crate_type, output_name)))
     aliases = _rust_aliases(ctx)
-    deps = _rust_resolved_deps(ctx)
+    deps = _rust_resolved_deps(ctx, include_dev = test)
     dep_args = _rust_dep_args(deps, aliases)
     dep_search_args, dep_search_inputs = _rust_search_path_args(ctx, deps, "deps")
     dep_inputs = _rust_dep_inputs(deps)
@@ -2289,15 +2304,29 @@ def _cargo_dependencies_impl(ctx):
         _rust_attr(ctx, "_cargo_workspace_deps", {}),
         _rust_attr(ctx, "_cargo_workspace_dep_aliases", {}),
     )
+    workspace_dev_deps = _cargo_resolved_workspace_deps(
+        deps,
+        _rust_attr(ctx, "_cargo_workspace_dev_deps", {}),
+        _rust_attr(ctx, "_cargo_workspace_dep_aliases", {}),
+    )
+    workspace_build_deps = _cargo_resolved_workspace_deps(
+        deps,
+        _rust_attr(ctx, "_cargo_workspace_build_deps", {}),
+        _rust_attr(ctx, "_cargo_workspace_dep_aliases", {}),
+    )
     packages = _rust_attr(ctx, "packages", [])
     if packages:
         deps = _rust_select_dependency_set([{"deps": deps}], packages, ctx["label"]["id"])
         workspace_deps = _cargo_filter_workspace_deps(workspace_deps, deps)
+        workspace_dev_deps = _cargo_filter_workspace_deps(workspace_dev_deps, deps)
+        workspace_build_deps = _cargo_filter_workspace_deps(workspace_build_deps, deps)
     return {
         "dependency_set": True,
         "deps": deps,
         "packages": packages,
         "workspace_deps": workspace_deps,
+        "workspace_dev_deps": workspace_dev_deps,
+        "workspace_build_deps": workspace_build_deps,
     }
 
 def _cargo_feature_args(ctx):
@@ -2354,6 +2383,8 @@ def _cargo_resolved_metadata(ctx, default_vendor_dir = "third_party/rust/vendor"
         "metadata": metadata,
         "specs": resolution["specs"],
         "workspace_deps": resolution["workspace_deps"],
+        "workspace_dev_deps": resolution["workspace_dev_deps"],
+        "workspace_build_deps": resolution["workspace_build_deps"],
         "workspace_dep_aliases": resolution["workspace_dep_aliases"],
         "split_host": split_host,
     }
@@ -2446,11 +2477,13 @@ def _cargo_resolver_target_specs(ctx, specs):
         targets.append(target)
     return targets
 
-def _cargo_workspace_dependency_names(metadata, id_to_target_name):
+def _cargo_workspace_dependency_names(metadata, id_to_target_name, id_to_host_name = None):
     packages = metadata.get("packages") or []
     nodes = _cargo_resolve_nodes(metadata)
     workspace_package_ids = _cargo_workspace_member_ids(metadata, packages)
     dependencies = {}
+    dev_dependencies = {}
+    build_dependencies = {}
     aliases = {}
     for package in packages:
         if not workspace_package_ids.get(package.get("id")):
@@ -2464,12 +2497,25 @@ def _cargo_workspace_dependency_names(metadata, id_to_target_name):
         dep_refs, package_aliases = _cargo_metadata_deps({"deps": external_deps}, id_to_target_name, False, True)
         target_names = [_cargo_ref_name(dep_ref) for dep_ref in dep_refs]
         dependencies[package["name"]] = target_names
+        dev_refs, dev_aliases = _cargo_metadata_dep_refs({"deps": external_deps}, id_to_target_name, False, False, include_dev = True)
+        dev_names = [
+            _cargo_ref_name(dep_ref)
+            for dep_ref in dev_refs
+            if _cargo_ref_name(dep_ref) not in target_names
+        ]
+        if dev_names:
+            dev_dependencies[package["name"]] = dev_names
+        build_refs, build_aliases = _cargo_metadata_build_deps({"deps": external_deps}, id_to_host_name or id_to_target_name)
+        build_names = [_cargo_ref_name(dep_ref) for dep_ref in build_refs]
+        if build_names:
+            build_dependencies[package["name"]] = build_names
+        package_aliases = _cargo_merge_aliases(_cargo_merge_aliases(package_aliases, dev_aliases), build_aliases)
         aliases[package["name"]] = {
             target_name: package_aliases[target_name]
-            for target_name in target_names
+            for target_name in _unique(target_names + dev_names + build_names)
             if package_aliases.get(target_name) != None
         }
-    return (dependencies, aliases)
+    return (dependencies, dev_dependencies, build_dependencies, aliases)
 
 def _cargo_require_resolver_file(ctx, attr_name, default):
     path = _rust_attr(ctx, attr_name, default)
@@ -2575,6 +2621,8 @@ def _cargo_dependencies_resolver(ctx):
         "attrs": {
             "_cargo_resolved": True,
             "_cargo_workspace_deps": resolved["workspace_deps"],
+            "_cargo_workspace_dev_deps": resolved["workspace_dev_deps"],
+            "_cargo_workspace_build_deps": resolved["workspace_build_deps"],
             "_cargo_workspace_dep_aliases": resolved["workspace_dep_aliases"],
         },
     }
@@ -3133,10 +3181,12 @@ def _cargo_metadata_resolution(ctx, metadata, host_metadata = None, materialize_
             host_deps, host_aliases = _cargo_metadata_deps(host_node, id_to_host_name, False, True)
             host_build_deps, host_build_aliases = _cargo_metadata_build_deps(host_node, id_to_host_name, True) if has_build_script else ([], {})
             targets.append(_cargo_metadata_target_spec(package, target, host_node, host_materialized_source_root, host_materialized_source_root + "/" + rel_root, host_name, kind, host_deps, host_build_deps, _cargo_merge_aliases(host_aliases, host_build_aliases), "", host_tool = True, host_source_root = host_source_root))
-    workspace_deps, workspace_dep_aliases = _cargo_workspace_dependency_names(metadata, id_to_target_name)
+    workspace_deps, workspace_dev_deps, workspace_build_deps, workspace_dep_aliases = _cargo_workspace_dependency_names(metadata, id_to_target_name, id_to_host_name)
     return {
         "specs": targets,
         "workspace_deps": workspace_deps,
+        "workspace_dev_deps": workspace_dev_deps,
+        "workspace_build_deps": workspace_build_deps,
         "workspace_dep_aliases": workspace_dep_aliases,
     }
 
@@ -3636,6 +3686,8 @@ cargo_dependencies = target_kind(
         attr("build_script_tools", "list<string>", default = str(_CARGO_BUILD_SCRIPT_TOOLS), docs = "Host tool names that package build scripts may invoke. Each name is resolved on PATH during graph loading and its directory joins the build script's search path; names that resolve to nothing are ignored. Set an empty list to give build scripts nothing beyond the Rust and C toolchains.", configurable = False),
         attr("_cargo_resolved", "bool", default = "false", docs = "Resolver-owned marker indicating that Cargo packages were expanded into graph targets.", configurable = False),
         attr("_cargo_workspace_deps", "map<string, list<string>>", default = "{}", docs = "Resolver-owned target names for each workspace package's direct external dependencies.", configurable = False),
+        attr("_cargo_workspace_dev_deps", "map<string, list<string>>", default = "{}", docs = "Resolver-owned target names for each workspace package's direct external dev-dependencies that are not also normal dependencies. Only test crates link them.", configurable = False),
+        attr("_cargo_workspace_build_deps", "map<string, list<string>>", default = "{}", docs = "Resolver-owned execution-host target names for each workspace package's direct external build-dependencies. Only crates that declare a build_script link them into it.", configurable = False),
         attr("_cargo_workspace_dep_aliases", "map<string, map<string, string>>", default = "{}", docs = "Resolver-owned Cargo rename mappings for workspace package dependencies.", configurable = False),
     ],
     resolver = _cargo_dependencies_resolver,

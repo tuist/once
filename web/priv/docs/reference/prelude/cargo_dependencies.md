@@ -24,6 +24,10 @@ Graph loading rejects any provenance mismatch. First-party Rust targets
 depend on this aggregate target and identify their Cargo package via
 `CARGO_PKG_NAME` or the `cargo_package` attribute. Once then exposes only the
 direct external dependencies Cargo reported for that workspace package.
+A `rust_test` for that package also links the package's direct external
+dev-dependencies, and a first-party target that declares a `build_script`
+links the package's direct external build-dependencies into that script, so
+authored test and build-script targets resolve the same crates Cargo would.
 The configured manifest and lockfile must both be covered by `resolver_inputs`,
 together with any workspace member manifests Cargo needs to inspect. When
 `resolver_inputs` is empty or omitted, `srcs` supplies those files instead.
@@ -54,6 +58,8 @@ package without synthetic target collisions.
 | `build_script_tools` | list&lt;string&gt; | no | `cmake`, `nasm`, `perl`, `pkg-config`, `protoc`, `python3` | Host tool names package build scripts may invoke; each is resolved on the search path during graph loading |
 | `_cargo_resolved` | bool | resolver-owned | `false` | Marks an owner whose locked packages were expanded into graph targets |
 | `_cargo_workspace_deps` | map&lt;string, list&lt;string&gt;&gt; | resolver-owned | `{}` | Records generated direct dependency target names by workspace package |
+| `_cargo_workspace_dev_deps` | map&lt;string, list&lt;string&gt;&gt; | resolver-owned | `{}` | Records generated direct dev-dependency target names by workspace package, excluding packages that are also normal dependencies. Only `rust_test` targets link them |
+| `_cargo_workspace_build_deps` | map&lt;string, list&lt;string&gt;&gt; | resolver-owned | `{}` | Records generated execution-host build-dependency target names by workspace package. Only targets that declare a `build_script` link them |
 | `_cargo_workspace_dep_aliases` | map&lt;string, map&lt;string, string&gt;&gt; | resolver-owned | `{}` | Records Cargo dependency renames by workspace package and generated target |
 
 The underscore-prefixed attributes are part of the typed resolver contract.
