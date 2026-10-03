@@ -47,7 +47,7 @@ impl Cas {
         self.root.join("actions")
     }
 
-    fn scratch_dir(&self) -> PathBuf {
+    pub(crate) fn scratch_dir(&self) -> PathBuf {
         self.root.join("scratch")
     }
 
@@ -149,16 +149,15 @@ impl Cas {
     /// stream is hashed and written to a scratch file in one pass; on
     /// completion the scratch file is optionally compressed, then
     /// renamed into place or discarded if the blob already exists. On
-    /// returned error, temporary files are removed. A crash or cancelled
-    /// future can leave scratch files that future cache invocations ignore.
+    /// returned error or cancellation, temporary files are cleaned up.
+    /// A process crash can leave scratch files that future cache invocations ignore.
     pub async fn put_stream<R: AsyncRead + Unpin>(&self, reader: R) -> Result<Digest> {
         let (tmp, digest) = self.stream_to_tmp("stream", reader).await?;
-        let result = self.commit_stream(&tmp, &digest).await;
-        let _ = fs::remove_file(&tmp).await;
-        result.map(|()| digest)
+        self.commit_stream(tmp, &digest).await?;
+        Ok(digest)
     }
 
-    async fn commit_stream(&self, tmp: &Path, digest: &Digest) -> Result<()> {
+    async fn commit_stream(&self, tmp: tempfile::TempPath, digest: &Digest) -> Result<()> {
         let final_path = self.blob_path(digest);
         if fs::try_exists(&final_path).await.unwrap_or(false) {
             return Ok(());
@@ -166,15 +165,10 @@ impl Cas {
 
         let stored_tmp = self.prepare_blob_tmp(tmp).await?;
         if fs::try_exists(&final_path).await.unwrap_or(false) {
-            let _ = fs::remove_file(&stored_tmp).await;
             return Ok(());
         }
 
-        let result = rename_into_place(&stored_tmp, &final_path).await;
-        if result.is_err() && stored_tmp != tmp {
-            let _ = fs::remove_file(&stored_tmp).await;
-        }
-        result
+        rename_into_place(&stored_tmp, &final_path).await
     }
 
     /// Stream `reader` into the scratch dir and compute the BLAKE3 of
@@ -184,31 +178,36 @@ impl Cas {
         &self,
         prefix: &str,
         reader: R,
-    ) -> Result<(PathBuf, Digest)> {
+    ) -> Result<(tempfile::TempPath, Digest)> {
         let scratch = self.scratch_dir();
         ensure_dir(&scratch).await?;
-        let pid = process::id();
-        let seq = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let tmp = scratch.join(format!("{prefix}-{pid}-{seq}"));
-
-        match self.write_stream_to(&tmp, reader).await {
-            Ok(digest) => Ok((tmp, digest)),
-            Err(e) => {
-                let _ = fs::remove_file(&tmp).await;
-                Err(e)
-            }
-        }
+        let temporary = tempfile::Builder::new()
+            .prefix(&format!("{prefix}-"))
+            .make_in(&scratch, |path| {
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create_new(true)
+                    .open(path)
+            })
+            .map_err(|source| Error::Io {
+                path: scratch,
+                source,
+            })?;
+        let (file, temporary_path) = temporary.into_parts();
+        let tmp = temporary_path.to_path_buf();
+        let digest = self
+            .write_stream_to(&tmp, File::from_std(file), reader)
+            .await?;
+        Ok((temporary_path, digest))
     }
 
     async fn write_stream_to<R: AsyncRead + Unpin>(
         &self,
         tmp: &Path,
+        mut file: File,
         mut reader: R,
     ) -> Result<Digest> {
-        let mut file = File::create(tmp).await.map_err(|source| Error::Io {
-            path: tmp.to_path_buf(),
-            source,
-        })?;
         let mut hasher = blake3::Hasher::new();
         let mut buf = vec![0u8; STREAM_CHUNK];
         loop {
@@ -234,42 +233,35 @@ impl Cas {
         Ok(Digest::from_bytes(*hasher.finalize().as_bytes()))
     }
 
-    async fn prepare_blob_tmp(&self, raw_tmp: &Path) -> Result<PathBuf> {
+    async fn prepare_blob_tmp(&self, raw_tmp: tempfile::TempPath) -> Result<tempfile::TempPath> {
         let scratch = self.scratch_dir();
         ensure_dir(&scratch).await?;
         let pid = process::id();
         let seq = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
         let encoded_tmp = scratch.join(format!("zstd-{pid}-{seq}"));
-        let raw_for_task = raw_tmp.to_path_buf();
-        let encoded_for_task = encoded_tmp.clone();
-        let encoded = tokio::task::spawn_blocking(move || {
-            blob::encode_file(&raw_for_task, &encoded_for_task)
+        let raw_path = raw_tmp.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            let encoded_tmp =
+                tempfile::TempPath::try_from_path(encoded_tmp).map_err(|source| Error::Io {
+                    path: raw_tmp.to_path_buf(),
+                    source,
+                })?;
+            let encoded =
+                blob::encode_file(&raw_tmp, &encoded_tmp).map_err(|source| Error::Io {
+                    path: raw_tmp.to_path_buf(),
+                    source,
+                })?;
+            if encoded.should_store {
+                Ok(encoded_tmp)
+            } else {
+                Ok(raw_tmp)
+            }
         })
         .await
         .map_err(|source| Error::Io {
-            path: raw_tmp.to_path_buf(),
+            path: raw_path,
             source: io::Error::other(source.to_string()),
-        })
-        .and_then(|result| {
-            result.map_err(|source| Error::Io {
-                path: raw_tmp.to_path_buf(),
-                source,
-            })
-        });
-        let encoded = match encoded {
-            Ok(encoded) => encoded,
-            Err(error) => {
-                let _ = fs::remove_file(&encoded_tmp).await;
-                return Err(error);
-            }
-        };
-
-        if encoded.should_store {
-            Ok(encoded_tmp)
-        } else {
-            let _ = fs::remove_file(&encoded_tmp).await;
-            Ok(raw_tmp.to_path_buf())
-        }
+        })?
     }
 
     /// Read a content-addressed blob.

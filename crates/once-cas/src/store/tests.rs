@@ -263,6 +263,43 @@ async fn copy_blob_to_file_preserves_destination_when_decode_fails() {
     assert_eq!(fs::read(&destination).await.unwrap(), b"keep this output");
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn streamed_blob_preserves_normal_file_creation_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = TempDir::new().unwrap();
+    let baseline = tmp.path().join("baseline");
+    std::fs::File::create(&baseline).unwrap();
+    let cas = Cas::open(tmp.path().join("cas"));
+    let digest = cas
+        .put_stream(b"uncompressed blob".as_slice())
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::metadata(cas.blob_path(&digest))
+            .unwrap()
+            .permissions()
+            .mode(),
+        std::fs::metadata(baseline).unwrap().permissions().mode()
+    );
+}
+
+#[tokio::test]
+async fn cancelling_put_stream_removes_partial_scratch_file() {
+    let tmp = TempDir::new().unwrap();
+    let cas = Cas::open(tmp.path());
+    let (mut writer, reader) = tokio::io::duplex(64);
+    let writing_cas = cas.clone();
+    let task = tokio::spawn(async move { writing_cas.put_stream(reader).await });
+    writer.write_all(&[42; 1024]).await.unwrap();
+    let mut before = fs::read_dir(cas.scratch_dir()).await.unwrap();
+    assert!(before.next_entry().await.unwrap().is_some());
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    let mut entries = fs::read_dir(cas.scratch_dir()).await.unwrap();
+    assert!(entries.next_entry().await.unwrap().is_none());
+}
+
 #[tokio::test]
 async fn put_stream_cleans_up_scratch_on_read_error() {
     use std::io;
