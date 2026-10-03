@@ -12,11 +12,11 @@ use std::time::Duration;
 use once_cas::{TuistAuth, TuistCacheConfig, TUIST_OAUTH_CLIENT_ID_ENV};
 use once_core::{RunEventBus, Xdg};
 use once_events_client::{
-    EventClient, ReconnectPolicy, SessionLimits, TransportConfig, TransportError,
+    CredentialsError, EventClient, ReconnectPolicy, SessionLimits, TransportConfig, TransportError,
 };
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
-use tonic::transport::{Channel, Endpoint};
+use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 
 use crate::argv_normalize::SafeContext;
 use crate::cache_provider::{credentials_root, resolve_config, ResolvedCacheProviderConfig};
@@ -97,24 +97,38 @@ pub async fn spawn(
             let channel = match build_channel(&endpoint_url).await {
                 Ok(channel) => channel,
                 Err(error) => {
-                    tracing::debug!(%error, "Once live reporter: gRPC connect failed");
+                    tracing::debug!(
+                        error = %error_chain(&error),
+                        "Once live reporter: gRPC connect failed"
+                    );
                     return Ok(0);
                 }
             };
 
-            let client = EventClient::authenticated(
-                channel,
-                TransportConfig {
-                    run_id: run_id.clone(),
-                    batch_flush: Duration::from_millis(150),
-                    final_drain: Duration::from_secs(2),
-                    limits: SessionLimits::default(),
-                },
-                &token,
-            );
-            let Ok(mut client) = client else {
-                tracing::debug!("Once live reporter: invalid authorization metadata");
-                return Ok(0);
+            let config = TransportConfig {
+                run_id: run_id.clone(),
+                batch_flush: Duration::from_millis(150),
+                final_drain: Duration::from_secs(2),
+                limits: SessionLimits::default(),
+            };
+            let project_id = tuist_project_id(&account, &project);
+            let client = match project_id.as_deref() {
+                Some(project_id) => {
+                    EventClient::authenticated_with_project_id(channel, config, &token, project_id)
+                }
+                None => EventClient::authenticated(channel, config, &token)
+                    .map_err(CredentialsError::from),
+            };
+            let mut client = match client {
+                Ok(client) => client,
+                Err(CredentialsError::Token(_)) => {
+                    tracing::debug!("Once live reporter: invalid authorization metadata");
+                    return Ok(0);
+                }
+                Err(CredentialsError::ProjectId) => {
+                    tracing::debug!("Once live reporter: project id is not valid metadata");
+                    return Ok(0);
+                }
             };
             let caps = tokio::time::timeout(Duration::from_secs(5), client.capabilities())
                 .await
@@ -130,7 +144,7 @@ pub async fn spawn(
             };
             let key = tokio::time::timeout(
                 Duration::from_secs(5),
-                client.argv_hash_key(format!("{account}/{project}")),
+                client.argv_hash_key(project_id.clone().unwrap_or_default()),
             )
             .await
             .map_err(|_| TransportError::PreflightTimeout)??;
@@ -163,14 +177,26 @@ pub async fn spawn(
                 argv_hash_key_id: key.key_id,
                 cwd_relative: crate::argv_normalize::cwd_relative(&workspace, &workspace),
                 safe_literal_allowlist_version: allowlist_version.to_string(),
-                project_id: format!("{account}/{project}"),
+                project_id: project_id.unwrap_or_default(),
                 is_ci: once_events_client::environment::is_ci(),
                 ..Default::default()
             };
 
             let _ = ready_tx.send(());
+            let renewal_workspace = workspace.clone();
+            let renewal_xdg = xdg.clone();
             client
                 .with_metadata(metadata)
+                .with_token_provider(move || {
+                    let workspace = renewal_workspace.clone();
+                    let xdg = renewal_xdg.clone();
+                    async move {
+                        tokio::task::spawn_blocking(move || auth_token(&workspace, &xdg))
+                            .await
+                            .ok()
+                            .flatten()
+                    }
+                })
                 .with_dashboard_link(|link| eprintln!("\n  ↗ Once live: {link}\n"))
                 .run_with_reconnect(bus_rx, shutdown_rx, ReconnectPolicy::default())
                 .await
@@ -183,6 +209,16 @@ pub async fn spawn(
         shutdown: Some(shutdown_tx),
         system_sampler: Some(system_sampler),
     }
+}
+
+/// The project id this provider's server expects. It is the only place the
+/// `account/project` shape lives; the transport and the protocol treat the id
+/// as opaque.
+fn tuist_project_id(account: &str, project: &str) -> Option<String> {
+    if account.is_empty() || project.is_empty() {
+        return None;
+    }
+    Some(format!("{account}/{project}"))
 }
 
 async fn resolve_events(workspace: &Path, xdg: &Xdg) -> Option<String> {
@@ -200,10 +236,27 @@ async fn resolve_events(workspace: &Path, xdg: &Xdg) -> Option<String> {
     }
 }
 
-async fn build_channel(url: &str) -> Result<Channel, tonic::transport::Error> {
-    let endpoint =
+pub(crate) async fn build_channel(url: &str) -> Result<Channel, tonic::transport::Error> {
+    let mut endpoint =
         Endpoint::from_shared(normalize_grpc_url(url))?.connect_timeout(Duration::from_secs(5));
+    // The parsed URI lowercases the scheme, so `HTTPS://` is matched too.
+    if endpoint.uri().scheme_str() == Some("https") {
+        endpoint = endpoint.tls_config(ClientTlsConfig::new().with_enabled_roots())?;
+    }
     endpoint.connect().await
+}
+
+// tonic reports a failed connect as a bare "transport error" and keeps the
+// reason in the source chain, so log every cause instead of only the outermost.
+fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        message.push_str(": ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    message
 }
 
 // gRPC targets in `/.well-known/once` are advertised as
@@ -293,7 +346,106 @@ fn git_revision(workspace: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::workspace_disclosure_enabled;
+    use std::time::Duration;
+
+    use tokio::io::AsyncReadExt;
+
+    use super::{build_channel, error_chain, tuist_project_id, workspace_disclosure_enabled};
+
+    #[test]
+    fn the_project_id_needs_both_halves() {
+        assert_eq!(
+            tuist_project_id("tuist", "once").as_deref(),
+            Some("tuist/once")
+        );
+        assert_eq!(tuist_project_id("tuist", ""), None);
+        assert_eq!(tuist_project_id("", "once"), None);
+        assert_eq!(tuist_project_id("", ""), None);
+    }
+
+    // Dials a plain TCP listener through `build_channel` and returns the first
+    // byte the client sent. Both waits are bounded so a client that never dials
+    // fails the test instead of hanging it.
+    async fn first_byte_sent_by(url: impl FnOnce(u16) -> String) -> Option<u8> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let first_byte = tokio::spawn(async move {
+            let (mut socket, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+                .await
+                .ok()?
+                .ok()?;
+            let mut byte = [0_u8; 1];
+            tokio::time::timeout(Duration::from_secs(5), socket.read_exact(&mut byte))
+                .await
+                .ok()?
+                .ok()?;
+            Some(byte[0])
+        });
+
+        let _ = build_channel(&url(port)).await;
+
+        first_byte.await.unwrap()
+    }
+
+    // 0x16 is the TLS handshake record type, the first byte of a ClientHello.
+    const TLS_HANDSHAKE: u8 = 0x16;
+
+    // Without a TLS config the channel gave up right after the TCP connect and
+    // never sent a byte, so `once` could not stream to any `grpcs://` server.
+    #[tokio::test]
+    async fn grpcs_endpoints_open_with_a_tls_handshake() {
+        let first = first_byte_sent_by(|port| format!("grpcs://127.0.0.1:{port}")).await;
+        assert_eq!(first, Some(TLS_HANDSHAKE));
+    }
+
+    #[tokio::test]
+    async fn the_https_scheme_is_matched_case_insensitively() {
+        let first = first_byte_sent_by(|port| format!("HTTPS://127.0.0.1:{port}")).await;
+        assert_eq!(first, Some(TLS_HANDSHAKE));
+    }
+
+    // A plaintext HTTP/2 client opens with the connection preface, which starts
+    // with `P`, so local `grpc://` servers keep working without TLS.
+    #[tokio::test]
+    async fn grpc_endpoints_stay_plaintext() {
+        let first = first_byte_sent_by(|port| format!("grpc://127.0.0.1:{port}")).await;
+        assert_eq!(first, Some(b'P'));
+    }
+
+    #[derive(Debug)]
+    struct Layered(&'static str, Option<Box<Layered>>);
+
+    impl std::fmt::Display for Layered {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str(self.0)
+        }
+    }
+
+    impl std::error::Error for Layered {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.1
+                .as_deref()
+                .map(|cause| cause as &(dyn std::error::Error + 'static))
+        }
+    }
+
+    // tonic reports connect failures as a bare "transport error" and keeps the
+    // reason in the source chain, which is what hid the missing TLS config.
+    #[test]
+    fn error_chain_includes_every_cause() {
+        let error = Layered(
+            "transport error",
+            Some(Box::new(Layered(
+                "tls handshake",
+                Some(Box::new(Layered("unknown issuer", None))),
+            ))),
+        );
+
+        assert_eq!(
+            error_chain(&error),
+            "transport error: tls handshake: unknown issuer"
+        );
+    }
 
     #[test]
     fn argument_disclosure_requires_explicit_workspace_setting() {

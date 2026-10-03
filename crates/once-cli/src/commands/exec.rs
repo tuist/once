@@ -17,15 +17,15 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::ExitCode;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{
     tool_env, verify_reproducible, workspace_tool_command, workspace_tool_env, Action, CacheState,
     EvidenceSubject, InputDigestBuilder, NetworkPolicy, OutputSymlinkMode, RemoteExecution,
-    ReproducibilityReport, ResourceLimits, ResourceRequest, RunOpts, SandboxMode, WorkspacePath,
-    Xdg,
+    ReproducibilityReport, ResourceLimits, ResourceRequest, RunEventBus, RunOpts, SandboxMode,
+    WorkspacePath, Xdg,
 };
 use once_frontend::{parse_script_annotations, ScriptAnnotations};
 use serde::Serialize;
@@ -142,19 +142,144 @@ pub async fn exec(
     };
     let resource_limits = args.resource_limits.clone();
     let (workspace, action) = plan_exec_action(workspace, xdg, cache, opts, args).await?;
-    if verify_reproducible {
-        return verify_and_report(&workspace, cache, &action, output).await;
+
+    // Live run reporter. Build and test runs stream through the same
+    // reporter via `commands::graph::mod.rs`; exec runs join the stream
+    // too so the Tuist dashboard carries a complete picture of what
+    // actually ran in a workspace, not only its typed-graph work.
+    // Opening the bus before any work means `RunStarted` publishes
+    // before the first action lifecycle event — the dashboard treats a
+    // run as present the moment its RunStarted arrives, including on
+    // `--verify-reproducible` and on failures that bail before an action
+    // completes.
+    let bus = RunEventBus::new(EVENT_BUS_CAPACITY);
+    let live_reporter = crate::live_run_reporter::spawn(
+        &bus,
+        &workspace,
+        once_core::Xdg::from_env(),
+        crate::cache_provider::account(&workspace),
+        crate::cache_provider::project(&workspace),
+    )
+    .await;
+    let run_started_epoch_ms = crate::bus_events::now_ms();
+    crate::bus_events::run_started(&bus, EXEC_TARGET_ID, run_started_epoch_ms);
+
+    // Perform the body of the exec, capturing its exit code so we can
+    // emit `run_completed` and drain the reporter on every path — Ok,
+    // Err, or `verify_reproducible`. Without this guard the `?` on
+    // `run_exec_action` would detach the reporter mid-run and leave the
+    // server's run row unfinalized.
+    let body_result = if verify_reproducible {
+        verify_and_report(&workspace, cache, &action, output)
+            .await
+            .map(|exit_code| ExecOutcome::Verify { exit_code })
+    } else {
+        exec_body(
+            &bus,
+            cache,
+            &workspace,
+            opts,
+            resource_limits,
+            &action,
+            output,
+        )
+        .await
+    };
+
+    // Always finalize. On error we don't know the exit code the user
+    // process would have returned; `-1` is the convention the server
+    // projector already handles for "unknown" (see the sentinel in
+    // `projector.ex` for aborted actions).
+    let finalize_exit_code = match &body_result {
+        Ok(outcome) => outcome.exit_code(),
+        Err(_) => -1,
+    };
+    crate::bus_events::run_completed(&bus, finalize_exit_code);
+    live_reporter.finish().await;
+
+    body_result.map(ExecOutcome::into_exit_code)
+}
+
+/// What the exec body produced on a successful path. Either the normal
+/// run (with sound + evidence + output already applied) or a
+/// reproducibility verification result. Both carry the exit code the
+/// run finalized at so the outer `exec` can emit `run_completed` with
+/// the same number.
+enum ExecOutcome {
+    Normal { exit_code: i32 },
+    Verify { exit_code: ExitCode },
+}
+
+impl ExecOutcome {
+    fn exit_code(&self) -> i32 {
+        match self {
+            // Verify_and_report only ever returns SUCCESS or FAILURE
+            // (reproducible vs. not); fold both to the i32 contract the
+            // bus event uses.
+            Self::Verify { exit_code } => i32::from(!is_success(*exit_code)),
+            Self::Normal { exit_code } => *exit_code,
+        }
     }
-    let streams_live = action_remote(&action).is_some() && output.format == Format::Human;
+
+    fn into_exit_code(self) -> ExitCode {
+        match self {
+            Self::Verify { exit_code } => exit_code,
+            Self::Normal { exit_code } => exit_from(exit_code),
+        }
+    }
+}
+
+// `std::process::ExitCode` is opaque — the only way to distinguish
+// SUCCESS from FAILURE is to format them and compare. The two
+// constants have well-known Debug shapes we match against; anything
+// else is treated as not-success (matches the verify command's
+// current internal contract).
+fn is_success(exit_code: ExitCode) -> bool {
+    format!("{exit_code:?}") == format!("{:?}", ExitCode::SUCCESS)
+}
+
+/// Normal (non-verify) exec body. Runs the action, emits its
+/// `ActionCompleted`, and completes the sound + evidence + output
+/// side-effects. `run_completed` and reporter drain happen in the
+/// caller so both the success and the error path finalize uniformly.
+async fn exec_body(
+    bus: &RunEventBus,
+    cache: &CacheProvider,
+    workspace: &Path,
+    opts: RunOpts,
+    resource_limits: ResourceLimits,
+    action: &Action,
+    output: Output,
+) -> Result<ExecOutcome> {
+    let streams_live = action_remote(action).is_some() && output.format == Format::Human;
+    let action_started_at = Instant::now();
+    let action_started_epoch_ms = crate::bus_events::now_ms();
     let outcome = run_exec_action(
         cache,
-        &workspace,
+        workspace,
         opts,
         resource_limits,
-        &action,
+        action,
         streams_live,
     )
     .await?;
+    let action_duration_ms = u64::try_from(action_started_at.elapsed().as_millis()).unwrap_or(0);
+    crate::bus_events::action_completed(
+        bus,
+        EXEC_TARGET_ID,
+        EXEC_CAPABILITY,
+        0,
+        None,
+        action_duration_ms,
+        outcome.cache == CacheState::Hit,
+        outcome.result.exit_code,
+        action_started_epoch_ms,
+        EXEC_WORKER_ID,
+        0,
+        i64::try_from(action_duration_ms).unwrap_or(i64::MAX),
+        &outcome.action.to_string(),
+        1,
+    );
     crate::sound::emit(sound_for_action_outcome(&outcome));
     crate::sound::emit(if outcome.result.exit_code == 0 {
         crate::sound::Event::Finished
@@ -162,16 +287,39 @@ pub async fn exec(
         crate::sound::Event::Failed
     });
     crate::commands::evidence::record_outcome(
-        &workspace,
+        workspace,
         EvidenceSubject::command(outcome.action),
-        &action,
+        action,
         &outcome,
     )
     .await;
     write_exec_output(cache, output, streams_live, &outcome).await?;
-
-    Ok(exit_from(outcome.result.exit_code))
+    Ok(ExecOutcome::Normal {
+        exit_code: outcome.result.exit_code,
+    })
 }
+
+// Synthetic target id for exec runs. The server's projector treats
+// run and action identifiers as opaque strings; a stable label here
+// keeps every exec run groupable in the dashboard the way one typed
+// target groups its actions during a build. We never emit multiple
+// exec actions under the same bus, so a static string is enough.
+const EXEC_TARGET_ID: &str = "exec";
+
+// Server-side projector normalizes unknown capabilities to "build"
+// (see `defp project_action/… capability` in the Elixir projector).
+// Passing an explicit "exec" lets us tag these rows distinctly in a
+// future projector pass without needing a client release first.
+const EXEC_CAPABILITY: &str = "exec";
+
+// Exec runs one action at a time, so there is only one worker lane.
+const EXEC_WORKER_ID: &str = "exec";
+
+// Capacity for the reporter's broadcast channel. Exec publishes a
+// handful of events (RunStarted, ActionCompleted, RunCompleted) so a
+// small ring is sufficient; the constant matches the shape used by
+// the graph scheduler for a single-target run.
+const EVENT_BUS_CAPACITY: usize = 1024;
 
 async fn verify_and_report(
     workspace: &Path,

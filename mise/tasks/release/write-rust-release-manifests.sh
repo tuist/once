@@ -74,30 +74,6 @@ fi
 suffix="$(printf '%s' "${target}" | tr '.-' '__')"
 dependency_target="cargo_dependencies_${suffix}"
 
-# `once-events-client` is the one first-party crate whose build script is
-# load-bearing: it runs `tonic-prost-build` to generate the wire types that
-# `src/lib.rs` pulls in with `tonic::include_proto!`. The Cargo resolver
-# synthesises a host target per build dependency and names it
-# `<crate>-<version>`, and the graph has no way to expand a dependency set
-# into a `build_deps` role, so the script has to name those targets. Reading
-# the versions out of `Cargo.lock` keeps a dependency bump from silently
-# breaking the release build.
-locked_version() {
-  local crate="$1" version
-  version="$(awk -v crate="${crate}" '
-    $1 == "name" && $3 == "\"" crate "\"" { found = 1; next }
-    found && $1 == "version" { gsub(/"/, "", $3); print $3; exit }
-  ' Cargo.lock)"
-  if [[ -z "${version}" ]]; then
-    echo "could not find ${crate} in Cargo.lock" >&2
-    exit 1
-  fi
-  printf '%s' "${version}"
-}
-
-protoc_bin_vendored_version="$(locked_version protoc-bin-vendored)"
-tonic_build_version="$(locked_version tonic-build)"
-tonic_prost_build_version="$(locked_version tonic-prost-build)"
 case "${target}" in
   *-apple-ios*)
     release_flags='["-C", "opt-level=3", "-C", "codegen-units=1"]'
@@ -214,13 +190,6 @@ deps = [
   "${dependency_target}",
 ]
 srcs = ["src/**/*.rs", "proto/**/*.proto", "build.rs"]
-
-[target.dependencies]
-build_deps = [
-  "protoc-bin-vendored-${protoc_bin_vendored_version}",
-  "tonic-build-${tonic_build_version}",
-  "tonic-prost-build-${tonic_prost_build_version}",
-]
 
 [target.attrs]
 crate_name = "once_events_client"

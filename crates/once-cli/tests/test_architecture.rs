@@ -104,7 +104,6 @@ fn compatibility_adapters_do_not_name_starlark_target_kinds() {
         "src/commands/bazel/invocation.rs",
         "src/commands/cargo/invocation.rs",
         "src/commands/swift/invocation.rs",
-        "src/commands/ui.rs",
         "src/commands/xcodebuild/invocation.rs",
     ];
     let target_kinds = once_frontend::built_in_target_kind_schemas();

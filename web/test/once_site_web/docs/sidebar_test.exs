@@ -48,6 +48,18 @@ defmodule OnceSiteWeb.Docs.SidebarTest do
            }
   end
 
+  test "natively supported toolchains live in their own group with logos" do
+    toolchains = Enum.find(Sidebar.guide_tree(), &(&1.label == "Toolchains"))
+    typed_graph = Enum.find(Sidebar.guide_tree(), &(&1.label == "Typed Graph"))
+
+    labels = Enum.map(toolchains.items, & &1.label)
+
+    assert labels == Enum.sort(labels)
+    assert Enum.all?(toolchains.items, &is_binary(&1.icon))
+    assert Enum.find(toolchains.items, &(&1.label == "Bazel")).icon == "bazel"
+    refute Enum.any?(typed_graph.items, &(&1.label in labels))
+  end
+
   test "exposes linting guides, commands, modules, and target kinds" do
     guide_slugs =
       Sidebar.guide_tree()

@@ -1,5 +1,6 @@
 @import "./fonts.css";
 @import "noora/noora.css";
+@import "./shared/theme.css";
 @import "./shared/prose.css";
 @import "./shared/code-window.css";
 @import "./shared/code-group.css";
@@ -139,6 +140,10 @@ p {
 #docs-sidebar [data-part="nav-item-icon"][data-icon="android"] {
   --nav-icon-mask: url("/docs/icons/android.svg");
   --nav-icon-color: oklch(53.7% 0.1613 146.6);
+}
+#docs-sidebar [data-part="nav-item-icon"][data-icon="bazel"] {
+  --nav-icon-mask: url("/docs/icons/bazel.svg");
+  --nav-icon-color: oklch(62% 0.16 145);
 }
 #docs-sidebar [data-part="nav-item-icon"][data-icon="c"] {
   --nav-icon-mask: url("/docs/icons/c.svg");

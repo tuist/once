@@ -23,7 +23,7 @@ automatically. From that workspace, run:
 
 ```sh
 once query targets
-once build --ui
+once build
 once test
 ```
 
@@ -36,8 +36,7 @@ rule as a `bazel_target`, and forwards the label and rule class on
 When discovery finds one Bazel workspace, `once build --ui` builds its
 non-test roots and opens the Runs interface. `once test` runs the test rules
 reported by that workspace. Use `once test --ui` to follow scheduling and
-results in the same interface. Add `once.toml` only when the discovered target
-needs configuration beyond the native workspace files.
+results in the same interface. Discovery does not write an Once manifest.
 
 ## Ignore The Once Cache
 

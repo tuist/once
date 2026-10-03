@@ -15,15 +15,14 @@ From the directory that contains the root `Cargo.toml`, run:
 
 ```sh
 once query targets
-once build --ui
+once build
 once test
 ```
 
-The Runs interface shows the live build graph, including independently cached
-package and dependency actions. Add `--ui` to `once test` to follow test
-batches and results there too. The targetless test command selects first-party
-tests and excludes test targets belonging only to external crates. Use `once
-test --all` to request every test target in the resolved graph.
+The build reports independently cached package and dependency actions as it
+runs. The targetless test command selects first-party tests and excludes test
+targets belonging only to external crates. Use `once test --all` to request
+every test target in the resolved graph.
 
 ### Check the Toolchain
 

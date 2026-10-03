@@ -53,11 +53,11 @@
       0px 0px 0px 1px oklch(32% 0.005 247.968 / 0.08),
       0px 1px 1px 0px oklch(32% 0.005 247.968 / 0.1);
     border-radius: var(--noora-radius-6);
-    background: var(--noora-neutral-light-50);
+    background: var(--noora-surface-background-primary);
     padding: var(--noora-spacing-6);
     height: 230px;
     overflow: hidden;
-    color: var(--noora-neutral-light-1200);
+    color: var(--noora-surface-label-primary);
     text-decoration: none;
   }
 
@@ -95,11 +95,7 @@
       transform: translate(-50%, -50%);
       opacity: 0.7;
       filter: blur(13px);
-      background: linear-gradient(
-        180deg,
-        var(--noora-purple-50) 0%,
-        color-mix(in oklch, var(--noora-purple-200) 32%, var(--noora-purple-50)) 100%
-      );
+      background: var(--once-card-gradient);
       width: 640px;
       height: 360px;
       content: "";
@@ -109,7 +105,7 @@
   & [data-part="hero-card"] h3 {
     position: relative;
     width: 100%;
-    color: var(--noora-neutral-light-1200);
+    color: var(--noora-surface-label-primary);
     font: var(--noora-font-weight-medium) var(--noora-font-heading-large);
   }
 
@@ -118,13 +114,13 @@
     position: relative;
     align-items: center;
     gap: var(--noora-spacing-2);
-    color: var(--noora-neutral-light-1200);
+    color: var(--noora-surface-label-primary);
     font: var(--noora-font-body-xsmall);
     white-space: nowrap;
   }
 
   & [data-part="hero-card-link"] {
-    color: var(--noora-purple-500);
+    color: light-dark(var(--noora-purple-500), var(--noora-purple-300));
     font: var(--noora-font-body-xsmall);
     text-decoration: none;
 
@@ -266,7 +262,7 @@
     & code {
       color: var(--noora-neutral-light-50);
       font: var(--noora-font-body-medium);
-      font-family: "Geist Mono", var(--noora-font-mono), monospace;
+      font-family: var(--noora-font-code);
       user-select: text;
       white-space: nowrap;
     }
@@ -480,11 +476,7 @@
       0px 0px 0px 1px oklch(32% 0.005 247.968 / 0.08),
       0px 1px 1px 0px oklch(32% 0.005 247.968 / 0.1);
     border-radius: var(--noora-radius-6);
-    background: linear-gradient(
-      180deg,
-      var(--noora-purple-50) 0%,
-      color-mix(in oklch, var(--noora-purple-200) 32%, var(--noora-purple-50)) 100%
-    );
+    background: var(--once-card-gradient);
     height: 208px;
     overflow: hidden;
   }
@@ -509,7 +501,7 @@
   }
 
   & [data-part="feature-card"] [data-part="title"] {
-    color: var(--noora-neutral-light-1200);
+    color: var(--noora-surface-label-primary);
     font: var(--noora-font-weight-medium) var(--noora-font-heading-xlarge);
   }
 

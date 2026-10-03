@@ -26,14 +26,44 @@ struct RecordedRun {
     batches: Vec<RunEventBatch>,
     expected_next_seq: u64,
     authorizations: Vec<String>,
+    projects: Vec<String>,
     stall: bool,
     break_first_stream: bool,
+    expired_bearer: Option<String>,
     invalid_hash_key: bool,
+}
+
+fn project_id_header(metadata: &tonic::metadata::MetadataMap) -> String {
+    metadata
+        .get(once_events_client::PROJECT_ID_METADATA)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string()
 }
 
 #[derive(Default, Clone)]
 struct TestServer {
     recorded: Arc<Mutex<RecordedRun>>,
+}
+
+impl TestServer {
+    /// Records what the call presented and refuses a bearer the test marked expired,
+    /// the way the real service refuses one it can no longer authenticate.
+    async fn admit(&self, metadata: &tonic::metadata::MetadataMap) -> Result<(), Status> {
+        let bearer = metadata
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        let mut state = self.recorded.lock().await;
+        state.projects.push(project_id_header(metadata));
+        let refused = state.expired_bearer.as_deref() == Some(bearer.as_str());
+        state.authorizations.push(bearer);
+        if refused {
+            return Err(Status::unauthenticated("missing or invalid bearer"));
+        }
+        Ok(())
+    }
 }
 
 #[tonic::async_trait]
@@ -42,13 +72,17 @@ impl RunEventService for TestServer {
         &self,
         req: Request<GetServerCapabilitiesRequest>,
     ) -> Result<Response<ServerCapabilities>, Status> {
-        self.recorded.lock().await.authorizations.push(
+        let project = project_id_header(req.metadata());
+        let mut recorded = self.recorded.lock().await;
+        recorded.projects.push(project);
+        recorded.authorizations.push(
             req.metadata()
                 .get("authorization")
                 .and_then(|value| value.to_str().ok())
                 .unwrap_or_default()
                 .to_string(),
         );
+        drop(recorded);
         Ok(Response::new(ServerCapabilities {
             supported_protocol_versions: vec!["1.0".into()],
             max_batch_bytes: 65_536,
@@ -94,13 +128,7 @@ impl RunEventService for TestServer {
         &self,
         req: Request<Streaming<RunEventBatch>>,
     ) -> Result<Response<Self::PublishRunEventsStream>, Status> {
-        self.recorded.lock().await.authorizations.push(
-            req.metadata()
-                .get("authorization")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or_default()
-                .to_string(),
-        );
+        self.admit(req.metadata()).await?;
         let recorded = self.recorded.clone();
         let mut inbound = req.into_inner();
         let first = inbound
@@ -190,18 +218,13 @@ impl RunEventService for TestServer {
         &self,
         req: Request<GetRunAckRequest>,
     ) -> Result<Response<RunEventAck>, Status> {
-        let authorization = req
-            .metadata()
-            .get("authorization")
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default()
-            .to_string();
-        let mut state = self.recorded.lock().await;
-        state.authorizations.push(authorization);
+        self.admit(req.metadata()).await?;
+        let state = self.recorded.lock().await;
+        let acked_seq = state.expected_next_seq.saturating_sub(1);
         Ok(Response::new(RunEventAck {
             run_id: req.into_inner().run_id,
-            acked_seq: state.expected_next_seq.saturating_sub(1),
-            expected_next_seq: state.expected_next_seq,
+            acked_seq,
+            expected_next_seq: acked_seq + 1,
             observed_high_water_seq: 0,
             finalization: RunFinalization::Active as i32,
             dashboard_url: "https://dashboard.example/runs/canonical".into(),
@@ -229,6 +252,116 @@ async fn start_server() -> (Channel, Arc<Mutex<RecordedRun>>) {
         .await
         .unwrap();
     (channel, recorded)
+}
+
+#[tokio::test]
+async fn sends_the_project_id_with_the_credentials_on_a_call() {
+    let (channel, recorded) = start_server().await;
+    let mut client = EventClient::authenticated_with_project_id(
+        channel,
+        TransportConfig::default(),
+        "session-token",
+        "some-project-id",
+    )
+    .unwrap();
+    client.capabilities().await.unwrap();
+
+    let recorded = recorded.lock().await;
+    assert_eq!(recorded.projects, vec!["some-project-id".to_string()]);
+    assert_eq!(
+        recorded.authorizations,
+        vec!["Bearer session-token".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn sends_no_project_id_when_none_is_given() {
+    let (channel, recorded) = start_server().await;
+    let mut client =
+        EventClient::authenticated(channel, TransportConfig::default(), "session-token").unwrap();
+    client.capabilities().await.unwrap();
+
+    assert_eq!(recorded.lock().await.projects, vec![String::new()]);
+}
+
+#[tokio::test]
+async fn names_the_project_on_every_call_across_a_reconnect() {
+    let (channel, recorded) = start_server().await;
+    recorded.lock().await.break_first_stream = true;
+    let client = EventClient::authenticated_with_project_id(
+        channel,
+        TransportConfig {
+            run_id: "reconnect-project".into(),
+            ..Default::default()
+        },
+        "reconnect-token",
+        "some-project-id",
+    )
+    .unwrap();
+    let bus = RunEventBus::new(16);
+    let rx = bus.subscribe();
+    bus.publish(RunEvent::RunStarted { at_epoch_ms: 1 });
+    bus.publish(RunEvent::RunCompleted {
+        at_epoch_ms: 2,
+        exit_status: 0,
+    });
+    let (tx, shutdown) = tokio::sync::oneshot::channel();
+    tx.send(()).unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        client.run_with_reconnect(
+            rx,
+            shutdown,
+            once_events_client::ReconnectPolicy {
+                initial_backoff: std::time::Duration::from_millis(5),
+                ..Default::default()
+            },
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    let recorded = recorded.lock().await;
+    assert!(
+        recorded.authorizations.len() >= 3,
+        "capabilities, two streams and a run ack"
+    );
+    assert_eq!(recorded.projects.len(), recorded.authorizations.len());
+    assert!(recorded
+        .projects
+        .iter()
+        .all(|project| project == "some-project-id"));
+}
+
+#[tokio::test]
+async fn rejects_project_ids_that_are_not_valid_metadata() {
+    let (channel, _) = start_server().await;
+    for invalid in [
+        "",
+        "has space",
+        "line\nbreak",
+        "caf\u{e9}",
+        &"x".repeat(257),
+    ] {
+        let result = EventClient::authenticated_with_project_id(
+            channel.clone(),
+            TransportConfig::default(),
+            "token",
+            invalid,
+        );
+        assert!(
+            matches!(result, Err(once_events_client::CredentialsError::ProjectId)),
+            "{invalid:?} should be rejected"
+        );
+    }
+    assert!(EventClient::authenticated_with_project_id(
+        channel,
+        TransportConfig::default(),
+        "token",
+        &"x".repeat(256),
+    )
+    .is_ok());
 }
 
 #[tokio::test]
@@ -596,4 +729,138 @@ async fn malformed_hash_key_is_rejected_before_argument_disclosure() {
         Err(once_events_client::TransportError::InvalidHashKey)
     ));
     assert!(recorded.lock().await.batches.is_empty());
+}
+
+async fn run_to_completion(client: EventClient, run_started: bool) -> u64 {
+    let bus = RunEventBus::new(16);
+    let rx = bus.subscribe();
+    if run_started {
+        bus.publish(RunEvent::RunStarted { at_epoch_ms: 1 });
+    }
+    bus.publish(RunEvent::RunCompleted {
+        at_epoch_ms: 2,
+        exit_status: 0,
+    });
+    let (tx, shutdown) = tokio::sync::oneshot::channel();
+    tx.send(()).unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        client.run_with_reconnect(
+            rx,
+            shutdown,
+            once_events_client::ReconnectPolicy {
+                initial_backoff: std::time::Duration::from_millis(5),
+                ..Default::default()
+            },
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_renewed_token_is_used_when_the_old_one_expires_mid_run() {
+    let (channel, recorded) = start_server().await;
+    recorded.lock().await.expired_bearer = Some("Bearer old-token".to_string());
+    let client = EventClient::authenticated_with_project_id(
+        channel,
+        TransportConfig {
+            run_id: "expiring".into(),
+            ..Default::default()
+        },
+        "old-token",
+        "some-project-id",
+    )
+    .unwrap()
+    .with_token_provider(|| async { Some("new-token".to_string()) });
+
+    assert_eq!(run_to_completion(client, true).await, 4);
+
+    let recorded = recorded.lock().await;
+    assert_eq!(recorded.expected_next_seq, 4);
+    let bearers = &recorded.authorizations;
+    assert_eq!(
+        bearers.first().map(String::as_str),
+        Some("Bearer old-token")
+    );
+    assert_eq!(bearers.last().map(String::as_str), Some("Bearer new-token"));
+    assert!(
+        bearers.iter().filter(|b| *b == "Bearer new-token").count() >= 2,
+        "the recovery probe and the reopened stream both use the renewed token: {bearers:?}"
+    );
+    assert!(recorded
+        .projects
+        .iter()
+        .all(|project| project == "some-project-id"));
+}
+
+#[tokio::test]
+async fn the_old_token_is_kept_when_renewal_yields_nothing_usable() {
+    for renewed in [None, Some("bad\nvalue".to_string()), Some(String::new())] {
+        let (channel, recorded) = start_server().await;
+        recorded.lock().await.break_first_stream = true;
+        let client = EventClient::authenticated(
+            channel,
+            TransportConfig {
+                run_id: "keeps-old".into(),
+                ..Default::default()
+            },
+            "old-token",
+        )
+        .unwrap()
+        .with_token_provider(move || {
+            let renewed = renewed.clone();
+            async move { renewed }
+        });
+
+        assert_eq!(run_to_completion(client, true).await, 4);
+
+        assert!(recorded
+            .lock()
+            .await
+            .authorizations
+            .iter()
+            .all(|value| value == "Bearer old-token"));
+    }
+}
+
+#[tokio::test]
+async fn without_a_provider_the_token_never_changes() {
+    let (channel, recorded) = start_server().await;
+    recorded.lock().await.break_first_stream = true;
+    let client = EventClient::authenticated(
+        channel,
+        TransportConfig {
+            run_id: "fixed".into(),
+            ..Default::default()
+        },
+        "fixed-token",
+    )
+    .unwrap();
+
+    assert_eq!(run_to_completion(client, true).await, 4);
+
+    assert!(recorded
+        .lock()
+        .await
+        .authorizations
+        .iter()
+        .all(|value| value == "Bearer fixed-token"));
+}
+
+#[tokio::test]
+async fn renewal_is_not_attempted_before_the_first_connection() {
+    let (channel, _) = start_server().await;
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = calls.clone();
+    let client = EventClient::authenticated(channel, TransportConfig::default(), "token")
+        .unwrap()
+        .with_token_provider(move || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            async { Some("renewed".to_string()) }
+        });
+    drop(client);
+
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
 }

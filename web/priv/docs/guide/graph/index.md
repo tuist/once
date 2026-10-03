@@ -45,9 +45,6 @@ the invocation fails when any finding meets `--fail-on`. `once lint --all
 --fail-on error` is a reasonable starting point when you want to sweep the
 whole graph.
 
-Pass `once build --ui` or `once test --ui` on a single explicit target to
-follow the live graph in the Runs interface.
-
 Continue with the guide for [Rust](/guide/graph/rust), [Swift
 Packages](/guide/graph/swift-packages), [Xcode
 Projects](/guide/graph/apple/xcode), or [Bazel](/guide/graph/bazel). Declare

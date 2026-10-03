@@ -72,7 +72,13 @@ defmodule OnceSiteWeb.Docs.Sidebar do
           %Item{label: "Ecosystems", slug: "/docs/guide/graph/ecosystems"},
           %Item{label: "Configurations", slug: "/docs/guide/graph/configuration"},
           %Item{label: "Testing and Scheduling", slug: "/docs/guide/graph/testing"},
-          %Item{label: "Linting", slug: "/docs/guide/graph/linting"},
+          %Item{label: "Linting", slug: "/docs/guide/graph/linting"}
+        ]
+      },
+      %Group{
+        label: "Toolchains",
+        items: [
+          %Item{label: "Android", slug: "/docs/guide/graph/android", icon: "android"},
           %Item{
             label: "Apple",
             slug: "/docs/guide/graph/apple",
@@ -82,8 +88,7 @@ defmodule OnceSiteWeb.Docs.Sidebar do
               %Item{label: "Swift Packages", slug: "/docs/guide/graph/swift-packages"}
             ]
           },
-          %Item{label: "Android", slug: "/docs/guide/graph/android", icon: "android"},
-          %Item{label: "Bazel", slug: "/docs/guide/graph/bazel", icon: "build-graph"},
+          %Item{label: "Bazel", slug: "/docs/guide/graph/bazel", icon: "bazel"},
           %Item{label: "C and C++", slug: "/docs/guide/graph/c", icon: "cplusplus"},
           %Item{label: "CMake", slug: "/docs/guide/graph/cmake", icon: "cplusplus"},
           %Item{
@@ -92,16 +97,16 @@ defmodule OnceSiteWeb.Docs.Sidebar do
             icon: "containers"
           },
           %Item{label: "Elixir", slug: "/docs/guide/graph/elixir", icon: "elixir"},
-          %Item{label: "Kotlin", slug: "/docs/guide/graph/kotlin", icon: "kotlin"},
           %Item{label: "Go", slug: "/docs/guide/graph/go", icon: "go"},
-          %Item{label: "Rust", slug: "/docs/guide/graph/rust", icon: "rust"},
-          %Item{label: "Zig", slug: "/docs/guide/graph/zig", icon: "zig"},
+          %Item{label: "Kotlin", slug: "/docs/guide/graph/kotlin", icon: "kotlin"},
           %Item{label: "Nx", slug: "/docs/guide/graph/nx", icon: "nx"},
           %Item{
             label: "React Native",
             slug: "/docs/guide/graph/react-native",
             icon: "react-native"
-          }
+          },
+          %Item{label: "Rust", slug: "/docs/guide/graph/rust", icon: "rust"},
+          %Item{label: "Zig", slug: "/docs/guide/graph/zig", icon: "zig"}
         ]
       },
       %Group{

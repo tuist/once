@@ -13,6 +13,9 @@
 //! transport shuts down gracefully once the bus is closed and the
 //! session drains, honouring the RFC's bounded final drain deadline.
 
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use once_core::{RunEvent as CoreEvent, RunEventBus};
@@ -30,6 +33,21 @@ use crate::bridge::{translate, Translated};
 use crate::proto::run_event_service_client::RunEventServiceClient;
 use crate::proto::{GetServerCapabilitiesRequest, RunEventBatch, ServerCapabilities};
 use crate::session::{AckAction, EventSession, SessionLimits};
+
+/// Per-call metadata key carrying the opaque project id, the same value the
+/// client reports in `RunStarted.project_id`. RFC 0008 defines it.
+pub const PROJECT_ID_METADATA: &str = "once-project-id";
+
+const MAX_PROJECT_ID_LEN: usize = 256;
+
+/// Credentials that cannot be sent as gRPC metadata.
+#[derive(Debug, thiserror::Error)]
+pub enum CredentialsError {
+    #[error("authorization token is not valid metadata")]
+    Token(#[from] tonic::metadata::errors::InvalidMetadataValue),
+    #[error("project id must be 1 to {MAX_PROJECT_ID_LEN} visible ASCII characters")]
+    ProjectId,
+}
 
 /// Configuration for a live transport.
 #[derive(Clone, Debug)]
@@ -81,17 +99,38 @@ pub struct EventClient {
     metadata: Option<crate::proto::RunStarted>,
     started_at_ms: Option<i64>,
     dashboard: crate::dashboard::DashboardLink,
+    token_slot: TokenSlot,
+    token_provider: Option<TokenProvider>,
 }
 
+type TokenSlot = Arc<Mutex<Option<MetadataValue<Ascii>>>>;
+
+/// Resolves a fresh bearer token, or nothing when none is available.
+type TokenProvider =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Option<String>> + Send>> + Send + Sync>;
+
+const RENEW_TOKEN_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[derive(Clone, Default)]
-struct Authorization(Option<MetadataValue<Ascii>>);
+struct Authorization {
+    token: TokenSlot,
+    project: Option<MetadataValue<Ascii>>,
+}
 
 impl Interceptor for Authorization {
     fn call(&mut self, mut request: Request<()>) -> Result<Request<()>, tonic::Status> {
-        if let Some(value) = &self.0 {
+        let token = self
+            .token
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(value) = token {
+            request.metadata_mut().insert("authorization", value);
+        }
+        if let Some(value) = &self.project {
             request
                 .metadata_mut()
-                .insert("authorization", value.clone());
+                .insert(PROJECT_ID_METADATA, value.clone());
         }
         Ok(request)
     }
@@ -123,12 +162,15 @@ impl EventClient {
     /// Construct a client from a shared tonic channel. The caller is
     /// responsible for TLS, auth interceptors, and connection reuse.
     pub fn new(channel: Channel, config: TransportConfig) -> Self {
+        let authorization = Authorization::default();
         Self {
-            client: RunEventServiceClient::with_interceptor(channel, Authorization::default()),
+            token_slot: authorization.token.clone(),
+            client: RunEventServiceClient::with_interceptor(channel, authorization),
             config,
             metadata: None,
             started_at_ms: None,
             dashboard: crate::dashboard::DashboardLink::default(),
+            token_provider: None,
         }
     }
 
@@ -137,18 +179,88 @@ impl EventClient {
         config: TransportConfig,
         token: &str,
     ) -> Result<Self, tonic::metadata::errors::InvalidMetadataValue> {
+        Self::with_credentials(channel, config, token, None).map_err(|error| match error {
+            CredentialsError::Token(error) => error,
+            CredentialsError::ProjectId => unreachable!("no project id was given"),
+        })
+    }
+
+    /// Like [`EventClient::authenticated`], and sends the opaque `project_id` in
+    /// [`PROJECT_ID_METADATA`] on every call. The server validates it against
+    /// what the token may report to; the format is the server's own.
+    pub fn authenticated_with_project_id(
+        channel: Channel,
+        config: TransportConfig,
+        token: &str,
+        project_id: &str,
+    ) -> Result<Self, CredentialsError> {
+        Self::with_credentials(channel, config, token, Some(project_id))
+    }
+
+    fn with_credentials(
+        channel: Channel,
+        config: TransportConfig,
+        token: &str,
+        project_id: Option<&str>,
+    ) -> Result<Self, CredentialsError> {
         let mut authorization: MetadataValue<Ascii> = format!("Bearer {token}").parse()?;
         authorization.set_sensitive(true);
+        let project = project_id
+            .map(|id| {
+                let visible = id.bytes().all(|byte| byte.is_ascii_graphic());
+                if id.is_empty() || id.len() > MAX_PROJECT_ID_LEN || !visible {
+                    return Err(CredentialsError::ProjectId);
+                }
+                id.parse().map_err(|_| CredentialsError::ProjectId)
+            })
+            .transpose()?;
+        let authorization = Authorization {
+            token: Arc::new(Mutex::new(Some(authorization))),
+            project,
+        };
         Ok(Self {
-            client: RunEventServiceClient::with_interceptor(
-                channel,
-                Authorization(Some(authorization)),
-            ),
+            token_slot: authorization.token.clone(),
+            client: RunEventServiceClient::with_interceptor(channel, authorization),
             config,
             metadata: None,
             started_at_ms: None,
             dashboard: crate::dashboard::DashboardLink::default(),
+            token_provider: None,
         })
+    }
+
+    /// Asks `provider` for a fresh bearer token before each reconnect, so a run that
+    /// outlives its token recovers instead of failing with the expired one. A provider
+    /// that yields nothing, or something that is not a valid token, keeps the current
+    /// token. The server still decides whether a token is acceptable.
+    #[must_use]
+    pub fn with_token_provider<F, Fut>(mut self, provider: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Option<String>> + Send + 'static,
+    {
+        self.token_provider = Some(Arc::new(move || Box::pin(provider())));
+        self
+    }
+
+    async fn renew_token(&self) {
+        let Some(provider) = &self.token_provider else {
+            return;
+        };
+        let Ok(Some(token)) = timeout(RENEW_TOKEN_TIMEOUT, provider()).await else {
+            return;
+        };
+        if token.is_empty() {
+            return;
+        }
+        let Ok(mut value) = format!("Bearer {token}").parse::<MetadataValue<Ascii>>() else {
+            return;
+        };
+        value.set_sensitive(true);
+        *self
+            .token_slot
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(value);
     }
 
     /// Report a validated dashboard link once, after durable run creation.
@@ -276,6 +388,7 @@ impl EventClient {
                         }
                     }
                     backoff = (backoff * 2).min(policy.max_backoff);
+                    self.renew_token().await;
                     if let Ok(ack) = self
                         .client
                         .get_run_ack(crate::proto::GetRunAckRequest {

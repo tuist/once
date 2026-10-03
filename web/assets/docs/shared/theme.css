@@ -1,0 +1,122 @@
+/* Once brand layer on top of Noora. It swaps Noora's typography, its cool
+   blue-gray neutrals, and its radii for the Once identity: a serif display face,
+   warm paper neutrals, and an indigo ink accent. Noora's accent scale is named
+   "purple"; Once remaps it so every component that reads it follows the Once
+   accent. Change the hues below to retint the whole site. */
+
+:root {
+  --once-accent-hue: 276;
+  --once-neutral-hue: 75;
+
+  --noora-font-heading: "Newsreader", "Iowan Old Style", Georgia, serif;
+  --noora-font-body: "Instrument Sans", "Noto Sans Georgian", system-ui, sans-serif;
+  --noora-font-code: "JetBrains Mono", ui-monospace, monospace;
+
+  --noora-neutral-light-50: oklch(98.8% 0.005 var(--once-neutral-hue));
+  --noora-neutral-light-100: oklch(97.2% 0.007 var(--once-neutral-hue));
+  --noora-neutral-light-200: oklch(95% 0.009 var(--once-neutral-hue));
+  --noora-neutral-light-300: oklch(92.4% 0.01 var(--once-neutral-hue));
+  --noora-neutral-light-400: oklch(88.4% 0.011 var(--once-neutral-hue));
+  --noora-neutral-light-500: oklch(83.6% 0.012 var(--once-neutral-hue));
+  --noora-neutral-light-600: oklch(77.6% 0.013 var(--once-neutral-hue));
+  --noora-neutral-light-700: oklch(71% 0.014 var(--once-neutral-hue));
+  --noora-neutral-light-800: oklch(63.5% 0.014 var(--once-neutral-hue));
+  --noora-neutral-light-900: oklch(55% 0.014 var(--once-neutral-hue));
+  --noora-neutral-light-1000: oklch(44.5% 0.013 var(--once-neutral-hue));
+  --noora-neutral-light-1100: oklch(31.5% 0.011 var(--once-neutral-hue));
+  --noora-neutral-light-1200: oklch(21.5% 0.009 var(--once-neutral-hue));
+
+  --noora-neutral-dark-50: oklch(97% 0.004 var(--once-neutral-hue));
+  --noora-neutral-dark-100: oklch(91.8% 0.006 var(--once-neutral-hue));
+  --noora-neutral-dark-200: oklch(86.2% 0.007 var(--once-neutral-hue));
+  --noora-neutral-dark-300: oklch(72% 0.009 var(--once-neutral-hue));
+  --noora-neutral-dark-400: oklch(64.8% 0.01 var(--once-neutral-hue));
+  --noora-neutral-dark-500: oklch(54.8% 0.011 var(--once-neutral-hue));
+  --noora-neutral-dark-600: oklch(45.8% 0.011 var(--once-neutral-hue));
+  --noora-neutral-dark-700: oklch(39.5% 0.011 var(--once-neutral-hue));
+  --noora-neutral-dark-800: oklch(34.7% 0.011 var(--once-neutral-hue));
+  --noora-neutral-dark-900: oklch(30.1% 0.011 var(--once-neutral-hue));
+  --noora-neutral-dark-1000: oklch(25.3% 0.01 var(--once-neutral-hue));
+  --noora-neutral-dark-1100: oklch(20.8% 0.009 var(--once-neutral-hue));
+  --noora-neutral-dark-1200: oklch(16.5% 0.008 var(--once-neutral-hue));
+
+  --once-link-color: var(--noora-surface-label-primary);
+  --once-link-color-hover: light-dark(var(--noora-purple-600), var(--noora-purple-300));
+  --once-link-underline: light-dark(
+    color-mix(in oklch, var(--noora-purple-500) 55%, transparent),
+    color-mix(in oklch, var(--noora-purple-300) 55%, transparent)
+  );
+  --once-selection-background: light-dark(
+    color-mix(in oklch, var(--noora-purple-200) 70%, transparent),
+    color-mix(in oklch, var(--noora-purple-500) 55%, transparent)
+  );
+  --once-card-gradient: linear-gradient(
+    180deg,
+    light-dark(var(--noora-neutral-light-100), var(--noora-neutral-dark-1100)) 0%,
+    light-dark(var(--noora-neutral-light-300), var(--noora-neutral-dark-1000)) 100%
+  );
+
+  --noora-radius-3: 0.25rem;
+  --noora-radius-4: 0.3125rem;
+  --noora-radius-5: 0.375rem;
+  --noora-radius-6: 0.5rem;
+
+  --noora-purple-50: oklch(97.2% 0.016 var(--once-accent-hue));
+  --noora-purple-100: oklch(91.5% 0.045 var(--once-accent-hue));
+  --noora-purple-200: oklch(84% 0.088 var(--once-accent-hue));
+  --noora-purple-300: oklch(75.5% 0.135 var(--once-accent-hue));
+  --noora-purple-400: oklch(66.5% 0.185 var(--once-accent-hue));
+  --noora-purple-500: oklch(55.5% 0.225 var(--once-accent-hue));
+  --noora-purple-600: oklch(48.5% 0.22 var(--once-accent-hue));
+  --noora-purple-700: oklch(40% 0.185 var(--once-accent-hue));
+  --noora-purple-800: oklch(31% 0.14 var(--once-accent-hue));
+  --noora-purple-900: oklch(22.5% 0.095 var(--once-accent-hue));
+
+  --noora-alpha-purple: oklch(55.5% 0.225 var(--once-accent-hue) / 0.2);
+  --once-accent-ring: oklch(48.5% 0.22 var(--once-accent-hue) / 0.9);
+  --once-accent-ring-strong: oklch(40% 0.2 var(--once-accent-hue) / 0.9);
+
+  --noora-button-border-primary:
+    0px 1px 0px 0px oklch(100% 0 0 / 0.2) inset,
+    0px 1px 1px 0px light-dark(oklch(32% 0.005 247.968 / 0.05), oklch(16.2% 0 0 / 0.2)),
+    0px 0px 0px 1px var(--once-accent-ring),
+    0px 1px 3px 0px light-dark(oklch(32% 0.005 247.968 / 0.16), oklch(0% 0 0 / 0.4));
+  --noora-button-border-primary-hover:
+    0px 1px 1px oklch(32% 0.005 247.968 / 0.12),
+    0px 0px 0px 1px var(--once-accent-ring),
+    0px 2px 3px oklch(32% 0.005 247.968 / 0.16),
+    0px 1px 0px oklch(100% 0 0 / 0.1) inset;
+  --noora-button-border-primary-focus:
+    0px 0px 0px 1px light-dark(var(--noora-neutral-light-50), var(--noora-neutral-dark-1200)),
+    0px 0px 0px 2.5px light-dark(var(--noora-purple-500), var(--noora-purple-400)),
+    0px 1px 0px 0px oklch(100% 0 0 / 0.2) inset,
+    0px 1px 1px 0px oklch(32% 0.005 247.968 / 0.12),
+    0px 0px 0px 1px var(--once-accent-ring),
+    0px 2px 3px 0px oklch(32% 0.005 247.968 / 0.16);
+  --noora-button-border-primary-active:
+    0px 0px 0px 1px var(--once-accent-ring),
+    0px 1px 4px 0px light-dark(oklch(0% 0 0 / 0.3), oklch(0% 0 0 / 0.4)) inset;
+  --noora-button-border-primary-disabled:
+    0px 1px 0px 0px oklch(100% 0 0 / 0.2) inset,
+    0px 1px 1px 0px light-dark(oklch(32% 0.005 247.968 / 0.12), oklch(16.2% 0 0 / 0.2)),
+    0px 0px 0px 1px oklch(48.5% 0.22 var(--once-accent-hue) / 0.4),
+    0px 2px 3px 0px light-dark(oklch(32% 0.005 247.968 / 0.16), oklch(0% 0 0 / 0.4));
+  --noora-choice-selector-check-border:
+    0px 1px 0px 0px oklch(100% 0 0 / 0.2) inset,
+    0px 1px 1px 0px light-dark(oklch(32% 0.005 247.968 / 0.12), oklch(16.2% 0 0 / 0.2)),
+    0px 0px 0px 1px var(--once-accent-ring-strong),
+    0px 1px 3px 0px light-dark(oklch(32% 0.005 247.968 / 0.16), oklch(0% 0 0 / 0.4));
+
+  &[data-theme="dark"] {
+    --noora-button-border-primary-hover:
+      0px 1px 0px 0px oklch(100% 0 0 / 0.1) inset,
+      0px 1px 1px 0px oklch(16.2% 0 0 / 0.2),
+      0px 0px 0px 1px var(--once-accent-ring),
+      0px 2px 3px 0px oklch(0% 0 0 / 0.4);
+  }
+}
+
+::selection {
+  background: var(--once-selection-background);
+  color: inherit;
+}

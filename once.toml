@@ -17,6 +17,11 @@ kind = "tuist"
 account = "tuist"
 project = "once"
 
+[infrastructures.tuist-web]
+kind = "tuist"
+account = "tuist"
+project = "once-web"
+
 [[target]]
 name = "cargo_dependencies"
 kind = "cargo_dependencies"

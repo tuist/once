@@ -8541,6 +8541,83 @@ result = repr(provider["test_info"]["command"]["argv"])
 }
 
 #[test]
+fn prelude_apple_test_bundle_embeds_dependency_resource_bundles() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let package_dir = workspace.path().join("tests/Sources");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        package_dir.join("DataTests.swift"),
+        "import XCTest\nfinal class DataTests: XCTestCase { func testData() {} }\n",
+    )
+    .unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    return "/usr/bin/" + name
+
+def host_command(argv, env = None, merge_stderr = None):
+    if "--find" in argv:
+        if argv[len(argv) - 1] == "swiftc":
+            return "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc\n"
+        return "/toolchain/" + argv[len(argv) - 1] + "\n"
+    if "--show-sdk-path" in argv:
+        return "/sdks/iPhoneSimulator.sdk\n"
+    if "--show-sdk-platform-path" in argv:
+        return "/Platforms/iPhoneSimulator.platform\n"
+    if "--version" in argv:
+        return "Swift version test\n"
+    fail("unexpected host_command: " + str(argv))
+
+ctx = {{
+    "label": {{"package": "tests", "name": "DataTests", "id": "tests/DataTests"}},
+    "attr": {{"platform": "ios", "minimum_os": "17.0", "sdk_variant": "simulator"}},
+    "deps": [{{
+        "label_id": "data/Data",
+        "transitive_archives": [".once/out/data/Data.a"],
+        "transitive_resource_bundles": [{{
+            "path": ".once/out/data/Data_Data.bundle",
+            "files": [
+                ".once/out/data/Data_Data.bundle/Info.plist",
+                ".once/out/data/Data_Data.bundle/fixture.json",
+            ],
+            "label_id": "data/Data",
+        }}],
+    }}],
+    "srcs": ["Sources/**/*.swift"],
+    "build_dir": ".once/out/tests/DataTests",
+    "capability": "test",
+}}
+provider = _apple_test_bundle_impl(ctx)
+result = repr(provider["test_bundle_path"])
+"#
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        "tests".to_string(),
+        ".once/out/tests/DataTests".to_string(),
+    );
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let bundle = out.unwrap().trim_matches('"').to_string();
+    let copy = action_by_identifier(
+        &store,
+        "apple_test_bundle_embed_resource_copy_Data_Data.bundle",
+    );
+    assert_eq!(copy.outputs, [format!("{bundle}/Data_Data.bundle")]);
+    assert!(copy
+        .inputs
+        .iter()
+        .any(|input| input.ends_with("Data_Data.bundle/fixture.json")));
+    let codesign = action_by_identifier(&store, "apple_test_bundle_codesign_DataTests");
+    assert!(codesign
+        .inputs
+        .iter()
+        .any(|input| input.ends_with("Data_Data.bundle/_CodeSignature/CodeResources")));
+}
+
+#[test]
 fn prelude_apple_ui_xctestrun_uses_the_runner_and_application_under_test() {
     let prelude = apple_prelude_source();
     let source = format!(
@@ -11005,6 +11082,107 @@ result = repr(_cargo_dependencies_impl(ctx))
         "{out}"
     );
     assert!(out.contains("cargo_dependencies/transitive-1.0.0"), "{out}");
+}
+
+#[test]
+fn prelude_cargo_workspace_dependency_names_keep_roles_and_renames_apart() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+metadata = {{
+    "workspace_members": ["path+file:///ws#app@0.1.0"],
+    "packages": [
+        {{"id": "path+file:///ws#app@0.1.0", "name": "app", "source": None}},
+        {{"id": "registry+index#foo@1.0.0", "name": "foo", "source": "registry+index"}},
+        {{"id": "registry+index#bar@1.0.0", "name": "bar", "source": "registry+index"}},
+    ],
+    "resolve": {{"nodes": [{{
+        "id": "path+file:///ws#app@0.1.0",
+        "deps": [
+            {{"pkg": "registry+index#foo@1.0.0", "name": "normal_name", "dep_kinds": [{{"kind": None}}]}},
+            {{"pkg": "registry+index#foo@1.0.0", "name": "build_name", "dep_kinds": [{{"kind": "build"}}]}},
+            {{"pkg": "registry+index#bar@1.0.0", "name": "test_name", "dep_kinds": [{{"kind": "dev"}}]}},
+        ],
+    }}]}},
+}}
+names = {{"registry+index#foo@1.0.0": "foo-1.0.0", "registry+index#bar@1.0.0": "bar-1.0.0"}}
+result = repr(_cargo_workspace_dependency_names(metadata, names, names))
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert!(
+        out.contains("\"deps\": {\"app\": [\"foo-1.0.0\"]}"),
+        "{out}"
+    );
+    assert!(
+        out.contains("\"dev_deps\": {\"app\": [\"bar-1.0.0\"]}"),
+        "{out}"
+    );
+    assert!(
+        out.contains("\"build_deps\": {\"app\": [\"foo-1.0.0\"]}"),
+        "{out}"
+    );
+    assert!(
+        out.contains("\"dep_aliases\": {\"app\": {\"foo-1.0.0\": \"normal_name\"}}"),
+        "{out}"
+    );
+    assert!(
+        out.contains("\"dev_dep_aliases\": {\"app\": {\"bar-1.0.0\": \"test_name\"}}"),
+        "{out}"
+    );
+    assert!(
+        out.contains("\"build_dep_aliases\": {\"app\": {\"foo-1.0.0\": \"build_name\"}}"),
+        "{out}"
+    );
+}
+
+#[test]
+fn prelude_cargo_dependencies_exposes_dev_and_build_roles_per_package() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{
+        "package": "",
+        "name": "cargo_dependencies",
+        "id": "cargo_dependencies",
+    }},
+    "attr": {{
+        "_cargo_resolved": True,
+        "_cargo_workspace_deps": {{"app": ["foo-1.0.0"]}},
+        "_cargo_workspace_dev_deps": {{"app": ["bar-1.0.0"]}},
+        "_cargo_workspace_build_deps": {{"app": ["foo-1.0.0"]}},
+        "_cargo_workspace_dep_aliases": {{"app": {{"foo-1.0.0": "normal_name"}}}},
+        "_cargo_workspace_build_dep_aliases": {{"app": {{"foo-1.0.0": "build_name"}}}},
+    }},
+    "deps": [
+        {{
+            "label_id": "cargo_dependencies/foo-1.0.0",
+            "package_name": "foo",
+            "crate_name": "foo",
+            "rlib": ".once/out/cargo_dependencies/foo-1.0.0/libfoo.rlib",
+        }},
+        {{
+            "label_id": "cargo_dependencies/bar-1.0.0",
+            "package_name": "bar",
+            "crate_name": "bar",
+            "rlib": ".once/out/cargo_dependencies/bar-1.0.0/libbar.rlib",
+        }},
+    ],
+    "srcs": [],
+}}
+provider = _cargo_dependencies_impl(ctx)
+result = repr([
+    [dep.get("extern_name") for dep in provider["workspace_deps"]["app"]],
+    [dep["crate_name"] for dep in provider["workspace_dev_deps"]["app"]],
+    [dep.get("extern_name") for dep in provider["workspace_build_deps"]["app"]],
+])
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert_eq!(out, "[[\"normal_name\"], [\"bar\"], [\"build_name\"]]");
 }
 
 #[test]
@@ -15171,6 +15349,25 @@ result = repr([
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
         r#"[[], ["-package-name", "Modern Package"]]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_lowers_package_default_isolation_settings() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+main_actor = {{"settings": [{{"tool": "swift", "kind": {{"defaultIsolation": {{"_0": "MainActor"}}}}}}]}}
+nonisolated = {{"settings": [{{"tool": "swift", "kind": {{"defaultIsolation": {{"_0": "nonisolated"}}}}}}]}}
+result = repr([
+    _xcode_swift_package_target_flags(main_actor, "ios", "5")["swift"],
+    _xcode_swift_package_target_flags(nonisolated, "ios", "6")["swift"],
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["-default-isolation", "MainActor"], ["-default-isolation", "nonisolated"]]"#
     );
 }
 
