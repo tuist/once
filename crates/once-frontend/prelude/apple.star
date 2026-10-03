@@ -5929,6 +5929,16 @@ def _apple_test_bundle_impl(ctx):
         codesign,
         "apple_test_bundle_embed",
     )
+    # Package code linked into the test bundle resolves `Bundle.module` next
+    # to its own bundle, so hostless package tests need the resource bundles
+    # of their dependencies inside the `.xctest`, as Xcode embeds them.
+    embedded_resource_bundles = _apple_embed_resource_bundles(
+        ctx,
+        deps,
+        bundle_dir,
+        codesign,
+        "apple_test_bundle_embed_resource",
+    )
     if platform == "macos" or platform == "macosx":
         test_cs_stamp = declare_output(bundle_dir + "/Contents/_CodeSignature/CodeResources")
     else:
@@ -5937,7 +5947,8 @@ def _apple_test_bundle_impl(ctx):
     test_codesign_inputs.extend(resource_files)
     test_codesign_inputs.extend(asset_files)
     test_codesign_inputs.extend(embedded_frameworks["stamps"])
-    script_outputs = _apple_run_postbuild_actions(ctx, attrs, _unique(test_codesign_inputs + embedded_frameworks["files"]), test_bundle_path)
+    test_codesign_inputs.extend(embedded_resource_bundles["stamps"])
+    script_outputs = _apple_run_postbuild_actions(ctx, attrs, _unique(test_codesign_inputs + embedded_frameworks["files"] + embedded_resource_bundles["files"]), test_bundle_path)
     test_codesign_inputs = _unique(test_codesign_inputs + script_outputs)
     resource_files = _unique(resource_files + script_outputs)
     run_action(
@@ -5999,6 +6010,7 @@ def _apple_test_bundle_impl(ctx):
         runner_codesign_inputs.extend(resource_files)
         runner_codesign_inputs.extend(asset_files)
         runner_codesign_inputs.extend(embedded_frameworks["stamps"])
+        runner_codesign_inputs.extend(embedded_resource_bundles["stamps"])
         run_action(
             argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", runner_application_path],
             inputs = runner_codesign_inputs,
@@ -6147,6 +6159,7 @@ exit "$status"
             if app_file not in test_inputs:
                 test_inputs.append(app_file)
         test_inputs.extend(embedded_frameworks["paths"])
+        test_inputs.extend(embedded_resource_bundles["paths"])
         for src in swift_srcs:
             if src not in test_inputs:
                 test_inputs.append(src)

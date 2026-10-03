@@ -8373,6 +8373,83 @@ result = repr(provider["test_info"]["command"]["argv"])
 }
 
 #[test]
+fn prelude_apple_test_bundle_embeds_dependency_resource_bundles() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let package_dir = workspace.path().join("tests/Sources");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        package_dir.join("DataTests.swift"),
+        "import XCTest\nfinal class DataTests: XCTestCase { func testData() {} }\n",
+    )
+    .unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    return "/usr/bin/" + name
+
+def host_command(argv, env = None, merge_stderr = None):
+    if "--find" in argv:
+        if argv[len(argv) - 1] == "swiftc":
+            return "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc\n"
+        return "/toolchain/" + argv[len(argv) - 1] + "\n"
+    if "--show-sdk-path" in argv:
+        return "/sdks/iPhoneSimulator.sdk\n"
+    if "--show-sdk-platform-path" in argv:
+        return "/Platforms/iPhoneSimulator.platform\n"
+    if "--version" in argv:
+        return "Swift version test\n"
+    fail("unexpected host_command: " + str(argv))
+
+ctx = {{
+    "label": {{"package": "tests", "name": "DataTests", "id": "tests/DataTests"}},
+    "attr": {{"platform": "ios", "minimum_os": "17.0", "sdk_variant": "simulator"}},
+    "deps": [{{
+        "label_id": "data/Data",
+        "transitive_archives": [".once/out/data/Data.a"],
+        "transitive_resource_bundles": [{{
+            "path": ".once/out/data/Data_Data.bundle",
+            "files": [
+                ".once/out/data/Data_Data.bundle/Info.plist",
+                ".once/out/data/Data_Data.bundle/fixture.json",
+            ],
+            "label_id": "data/Data",
+        }}],
+    }}],
+    "srcs": ["Sources/**/*.swift"],
+    "build_dir": ".once/out/tests/DataTests",
+    "capability": "test",
+}}
+provider = _apple_test_bundle_impl(ctx)
+result = repr(provider["test_bundle_path"])
+"#
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        "tests".to_string(),
+        ".once/out/tests/DataTests".to_string(),
+    );
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let bundle = out.unwrap().trim_matches('"').to_string();
+    let copy = action_by_identifier(
+        &store,
+        "apple_test_bundle_embed_resource_copy_Data_Data.bundle",
+    );
+    assert_eq!(copy.outputs, [format!("{bundle}/Data_Data.bundle")]);
+    assert!(copy
+        .inputs
+        .iter()
+        .any(|input| input.ends_with("Data_Data.bundle/fixture.json")));
+    let codesign = action_by_identifier(&store, "apple_test_bundle_codesign_DataTests");
+    assert!(codesign
+        .inputs
+        .iter()
+        .any(|input| input.ends_with("Data_Data.bundle/_CodeSignature/CodeResources")));
+}
+
+#[test]
 fn prelude_apple_ui_xctestrun_uses_the_runner_and_application_under_test() {
     let prelude = apple_prelude_source();
     let source = format!(
