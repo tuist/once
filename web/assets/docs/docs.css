@@ -172,6 +172,14 @@ p {
   --nav-icon-mask: url("/docs/icons/nx.svg");
   --nav-icon-color: oklch(63% 0.182 259.5);
 }
+#docs-sidebar [data-part="nav-item-icon"][data-icon="build-graph"] {
+  --nav-icon-mask: url("/docs/icons/build-graph.svg");
+  --nav-icon-color: oklch(53.7% 0.1613 146.6);
+}
+#docs-sidebar [data-part="nav-item-icon"][data-icon="containers"] {
+  --nav-icon-mask: url("/docs/icons/containers.svg");
+  --nav-icon-color: oklch(63% 0.14 238.5);
+}
 
 #docs-sidebar [data-part="nav-item-icon"][data-icon="ruby"],
 #docs-sidebar [data-part="nav-item-icon"][data-icon="javascript"],

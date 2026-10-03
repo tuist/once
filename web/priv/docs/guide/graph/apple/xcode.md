@@ -5,15 +5,13 @@ next: false
 
 # Xcode Projects
 
-Once can read an Xcode project or workspace you already have and derive a typed
-graph from it. You do not migrate the project, generate a new one, or restate
-its targets in `once.toml`. The `.xcodeproj` stays the source of truth for
-targets, build settings, and file membership, and Once compiles what it finds
-there.
+Once reads an existing Xcode project or workspace and derives a typed graph
+from it. The `.xcodeproj` stays the source of truth for targets, build settings,
+and file membership, and Once compiles what it finds there.
 
-This is the fastest way to try Once against real code. A project at the
-repository root needs no manifest at all: run one query and see your
-application, frameworks, libraries, and test bundles as Once targets.
+This is the fastest way to try Once against real code. Query a project at the
+repository root to see its application, frameworks, libraries, and test bundles
+as Once targets.
 
 ## Prerequisites
 
@@ -39,11 +37,10 @@ not run, complete that step first. Once reads the project as it stands on disk,
 so run `pod install`, fetch vendored binaries, or execute a bootstrap script
 before pointing Once at the result.
 
-## Try It Without a Manifest
+## Build an existing project
 
-An Xcode project checked in beside the repository root is a recognized native
-project, so there is nothing to write. From the directory holding the
-`.xcodeproj`:
+Once recognizes an Xcode project checked in beside the repository root. From
+the directory holding the `.xcodeproj`:
 
 ```sh
 once query workspace
@@ -51,8 +48,7 @@ once query targets
 ```
 
 Once detects the project, supplies an ephemeral `xcode_workspace` seed, and
-resolves the graph. Build and test commands work against that graph
-immediately, with no `once.toml` in the repository.
+resolves the graph. Build and test commands work against that graph immediately.
 
 For the shortest end-to-end trial, build the discovered project and watch the
 live action graph in the Runs interface:
@@ -66,13 +62,12 @@ No scheme or Once target name is needed when the directory contains one
 discovered Xcode project. If Once discovers several project roots, use the
 identifiers from `once query targets` to choose one explicitly.
 
-Discovery does not write `once.toml`. The `.xcodeproj` stays authoritative for
-everything the seed resolves.
+The `.xcodeproj` stays authoritative for everything the seed resolves.
 
-## Declare the Seed Explicitly
+## Configure the project seed
 
-Write the target yourself when the project is not at the repository root, when
-a directory holds more than one project, or when you want to pin a
+Add a target in `once.toml` when the project is not at the repository root,
+when a directory holds more than one project, or when you want to pin a
 configuration:
 
 ```toml

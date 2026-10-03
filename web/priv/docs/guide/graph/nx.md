@@ -8,9 +8,9 @@ next: false
 Once can read an existing [Nx](https://nx.dev) workspace, derive a typed
 build graph from its projects and tasks, and schedule each task through
 Once's cache and remote execution. You can query, build, and test the
-workspace without translating anything into `once.toml`.
+workspace from its native project files.
 
-## Start With an Existing Nx Workspace
+## Build an existing Nx workspace
 
 ### Check the Toolchain
 
@@ -37,8 +37,7 @@ once query workspace
 once query targets --kind nx_task
 ```
 
-No `once.toml` is required, and these commands do not write one. The
-`nx_workspace` seed runs `nx graph` once at load time, reads the resulting
+The `nx_workspace` seed runs `nx graph` once at load time, reads the resulting
 project graph, and emits one `nx_task` target per project and task pair.
 Dependency edges honor Nx's `dependsOn`, including the upstream `^` form
 and the object form.
@@ -88,9 +87,11 @@ around `run-commands` or `run-script` tasks run natively in full. A
 workspace that leans on plugin executors will need adapters for those
 executors before Once can run them.
 
-## Configuration
+## Configure native discovery
 
-`nx_workspace` accepts a small number of attributes:
+Add a `nx_workspace` target in `once.toml` when you need to change which tasks
+are discovered or read a checked-in graph snapshot. It accepts these
+attributes:
 
 - `targets` selects which task names to emit. Defaults to `build`, `test`,
   and `lint`. Set it to the empty list to include every task in the graph.
