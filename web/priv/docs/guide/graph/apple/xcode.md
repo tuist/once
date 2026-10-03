@@ -54,11 +54,10 @@ Once detects the project, supplies an ephemeral `xcode_workspace` seed, and
 resolves the graph. Build and test commands work against that graph
 immediately, with no `once.toml` in the repository.
 
-For the shortest end-to-end trial, build the discovered project and watch the
-live action graph in the Runs interface:
+For the shortest end-to-end trial, build the discovered project:
 
 ```sh
-once build --ui
+once build
 once test
 ```
 
@@ -150,10 +149,8 @@ projects build their application roots; library-only projects build their
 non-test products:
 
 ```sh
-once build --ui
+once build
 ```
-
-Omit `--ui` for ordinary terminal-only output.
 
 Building one lowered target builds only that target and its dependencies:
 

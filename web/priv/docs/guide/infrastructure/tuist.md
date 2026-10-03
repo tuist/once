@@ -57,6 +57,18 @@ The second machine should report a cache hit and restore
 `build/greeting.txt`. Because its local cache has no matching entry, the hit
 confirms that Tuist supplied the recorded result.
 
+## Follow Runs Live
+
+Once streams build and test runs to Tuist when the provider is configured and
+the machine is authenticated. Each run publishes ordered event batches to the
+project's account and project, and the service returns a dashboard link that
+Once prints as the run starts. Open it to follow the graph, cache decisions,
+and captured output while the run progresses.
+
+Live reporting is best-effort: a missing endpoint or an expired session is
+logged and never fails the run. Re-authenticate with `once auth login
+--provider tuist` when the session expires.
+
 ## Authenticate Automation
 
 Choose the authentication method supported by the environment.

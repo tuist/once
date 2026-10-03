@@ -68,7 +68,7 @@ Discover and use the workspace without writing a manifest:
 
 ```sh
 once query targets
-once build --ui
+once build
 once test
 ```
 
