@@ -11,6 +11,7 @@ mod discovery;
 mod dispatch;
 mod live_run_reporter;
 mod logging;
+mod provision;
 mod reference;
 mod render;
 mod reporter;

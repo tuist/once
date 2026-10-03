@@ -33,8 +33,8 @@ pub use error::{Error, Result};
 pub use model::{ActionResult, Stats};
 pub use provider::CacheProvider;
 pub use tuist::{
-    TuistAuth, TuistAuthPrompt, TuistCacheConfig, TUIST_APP_OAUTH_CLIENT_ID,
-    TUIST_OAUTH_CLIENT_ID_ENV,
+    ProjectCreateError, RemoteProject, TuistAuth, TuistAuthPrompt, TuistCacheConfig, TuistProjects,
+    TUIST_APP_OAUTH_CLIENT_ID, TUIST_OAUTH_CLIENT_ID_ENV,
 };
 
 /// Local content-addressed store rooted at a workspace `.once/`
@@ -183,26 +183,14 @@ impl Cas {
     pub async fn put_stream<R: AsyncRead + Unpin>(&self, reader: R) -> Result<Digest> {
         let (tmp, digest) = self.stream_to_tmp("stream", reader).await?;
         let final_path = self.blob_path(&digest);
-
         if fs::try_exists(&final_path).await.unwrap_or(false) {
-            // Another writer beat us, or this content is already cached.
-            let _ = fs::remove_file(&tmp).await;
             return Ok(digest);
         }
-
-        let stored_tmp = self.prepare_blob_tmp(&tmp).await?;
+        let stored_tmp = self.prepare_blob_tmp(tmp).await?;
         if fs::try_exists(&final_path).await.unwrap_or(false) {
-            let _ = fs::remove_file(&stored_tmp).await;
-            if stored_tmp != tmp {
-                let _ = fs::remove_file(&tmp).await;
-            }
             return Ok(digest);
         }
-
         rename_into_place(&stored_tmp, &final_path).await?;
-        if stored_tmp != tmp {
-            let _ = fs::remove_file(&tmp).await;
-        }
         Ok(digest)
     }
 
@@ -213,31 +201,36 @@ impl Cas {
         &self,
         prefix: &str,
         reader: R,
-    ) -> Result<(PathBuf, Digest)> {
+    ) -> Result<(tempfile::TempPath, Digest)> {
         let scratch = self.scratch_dir();
         ensure_dir(&scratch).await?;
-        let pid = process::id();
-        let seq = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let tmp = scratch.join(format!("{prefix}-{pid}-{seq}"));
-
-        match self.write_stream_to(&tmp, reader).await {
-            Ok(digest) => Ok((tmp, digest)),
-            Err(e) => {
-                let _ = fs::remove_file(&tmp).await;
-                Err(e)
-            }
-        }
+        let temporary = tempfile::Builder::new()
+            .prefix(&format!("{prefix}-"))
+            .make_in(&scratch, |path| {
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create_new(true)
+                    .open(path)
+            })
+            .map_err(|source| Error::Io {
+                path: scratch,
+                source,
+            })?;
+        let (file, temporary_path) = temporary.into_parts();
+        let tmp = temporary_path.to_path_buf();
+        let digest = self
+            .write_stream_to(&tmp, File::from_std(file), reader)
+            .await?;
+        Ok((temporary_path, digest))
     }
 
     async fn write_stream_to<R: AsyncRead + Unpin>(
         &self,
         tmp: &Path,
+        mut file: File,
         mut reader: R,
     ) -> Result<Digest> {
-        let mut file = File::create(tmp).await.map_err(|source| Error::Io {
-            path: tmp.to_path_buf(),
-            source,
-        })?;
         let mut hasher = blake3::Hasher::new();
         let mut buf = vec![0u8; STREAM_CHUNK];
         loop {
@@ -263,33 +256,35 @@ impl Cas {
         Ok(Digest::from_bytes(*hasher.finalize().as_bytes()))
     }
 
-    async fn prepare_blob_tmp(&self, raw_tmp: &Path) -> Result<PathBuf> {
+    async fn prepare_blob_tmp(&self, raw_tmp: tempfile::TempPath) -> Result<tempfile::TempPath> {
         let scratch = self.scratch_dir();
         ensure_dir(&scratch).await?;
         let pid = process::id();
         let seq = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
         let encoded_tmp = scratch.join(format!("zstd-{pid}-{seq}"));
-        let raw_for_task = raw_tmp.to_path_buf();
-        let encoded_for_task = encoded_tmp.clone();
-        let encoded = tokio::task::spawn_blocking(move || {
-            blob::encode_file(&raw_for_task, &encoded_for_task)
+        let raw_path = raw_tmp.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            let encoded_tmp =
+                tempfile::TempPath::try_from_path(encoded_tmp).map_err(|source| Error::Io {
+                    path: raw_tmp.to_path_buf(),
+                    source,
+                })?;
+            let encoded =
+                blob::encode_file(&raw_tmp, &encoded_tmp).map_err(|source| Error::Io {
+                    path: raw_tmp.to_path_buf(),
+                    source,
+                })?;
+            if encoded.should_store {
+                Ok(encoded_tmp)
+            } else {
+                Ok(raw_tmp)
+            }
         })
         .await
         .map_err(|source| Error::Io {
-            path: raw_tmp.to_path_buf(),
+            path: raw_path,
             source: io::Error::other(source.to_string()),
         })?
-        .map_err(|source| Error::Io {
-            path: raw_tmp.to_path_buf(),
-            source,
-        })?;
-
-        if encoded.should_store {
-            Ok(encoded_tmp)
-        } else {
-            let _ = fs::remove_file(&encoded_tmp).await;
-            Ok(raw_tmp.to_path_buf())
-        }
     }
 
     /// Read a content-addressed blob.
@@ -1352,6 +1347,43 @@ mod tests {
 
         assert!(cas.copy_blob_to_file(&digest, &destination).await.is_err());
         assert_eq!(fs::read(&destination).await.unwrap(), b"keep this output");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn streamed_blob_preserves_normal_file_creation_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new().unwrap();
+        let baseline = tmp.path().join("baseline");
+        std::fs::File::create(&baseline).unwrap();
+        let cas = Cas::open(tmp.path().join("cas"));
+        let digest = cas
+            .put_stream(b"uncompressed blob".as_slice())
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(cas.blob_path(&digest))
+                .unwrap()
+                .permissions()
+                .mode(),
+            std::fs::metadata(baseline).unwrap().permissions().mode()
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelling_put_stream_removes_partial_scratch_file() {
+        let tmp = TempDir::new().unwrap();
+        let cas = Cas::open(tmp.path());
+        let (mut writer, reader) = tokio::io::duplex(64);
+        let writing_cas = cas.clone();
+        let task = tokio::spawn(async move { writing_cas.put_stream(reader).await });
+        writer.write_all(&[42; 1024]).await.unwrap();
+        let mut before = fs::read_dir(cas.scratch_dir()).await.unwrap();
+        assert!(before.next_entry().await.unwrap().is_some());
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        let mut entries = fs::read_dir(cas.scratch_dir()).await.unwrap();
+        assert!(entries.next_entry().await.unwrap().is_none());
     }
 
     #[tokio::test]

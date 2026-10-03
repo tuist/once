@@ -184,32 +184,65 @@ impl TuistCache {
             return Ok(());
         }
         let remote_digest = self.remote_blob_digest(digest).await?;
+        let mut attempt = 1;
+        loop {
+            match self.stream_remote_blob(digest, &remote_digest).await {
+                Ok(()) => return Ok(()),
+                Err(BlobReadFailure::Transient(error)) if attempt < BLOB_READ_ATTEMPTS => {
+                    tracing::warn!(
+                        blob_digest = %digest,
+                        attempt,
+                        error = %error,
+                        "retrying remote blob read after a transient failure"
+                    );
+                    tokio::time::sleep(BLOB_READ_RETRY_DELAY * attempt).await;
+                    attempt += 1;
+                }
+                Err(BlobReadFailure::Transient(error) | BlobReadFailure::Final(error)) => {
+                    return Err(error)
+                }
+            }
+        }
+    }
+
+    /// Streams one remote blob into the local store. Transport failures
+    /// that a fresh stream can recover from, such as a dropped HTTP/2
+    /// stream, are reported as transient so the caller can retry.
+    async fn stream_remote_blob(
+        &self,
+        digest: &Digest,
+        remote_digest: &reapi::Digest,
+    ) -> std::result::Result<(), BlobReadFailure> {
         let _permit = self
             .transfer_limit
             .acquire()
             .await
             .expect("transfer semaphore remains open");
-        let channel = self.grpc_channel().await?;
+        let channel = self.grpc_channel().await.map_err(BlobReadFailure::Final)?;
         let mut client =
             ByteStreamClient::new(channel).max_decoding_message_size(BYTE_STREAM_MESSAGE_LIMIT);
         let request = bytestream::ReadRequest {
             resource_name: byte_stream_read_resource(
                 &self.instance_name(),
-                &remote_digest,
+                remote_digest,
                 reapi::compressor::Value::Identity as i32,
             ),
             read_offset: 0,
             read_limit: 0,
         };
         let response = match client
-            .read(self.authorized_grpc_request(request, "get blob").await?)
+            .read(
+                self.authorized_grpc_request(request, "get blob")
+                    .await
+                    .map_err(BlobReadFailure::Final)?,
+            )
             .await
         {
             Ok(response) => response,
             Err(status) if status.code() == Code::NotFound => {
-                return Err(Error::BlobNotFound(*digest));
+                return Err(BlobReadFailure::Final(Error::BlobNotFound(*digest)));
             }
-            Err(status) => return Err(grpc_error("get blob", &status)),
+            Err(status) => return Err(BlobReadFailure::from_status(&status)),
         };
         let mut stream = response.into_inner();
         let (mut writer, reader) = tokio::io::duplex(64 * 1024);
@@ -217,26 +250,38 @@ impl TuistCache {
             while let Some(response) = stream
                 .message()
                 .await
-                .map_err(|source| grpc_error("get blob", &source))?
+                .map_err(|source| BlobReadFailure::from_status(&source))?
             {
-                writer
-                    .write_all(&response.data)
-                    .await
-                    .map_err(|source| Error::Remote {
+                writer.write_all(&response.data).await.map_err(|source| {
+                    BlobReadFailure::Final(Error::Remote {
                         provider: PROVIDER_NAME,
                         operation: "get blob",
                         message: source.to_string(),
-                    })?;
+                    })
+                })?;
             }
-            Ok::<_, Error>(())
+            writer.shutdown().await.map_err(|source| {
+                BlobReadFailure::Final(Error::Remote {
+                    provider: PROVIDER_NAME,
+                    operation: "get blob",
+                    message: source.to_string(),
+                })
+            })?;
+            Ok::<_, BlobReadFailure>(())
         };
-        let (mirrored, ()) = tokio::try_join!(self.local.put_stream(reader), download)?;
+        let store = async {
+            self.local
+                .put_stream(reader)
+                .await
+                .map_err(BlobReadFailure::Final)
+        };
+        let (mirrored, ()) = tokio::try_join!(store, download)?;
         if mirrored != *digest {
-            return Err(Error::Remote {
+            return Err(BlobReadFailure::Final(Error::Remote {
                 provider: PROVIDER_NAME,
                 operation: "get blob",
                 message: format!("remote blob {digest} did not match requested digest"),
-            });
+            }));
         }
         Ok(())
     }
@@ -1376,6 +1421,35 @@ struct EndpointResponse {
     endpoints: Vec<String>,
 }
 
+const BLOB_READ_ATTEMPTS: u32 = 3;
+const BLOB_READ_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
+
+enum BlobReadFailure {
+    Transient(Error),
+    Final(Error),
+}
+
+impl BlobReadFailure {
+    fn from_status(status: &Status) -> Self {
+        let error = grpc_error("get blob", status);
+        if is_transient_status(status.code()) {
+            Self::Transient(error)
+        } else {
+            Self::Final(error)
+        }
+    }
+}
+
+/// gRPC codes a retried read can recover from. `Internal` covers HTTP/2
+/// stream resets, which tonic reports as `h2 protocol error`, and
+/// `Cancelled` covers a stream the transport tore down mid-read.
+fn is_transient_status(code: Code) -> bool {
+    matches!(
+        code,
+        Code::Unavailable | Code::Internal | Code::Unknown | Code::Aborted | Code::Cancelled
+    )
+}
+
 #[derive(Debug)]
 enum RemoteReadError {
     Miss(String),
@@ -1762,6 +1836,10 @@ fn non_empty_str(value: &str) -> Option<&str> {
 fn is_empty_blob(digest: &Digest) -> bool {
     *digest == Digest::of_bytes(&[])
 }
+
+#[cfg(test)]
+#[path = "cache_stream_tests.rs"]
+mod stream_tests;
 
 #[cfg(test)]
 mod tests {

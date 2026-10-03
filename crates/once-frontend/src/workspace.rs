@@ -123,14 +123,12 @@ pub fn load_workspace_with_configuration(
         } else {
             format!("{}/{}", matched.package, matched.markers[0])
         };
-        if !all
-            .iter()
-            .any(|explicit| explicit.package == target.package && explicit.kind == target.kind)
-            && !all.iter().any(|explicit| {
-                resolver_kinds.contains(&explicit.kind)
-                    && target_covers_path(explicit, &marker_path)
-            })
-        {
+        if !all.iter().any(|explicit| {
+            explicit.package == target.package
+                && (explicit.kind == target.kind || explicit.name == target.name)
+        }) && !all.iter().any(|explicit| {
+            resolver_kinds.contains(&explicit.kind) && target_covers_path(explicit, &marker_path)
+        }) {
             all.push(target);
         }
     }
@@ -431,6 +429,25 @@ kind = "custom_library"
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].id(), "mix");
         assert_eq!(targets[0].kind, "mix_workspace");
+    }
+
+    #[test]
+    fn an_explicit_target_shadows_a_discovered_seed_that_has_the_same_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            &tmp.path().join("once.toml"),
+            "[[target]]\nname = \"mix\"\nkind = \"custom_library\"\n",
+        );
+        write(
+            &tmp.path().join("mix.exs"),
+            "defmodule Demo.MixProject do\n  use Mix.Project\nend\n",
+        );
+
+        let targets = load_workspace(tmp.path()).unwrap();
+
+        assert_eq!(targets.len(), 1, "{targets:?}");
+        assert_eq!(targets[0].id(), "mix");
+        assert_eq!(targets[0].kind, "custom_library");
     }
 
     #[test]

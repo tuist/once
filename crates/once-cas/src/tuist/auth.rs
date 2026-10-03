@@ -74,6 +74,21 @@ impl TuistAuth {
         self.token_with_env(env_token(TUIST_TOKEN_ENV))
     }
 
+    /// Whether a reusable session is already present in the environment or the
+    /// credential store. Does not refresh or validate the token.
+    pub fn has_stored_session(&self) -> bool {
+        if env_token(TUIST_TOKEN_ENV).is_some() {
+            return true;
+        }
+        self.storage()
+            .and_then(|storage| {
+                storage
+                    .load(&self.storage_key())
+                    .map_err(|source| Self::remote_auth_error("load auth token", &source))
+            })
+            .is_ok_and(|token| token.is_some())
+    }
+
     fn token_with_env(&self, env_token: Option<String>) -> Result<String> {
         if let Some(token) = env_token {
             return Ok(token);
@@ -238,12 +253,12 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
-    use std::sync::Mutex;
     use std::thread;
 
     use tempfile::TempDir;
 
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    use crate::tuist::test_env::ENV_LOCK;
+
     const TEST_ENV_KEYS: &[&str] = &[
         "GITHUB_RUN_ID",
         "CI",

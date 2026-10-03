@@ -14,21 +14,25 @@ spec_helper_precheck() {
 spec_helper_loaded() { :; }
 
 setup_workspace() {
-  WORKSPACE="$(mktemp -d -t once-spec.XXXXXX)"
-  # Per-test XDG roots so once's CAS, runtime sockets, and
-  # materialized data land under the test's tempdir instead of the
-  # user's real home. Keeping them as siblings under $WORKSPACE means
-  # the existing cleanup (`rm -rf $WORKSPACE`) wipes them automatically.
-  XDG_CACHE_HOME="$WORKSPACE/.xdg/cache"
-  XDG_STATE_HOME="$WORKSPACE/.xdg/state"
-  XDG_DATA_HOME="$WORKSPACE/.xdg/data"
-  XDG_CONFIG_HOME="$WORKSPACE/.xdg/config"
-  XDG_RUNTIME_DIR="$WORKSPACE/.xdg/runtime"
+  SPEC_ROOT="$(mktemp -d -t once-spec.XXXXXX)"
+  WORKSPACE="$SPEC_ROOT/workspace"
+  # Per-test XDG roots and HOME so once's CAS, runtime sockets, session
+  # logs, and materialized data land under the test's tempdir instead of
+  # the user's real home. They sit beside the workspace, not inside it: a
+  # fixture whose package root is the workspace globs `./**/*`, and the
+  # session logs each concurrent test batch writes under HOME would
+  # otherwise change that glob's matches mid-run and invalidate the
+  # analysis another batch is relying on.
+  XDG_CACHE_HOME="$SPEC_ROOT/xdg/cache"
+  XDG_STATE_HOME="$SPEC_ROOT/xdg/state"
+  XDG_DATA_HOME="$SPEC_ROOT/xdg/data"
+  XDG_CONFIG_HOME="$SPEC_ROOT/xdg/config"
+  XDG_RUNTIME_DIR="$SPEC_ROOT/xdg/runtime"
   SPEC_ORIGINAL_HOME="${HOME:-}"
   SPEC_ORIGINAL_MSB_PATH="${MSB_PATH:-}"
-  HOME="$WORKSPACE/.home"
-  mkdir -p "$XDG_CACHE_HOME" "$XDG_STATE_HOME" "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" "$XDG_RUNTIME_DIR" "$HOME"
-  export WORKSPACE XDG_CACHE_HOME XDG_STATE_HOME XDG_DATA_HOME XDG_CONFIG_HOME XDG_RUNTIME_DIR HOME SPEC_ORIGINAL_HOME
+  HOME="$SPEC_ROOT/home"
+  mkdir -p "$WORKSPACE" "$XDG_CACHE_HOME" "$XDG_STATE_HOME" "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" "$XDG_RUNTIME_DIR" "$HOME"
+  export SPEC_ROOT WORKSPACE XDG_CACHE_HOME XDG_STATE_HOME XDG_DATA_HOME XDG_CONFIG_HOME XDG_RUNTIME_DIR HOME SPEC_ORIGINAL_HOME
   if [ "${ONCE_RUN_MICROSANDBOX_SPECS:-}" = "1" ]; then
     MSB_HOME="$(mktemp -d /tmp/once-msb.XXXXXX)"
     if [ -z "${MSB_PATH:-}" ] && [ -x "$SPEC_ORIGINAL_HOME/.microsandbox/bin/msb" ]; then
@@ -51,10 +55,10 @@ cleanup_workspace() {
   else
     unset MSB_PATH
   fi
-  if [ -n "${WORKSPACE:-}" ] && [ -d "$WORKSPACE" ]; then
-    rm -rf "$WORKSPACE"
-    unset WORKSPACE
+  if [ -n "${SPEC_ROOT:-}" ] && [ -d "$SPEC_ROOT" ]; then
+    rm -rf "$SPEC_ROOT"
   fi
+  unset SPEC_ROOT WORKSPACE
   if [ -n "${SPEC_ORIGINAL_HOME:-}" ]; then
     HOME="$SPEC_ORIGINAL_HOME"
     export HOME

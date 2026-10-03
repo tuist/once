@@ -119,7 +119,6 @@ pub async fn build(
     sandbox: SandboxMode,
     resource_limits: ResourceLimits,
     resolved: &configuration::ResolvedConfiguration,
-    ui: bool,
 ) -> Result<ExitCode> {
     let started_at = Instant::now();
     let bus = RunEventBus::new(EVENT_BUS_CAPACITY);
@@ -134,68 +133,11 @@ pub async fn build(
     )
     .await;
     bus_events::run_started(&bus, target_id, bus_events::now_ms());
-
-    let ui_server = if ui {
-        Some(crate::commands::ui::UiServer::start().await?)
-    } else {
-        None
-    };
-    if let Some(ui_server) = &ui_server {
-        eprintln!("Runs interface: {}", ui_server.url());
-    }
-    let publisher = ui_server
-        .as_ref()
-        .map(crate::commands::ui::UiServer::publisher);
-    let run_context = if ui {
-        let workspace = workspace.to_path_buf();
-        let target = target_id.to_string();
-        let configuration = resolved.configuration.clone();
-        Some(
-            tokio::task::spawn_blocking(move || {
-                crate::commands::ui::RunContext::build(&workspace, target, &configuration)
-            })
-            .await
-            .context("preparing the Runs build graph")?,
-        )
-    } else {
-        None
-    };
-    // Optional live event ingest to a compatible ingest server. Enabled
-    // by ONCE_EVENTS_ENDPOINT; failures are logged and never abort the
-    // run. Subscribing before publisher.started() ensures RunStarted
-    // is captured.
-    let mut event_client = if let (Some(server), Some(context)) = (&ui_server, &run_context) {
-        match crate::commands::events::try_start(server, context.run_id_string()).await {
-            Ok(handle) => handle,
-            Err(error) => {
-                tracing::warn!(%error, "event ingest disabled for this run");
-                None
-            }
-        }
-    } else {
-        None
-    };
-    if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
-        publisher.started(run_context).await;
-        publisher
-            .progress(run_context, "Preparing the Once build graph…\n")
-            .await;
-    }
     bus_events::target_cache_checking(&bus, target_id);
-    let live_output = publisher
-        .as_ref()
-        .zip(run_context.as_ref())
-        .map(|(publisher, run_context)| publisher.live_output(run_context));
-    // If the UI dashboard is not attached, keep an observer that only
-    // publishes LogChunk events onto the bus so the terminal reporter
-    // (and the ingest client, when the feature is enabled) can still
-    // render captured child output.
-    let bus_observer: Option<std::sync::Arc<dyn once_core::ActionOutputObserver>> =
-        if live_output.is_none() {
-            Some(BusOutputObserver::new(bus.clone(), target_id.to_string()))
-        } else {
-            None
-        };
+    // Publish captured child output as `LogChunk` events so the terminal
+    // reporter and the server-side live reporter can render it.
+    let bus_observer: std::sync::Arc<dyn once_core::ActionOutputObserver> =
+        BusOutputObserver::new(bus.clone(), target_id.to_string());
     let xdg = once_core::Xdg::from_env();
     let stored_receipt =
         build_receipt::read(workspace, target_id, sandbox, &resolved.path_suffix).await;
@@ -223,24 +165,8 @@ pub async fn build(
             .as_millis()
             .try_into()
             .unwrap_or(u64::MAX);
-        if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
-            publisher
-                .progress(run_context, "Reused the previous Once build result.\n")
-                .await;
-            publisher
-                .finished(
-                    run_context,
-                    &record.action_digest,
-                    duration_ms,
-                    &record.cache,
-                    0,
-                    None,
-                )
-                .await;
-        }
         bus_events::target_finished(&bus, target_id, duration_ms, &record.cache, 0);
         write_record(output, &record).await?;
-        write_runs_report(workspace, ui_server.as_ref()).await;
         finish_live_reporter(live_reporter).await;
         finish_reporter(reporter).await;
         return Ok(ExitCode::SUCCESS);
@@ -251,43 +177,22 @@ pub async fn build(
     )
     .await
     {
-        Ok(session) => {
-            let session = session
-                .with_resource_limits(resource_limits)
-                .with_event_bus(bus.clone());
-            match (&live_output, &bus_observer) {
-                (Some(live_output), _) => session.with_output_observer(live_output.observer()),
-                (None, Some(observer)) => session.with_output_observer(observer.clone()),
-                (None, None) => session,
-            }
-        }
+        Ok(session) => session
+            .with_resource_limits(resource_limits)
+            .with_event_bus(bus.clone())
+            .with_output_observer(bus_observer.clone()),
         Err(error) => {
             let duration_ms: u64 = started_at
                 .elapsed()
                 .as_millis()
                 .try_into()
                 .unwrap_or(u64::MAX);
-            if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
-                publisher
-                    .progress(run_context, &format!("Build setup failed: {error}\n"))
-                    .await;
-                publisher.failed(run_context, duration_ms).await;
-            }
             bus_events::target_failed(&bus, target_id, duration_ms);
-            write_runs_report(workspace, ui_server.as_ref()).await;
             finish_live_reporter(live_reporter).await;
             finish_reporter(reporter).await;
             return Err(error);
         }
     };
-    if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
-        publisher
-            .progress(
-                run_context,
-                "Analysing the Once targets and starting actions…\n",
-            )
-            .await;
-    }
     bus_events::target_preparing(&bus, target_id);
     session.with_known_changes(changes);
     let session = session;
@@ -299,46 +204,21 @@ pub async fn build(
                 .as_millis()
                 .try_into()
                 .unwrap_or(u64::MAX);
-            if let Some(live_output) = &live_output {
-                live_output.flush().await;
-            }
-            if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
-                publisher
-                    .progress(run_context, &format!("Build setup failed: {error}\n"))
-                    .await;
-                publisher.failed(run_context, duration_ms).await;
-            }
             bus_events::target_failed(&bus, target_id, duration_ms);
-            write_runs_report(workspace, ui_server.as_ref()).await;
             finish_live_reporter(live_reporter).await;
             finish_reporter(reporter).await;
             return Err(error);
         }
     };
     let record = match build_target(workspace, cache, target, &session, sandbox).await {
-        Ok(record) => {
-            if let Some(live_output) = &live_output {
-                live_output.flush().await;
-            }
-            record
-        }
+        Ok(record) => record,
         Err(error) => {
             let duration_ms: u64 = started_at
                 .elapsed()
                 .as_millis()
                 .try_into()
                 .unwrap_or(u64::MAX);
-            if let Some(live_output) = &live_output {
-                live_output.flush().await;
-            }
-            if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
-                publisher
-                    .progress(run_context, &format!("Build failed: {error}\n"))
-                    .await;
-                publisher.failed(run_context, duration_ms).await;
-            }
             bus_events::target_failed(&bus, target_id, duration_ms);
-            write_runs_report(workspace, ui_server.as_ref()).await;
             finish_live_reporter(live_reporter).await;
             finish_reporter(reporter).await;
             return Err(error);
@@ -356,18 +236,6 @@ pub async fn build(
             .as_millis()
             .try_into()
             .unwrap_or(u64::MAX);
-        if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
-            publisher
-                .finished(
-                    run_context,
-                    &record.action_digest,
-                    duration_ms,
-                    &record.cache,
-                    record.result.exit_code,
-                    None,
-                )
-                .await;
-        }
         bus_events::target_finished(
             &bus,
             target_id,
@@ -376,7 +244,6 @@ pub async fn build(
             record.result.exit_code,
         );
         write_record(output, &record).await?;
-        write_runs_report(workspace, ui_server.as_ref()).await;
         finish_live_reporter(live_reporter).await;
         finish_reporter(reporter).await;
         return Ok(ExitCode::SUCCESS);
@@ -426,36 +293,13 @@ pub async fn build(
             .await;
         }
     }
-    let duration_ms: u64 = started_at
-        .elapsed()
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX);
     bus_events::target_capturing(&bus, target_id);
     bus_events::target_publishing(&bus, target_id);
-    if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
-        publisher
-            .finished(
-                run_context,
-                &record.action_digest,
-                duration_ms,
-                &record.cache,
-                record.result.exit_code,
-                None,
-            )
-            .await;
-    }
     // The scheduler already fired `TargetCompleted` for the top-level
     // target from `build_one`; publish only the outer `RunCompleted`
     // here to avoid a duplicate completion line.
     bus_events::run_completed(&bus, record.result.exit_code);
     write_record(output, &record).await?;
-    if let Some(handle) = event_client.take() {
-        handle
-            .shutdown_with_timeout(std::time::Duration::from_secs(3))
-            .await;
-    }
-    write_runs_report(workspace, ui_server.as_ref()).await;
     emit_capability_completion_sounds(&record);
     finish_live_reporter(live_reporter).await;
     finish_reporter(reporter).await;
@@ -491,17 +335,6 @@ fn emit_capability_completion_sounds(record: &CapabilityRunRecord) {
     } else {
         crate::sound::Event::Failed
     });
-}
-
-async fn write_runs_report(workspace: &Path, ui_server: Option<&crate::commands::ui::UiServer>) {
-    let Some(ui_server) = ui_server else {
-        return;
-    };
-    match ui_server.write_static_site(workspace).await {
-        Ok(Some(report)) => eprintln!("Runs report: {}", report.display()),
-        Ok(None) => {}
-        Err(error) => tracing::warn!(error = %error, "could not write the static Runs report"),
-    }
 }
 
 /// Run static analysis for one target and report whether findings met
@@ -586,7 +419,6 @@ pub async fn test(
     sandbox: SandboxMode,
     resource_limits: ResourceLimits,
     resolved: &configuration::ResolvedConfiguration,
-    ui: bool,
 ) -> Result<ExitCode> {
     test_with_filters(
         workspace,
@@ -598,7 +430,6 @@ pub async fn test(
         None,
         resource_limits,
         resolved,
-        ui,
     )
     .await
 }
@@ -614,7 +445,6 @@ pub async fn test_with_filters(
     test_batch_id: Option<&str>,
     resource_limits: ResourceLimits,
     resolved: &configuration::ResolvedConfiguration,
-    ui: bool,
 ) -> Result<ExitCode> {
     if let Some(batch_id) = test_batch_id {
         if Digest::from_hex(batch_id).is_none() {
@@ -634,49 +464,9 @@ pub async fn test_with_filters(
     )
     .await;
     bus_events::run_started(&bus, target_id, bus_events::now_ms());
-
-    let ui_server = if ui {
-        Some(crate::commands::ui::UiServer::start().await?)
-    } else {
-        None
-    };
-    if let Some(ui_server) = &ui_server {
-        eprintln!("Runs interface: {}", ui_server.url());
-    }
-    let publisher = ui_server
-        .as_ref()
-        .map(crate::commands::ui::UiServer::publisher);
-    let run_context = if ui {
-        let workspace = workspace.to_path_buf();
-        let target = target_id.to_string();
-        let configuration = resolved.configuration.clone();
-        Some(
-            tokio::task::spawn_blocking(move || {
-                crate::commands::ui::RunContext::test(&workspace, target, &configuration)
-            })
-            .await
-            .context("preparing the Runs test graph")?,
-        )
-    } else {
-        None
-    };
-    if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
-        publisher.started(run_context).await;
-        publisher
-            .progress(run_context, "Preparing the Once test run…\n")
-            .await;
-    }
     bus_events::target_cache_checking(&bus, target_id);
-    let live_output = publisher
-        .as_ref()
-        .zip(run_context.as_ref())
-        .map(|(publisher, run_context)| publisher.live_output(run_context));
-    let bus_observer: Option<std::sync::Arc<dyn once_core::ActionOutputObserver>> =
-        if live_output.is_none() {
-            Some(BusOutputObserver::new(bus.clone(), target_id.to_string()))
-        } else {
-            None
-        };
+    let bus_observer: std::sync::Arc<dyn once_core::ActionOutputObserver> =
+        BusOutputObserver::new(bus.clone(), target_id.to_string());
     let graph = match once_frontend::load_graph_workspace_with_configuration(
         workspace,
         &resolved.configuration,
@@ -688,14 +478,7 @@ pub async fn test_with_filters(
                 .as_millis()
                 .try_into()
                 .unwrap_or(u64::MAX);
-            if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
-                publisher
-                    .progress(run_context, &format!("Test setup failed: {error}\n"))
-                    .await;
-                publisher.failed(run_context, duration_ms).await;
-            }
             bus_events::target_failed(&bus, target_id, duration_ms);
-            write_runs_report(workspace, ui_server.as_ref()).await;
             finish_live_reporter(live_reporter).await;
             finish_reporter(reporter).await;
             return Err(error).context("loading graph");
@@ -724,16 +507,7 @@ pub async fn test_with_filters(
     .with_resource_limits(resource_limits)
     .with_event_bus(bus.clone())
     .suppress_target_lifecycle(target_id);
-    let session = match (&live_output, &bus_observer) {
-        (Some(live_output), _) => session.with_output_observer(live_output.observer()),
-        (None, Some(observer)) => session.with_output_observer(observer.clone()),
-        (None, None) => session,
-    };
-    if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
-        publisher
-            .progress(run_context, "Running the selected Once test target…\n")
-            .await;
-    }
+    let session = session.with_output_observer(bus_observer.clone());
     bus_events::target_preparing(&bus, target_id);
     bus_events::target_executing(&bus, target_id);
     let target = session.target(target_id)?;
@@ -782,16 +556,13 @@ pub async fn test_with_filters(
     } else {
         run_target_capability(workspace, cache, target, "test", sandbox).await?
     };
-    if let Some(live_output) = &live_output {
-        live_output.flush().await;
-    }
     record_capability_run(workspace, &record).await;
     if test_filters.is_empty() {
         crate::commands::query::refresh_test_manifest_for_target(workspace, target)
             .context("persisting test manifest")?;
     }
     let test_results =
-        load_test_results_for_runs(workspace, target_id, record.test_results.as_deref());
+        load_test_results_for_events(workspace, target_id, record.test_results.as_deref());
     // Fan the normalized test-results blob out as
     // `TestSuiteStarted` / `TestCaseCompleted` / `TestSuiteCompleted`
     // events on the bus so the server projector can persist per-case
@@ -818,18 +589,6 @@ pub async fn test_with_filters(
         .unwrap_or(u64::MAX);
     bus_events::target_capturing(&bus, target_id);
     bus_events::target_publishing(&bus, target_id);
-    if let (Some(publisher), Some(run_context)) = (&publisher, &run_context) {
-        publisher
-            .finished(
-                run_context,
-                &record.action_digest,
-                duration_ms,
-                &record.cache,
-                record.result.exit_code,
-                test_results,
-            )
-            .await;
-    }
     bus_events::target_finished(
         &bus,
         target_id,
@@ -838,7 +597,6 @@ pub async fn test_with_filters(
         record.result.exit_code,
     );
     write_record(output, &record).await?;
-    write_runs_report(workspace, ui_server.as_ref()).await;
     emit_capability_completion_sounds(&record);
     finish_live_reporter(live_reporter).await;
     finish_reporter(reporter).await;
@@ -958,7 +716,7 @@ fn publish_test_results_events(
     });
 }
 
-fn load_test_results_for_runs(
+fn load_test_results_for_events(
     workspace: &Path,
     target_id: &str,
     result_path: Option<&str>,
@@ -974,7 +732,7 @@ fn load_test_results_for_runs(
     };
     result
         .inspect_err(|error| {
-            tracing::debug!(error = %error, target = target_id, "could not load test results for Runs");
+            tracing::debug!(error = %error, target = target_id, "could not load test results for the run event stream");
         })
         .ok()
 }

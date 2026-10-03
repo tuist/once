@@ -10,6 +10,7 @@ mod cache_resolution;
 mod error;
 mod examples;
 mod graph;
+mod infrastructure_editor;
 mod manifest;
 mod manifest_editor;
 mod module_contract;
@@ -49,6 +50,7 @@ pub use graph::{
     SourceReference, TargetKindExample, TargetKindExampleBundle, TargetKindExampleFile,
     TargetKindExampleRoot, TargetKindExampleSource, TargetKindSchema, TargetLabel, ToolRequirement,
 };
+pub use infrastructure_editor::{apply_infrastructure_binding, InfrastructureBinding};
 pub use manifest::{
     load_cache_provider_toml_str, load_infrastructure_toml_str, load_toml_str,
     load_workspace_configuration, BuildConfiguration, ConfigurationOverrides,

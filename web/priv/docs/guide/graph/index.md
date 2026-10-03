@@ -45,9 +45,6 @@ the invocation fails when any finding meets `--fail-on`. `once lint --all
 --fail-on error` is a reasonable starting point when you want to sweep the
 whole graph.
 
-Pass `once build --ui` or `once test --ui` on a single explicit target to
-follow the live graph in the Runs interface.
-
 Continue with the guide for [Rust](/guide/graph/rust), [Swift
 Packages](/guide/graph/swift-packages), [Xcode
 Projects](/guide/graph/apple/xcode), or [Bazel](/guide/graph/bazel). Declare
@@ -178,6 +175,7 @@ ecosystem-specific examples:
 - [C and C++](/guide/graph/c)
 - [Bazel](/guide/graph/bazel)
 - [CMake](/guide/graph/cmake)
+- [Container Images](/guide/graph/containers)
 - [Elixir](/guide/graph/elixir)
 - [Kotlin](/guide/graph/kotlin)
 - [Go](/guide/graph/go)
@@ -212,6 +210,10 @@ When discovery produces one buildable workspace root, `once build` selects it
 without requiring a target argument. `once test` runs the first-party test
 targets rooted in that workspace. Use `once test --all` to include test targets
 from its complete resolved dependency graph.
+
+A discovered image is a direct target, so pass its name to `once build`. See
+[Container Images](/guide/graph/containers) for commands that build an existing
+Dockerfile without a `once.toml` file.
 
 The native seed can remain the only target, or it can live beside explicit
 targets for exceptional build boundaries. Keep manifest data in `once.toml`

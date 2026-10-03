@@ -25,7 +25,6 @@ once-frontend = { version = "0.0.0", path = "crates/once-frontend" }
 once-host-tree = { version = "0.0.0", path = "crates/once-host-tree" }
 
 anyhow = "1"
-axum = "0.8"
 bazel-remote-apis = "0.27"
 base64 = "0.22"
 blake3 = "1"
@@ -62,6 +61,7 @@ uuid = { version = "1", features = ["v7"] }
 walkdir = "2"
 zstd = "0.13"
 tar = "0.4"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [workspace.lints.rust]

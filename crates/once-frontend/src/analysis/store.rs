@@ -55,6 +55,7 @@ pub enum DeclaredActionOperation {
         entries: Vec<DeclaredArchiveEntry>,
         output: String,
         sha256_output: Option<String>,
+        uncompressed_sha256_output: Option<String>,
         format: DeclaredArchiveFormat,
     },
     DownloadAndExtract {
@@ -70,6 +71,8 @@ pub struct DeclaredArchiveEntry {
     pub kind: DeclaredArchiveEntryKind,
     pub source: Option<String>,
     pub path: String,
+    #[serde(default)]
+    pub target: Option<String>,
     pub mode: u32,
     pub directory_mode: u32,
     pub owner_id: u64,
@@ -83,12 +86,14 @@ pub enum DeclaredArchiveEntryKind {
     File,
     Directory,
     Tree,
+    Symlink,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DeclaredArchiveFormat {
     Tar,
+    TarGz,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -230,6 +235,9 @@ pub enum Observation {
         env: BTreeMap<String, String>,
         cwd: Option<String>,
         merge_stderr: bool,
+        /// False when a non-zero exit status was an acceptable answer.
+        #[serde(default = "default_check", skip_serializing_if = "is_true")]
+        check: bool,
         output_sha256: String,
         /// Description of the program that answered, so a caller that cannot
         /// afford to ask again has something to compare. Absent in records
@@ -241,6 +249,16 @@ pub enum Observation {
     FileDigest {
         path: String,
         sha256: String,
+    },
+    /// The size in bytes of one host file.
+    FileSize {
+        path: String,
+        bytes: i64,
+    },
+    /// Where one host path links to, or empty when it is not a link.
+    SymlinkTarget {
+        path: String,
+        target: String,
     },
     TreeDigest {
         path: String,
@@ -435,6 +453,11 @@ struct CommandKey {
     env: BTreeMap<String, String>,
     cwd: Option<PathBuf>,
     merge_stderr: bool,
+    check: bool,
+}
+
+fn default_check() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -644,6 +667,7 @@ impl HostCache {
                     env: command.env,
                     cwd: command.cwd,
                     merge_stderr: command.merge_stderr,
+                    check: true,
                 },
                 command.output,
             );
@@ -795,6 +819,7 @@ impl HostCache {
     /// The lock is released before `Command::output` so other analyses
     /// running on sibling targets aren't blocked by a slow external
     /// process spawn (toolchain discovery, version probes, etc).
+    #[cfg(test)]
     pub(super) fn command(
         &self,
         argv: &[String],
@@ -802,14 +827,30 @@ impl HostCache {
         cwd: Option<&Path>,
         merge_stderr: bool,
     ) -> Result<String> {
+        self.command_checked(argv, env, cwd, merge_stderr, true)
+    }
+
+    /// Like [`Self::command`], but with `check` false a non-zero exit status
+    /// still returns the captured output. Callers that tolerate failure use
+    /// it for idempotent setup whose success they verify with a later probe.
+    pub(super) fn command_checked(
+        &self,
+        argv: &[String],
+        env: &BTreeMap<String, String>,
+        cwd: Option<&Path>,
+        merge_stderr: bool,
+        check: bool,
+    ) -> Result<String> {
         let key = CommandKey {
             argv: argv.to_vec(),
             env: env.clone(),
             cwd: cwd.map(Path::to_path_buf),
             merge_stderr,
+            check,
         };
-        self.commands
-            .get_or_compute(key, || self.run_command(argv, env, cwd, merge_stderr))
+        self.commands.get_or_compute(key, || {
+            self.run_command(argv, env, cwd, merge_stderr, check)
+        })
     }
 
     /// Spawn one host command and return its captured output.
@@ -819,6 +860,7 @@ impl HostCache {
         env: &BTreeMap<String, String>,
         cwd: Option<&Path>,
         merge_stderr: bool,
+        check: bool,
     ) -> Result<String> {
         let mut iter = argv.iter();
         let program = iter
@@ -839,7 +881,7 @@ impl HostCache {
         }
         let (status, stdout, stderr) = capture_host_command_output(&mut command)
             .with_context(|| format!("running `{program}`"))?;
-        if !status.success() {
+        if check && !status.success() {
             let rendered_args = command_args
                 .iter()
                 .map(|arg| arg.as_str())
@@ -912,7 +954,7 @@ impl HostCache {
         self.commands
             .answers()
             .into_iter()
-            .filter(|(key, _)| self.is_cacheable_tool_command(key))
+            .filter(|(key, _)| key.check && self.is_cacheable_tool_command(key))
             .map(|(key, output)| CachedToolCommand {
                 argv: key.argv,
                 env: key.env,

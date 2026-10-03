@@ -6,6 +6,8 @@ The client publishes ordered batches and the service acknowledges the contiguous
 
 ## service `RunEventService`
 
+Every call carries the bearer token in the `authorization` metadata. Clients also send the opaque project id, the same value as `RunStarted.project_id`, in the optional `once-project-id` metadata, because a reconnect does not always resend `RunStarted`. See RFC 0008, "Identity and redaction".
+
 | Name | Type | Number | Description |
 | --- | --- | ---: | --- |
 | `rpc GetServerCapabilities(GetServerCapabilitiesRequest) returns (ServerCapabilities)` | call | |  |

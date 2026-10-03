@@ -251,16 +251,6 @@ pub enum Cmd {
         #[usage(long, value_name = "KEY=VALUE")]
         config: Vec<String>,
 
-        /// Start the local Runs interface for this Once build.
-        ///
-        /// Once serves the client interface from this process. The page
-        /// receives the build target, dependency graph, cache decision,
-        /// duration, action digest, and output as the build progresses.
-        /// The Runs interface currently supports a single target; combine
-        /// it with an explicit target id rather than a targetless build.
-        #[usage(long)]
-        ui: bool,
-
         /// Build every build-capable target in the loaded graph, including
         /// targets reached through vendored dependencies. Without it the
         /// targetless default builds only workspace-owned targets.
@@ -366,10 +356,6 @@ pub enum Cmd {
         /// Override the workspace build configuration. See `once build --config`.
         #[usage(long, value_name = "KEY=VALUE")]
         config: Vec<String>,
-
-        /// Start the local Runs interface for this Once test run.
-        #[usage(long)]
-        ui: bool,
 
         /// Maximum number of test batches to execute concurrently.
         /// Defaults to the host's available parallelism for an affected plan.
@@ -508,6 +494,38 @@ pub enum Cmd {
     Auth {
         #[usage(subcommand)]
         cmd: Option<AuthCmd>,
+    },
+
+    /// Provision a remote project and bind this workspace to it.
+    ///
+    /// Resolves an infrastructure provider by name, asks it to create or
+    /// select a project, and records the provider binding in the root
+    /// `once.toml` under `[infrastructures.<name>]` plus
+    /// `[infrastructure.cache]`. Provider protocol details stay behind the
+    /// provider, so a project is provisioned without coupling Once to any
+    /// one host.
+    Connect {
+        /// Provider reference, resolved like `once auth login --provider`.
+        #[usage(long)]
+        provider: String,
+
+        /// Account or organization that owns the project.
+        #[usage(long)]
+        account: Option<String>,
+
+        /// Project handle. Defaults to the workspace directory name when
+        /// `--create` is set.
+        #[usage(long)]
+        project: Option<String>,
+
+        /// Create the project when it does not exist, instead of only
+        /// binding an existing one.
+        #[usage(long)]
+        create: bool,
+
+        /// Print the binding without writing `once.toml`.
+        #[usage(long)]
+        dry_run: bool,
     },
 
     /// Inspect the project toolchain contract.
@@ -766,6 +784,7 @@ impl Cmd {
                 }
                 path
             }
+            Self::Connect { .. } => vec!["connect"],
             Self::Toolchain { cmd } => {
                 let mut path = vec!["toolchain"];
                 if let Some(cmd) = cmd {

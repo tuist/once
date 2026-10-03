@@ -72,7 +72,13 @@ defmodule OnceSiteWeb.Docs.Sidebar do
           %Item{label: "Ecosystems", slug: "/docs/guide/graph/ecosystems"},
           %Item{label: "Configurations", slug: "/docs/guide/graph/configuration"},
           %Item{label: "Testing and Scheduling", slug: "/docs/guide/graph/testing"},
-          %Item{label: "Linting", slug: "/docs/guide/graph/linting"},
+          %Item{label: "Linting", slug: "/docs/guide/graph/linting"}
+        ]
+      },
+      %Group{
+        label: "Toolchains",
+        items: [
+          %Item{label: "Android", slug: "/docs/guide/graph/android", icon: "android"},
           %Item{
             label: "Apple",
             slug: "/docs/guide/graph/apple",
@@ -82,21 +88,25 @@ defmodule OnceSiteWeb.Docs.Sidebar do
               %Item{label: "Swift Packages", slug: "/docs/guide/graph/swift-packages"}
             ]
           },
-          %Item{label: "Android", slug: "/docs/guide/graph/android", icon: "android"},
-          %Item{label: "Bazel", slug: "/docs/guide/graph/bazel"},
+          %Item{label: "Bazel", slug: "/docs/guide/graph/bazel", icon: "bazel"},
           %Item{label: "C and C++", slug: "/docs/guide/graph/c", icon: "cplusplus"},
           %Item{label: "CMake", slug: "/docs/guide/graph/cmake", icon: "cplusplus"},
+          %Item{
+            label: "Container Images",
+            slug: "/docs/guide/graph/containers",
+            icon: "containers"
+          },
           %Item{label: "Elixir", slug: "/docs/guide/graph/elixir", icon: "elixir"},
-          %Item{label: "Kotlin", slug: "/docs/guide/graph/kotlin", icon: "kotlin"},
           %Item{label: "Go", slug: "/docs/guide/graph/go", icon: "go"},
-          %Item{label: "Rust", slug: "/docs/guide/graph/rust", icon: "rust"},
-          %Item{label: "Zig", slug: "/docs/guide/graph/zig", icon: "zig"},
+          %Item{label: "Kotlin", slug: "/docs/guide/graph/kotlin", icon: "kotlin"},
           %Item{label: "Nx", slug: "/docs/guide/graph/nx", icon: "nx"},
           %Item{
             label: "React Native",
             slug: "/docs/guide/graph/react-native",
             icon: "react-native"
-          }
+          },
+          %Item{label: "Rust", slug: "/docs/guide/graph/rust", icon: "rust"},
+          %Item{label: "Zig", slug: "/docs/guide/graph/zig", icon: "zig"}
         ]
       },
       %Group{
@@ -114,6 +124,7 @@ defmodule OnceSiteWeb.Docs.Sidebar do
         label: "Infrastructure",
         items: [
           %Item{label: "Overview", slug: "/docs/guide/infrastructure"},
+          %Item{label: "Connect A Project", slug: "/docs/guide/infrastructure/connect"},
           %Item{label: "Remote Execution", slug: "/docs/guide/infrastructure/remote-execution"},
           %Item{
             label: "Microsandbox",
@@ -177,6 +188,7 @@ defmodule OnceSiteWeb.Docs.Sidebar do
           %Item{label: "auth", slug: "/docs/reference/cli/auth"},
           %Item{label: "build", slug: "/docs/reference/cli/build"},
           %Item{label: "cache", slug: "/docs/reference/cli/cache"},
+          %Item{label: "connect", slug: "/docs/reference/cli/connect"},
           %Item{label: "edit", slug: "/docs/reference/cli/edit"},
           %Item{label: "exec", slug: "/docs/reference/cli/exec"},
           %Item{label: "lint", slug: "/docs/reference/cli/lint"},

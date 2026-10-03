@@ -1924,11 +1924,13 @@ fn operation_to_action(operation: DeclaredActionOperation, input_digest: Digest)
             entries,
             output,
             sha256_output,
+            uncompressed_sha256_output,
             format,
         } => archive_to_action(
             entries,
             &output,
             sha256_output.as_deref(),
+            uncompressed_sha256_output.as_deref(),
             format,
             input_digest,
         )?,
@@ -1951,6 +1953,7 @@ fn archive_to_action(
     entries: Vec<once_frontend::analysis::DeclaredArchiveEntry>,
     output: &str,
     sha256_output: Option<&str>,
+    uncompressed_sha256_output: Option<&str>,
     format: DeclaredArchiveFormat,
     input_digest: Digest,
 ) -> Result<Action> {
@@ -1962,6 +1965,7 @@ fn archive_to_action(
                     DeclaredArchiveEntryKind::File => ArchiveEntryKind::File,
                     DeclaredArchiveEntryKind::Directory => ArchiveEntryKind::Directory,
                     DeclaredArchiveEntryKind::Tree => ArchiveEntryKind::Tree,
+                    DeclaredArchiveEntryKind::Symlink => ArchiveEntryKind::Symlink,
                 },
                 source: entry
                     .source
@@ -1969,6 +1973,7 @@ fn archive_to_action(
                     .map(|source| workspace_path(source, "write_archive entry source"))
                     .transpose()?,
                 path: entry.path,
+                target: entry.target,
                 mode: entry.mode,
                 directory_mode: entry.directory_mode,
                 owner_id: entry.owner_id,
@@ -1983,8 +1988,12 @@ fn archive_to_action(
         sha256_output: sha256_output
             .map(|path| workspace_path(path, "write_archive sha256_output"))
             .transpose()?,
+        uncompressed_sha256_output: uncompressed_sha256_output
+            .map(|path| workspace_path(path, "write_archive uncompressed_sha256_output"))
+            .transpose()?,
         format: match format {
             DeclaredArchiveFormat::Tar => ArchiveFormat::Tar,
+            DeclaredArchiveFormat::TarGz => ArchiveFormat::TarGz,
         },
         input_digest: Some(input_digest),
     })

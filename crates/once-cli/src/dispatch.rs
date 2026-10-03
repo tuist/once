@@ -112,11 +112,30 @@ async fn run_command(
     }
     match command {
         Cmd::Auth { cmd } => run_auth_command(workspace, xdg, output, cmd).await,
+        Cmd::Connect {
+            provider,
+            account,
+            project,
+            create,
+            dry_run,
+        } => commands::connect::connect(
+            workspace,
+            xdg,
+            output,
+            commands::connect::ConnectArgs {
+                provider,
+                account,
+                project,
+                create,
+                dry_run,
+            },
+        )
+        .await
+        .map(|()| ExitCode::SUCCESS),
         Cmd::Build {
             target,
             sandbox,
             config,
-            ui,
             all,
         } => {
             let resolved = commands::graph::resolve_invocation_configuration(workspace, &config)?;
@@ -129,7 +148,6 @@ async fn run_command(
                 sandbox,
                 resource_limits,
                 resolved,
-                ui,
             )
             .await
         }
@@ -225,7 +243,6 @@ async fn run_command(
             target,
             sandbox,
             config,
-            ui,
             jobs,
             all,
             changed_paths,
@@ -241,7 +258,6 @@ async fn run_command(
                     output,
                     target,
                     sandbox,
-                    ui,
                     jobs,
                     all,
                     changed_paths,
@@ -312,15 +328,8 @@ async fn dispatch_build(
     sandbox: SandboxMode,
     resource_limits: &ResourceLimits,
     resolved: commands::graph::ResolvedConfiguration,
-    ui: bool,
 ) -> Result<ExitCode> {
     let targets = resolve_build_targets(workspace, target, all)?;
-    if ui && targets.len() > 1 {
-        anyhow::bail!(
-            "the Runs interface currently supports a single build target; \
-             pass one explicitly or omit --ui to fan out"
-        );
-    }
     let cache = crate::cache_provider::resolve(workspace, xdg)?;
     // `commands::graph::build` currently signals failure exclusively through
     // `Err`; a `?` here fails the fan-out fast. If that contract ever weakens
@@ -335,7 +344,6 @@ async fn dispatch_build(
             sandbox,
             resource_limits.clone(),
             &resolved,
-            ui,
         ))
         .await?;
     }
@@ -384,7 +392,6 @@ struct TestDispatchArgs {
     output: Output,
     target: Option<String>,
     sandbox: SandboxMode,
-    ui: bool,
     jobs: Option<usize>,
     all: bool,
     changed_paths: Vec<String>,
@@ -409,7 +416,6 @@ async fn dispatch_test(workspace: &Path, xdg: &Xdg, args: TestDispatchArgs) -> R
             args.test_batch_id.as_deref(),
             args.resource_limits,
             &args.resolved,
-            false,
         ))
         .await;
     }
@@ -429,14 +435,8 @@ async fn dispatch_test(workspace: &Path, xdg: &Xdg, args: TestDispatchArgs) -> R
             args.sandbox,
             args.resource_limits,
             &args.resolved,
-            args.ui,
         ))
         .await;
-    }
-    if args.ui {
-        anyhow::bail!(
-            "the Runs interface currently supports a single test target; omit --all, --changed-path, --jobs, and --test-unit"
-        );
     }
     let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
     let plan = match args.target {

@@ -66,10 +66,59 @@ pub fn digest_source_path<P: AsRef<Path>>(
         bytes.extend_from_slice(target.to_string_lossy().as_bytes());
         Ok(Digest::of_bytes(&bytes))
     } else if metadata.is_dir() {
-        digest_directory_blob(&abs, OutputSymlinkMode::Preserve)
+        let blob = digest_directory_blob(&abs, OutputSymlinkMode::Preserve)?;
+        let special = special_permission_entries(&abs)?;
+        if special.is_empty() {
+            return Ok(blob);
+        }
+        let mut bytes = b"once.directory.special-modes.v1\0".to_vec();
+        bytes.extend_from_slice(blob.as_bytes());
+        for (path, bits) in special {
+            bytes.extend_from_slice(path.as_bytes());
+            bytes.push(0);
+            bytes.extend_from_slice(&bits.to_le_bytes());
+        }
+        Ok(Digest::of_bytes(&bytes))
     } else {
-        let file = std::fs::File::open(&abs)?;
-        Digest::of_reader(std::io::BufReader::new(file))
+        // The permission bits are part of what an action sees when the file is
+        // copied into its workspace, so they belong in the digest. Without
+        // them, making a script executable would keep serving a result built
+        // from the non-executable file.
+        crate::file_blob::digest_source_file(&abs, &metadata)
+    }
+}
+
+/// The setuid, setgid, and sticky bits of every regular file under `root`, by
+/// path. The directory digest records only read, write, and execute bits, so
+/// these are folded in separately and only when some file has one.
+fn special_permission_entries(root: &Path) -> std::io::Result<Vec<(String, u32)>> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut found = Vec::new();
+        let mut pending = vec![(root.to_path_buf(), String::new())];
+        while let Some((directory, prefix)) = pending.pop() {
+            for entry in std::fs::read_dir(&directory)? {
+                let entry = entry?;
+                let metadata = std::fs::symlink_metadata(entry.path())?;
+                let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
+                if metadata.is_dir() {
+                    pending.push((entry.path(), format!("{name}/")));
+                } else if metadata.is_file() {
+                    let bits = metadata.permissions().mode() & 0o7000;
+                    if bits != 0 {
+                        found.push((name, bits));
+                    }
+                }
+            }
+        }
+        found.sort();
+        Ok(found)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = root;
+        Ok(Vec::new())
     }
 }
 
@@ -425,5 +474,52 @@ mod tests {
         let mut b = InputDigestBuilder::new(b"d");
         let err = b.push_source(tmp.path(), "missing.rs").unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod permission_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    #[test]
+    fn source_digest_changes_when_only_the_permission_bits_change() {
+        let workspace = tempfile::tempdir().unwrap();
+        let path = workspace.path().join("script.sh");
+        std::fs::write(&path, "echo hi\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let plain = digest_source_path(workspace.path(), "script.sh").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let executable = digest_source_path(workspace.path(), "script.sh").unwrap();
+        assert_ne!(plain, executable);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o4755)).unwrap();
+        let setuid = digest_source_path(workspace.path(), "script.sh").unwrap();
+        assert_ne!(executable, setuid);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o1755)).unwrap();
+        let sticky = digest_source_path(workspace.path(), "script.sh").unwrap();
+        assert_ne!(setuid, sticky);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            plain,
+            digest_source_path(workspace.path(), "script.sh").unwrap()
+        );
+    }
+
+    #[test]
+    fn directory_digest_changes_when_a_file_inside_gains_a_special_bit() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::create_dir(workspace.path().join("tree")).unwrap();
+        let file = workspace.path().join("tree/tool");
+        std::fs::write(&file, "x").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let plain = digest_source_path(workspace.path(), "tree").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o4755)).unwrap();
+        let setuid = digest_source_path(workspace.path(), "tree").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o1755)).unwrap();
+        let sticky = digest_source_path(workspace.path(), "tree").unwrap();
+        assert_ne!(plain, setuid);
+        assert_ne!(setuid, sticky);
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(plain, digest_source_path(workspace.path(), "tree").unwrap());
     }
 }

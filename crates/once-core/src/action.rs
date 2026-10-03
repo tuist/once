@@ -259,6 +259,10 @@ pub enum Action {
         output: WorkspacePath,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sha256_output: Option<WorkspacePath>,
+        /// Digest of the archive before compression, for formats that
+        /// compress. Absent for an uncompressed archive.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        uncompressed_sha256_output: Option<WorkspacePath>,
         format: ArchiveFormat,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         input_digest: Option<Digest>,
@@ -285,6 +289,9 @@ pub enum Action {
 pub enum ArchiveFormat {
     /// Uncompressed tar.
     Tar,
+    /// Tar compressed as a gzip stream with a fixed header, so identical
+    /// entries compress to identical bytes on every machine.
+    TarGz,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -301,6 +308,9 @@ pub struct ArchiveEntry {
     pub source: Option<WorkspacePath>,
     /// Path recorded inside the archive.
     pub path: String,
+    /// Link destination recorded for a symbolic-link entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
     /// Permission bits for a file entry.
     pub mode: u32,
     /// Permission bits for a directory entry.
@@ -323,6 +333,8 @@ pub enum ArchiveEntryKind {
     Directory,
     /// A directory and everything beneath it.
     Tree,
+    /// A symbolic link whose destination is recorded as written.
+    Symlink,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
