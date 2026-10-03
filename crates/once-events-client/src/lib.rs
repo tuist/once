@@ -38,4 +38,7 @@ pub use bridge::{heartbeat_payload, translate, Translated};
 pub use buffer::{PendingEvent, RingBuffer, RingPushOutcome};
 pub use loss::{LossIntervals, LossPushOutcome};
 pub use session::{AckAction, AckDisposition, EventSession, SessionLimits};
-pub use transport::{EventClient, ReconnectPolicy, TransportConfig, TransportError};
+pub use transport::{
+    CredentialsError, EventClient, ReconnectPolicy, TransportConfig, TransportError,
+    PROJECT_ID_METADATA,
+};

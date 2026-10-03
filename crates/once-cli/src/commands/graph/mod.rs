@@ -129,8 +129,8 @@ pub async fn build(
         &bus,
         workspace,
         once_core::Xdg::from_env(),
-        cache_provider_account(workspace),
-        cache_provider_project(workspace),
+        crate::cache_provider::account(workspace),
+        crate::cache_provider::project(workspace),
     )
     .await;
     bus_events::run_started(&bus, target_id, bus_events::now_ms());
@@ -477,27 +477,6 @@ async fn finish_live_reporter(reporter: crate::live_run_reporter::LiveRunReporte
     reporter.finish().await;
 }
 
-/// The Tuist account this workspace's cache is configured against.
-///
-/// Read from the resolved cache provider config so the live URL and the
-/// gRPC target the CLI prints match the credentials the build is using.
-fn cache_provider_account(workspace: &std::path::Path) -> Option<String> {
-    let xdg = once_core::Xdg::from_env();
-    match crate::cache_provider::resolve_config(workspace, &xdg).ok()? {
-        crate::cache_provider::ResolvedCacheProviderConfig::Tuist(config) => config.account,
-        crate::cache_provider::ResolvedCacheProviderConfig::Local => None,
-    }
-}
-
-/// The Tuist project this workspace's cache is configured against.
-fn cache_provider_project(workspace: &std::path::Path) -> Option<String> {
-    let xdg = once_core::Xdg::from_env();
-    match crate::cache_provider::resolve_config(workspace, &xdg).ok()? {
-        crate::cache_provider::ResolvedCacheProviderConfig::Tuist(config) => config.project,
-        crate::cache_provider::ResolvedCacheProviderConfig::Local => None,
-    }
-}
-
 fn emit_capability_completion_sounds(record: &CapabilityRunRecord) {
     let action_event = if record.result.exit_code != 0 {
         crate::sound::Event::ActionFailed
@@ -650,8 +629,8 @@ pub async fn test_with_filters(
         &bus,
         workspace,
         once_core::Xdg::from_env(),
-        cache_provider_account(workspace),
-        cache_provider_project(workspace),
+        crate::cache_provider::account(workspace),
+        crate::cache_provider::project(workspace),
     )
     .await;
     bus_events::run_started(&bus, target_id, bus_events::now_ms());

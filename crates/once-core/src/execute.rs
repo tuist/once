@@ -388,13 +388,39 @@ fn extract_zip_archive(archive_path: &Path, destination: &Path) -> Result<()> {
                 reason: format!("ZIP entry `{}` escapes the destination", entry.name()),
             });
         }
-        let output = destination.join(relative);
+        let output = destination.join(&relative);
         let unix_mode = entry.unix_mode().unwrap_or(0);
         let file_type = unix_mode & 0o170_000;
-        if file_type != 0 && file_type != 0o100_000 && file_type != 0o040_000 {
+        if file_type != 0
+            && file_type != 0o100_000
+            && file_type != 0o040_000
+            && file_type != 0o120_000
+        {
             return Err(Error::InvalidDownloadAndExtract {
                 reason: format!("ZIP entry `{}` has an unsupported file type", entry.name()),
             });
+        }
+        if traverses_extracted_symlink(destination, &relative) {
+            return Err(Error::InvalidDownloadAndExtract {
+                reason: format!(
+                    "ZIP entry `{}` is written through a symbolic link",
+                    entry.name()
+                ),
+            });
+        }
+        if file_type == 0o120_000 {
+            let mut target = String::new();
+            std::io::Read::read_to_string(&mut entry, &mut target).map_err(|source| {
+                Error::InvalidDownloadAndExtract {
+                    reason: format!("reading ZIP symbolic link `{}`: {source}", entry.name()),
+                }
+            })?;
+            extract_zip_symlink(&relative, Path::new(&target), &output).map_err(|reason| {
+                Error::InvalidDownloadAndExtract {
+                    reason: format!("ZIP entry `{}` {reason}", entry.name()),
+                }
+            })?;
+            continue;
         }
         if entry.is_dir() {
             std::fs::create_dir_all(&output).map_err(|source| Error::FileAction {
@@ -437,6 +463,55 @@ fn extract_zip_archive(archive_path: &Path, destination: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Whether `relative`, or any directory above it, is a symbolic link that an
+/// earlier entry of the same archive extracted under `destination`.
+fn traverses_extracted_symlink(destination: &Path, relative: &Path) -> bool {
+    let mut current = destination.to_path_buf();
+    relative.components().any(|component| {
+        current.push(component);
+        std::fs::symlink_metadata(&current).is_ok_and(|metadata| metadata.file_type().is_symlink())
+    })
+}
+
+/// Creates the symbolic link an archive stores at `relative`, such as the
+/// `Versions/Current` links inside a macOS framework. The target must be
+/// relative and stay inside the destination. `..` is accepted only before the
+/// first named component, so it climbs real directories rather than out of a
+/// directory reached through another link.
+fn extract_zip_symlink(
+    relative: &Path,
+    target: &Path,
+    output: &Path,
+) -> std::result::Result<(), String> {
+    let mut depth = relative.components().count().saturating_sub(1);
+    let mut descended = false;
+    for component in target.components() {
+        match component {
+            Component::Normal(_) => descended = true,
+            Component::CurDir => {}
+            Component::ParentDir if !descended && depth > 0 => depth -= 1,
+            _ => {
+                return Err(format!(
+                    "links to `{}` outside the destination",
+                    target.display()
+                ))
+            }
+        }
+    }
+    let parent = output
+        .parent()
+        .ok_or_else(|| "has no parent directory".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|source| source.to_string())?;
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, output).map_err(|source| source.to_string())
+    }
+    #[cfg(not(unix))]
+    {
+        Err("is a symbolic link, which this platform cannot extract".to_string())
+    }
 }
 
 async fn execute_command(
@@ -1431,7 +1506,90 @@ fn hex_lower(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{copy_tree_contents_blocking, file_sha256_hex, hex_lower, tree_digest_bytes};
+    use super::{
+        copy_tree_contents_blocking, extract_zip_archive, file_sha256_hex, hex_lower,
+        tree_digest_bytes,
+    };
+
+    enum ZipFixtureEntry<'a> {
+        File(&'a str, &'a str),
+        Symlink(&'a str, &'a str),
+    }
+
+    fn write_zip(path: &std::path::Path, entries: &[ZipFixtureEntry<'_>]) {
+        let mut archive = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        for entry in entries {
+            match entry {
+                ZipFixtureEntry::File(name, contents) => {
+                    archive.start_file(*name, options).unwrap();
+                    std::io::Write::write_all(&mut archive, contents.as_bytes()).unwrap();
+                }
+                ZipFixtureEntry::Symlink(name, target) => {
+                    archive.add_symlink(*name, *target, options).unwrap();
+                }
+            }
+        }
+        archive.finish().unwrap();
+    }
+
+    fn extract_fixture(entries: &[ZipFixtureEntry<'_>]) -> (tempfile::TempDir, crate::Result<()>) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let archive = tmp.path().join("fixture.zip");
+        write_zip(&archive, entries);
+        let result = extract_zip_archive(&archive, &tmp.path().join("output"));
+        (tmp, result)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extract_zip_archive_restores_framework_symlinks() {
+        use ZipFixtureEntry::{File, Symlink};
+        let (tmp, result) = extract_fixture(&[
+            File("Vendor.framework/Versions/A/Vendor", "binary"),
+            File("Vendor.framework/Versions/A/Resources/Info.plist", "plist"),
+            Symlink("Vendor.framework/Versions/Current", "A"),
+            Symlink("Vendor.framework/Vendor", "Versions/Current/Vendor"),
+            Symlink("Vendor.framework/Resources", "Versions/Current/Resources"),
+            Symlink("Vendor.framework/Sibling", "../Other"),
+        ]);
+        result.unwrap();
+        let framework = tmp.path().join("output/Vendor.framework");
+        assert_eq!(
+            std::fs::read_link(framework.join("Resources")).unwrap(),
+            std::path::Path::new("Versions/Current/Resources")
+        );
+        assert_eq!(
+            std::fs::read_to_string(framework.join("Resources/Info.plist")).unwrap(),
+            "plist"
+        );
+        assert_eq!(
+            std::fs::read_to_string(framework.join("Vendor")).unwrap(),
+            "binary"
+        );
+    }
+
+    #[test]
+    fn extract_zip_archive_rejects_symlinks_that_leave_the_destination() {
+        use ZipFixtureEntry::{File, Symlink};
+        for entries in [
+            vec![Symlink("Vendor/escape", "/etc")],
+            vec![Symlink("Vendor/escape", "../../outside")],
+            vec![Symlink("escape", "..")],
+            vec![Symlink("root", "."), Symlink("Vendor/escape", "../root/..")],
+            vec![Symlink("root", "."), Symlink("root/escape", "..")],
+            vec![Symlink("root", "."), File("root/file", "contents")],
+        ] {
+            let (tmp, result) = extract_fixture(&entries);
+            let error = result.unwrap_err().to_string();
+            assert!(
+                error.contains("outside the destination")
+                    || error.contains("through a symbolic link"),
+                "{error}"
+            );
+            assert!(!tmp.path().join("outside").exists());
+        }
+    }
 
     fn tree_digest_string(root: &std::path::Path, suffixes: &[String]) -> String {
         String::from_utf8(tree_digest_bytes(root, suffixes).unwrap()).unwrap()
