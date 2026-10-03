@@ -185,14 +185,17 @@ async fn transient_stream_failures_are_retried_on_a_fresh_read() {
         &temp,
         digest,
         chunks,
-        vec![Status::internal("h2 protocol error: http2 error")],
+        vec![
+            Status::internal("h2 protocol error: http2 error"),
+            Status::cancelled("operation was canceled"),
+        ],
     )
     .await;
     let result =
         tokio::time::timeout(Duration::from_secs(5), cache.ensure_blob_local(&digest)).await;
     server.abort();
     result.expect("retried restoration must finish").unwrap();
-    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 3);
     assert_eq!(cache.local.get_blob(&digest).await.unwrap(), bytes);
 }
 

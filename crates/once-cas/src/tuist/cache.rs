@@ -1441,11 +1441,12 @@ impl BlobReadFailure {
 }
 
 /// gRPC codes a retried read can recover from. `Internal` covers HTTP/2
-/// stream resets, which tonic reports as `h2 protocol error`.
+/// stream resets, which tonic reports as `h2 protocol error`, and
+/// `Cancelled` covers a stream the transport tore down mid-read.
 fn is_transient_status(code: Code) -> bool {
     matches!(
         code,
-        Code::Unavailable | Code::Internal | Code::Unknown | Code::Aborted
+        Code::Unavailable | Code::Internal | Code::Unknown | Code::Aborted | Code::Cancelled
     )
 }
 
