@@ -430,37 +430,47 @@ fn extract_zip_archive(archive_path: &Path, destination: &Path) -> Result<()> {
             })?;
             continue;
         }
-        let parent = output
-            .parent()
-            .ok_or_else(|| Error::InvalidDownloadAndExtract {
-                reason: format!("ZIP entry `{}` has no parent directory", entry.name()),
-            })?;
-        std::fs::create_dir_all(parent).map_err(|source| Error::FileAction {
-            action: "download_and_extract",
-            path: parent.display().to_string(),
-            source,
+        extract_zip_file(&mut entry, &output, unix_mode)?;
+    }
+    Ok(())
+}
+
+/// Writes a regular ZIP entry to `output`, creating its parent directory and
+/// applying the archived permission bits.
+fn extract_zip_file(
+    entry: &mut zip::read::ZipFile<'_>,
+    output: &Path,
+    unix_mode: u32,
+) -> Result<()> {
+    let parent = output
+        .parent()
+        .ok_or_else(|| Error::InvalidDownloadAndExtract {
+            reason: format!("ZIP entry `{}` has no parent directory", entry.name()),
         })?;
-        let mut output_file =
-            std::fs::File::create(&output).map_err(|source| Error::FileAction {
+    std::fs::create_dir_all(parent).map_err(|source| Error::FileAction {
+        action: "download_and_extract",
+        path: parent.display().to_string(),
+        source,
+    })?;
+    let mut output_file = std::fs::File::create(output).map_err(|source| Error::FileAction {
+        action: "download_and_extract",
+        path: output.display().to_string(),
+        source,
+    })?;
+    std::io::copy(entry, &mut output_file).map_err(|source| Error::FileAction {
+        action: "download_and_extract",
+        path: output.display().to_string(),
+        source,
+    })?;
+    #[cfg(unix)]
+    if unix_mode != 0 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(output, std::fs::Permissions::from_mode(unix_mode & 0o777))
+            .map_err(|source| Error::FileAction {
                 action: "download_and_extract",
                 path: output.display().to_string(),
                 source,
             })?;
-        std::io::copy(&mut entry, &mut output_file).map_err(|source| Error::FileAction {
-            action: "download_and_extract",
-            path: output.display().to_string(),
-            source,
-        })?;
-        #[cfg(unix)]
-        if unix_mode != 0 {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&output, std::fs::Permissions::from_mode(unix_mode & 0o777))
-                .map_err(|source| Error::FileAction {
-                action: "download_and_extract",
-                path: output.display().to_string(),
-                source,
-            })?;
-        }
     }
     Ok(())
 }
