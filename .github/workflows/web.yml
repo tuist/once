@@ -45,7 +45,7 @@ jobs:
           # Pinned so mise-action does not follow the upstream "latest"
           # pointer into a release whose assets have not been published
           # yet (v2026.9.3's tarball 404s at the time of writing).
-          version: "2026.9.2"
+          version: "2026.9.3"
 
       - name: Install native build dependencies
         run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
@@ -101,7 +101,7 @@ jobs:
           # Pinned so mise-action does not follow the upstream "latest"
           # pointer into a release whose assets have not been published
           # yet (v2026.9.3's tarball 404s at the time of writing).
-          version: "2026.9.2"
+          version: "2026.9.3"
 
       - name: Install native build dependencies
         run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
@@ -170,7 +170,7 @@ jobs:
           # Pinned so mise-action does not follow the upstream "latest"
           # pointer into a release whose assets have not been published
           # yet (v2026.9.3's tarball 404s at the time of writing).
-          version: "2026.9.2"
+          version: "2026.9.3"
           install_args: "helm@3.21.0"
           cache: "false"
 

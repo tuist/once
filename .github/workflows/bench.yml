@@ -39,7 +39,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.9.2"
+          version: "2026.9.3"
           experimental: true
           cache: true
       - if: matrix.os == 'ubuntu-latest'
