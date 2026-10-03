@@ -45,10 +45,12 @@ impl LiveRunReporter {
                 tracing::debug!(final_seq = seq, "live run reporter drained");
             }
             Ok(Err(error)) => {
-                tracing::debug!(%error, "live run reporter finished with error");
+                tracing::warn!(%error, "live run reporter finished with error");
+                eprintln!("Once insights could not be fully delivered: {error}");
             }
             Err(error) => {
-                tracing::debug!(%error, "live run reporter task ended abnormally");
+                tracing::warn!(%error, "live run reporter task ended abnormally");
+                eprintln!("Once insights reporter stopped unexpectedly");
             }
         }
     }
@@ -108,8 +110,8 @@ pub async fn spawn(
             let config = TransportConfig {
                 run_id: run_id.clone(),
                 batch_flush: Duration::from_millis(150),
-                final_drain: Duration::from_secs(2),
                 limits: SessionLimits::default(),
+                ..TransportConfig::default()
             };
             let project_id = tuist_project_id(&account, &project);
             let client = match project_id.as_deref() {
