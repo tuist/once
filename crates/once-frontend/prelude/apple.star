@@ -4448,11 +4448,16 @@ def _apple_run_build_actions(ctx, actions, identifier_prefix, product_inputs = [
         # so signing and downstream targets cannot restore the pre-script copy.
         if not cacheable:
             outputs = _unique(outputs + product_inputs + ([product_root] if product_root else []))
+            if product_root:
+                outputs = [path for path in outputs if not path.startswith(product_root + "/")]
         # Xcode treats declared outputs as hints, so a phase may skip one, for
-        # example a fixture copy that only runs in one configuration. Capture
-        # outputs inside the product through the product directory, where a
-        # skipped output is simply absent from the bundle.
-        if product_root and [path for path in outputs if path.startswith(product_root + "/")]:
+        # example a fixture copy that only runs in one configuration. Before
+        # packaging, the product holds only inputs of this action, so capture
+        # outputs inside it through the product tree, where a skipped output is
+        # simply absent. Later phases keep exact outputs because restoring the
+        # whole bundle would revert edits made after them.
+        captures_product_tree = cacheable and identifier_prefix == "prepackage_action" and product_root and [path for path in outputs if path.startswith(product_root + "/")]
+        if captures_product_tree:
             outputs = _unique([path for path in outputs if not path.startswith(product_root + "/")] + [product_root])
         output_dirs = _unique([
             _parent_dir(output)
@@ -4474,7 +4479,7 @@ def _apple_run_build_actions(ctx, actions, identifier_prefix, product_inputs = [
             identifier = identifier_prefix + ":" + ctx["label"]["id"] + ":" + (action.get("id") or action.get("name") or "script"),
         )
         for output in action.get("outputs") or []:
-            generated_sources.append(product_root if product_root and output.startswith(product_root + "/") else output)
+            generated_sources.append(product_root if captures_product_tree and output.startswith(product_root + "/") else output)
         if product_root and not cacheable:
             generated_sources.append(product_root)
         product_inputs = _unique(product_inputs + outputs) if product_inputs else []

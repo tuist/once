@@ -94,6 +94,7 @@ result = repr(True)
     assert!(second.cacheable);
     assert_eq!(second.sandbox.as_deref(), Some("off"));
     assert!(second.inputs.contains(&".once/out/App/App.app".to_string()));
+    assert_eq!(second.outputs, [".once/out/App/App.app/observed.txt"]);
 }
 
 #[test]
