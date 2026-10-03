@@ -17,7 +17,6 @@ once-events-client = { version = "0.0.0", path = "../once-events-client" }
 once-frontend.workspace = true
 
 anyhow.workspace = true
-axum.workspace = true
 blake3.workspace = true
 hex = "0.4"
 usage.workspace = true

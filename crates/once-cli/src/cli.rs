@@ -251,16 +251,6 @@ pub enum Cmd {
         #[usage(long, value_name = "KEY=VALUE")]
         config: Vec<String>,
 
-        /// Start the local Runs interface for this Once build.
-        ///
-        /// Once serves the client interface from this process. The page
-        /// receives the build target, dependency graph, cache decision,
-        /// duration, action digest, and output as the build progresses.
-        /// The Runs interface currently supports a single target; combine
-        /// it with an explicit target id rather than a targetless build.
-        #[usage(long)]
-        ui: bool,
-
         /// Build every build-capable target in the loaded graph, including
         /// targets reached through vendored dependencies. Without it the
         /// targetless default builds only workspace-owned targets.
@@ -366,10 +356,6 @@ pub enum Cmd {
         /// Override the workspace build configuration. See `once build --config`.
         #[usage(long, value_name = "KEY=VALUE")]
         config: Vec<String>,
-
-        /// Start the local Runs interface for this Once test run.
-        #[usage(long)]
-        ui: bool,
 
         /// Maximum number of test batches to execute concurrently.
         /// Defaults to the host's available parallelism for an affected plan.

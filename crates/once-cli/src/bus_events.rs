@@ -1,18 +1,11 @@
 //! Always-on producers for [`RunEventBus`] events.
 //!
-//! Historically only the `--ui` HTTP dashboard published lifecycle
-//! events onto the bus, so nothing else (a terminal renderer, the RFC
-//! 0008 ingest, an in-process sound module that wants to subscribe)
-//! could observe them. This module provides small helpers that a
-//! command's hot path can call unconditionally to broadcast the same
-//! events the dashboard used to emit, plus a lightweight
-//! [`ActionOutputObserver`] that only pushes `LogChunk` events onto
-//! the bus (with no channel or per-run UI store).
-//!
-//! The UI dashboard still exists; when it is enabled, its
-//! [`Publisher`](crate::commands::ui::Publisher) additionally updates a
-//! rendering store from these events, but the bus emit itself moves
-//! here so it fires whether or not the dashboard is on.
+//! Commands publish lifecycle events onto the bus unconditionally so
+//! every subscriber (the terminal renderer, the server-side live
+//! reporter, an in-process sound module) can observe them. This module
+//! provides small helpers a command's hot path can call without
+//! branching, plus a lightweight [`ActionOutputObserver`] that only
+//! pushes `LogChunk` events onto the bus.
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -500,9 +493,8 @@ pub fn target_failed(bus: &RunEventBus, target_id: &str, duration_ms: u64) {
 }
 
 /// A lightweight observer that only publishes `LogChunk` events onto
-/// the bus. Unlike the UI dashboard's observer, it never queues text
-/// into a decoder or channel; the terminal reporter and any other
-/// subscriber decode as they render.
+/// the bus. It never queues text into a decoder or channel; the
+/// terminal reporter and any other subscriber decode as they render.
 pub struct BusOutputObserver {
     bus: RunEventBus,
     target_id: String,
