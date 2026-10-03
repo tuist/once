@@ -1206,17 +1206,30 @@ impl TuistCache {
     async fn fetch_endpoints(&self) -> Result<Vec<String>> {
         let url = self.endpoints_url()?;
         let token = self.auth_token().await?;
-        let response = self
-            .authorized_request(Method::GET, url, token)
-            .await?
-            .header(KURA_FEATURE_FLAGS_HEADER, KURA_FEATURE_FLAG)
-            .send()
-            .await
-            .map_err(|source| Error::Remote {
-                provider: PROVIDER_NAME,
-                operation: "discover endpoints",
-                message: source.to_string(),
-            })?;
+        let mut attempt = 1;
+        let response = loop {
+            let sent = self
+                .authorized_request(Method::GET, url.clone(), token)
+                .await?
+                .header(KURA_FEATURE_FLAGS_HEADER, KURA_FEATURE_FLAG)
+                .send()
+                .await;
+            let unreachable = match sent {
+                Ok(response) if !is_transient_http_status(response.status()) => break response,
+                Ok(response) => remote_status_message(response).await,
+                Err(source) => source.to_string(),
+            };
+            if attempt >= ENDPOINT_DISCOVERY_ATTEMPTS {
+                return Err(Error::Remote {
+                    provider: PROVIDER_NAME,
+                    operation: "reach endpoint discovery",
+                    message: unreachable,
+                });
+            }
+            tracing::warn!(attempt, "retrying Tuist cache endpoint discovery");
+            tokio::time::sleep(ENDPOINT_DISCOVERY_RETRY_DELAY * attempt).await;
+            attempt += 1;
+        };
         match response.status() {
             status if status.is_success() => {
                 let endpoints: EndpointResponse =
@@ -1481,6 +1494,15 @@ impl RemoteReadError {
     }
 }
 
+const ENDPOINT_DISCOVERY_ATTEMPTS: u32 = 3;
+const ENDPOINT_DISCOVERY_RETRY_DELAY: Duration = Duration::from_millis(250);
+
+/// Responses that say Tuist could not answer right now, as opposed to a
+/// rejected or misconfigured request.
+fn is_transient_http_status(status: reqwest::StatusCode) -> bool {
+    status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+}
+
 fn remote_action_read_error(error: Error) -> RemoteReadError {
     match error {
         Error::Remote {
@@ -1490,7 +1512,10 @@ fn remote_action_read_error(error: Error) -> RemoteReadError {
         } if provider == PROVIDER_NAME
             && matches!(
                 operation,
-                "connect endpoint" | "get action result" | "pick fastest endpoint"
+                "connect endpoint"
+                    | "get action result"
+                    | "pick fastest endpoint"
+                    | "reach endpoint discovery"
             ) =>
         {
             RemoteReadError::miss(message)
@@ -1861,6 +1886,59 @@ mod tests {
         .unwrap()
     }
 
+    /// Serves one HTTP response per connection from `responses`, in order.
+    async fn serve_discovery(responses: Vec<&'static str>) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            for response in responses {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 4096];
+                let _ = stream.read(&mut request).await.unwrap();
+                stream.write_all(response.as_bytes()).await.unwrap();
+                let _ = stream.shutdown().await;
+            }
+        });
+        format!("http://{address}")
+    }
+
+    const UNAVAILABLE: &str =
+        "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+
+    #[tokio::test]
+    async fn endpoint_discovery_retries_an_unavailable_server() {
+        let temp = TempDir::new().unwrap();
+        let mut cache = tuist_cache(&temp, Some("once"));
+        let body = r#"{"endpoints":["https://cache.example.test"]}"#;
+        let ok: &'static str = Box::leak(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .into_boxed_str(),
+        );
+        cache.config.url = serve_discovery(vec![UNAVAILABLE, ok]).await;
+        cache.auth_token_cache.set(Ok("test-token".into())).unwrap();
+
+        assert_eq!(
+            cache.fetch_endpoints().await.unwrap(),
+            ["https://cache.example.test"]
+        );
+    }
+
+    #[tokio::test]
+    async fn persistently_unavailable_discovery_is_a_read_miss() {
+        let temp = TempDir::new().unwrap();
+        let mut cache = tuist_cache(&temp, Some("once"));
+        cache.config.url = serve_discovery(vec![UNAVAILABLE; 3]).await;
+        cache.auth_token_cache.set(Ok("test-token".into())).unwrap();
+
+        let error = cache.fetch_endpoints().await.unwrap_err();
+
+        assert!(remote_action_read_error(error).is_read_miss());
+    }
+
     #[tokio::test]
     async fn data_plane_endpoint_prefers_the_override_over_discovery() {
         let temp = TempDir::new().unwrap();
@@ -2090,7 +2168,11 @@ mod tests {
 
     #[test]
     fn remote_endpoint_connectivity_errors_are_read_misses() {
-        for operation in ["connect endpoint", "pick fastest endpoint"] {
+        for operation in [
+            "connect endpoint",
+            "pick fastest endpoint",
+            "reach endpoint discovery",
+        ] {
             let error = Error::Remote {
                 provider: PROVIDER_NAME,
                 operation,
@@ -2098,6 +2180,20 @@ mod tests {
             };
 
             assert!(remote_action_read_error(error).is_read_miss());
+        }
+    }
+
+    #[test]
+    fn only_unanswered_discovery_responses_are_transient() {
+        for status in [500, 502, 503, 504, 429] {
+            assert!(is_transient_http_status(
+                reqwest::StatusCode::from_u16(status).unwrap()
+            ));
+        }
+        for status in [200, 400, 401, 403, 404] {
+            assert!(!is_transient_http_status(
+                reqwest::StatusCode::from_u16(status).unwrap()
+            ));
         }
     }
 
