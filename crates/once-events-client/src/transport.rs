@@ -13,6 +13,9 @@
 //! transport shuts down gracefully once the bus is closed and the
 //! session drains, honouring the RFC's bounded final drain deadline.
 
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use once_core::{RunEvent as CoreEvent, RunEventBus};
@@ -97,20 +100,33 @@ pub struct EventClient {
     metadata: Option<crate::proto::RunStarted>,
     started_at_ms: Option<i64>,
     dashboard: crate::dashboard::DashboardLink,
+    token_slot: TokenSlot,
+    token_provider: Option<TokenProvider>,
 }
+
+type TokenSlot = Arc<Mutex<Option<MetadataValue<Ascii>>>>;
+
+/// Resolves a fresh bearer token, or nothing when none is available.
+type TokenProvider =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Option<String>> + Send>> + Send + Sync>;
+
+const RENEW_TOKEN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Default)]
 struct Authorization {
-    token: Option<MetadataValue<Ascii>>,
+    token: TokenSlot,
     project: Option<MetadataValue<Ascii>>,
 }
 
 impl Interceptor for Authorization {
     fn call(&mut self, mut request: Request<()>) -> Result<Request<()>, tonic::Status> {
-        if let Some(value) = &self.token {
-            request
-                .metadata_mut()
-                .insert("authorization", value.clone());
+        let token = self
+            .token
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(value) = token {
+            request.metadata_mut().insert("authorization", value);
         }
         if let Some(value) = &self.project {
             request
@@ -147,12 +163,15 @@ impl EventClient {
     /// Construct a client from a shared tonic channel. The caller is
     /// responsible for TLS, auth interceptors, and connection reuse.
     pub fn new(channel: Channel, config: TransportConfig) -> Self {
+        let authorization = Authorization::default();
         Self {
-            client: RunEventServiceClient::with_interceptor(channel, Authorization::default()),
+            token_slot: authorization.token.clone(),
+            client: RunEventServiceClient::with_interceptor(channel, authorization),
             config,
             metadata: None,
             started_at_ms: None,
             dashboard: crate::dashboard::DashboardLink::default(),
+            token_provider: None,
         }
     }
 
@@ -196,19 +215,53 @@ impl EventClient {
                 id.parse().map_err(|_| CredentialsError::ProjectId)
             })
             .transpose()?;
+        let authorization = Authorization {
+            token: Arc::new(Mutex::new(Some(authorization))),
+            project,
+        };
         Ok(Self {
-            client: RunEventServiceClient::with_interceptor(
-                channel,
-                Authorization {
-                    token: Some(authorization),
-                    project,
-                },
-            ),
+            token_slot: authorization.token.clone(),
+            client: RunEventServiceClient::with_interceptor(channel, authorization),
             config,
             metadata: None,
             started_at_ms: None,
             dashboard: crate::dashboard::DashboardLink::default(),
+            token_provider: None,
         })
+    }
+
+    /// Asks `provider` for a fresh bearer token before each reconnect, so a run that
+    /// outlives its token recovers instead of failing with the expired one. A provider
+    /// that yields nothing, or something that is not a valid token, keeps the current
+    /// token. The server still decides whether a token is acceptable.
+    #[must_use]
+    pub fn with_token_provider<F, Fut>(mut self, provider: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Option<String>> + Send + 'static,
+    {
+        self.token_provider = Some(Arc::new(move || Box::pin(provider())));
+        self
+    }
+
+    async fn renew_token(&self) {
+        let Some(provider) = &self.token_provider else {
+            return;
+        };
+        let Ok(Some(token)) = timeout(RENEW_TOKEN_TIMEOUT, provider()).await else {
+            return;
+        };
+        if token.is_empty() {
+            return;
+        }
+        let Ok(mut value) = format!("Bearer {token}").parse::<MetadataValue<Ascii>>() else {
+            return;
+        };
+        value.set_sensitive(true);
+        *self
+            .token_slot
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(value);
     }
 
     /// Report a validated dashboard link once, after durable run creation.
@@ -336,6 +389,7 @@ impl EventClient {
                         }
                     }
                     backoff = (backoff * 2).min(policy.max_backoff);
+                    self.renew_token().await;
                     if let Ok(ack) = self
                         .client
                         .get_run_ack(crate::proto::GetRunAckRequest {

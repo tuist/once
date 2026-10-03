@@ -19,3 +19,28 @@ edition = "2021"
 CARGO_MANIFEST_DIR = "crates/once"
 CARGO_PKG_NAME = "once"
 CARGO_PKG_VERSION = "0.0.0"
+
+# Tests
+
+[[target]]
+name = "once_unit_tests"
+kind = "rust_test"
+deps = [
+  "crates/once-cas/once_cas",
+  "crates/once-host-tree/once_host_tree",
+  "crates/once-core/once_core",
+  "crates/once-frontend/once_frontend",
+  "cargo_dependencies",
+]
+srcs = ["src/**/*.rs"]
+
+[target.attrs]
+crate_name = "once"
+crate_root = "src/lib.rs"
+edition = "2021"
+cargo_package = "once"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/once"
+CARGO_PKG_NAME = "once"
+CARGO_PKG_VERSION = "0.0.0"

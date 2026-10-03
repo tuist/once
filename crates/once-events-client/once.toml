@@ -21,3 +21,51 @@ build_script = "build.rs"
 CARGO_MANIFEST_DIR = "crates/once-events-client"
 CARGO_PKG_NAME = "once-events-client"
 CARGO_PKG_VERSION = "0.0.0"
+
+# Tests
+
+[[target]]
+name = "once_events_client_unit_tests"
+kind = "rust_test"
+deps = [
+  "crates/once-core/once_core",
+  "cargo_dependencies",
+]
+srcs = [
+  "src/**/*.rs",
+  "proto/**/*.proto",
+  "build.rs",
+]
+
+[target.attrs]
+crate_name = "once_events_client"
+crate_root = "src/lib.rs"
+edition = "2021"
+cargo_package = "once-events-client"
+build_script = "build.rs"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/once-events-client"
+CARGO_PKG_NAME = "once-events-client"
+CARGO_PKG_VERSION = "0.0.0"
+
+[[target]]
+name = "end_to_end_tests"
+kind = "rust_test"
+deps = [
+  "crates/once-events-client/once_events_client",
+  "crates/once-core/once_core",
+  "cargo_dependencies",
+]
+srcs = ["tests/end_to_end.rs"]
+
+[target.attrs]
+crate_name = "end_to_end"
+crate_root = "tests/end_to_end.rs"
+edition = "2021"
+cargo_package = "once-events-client"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/once-events-client"
+CARGO_PKG_NAME = "once-events-client"
+CARGO_PKG_VERSION = "0.0.0"
