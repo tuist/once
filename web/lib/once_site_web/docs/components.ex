@@ -36,6 +36,19 @@ defmodule OnceSiteWeb.Docs.Components do
 
   embed_templates "components/*"
 
+  defp close_mobile_navigation do
+    JS.remove_attribute("data-sidebar-open", to: "body")
+    |> JS.remove_attribute("data-mobile-open", to: "#docs-sidebar")
+    |> JS.set_attribute({"aria-expanded", "false"}, to: "#docs-mobile-menu-trigger")
+    |> close_mobile_toc()
+  end
+
+  defp close_mobile_toc(js \\ %JS{}) do
+    js
+    |> JS.set_attribute({"data-state", "closed"}, to: "#docs-mobile-toc")
+    |> JS.set_attribute({"aria-expanded", "false"}, to: "#docs-mobile-toc-trigger")
+  end
+
   defp group_icon(label), do: Map.get(@group_icons, label, "file")
 
   defp docs_path(slug), do: slug
