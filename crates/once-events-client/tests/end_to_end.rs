@@ -21,6 +21,14 @@ use once_events_client::proto::{
     GetServerCapabilitiesRequest, RunEventAck, RunEventBatch, RunFinalization, ServerCapabilities,
 };
 
+#[derive(Default, PartialEq)]
+enum StreamFailure {
+    #[default]
+    None,
+    BeforeAck,
+    AfterAck,
+}
+
 #[derive(Default)]
 struct RecordedRun {
     batches: Vec<RunEventBatch>,
@@ -28,8 +36,27 @@ struct RecordedRun {
     authorizations: Vec<String>,
     projects: Vec<String>,
     stall: bool,
-    break_first_stream: bool,
+    stream_failure: StreamFailure,
     invalid_hash_key: bool,
+    ack_delay: std::time::Duration,
+}
+
+async fn send_ack(
+    tx: &tokio::sync::mpsc::Sender<Result<BatchAck, Status>>,
+    ack: BatchAck,
+    delay: std::time::Duration,
+    close_after_ack: bool,
+) -> bool {
+    tokio::time::sleep(delay).await;
+    if tx.send(Ok(ack)).await.is_err() {
+        return false;
+    }
+    if close_after_ack {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let _ = tx.send(Err(Status::unavailable("closed after ack"))).await;
+        return false;
+    }
+    true
 }
 
 fn project_id_header(metadata: &tonic::metadata::MetadataMap) -> String {
@@ -174,14 +201,17 @@ impl RunEventService for TestServer {
                 let batch_id = batch.batch_id.clone();
                 let expected_next = state.expected_next_seq;
                 state.batches.push(batch);
-                if state.break_first_stream {
-                    state.break_first_stream = false;
+                if state.stream_failure == StreamFailure::BeforeAck {
+                    state.stream_failure = StreamFailure::None;
                     drop(state);
                     let _ = tx
                         .send(Err(Status::unavailable("lost acknowledgement")))
                         .await;
                     return;
                 }
+                let ack_delay = state.ack_delay;
+                let close_after_ack = state.stream_failure == StreamFailure::AfterAck;
+                state.stream_failure = StreamFailure::None;
                 drop(state);
                 let ack = BatchAck {
                     run_id,
@@ -195,7 +225,7 @@ impl RunEventService for TestServer {
                     finalization: RunFinalization::Active as i32,
                     dashboard_url: "https://dashboard.example/runs/canonical".into(),
                 };
-                if tx.send(Ok(ack)).await.is_err() {
+                if !send_ack(&tx, ack, ack_delay, close_after_ack).await {
                     return;
                 }
             }
@@ -282,7 +312,7 @@ async fn sends_no_project_id_when_none_is_given() {
 #[tokio::test]
 async fn names_the_project_on_every_call_across_a_reconnect() {
     let (channel, recorded) = start_server().await;
-    recorded.lock().await.break_first_stream = true;
+    recorded.lock().await.stream_failure = StreamFailure::BeforeAck;
     let client = EventClient::authenticated_with_project_id(
         channel,
         TransportConfig {
@@ -636,6 +666,170 @@ async fn canonical_dashboard_link_arrives_while_run_is_active() {
 }
 
 #[tokio::test]
+async fn shutdown_drains_cached_action_burst_beyond_two_seconds() {
+    use once_events_client::proto::run_event::Payload;
+    let (channel, recorded) = start_server().await;
+    recorded.lock().await.ack_delay = std::time::Duration::from_millis(150);
+    let client = EventClient::new(
+        channel,
+        TransportConfig {
+            run_id: "cached-burst".into(),
+            limits: once_events_client::SessionLimits {
+                max_events_per_batch: 16,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    );
+    let bus = RunEventBus::new(512);
+    let rx = bus.subscribe();
+    bus.publish(RunEvent::RunStarted { at_epoch_ms: 1 });
+    for index in 0..256 {
+        bus.publish(RunEvent::ActionCompleted {
+            at_epoch_ms: 2,
+            target_id: "cached-target".into(),
+            capability: "build".into(),
+            action_index: index,
+            identifier: Some(format!("action-{index}")),
+            result: once_core::TargetResult::Succeeded,
+            was_cached: true,
+            duration_ms: 0,
+            exit_code: 0,
+            start_at_epoch_ms: 2,
+            worker_id: "local".into(),
+            prepare_ms: 0,
+            execute_ms: 0,
+            cache_key: String::new(),
+            selected_attempt: 1,
+        });
+    }
+    bus.publish(RunEvent::RunCompleted {
+        at_epoch_ms: 3,
+        exit_status: 0,
+    });
+    let (tx, shutdown) = tokio::sync::oneshot::channel();
+    tx.send(()).unwrap();
+    let started = std::time::Instant::now();
+    let expected_next = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        client.run_until_shutdown(rx, shutdown),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(started.elapsed() > std::time::Duration::from_secs(2));
+    let recorded = recorded.lock().await;
+    let actions: std::collections::BTreeSet<_> = recorded
+        .batches
+        .iter()
+        .flat_map(|batch| &batch.events)
+        .filter_map(|event| match &event.payload {
+            Some(Payload::ActionCompleted(action)) => Some(action.identifier.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(actions.len(), 256);
+    assert!(recorded
+        .batches
+        .iter()
+        .flat_map(|batch| &batch.events)
+        .any(|event| matches!(&event.payload, Some(Payload::RunCompleted(_)))));
+    assert_eq!(recorded.expected_next_seq, expected_next);
+}
+
+#[tokio::test]
+async fn abandoned_producer_is_finalized_as_failed() {
+    use once_events_client::proto::{run_event::Payload, RunResult};
+    for dropped_shutdown in [false, true] {
+        let (channel, recorded) = start_server().await;
+        let client = EventClient::new(
+            channel,
+            TransportConfig {
+                run_id: "abandoned".into(),
+                ..Default::default()
+            },
+        );
+        let bus = RunEventBus::new(16);
+        let rx = bus.subscribe();
+        bus.publish(RunEvent::RunStarted { at_epoch_ms: 1 });
+        let (tx, shutdown) = tokio::sync::oneshot::channel();
+        let result = if dropped_shutdown {
+            drop(tx);
+            client.run_until_shutdown(rx, shutdown).await
+        } else {
+            drop(bus);
+            client.run(rx).await
+        };
+        result.unwrap();
+        let recorded = recorded.lock().await;
+        let terminal: Vec<_> = recorded
+            .batches
+            .iter()
+            .flat_map(|batch| &batch.events)
+            .filter_map(|event| match &event.payload {
+                Some(Payload::RunCompleted(completed)) => Some(completed.result),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(terminal, [RunResult::Failed as i32]);
+    }
+}
+
+#[tokio::test]
+async fn shutdown_unblocks_reconnect_with_an_empty_acked_session() {
+    use once_events_client::proto::{run_event::Payload, RunResult};
+    for closed_bus in [false, true] {
+        let (channel, recorded) = start_server().await;
+        recorded.lock().await.stream_failure = StreamFailure::AfterAck;
+        let client = EventClient::new(
+            channel,
+            TransportConfig {
+                run_id: "acked-before-reconnect".into(),
+                final_drain: std::time::Duration::from_secs(1),
+                ..Default::default()
+            },
+        );
+        let bus = RunEventBus::new(16);
+        let rx = bus.subscribe();
+        bus.publish(RunEvent::RunStarted { at_epoch_ms: 1 });
+        let (tx, shutdown) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            client
+                .run_with_reconnect(
+                    rx,
+                    shutdown,
+                    once_events_client::ReconnectPolicy {
+                        initial_backoff: std::time::Duration::from_millis(5),
+                        ..Default::default()
+                    },
+                )
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if recorded.lock().await.authorizations.len() >= 3 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        if closed_bus {
+            drop(bus);
+        } else {
+            tx.send(()).unwrap();
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(recorded.lock().await.batches.iter().flat_map(|batch| &batch.events).any(|event| matches!(&event.payload, Some(Payload::RunCompleted(completed)) if completed.result == RunResult::Failed as i32)));
+    }
+}
+
+#[tokio::test]
 async fn shutdown_deadline_covers_stalled_acknowledgements() {
     let (channel, recorded) = start_server().await;
     recorded.lock().await.stall = true;
@@ -671,7 +865,7 @@ async fn shutdown_deadline_covers_stalled_acknowledgements() {
 #[tokio::test]
 async fn reconnect_after_lost_ack_preserves_shutdown_and_terminal() {
     let (channel, recorded) = start_server().await;
-    recorded.lock().await.break_first_stream = true;
+    recorded.lock().await.stream_failure = StreamFailure::BeforeAck;
     let client = EventClient::authenticated(
         channel,
         TransportConfig {

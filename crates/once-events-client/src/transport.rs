@@ -51,6 +51,7 @@ pub enum CredentialsError {
 pub struct TransportConfig {
     pub run_id: String,
     pub batch_flush: Duration,
+    /// Absolute shutdown budget, including reconnects. Defaults to 30 seconds.
     pub final_drain: Duration,
     pub limits: SessionLimits,
 }
@@ -60,7 +61,7 @@ impl Default for TransportConfig {
         Self {
             run_id: String::new(),
             batch_flush: Duration::from_millis(150),
-            final_drain: Duration::from_secs(2),
+            final_drain: Duration::from_secs(30),
             limits: SessionLimits::default(),
         }
     }
@@ -453,6 +454,7 @@ impl EventClient {
             &mut self.started_at_ms,
             &batch_tx,
             self.config.limits,
+            stopping,
         )
         .await?;
         let mut ack_stream = self
@@ -477,6 +479,9 @@ impl EventClient {
                 );
                 bus_open = false;
             }
+            if !bus_open {
+                complete_abandoned_run(session, self.metadata.as_ref(), &mut self.started_at_ms);
+            }
             if !bus_open || session.finalized_locally() {
                 drain_deadline.get_or_insert_with(|| Instant::now() + self.config.final_drain);
             }
@@ -493,10 +498,7 @@ impl EventClient {
                 () = deadline => return Err(TransportError::DrainTimeout),
                 () = stopping.cancelled(), if bus_open => {},
                 _ = heartbeat.tick(), if bus_open && !session.finalized_locally() => {
-                    let epoch_ms = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
-                        .unwrap_or_default();
+                    let epoch_ms = now_epoch_ms();
                     session.push_ordinary(crate::bridge::heartbeat_payload(), epoch_ms, 0);
                 },
                 ack = ack_stream.next() => match ack {
@@ -553,9 +555,14 @@ async fn prime_stream(
     started_at_ms: &mut Option<i64>,
     batch_tx: &mpsc::Sender<RunEventBatch>,
     limits: SessionLimits,
+    stopping: &tokio_util::sync::CancellationToken,
 ) -> Result<String, TransportError> {
     // Some servers send response headers only after receiving the first batch.
     loop {
+        if stopping.is_cancelled() {
+            drain_bus(session, bus_rx, metadata, started_at_ms);
+            complete_abandoned_run(session, metadata, started_at_ms);
+        }
         if let Some(batch) = session.next_batch() {
             if prost::Message::encoded_len(&batch) > limits.max_batch_bytes
                 || batch
@@ -572,14 +579,52 @@ async fn prime_stream(
                 .map_err(|_| TransportError::AckStreamClosed)?;
             return Ok(batch_id);
         }
-        match bus_rx.recv().await {
+        if stopping.is_cancelled() {
+            return Err(TransportError::AckStreamClosed);
+        }
+        let event = tokio::select! {
+            () = stopping.cancelled() => continue,
+            event = bus_rx.recv() => event,
+        };
+        match event {
             Ok(event) => enqueue_event(session, event, metadata, started_at_ms),
             Err(broadcast::error::RecvError::Lagged(n)) => session.record_producer_loss(n),
             Err(broadcast::error::RecvError::Closed) => {
-                return Err(TransportError::AckStreamClosed);
+                complete_abandoned_run(session, metadata, started_at_ms);
+                if session.is_drained() {
+                    return Err(TransportError::AckStreamClosed);
+                }
             }
         }
     }
+}
+
+fn now_epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or_default()
+}
+
+fn complete_abandoned_run(
+    session: &mut EventSession,
+    metadata: Option<&crate::proto::RunStarted>,
+    started_at_ms: &mut Option<i64>,
+) {
+    if session.finalized_locally() || started_at_ms.is_none() {
+        return;
+    }
+    tracing::warn!("run event producer stopped without a completion; marking run failed");
+    let at_epoch_ms = now_epoch_ms();
+    enqueue_event(
+        session,
+        CoreEvent::RunCompleted {
+            at_epoch_ms,
+            exit_status: 1,
+        },
+        metadata,
+        started_at_ms,
+    );
 }
 
 fn drain_bus(
