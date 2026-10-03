@@ -3,7 +3,16 @@
 
 Describe 'once exec'
   BeforeEach 'setup_workspace'
-  AfterEach 'cleanup_workspace'
+  AfterEach 'cleanup_exec_workspace'
+
+  cleanup_exec_workspace() {
+    if [ -n "${DAYTONA_SERVER_PID:-}" ]; then
+      kill "$DAYTONA_SERVER_PID" 2>/dev/null || true
+      wait "$DAYTONA_SERVER_PID" 2>/dev/null || true
+      unset DAYTONA_SERVER_PID
+    fi
+    cleanup_workspace
+  }
 
   copy_exec_fixture() {
     cp -R "$REPO_ROOT/fixtures/exec/$1/." "$WORKSPACE/"
@@ -226,8 +235,9 @@ SH
 
   It 'runs a command through the daytona compute provider'
     copy_exec_fixture daytona
-    python3 "$WORKSPACE/daytona_api.py" "$WORKSPACE/daytona_deleted" > "$WORKSPACE/daytona_port" &
-    while [ ! -s "$WORKSPACE/daytona_port" ]; do sleep 0.05; done
+    "$SPEC_PYTHON3" "$WORKSPACE/daytona_api.py" "$WORKSPACE/daytona_deleted" > "$WORKSPACE/daytona_port" &
+    DAYTONA_SERVER_PID=$!
+    wait_for_server_file "$WORKSPACE/daytona_port" "$DAYTONA_SERVER_PID" || return
     port="$(cat "$WORKSPACE/daytona_port")"
     When call env ONCE_DAYTONA_CONTROL_URL="http://127.0.0.1:$port/api" ONCE_DAYTONA_TOOLBOX_URL="http://127.0.0.1:$port/toolbox" ONCE_DAYTONA_API_KEY=token-1 "$ONCE_BIN" -C "$WORKSPACE" exec --remote --compute daytona -e VALUE=output -- /bin/sh -c 'printf "daytona-$VALUE"'
     The status should be success
