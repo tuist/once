@@ -3766,6 +3766,7 @@ dependencies = [
  "base64",
  "blake3",
  "fd-lock",
+ "flate2",
  "futures",
  "jsonwebtoken",
  "libc",

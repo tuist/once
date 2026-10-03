@@ -12,6 +12,7 @@ pub(crate) async fn write(
     entries: &[ArchiveEntry],
     output: &WorkspacePath,
     sha256_output: Option<&WorkspacePath>,
+    uncompressed_sha256_output: Option<&WorkspacePath>,
     format: ArchiveFormat,
     workspace_root: &Path,
 ) -> Result<()> {
@@ -19,6 +20,7 @@ pub(crate) async fn write(
     let output_path = output.resolve(workspace_root);
     let output_label = output.as_str().to_string();
     let sha256_path = sha256_output.map(|path| path.resolve(workspace_root));
+    let uncompressed_path = uncompressed_sha256_output.map(|path| path.resolve(workspace_root));
     let sha256_label = sha256_output.map(|path| path.as_str().to_string());
     let workspace_root = workspace_root.to_path_buf();
     tokio::task::spawn_blocking(move || {
@@ -26,6 +28,7 @@ pub(crate) async fn write(
             &entries,
             &output_path,
             sha256_path.as_deref(),
+            uncompressed_path.as_deref(),
             format,
             &workspace_root,
         )
@@ -47,11 +50,115 @@ fn write_blocking(
     entries: &[ArchiveEntry],
     output: &Path,
     sha256_output: Option<&Path>,
+    uncompressed_sha256_output: Option<&Path>,
     format: ArchiveFormat,
     workspace_root: &Path,
 ) -> io::Result<()> {
     match format {
-        ArchiveFormat::Tar => write_tar(entries, output, sha256_output, workspace_root),
+        ArchiveFormat::Tar => {
+            if uncompressed_sha256_output.is_some() {
+                return Err(invalid_input(
+                    "an uncompressed digest output requires a compressed archive format",
+                ));
+            }
+            write_tar(entries, output, sha256_output, workspace_root)
+        }
+        ArchiveFormat::TarGz => write_tar_gz(
+            entries,
+            output,
+            sha256_output,
+            uncompressed_sha256_output,
+            workspace_root,
+        ),
+    }
+}
+
+fn write_tar_gz(
+    entries: &[ArchiveEntry],
+    output: &Path,
+    sha256_output: Option<&Path>,
+    uncompressed_sha256_output: Option<&Path>,
+    workspace_root: &Path,
+) -> io::Result<()> {
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let resolved = resolve_entries(entries, workspace_root)?;
+    let compressed = DigestWriter::new(File::create(output)?);
+    let frame = GzipFrame::new(compressed)?;
+    let mut builder = Builder::new(DigestWriter::new(frame));
+    for entry in resolved.values() {
+        append_entry(&mut builder, entry)?;
+    }
+    builder.finish()?;
+    let mut tar_writer = builder.into_inner()?;
+    tar_writer.flush()?;
+    let uncompressed_digest = tar_writer.digest_hex();
+    let mut compressed = tar_writer.into_inner().finish()?;
+    compressed.flush()?;
+    if let Some(path) = sha256_output {
+        write_digest_file(path, &compressed.digest_hex())?;
+    }
+    if let Some(path) = uncompressed_sha256_output {
+        write_digest_file(path, &uncompressed_digest)?;
+    }
+    Ok(())
+}
+
+fn write_digest_file(path: &Path, digest: &str) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, format!("{digest}\n"))
+}
+
+/// A gzip stream with a fixed header: no timestamp, no name, and an unknown
+/// operating system, so the same input compresses to the same bytes anywhere.
+struct GzipFrame<W: Write> {
+    deflate: Option<flate2::write::DeflateEncoder<W>>,
+    checksum: flate2::Crc,
+}
+
+impl<W: Write> GzipFrame<W> {
+    fn new(mut inner: W) -> io::Result<Self> {
+        inner.write_all(&[0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 255])?;
+        Ok(Self {
+            deflate: Some(flate2::write::DeflateEncoder::new(
+                inner,
+                flate2::Compression::new(6),
+            )),
+            checksum: flate2::Crc::new(),
+        })
+    }
+
+    fn finish(mut self) -> io::Result<W> {
+        let mut inner = self
+            .deflate
+            .take()
+            .ok_or_else(|| io::Error::other("gzip stream already finished"))?
+            .finish()?;
+        inner.write_all(&self.checksum.sum().to_le_bytes())?;
+        inner.write_all(&self.checksum.amount().to_le_bytes())?;
+        Ok(inner)
+    }
+}
+
+impl<W: Write> Write for GzipFrame<W> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        let deflate = self
+            .deflate
+            .as_mut()
+            .ok_or_else(|| io::Error::other("gzip stream already finished"))?;
+        let written = deflate.write(buffer)?;
+        self.checksum.update(&buffer[..written]);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self.deflate.as_mut() {
+            Some(deflate) => deflate.flush(),
+            None => Ok(()),
+        }
     }
 }
 
@@ -139,6 +246,32 @@ fn resolve_entries(
                         path: normalize_archive_path(&entry.path, false)?,
                         source: ResolvedSource::Directory,
                         mode: entry.directory_mode,
+                        owner_id: entry.owner_id,
+                        group_id: entry.group_id,
+                        mtime: entry.mtime,
+                    },
+                )?;
+            }
+            ArchiveEntryKind::Symlink => {
+                if entry.source.is_some() {
+                    return Err(invalid_input(format!(
+                        "archive symlink `{}` must not declare a source",
+                        entry.path
+                    )));
+                }
+                let target = entry.target.as_deref().filter(|target| !target.is_empty());
+                let target = target.ok_or_else(|| {
+                    invalid_input(format!(
+                        "archive symlink `{}` requires a target",
+                        entry.path
+                    ))
+                })?;
+                insert_entry(
+                    &mut resolved,
+                    ResolvedEntry {
+                        path: normalize_archive_path(&entry.path, false)?,
+                        source: ResolvedSource::Symlink(PathBuf::from(target)),
+                        mode: 0o777,
                         owner_id: entry.owner_id,
                         group_id: entry.group_id,
                         mtime: entry.mtime,
@@ -325,9 +458,7 @@ fn append_entry<W: Write>(builder: &mut Builder<W>, entry: &ResolvedEntry) -> io
         ResolvedSource::Symlink(target) => {
             header.set_entry_type(EntryType::Symlink);
             header.set_size(0);
-            header.set_link_name(target)?;
-            header.set_cksum();
-            builder.append_data(&mut header, &entry.path, io::empty())?;
+            builder.append_link(&mut header, &entry.path, target)?;
         }
     }
     Ok(())
@@ -348,6 +479,10 @@ impl<W> DigestWriter<W> {
             inner,
             hasher: Sha256::new(),
         }
+    }
+
+    fn into_inner(self) -> W {
+        self.inner
     }
 
     fn digest_hex(&self) -> String {
@@ -391,6 +526,7 @@ mod tests {
                 kind: ArchiveEntryKind::Directory,
                 source: None,
                 path: "usr/local/bin".to_string(),
+                target: None,
                 mode: 0,
                 directory_mode: 0o755,
                 owner_id: 7,
@@ -401,6 +537,7 @@ mod tests {
                 kind: ArchiveEntryKind::File,
                 source: Some(WorkspacePath::try_from("hello").unwrap()),
                 path: "usr/local/bin/hello".to_string(),
+                target: None,
                 mode: 0o755,
                 directory_mode: 0o755,
                 owner_id: 7,
@@ -415,6 +552,7 @@ mod tests {
             &entries,
             &output,
             Some(&digest),
+            None,
             ArchiveFormat::Tar,
             temporary.path(),
         )
@@ -424,6 +562,7 @@ mod tests {
             &entries,
             &output,
             Some(&digest),
+            None,
             ArchiveFormat::Tar,
             temporary.path(),
         )
@@ -456,6 +595,181 @@ mod tests {
                 ("usr/local/bin/hello".to_string(), 0o755, 7, 8, 9),
             ]
         );
+    }
+
+    fn sample_entries() -> Vec<ArchiveEntry> {
+        vec![
+            ArchiveEntry {
+                kind: ArchiveEntryKind::File,
+                source: Some(WorkspacePath::try_from("hello").unwrap()),
+                path: "usr/local/bin/hello".to_string(),
+                target: None,
+                mode: 0o755,
+                directory_mode: 0o755,
+                owner_id: 0,
+                group_id: 0,
+                mtime: 0,
+            },
+            ArchiveEntry {
+                kind: ArchiveEntryKind::Symlink,
+                source: None,
+                path: "usr/bin/hello".to_string(),
+                target: Some("/usr/local/bin/hello".to_string()),
+                mode: 0,
+                directory_mode: 0,
+                owner_id: 0,
+                group_id: 0,
+                mtime: 0,
+            },
+        ]
+    }
+
+    #[test]
+    fn gzip_archives_are_deterministic_and_report_both_digests() {
+        use std::io::Read as _;
+
+        let temporary = tempfile::tempdir().unwrap();
+        std::fs::write(temporary.path().join("hello"), b"hello\n".repeat(1000)).unwrap();
+        let entries = sample_entries();
+        let output = temporary.path().join("layer.tar.gz");
+        let compressed_digest = temporary.path().join("layer.gz.sha256");
+        let tar_digest = temporary.path().join("layer.tar.sha256");
+        let write = || {
+            write_blocking(
+                &entries,
+                &output,
+                Some(&compressed_digest),
+                Some(&tar_digest),
+                ArchiveFormat::TarGz,
+                temporary.path(),
+            )
+            .unwrap();
+            std::fs::read(&output).unwrap()
+        };
+        let first = write();
+        assert_eq!(first, write());
+        assert_eq!(&first[..10], &[0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 255]);
+
+        let mut tar_bytes = Vec::new();
+        flate2::read::GzDecoder::new(first.as_slice())
+            .read_to_end(&mut tar_bytes)
+            .unwrap();
+        assert!(tar_bytes.len() > first.len());
+        assert_eq!(
+            std::fs::read_to_string(&compressed_digest).unwrap().trim(),
+            hex_lower(&Sha256::digest(&first))
+        );
+        assert_eq!(
+            std::fs::read_to_string(&tar_digest).unwrap().trim(),
+            hex_lower(&Sha256::digest(&tar_bytes))
+        );
+
+        let plain = temporary.path().join("layer.tar");
+        write_blocking(
+            &entries,
+            &plain,
+            None,
+            None,
+            ArchiveFormat::Tar,
+            temporary.path(),
+        )
+        .unwrap();
+        assert_eq!(tar_bytes, std::fs::read(&plain).unwrap());
+    }
+
+    #[test]
+    fn symlink_entries_record_their_target() {
+        let temporary = tempfile::tempdir().unwrap();
+        std::fs::write(temporary.path().join("hello"), b"hello\n").unwrap();
+        let output = temporary.path().join("layer.tar");
+        write_blocking(
+            &sample_entries(),
+            &output,
+            None,
+            None,
+            ArchiveFormat::Tar,
+            temporary.path(),
+        )
+        .unwrap();
+        let bytes = std::fs::read(&output).unwrap();
+        let mut archive = tar::Archive::new(bytes.as_slice());
+        let link = archive
+            .entries()
+            .unwrap()
+            .map(|entry| entry.unwrap())
+            .find(|entry| entry.header().entry_type() == EntryType::Symlink)
+            .unwrap();
+        assert_eq!(link.path().unwrap().to_string_lossy(), "usr/bin/hello");
+        assert_eq!(
+            link.link_name().unwrap().unwrap().to_string_lossy(),
+            "/usr/local/bin/hello"
+        );
+    }
+
+    #[test]
+    fn symlink_targets_longer_than_a_tar_header_field_are_archived() {
+        let temporary = tempfile::tempdir().unwrap();
+        let target = format!("/{}", "long-directory-name/".repeat(8));
+        assert!(target.len() > 101);
+        let entries = vec![ArchiveEntry {
+            kind: ArchiveEntryKind::Symlink,
+            source: None,
+            path: "usr/bin/tool".to_string(),
+            target: Some(target.clone()),
+            mode: 0,
+            directory_mode: 0,
+            owner_id: 0,
+            group_id: 0,
+            mtime: 0,
+        }];
+        let output = temporary.path().join("layer.tar");
+        write_blocking(
+            &entries,
+            &output,
+            None,
+            None,
+            ArchiveFormat::Tar,
+            temporary.path(),
+        )
+        .unwrap();
+        let bytes = std::fs::read(&output).unwrap();
+        let mut archive = tar::Archive::new(bytes.as_slice());
+        let link = archive
+            .entries()
+            .unwrap()
+            .map(|entry| entry.unwrap())
+            .find(|entry| entry.header().entry_type() == EntryType::Symlink)
+            .unwrap();
+        assert_eq!(link.link_name().unwrap().unwrap().to_string_lossy(), target);
+    }
+
+    #[test]
+    fn symlinks_need_a_target_and_plain_tars_have_no_uncompressed_digest() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut entries = sample_entries();
+        entries.remove(0);
+        entries[0].target = None;
+        let output = temporary.path().join("layer.tar");
+        let error = write_blocking(
+            &entries,
+            &output,
+            None,
+            None,
+            ArchiveFormat::Tar,
+            temporary.path(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("requires a target"), "{error}");
+        let error = write_blocking(
+            &[],
+            &output,
+            None,
+            Some(&temporary.path().join("x")),
+            ArchiveFormat::Tar,
+            temporary.path(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("compressed"), "{error}");
     }
 
     #[test]

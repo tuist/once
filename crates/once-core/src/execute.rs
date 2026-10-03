@@ -152,6 +152,7 @@ async fn execute_portable_action(
             entries,
             output,
             sha256_output,
+            uncompressed_sha256_output,
             format,
             ..
         } => {
@@ -159,12 +160,16 @@ async fn execute_portable_action(
                 entries,
                 output,
                 sha256_output.as_ref(),
+                uncompressed_sha256_output.as_ref(),
                 *format,
                 workspace_root,
             )
             .await?;
             let mut outputs = vec![output.clone()];
-            if let Some(path) = sha256_output {
+            for path in [sha256_output, uncompressed_sha256_output]
+                .into_iter()
+                .flatten()
+            {
                 outputs.push(path.clone());
             }
             capture_file_action_outputs(&outputs, workspace_root, cache).await
@@ -619,7 +624,7 @@ impl Drop for PreparedSandbox {
         if self.keep {
             return;
         }
-        if let Err(error) = std::fs::remove_dir_all(&self.root) {
+        if let Err(error) = remove_tree_blocking(&self.root) {
             if error.kind() != std::io::ErrorKind::NotFound {
                 tracing::warn!(
                     sandbox = %self.root.display(),
@@ -662,16 +667,33 @@ async fn prepare_input_sandbox(
     tokio::task::spawn_blocking(move || {
         remove_path_blocking(&sandbox_root)?;
         std::fs::create_dir_all(&sandbox_execroot)?;
-        for input in input_paths {
-            stage_sandbox_input_blocking(&workspace, &sandbox_execroot, &input, copy_inputs)?;
+        for input in &input_paths {
+            stage_sandbox_input_blocking(&workspace, &sandbox_execroot, input, copy_inputs)?;
         }
-        for output in output_paths {
+        for output in &output_paths {
             if let Some(parent) = output.resolve(&sandbox_execroot).parent() {
                 std::fs::create_dir_all(parent)?;
             }
         }
-        if let Some(cwd) = cwd_path {
+        if let Some(cwd) = &cwd_path {
             std::fs::create_dir_all(cwd.resolve(&sandbox_execroot))?;
+        }
+        if copy_inputs {
+            let keep_writable = output_paths
+                .iter()
+                .map(|output| std::path::PathBuf::from(output.as_str()))
+                .chain(
+                    cwd_path
+                        .iter()
+                        .map(|cwd| std::path::PathBuf::from(cwd.as_str())),
+                )
+                .collect::<Vec<_>>();
+            mirror_ancestor_permissions(
+                &workspace,
+                &sandbox_execroot,
+                &input_paths,
+                &keep_writable,
+            )?;
         }
         Ok::<_, std::io::Error>(())
     })
@@ -1247,10 +1269,87 @@ fn remove_path_blocking(path: &Path) -> std::io::Result<()> {
         Err(source) => return Err(source),
     };
     if metadata.is_dir() && !metadata.file_type().is_symlink() {
-        std::fs::remove_dir_all(path)
+        remove_tree_blocking(path)
     } else {
         std::fs::remove_file(path)
     }
+}
+
+/// Remove a directory tree, first restoring owner access to directories whose
+/// mode forbids deleting their entries. Sandboxes mirror source permissions,
+/// so a read-only source directory must not make its copy undeletable.
+fn remove_tree_blocking(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_dir_all(path) {
+        Err(source) if source.kind() == std::io::ErrorKind::PermissionDenied => {
+            make_tree_removable(path)?;
+            std::fs::remove_dir_all(path)
+        }
+        other => other,
+    }
+}
+
+fn make_tree_removable(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let metadata = std::fs::symlink_metadata(path)?;
+        if metadata.is_dir() && !metadata.file_type().is_symlink() {
+            let mut permissions = metadata.permissions();
+            permissions.set_mode(permissions.mode() | 0o700);
+            std::fs::set_permissions(path, permissions)?;
+            for entry in std::fs::read_dir(path)? {
+                make_tree_removable(&entry?.path())?;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
+
+/// Give the directories above each staged input the permissions they have in
+/// the workspace. Directories created on the way to an input otherwise take
+/// default modes, so a `0700` directory would arrive as `0755`. Runs after
+/// every input is staged, deepest directories first, so a restrictive parent
+/// cannot block staging its siblings.
+fn mirror_ancestor_permissions(
+    workspace_root: &Path,
+    sandbox_execroot: &Path,
+    inputs: &[WorkspacePath],
+    keep_writable: &[std::path::PathBuf],
+) -> std::io::Result<()> {
+    let mut directories = std::collections::BTreeSet::new();
+    for input in inputs {
+        for ancestor in Path::new(input.as_str()).ancestors().skip(1) {
+            if !ancestor.as_os_str().is_empty() {
+                directories.insert(ancestor.to_path_buf());
+            }
+        }
+    }
+    let mut ordered = directories.into_iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|directory| std::cmp::Reverse(directory.components().count()));
+    for directory in ordered {
+        if keep_writable
+            .iter()
+            .any(|kept| kept.starts_with(&directory))
+        {
+            continue;
+        }
+        let source = std::fs::symlink_metadata(workspace_root.join(&directory));
+        let destination = std::fs::symlink_metadata(sandbox_execroot.join(&directory));
+        if let (Ok(source), Ok(destination)) = (source, destination) {
+            if source.is_dir()
+                && destination.is_dir()
+                && !source.file_type().is_symlink()
+                && !destination.file_type().is_symlink()
+            {
+                std::fs::set_permissions(sandbox_execroot.join(&directory), source.permissions())?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn copy_tree_contents_blocking(source: &Path, destination: &Path) -> std::io::Result<()> {
@@ -1344,6 +1443,9 @@ fn copy_file_blocking(source: &Path, destination: &Path) -> std::io::Result<()> 
     }
     remove_path_blocking(destination)?;
     std::fs::copy(source, destination)?;
+    // The platform copy does not always carry the setuid, setgid, and sticky
+    // bits, so set the source's permissions explicitly.
+    std::fs::set_permissions(destination, std::fs::metadata(source)?.permissions())?;
     Ok(())
 }
 

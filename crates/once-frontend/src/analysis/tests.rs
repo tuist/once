@@ -693,6 +693,27 @@ fn host_command_can_merge_stderr() {
     assert!(merged.contains("on-stderr"), "{merged:?}");
 }
 
+/// With `check` false a failing command still returns its output, and the
+/// checked and unchecked answers never share a cache slot.
+#[cfg(unix)]
+#[test]
+fn host_command_can_tolerate_a_failing_exit_status() {
+    let cache = HostCache::default();
+    let argv = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "printf partial; exit 3".to_string(),
+    ];
+    let env = BTreeMap::new();
+
+    assert!(cache.command(&argv, &env, None, false).is_err());
+    let tolerated = cache
+        .command_checked(&argv, &env, None, false, false)
+        .unwrap();
+    assert_eq!(tolerated, "partial");
+    assert!(cache.command(&argv, &env, None, false).is_err());
+}
+
 /// Two calls with the same argv but different `env` must spawn the
 /// process twice, with no shared cache slot. This keeps host
 /// discovery probes partitioned by their environment overrides.
@@ -978,6 +999,7 @@ write_archive(
                     kind: DeclaredArchiveEntryKind::Directory,
                     source: None,
                     path: "etc".to_string(),
+                    target: None,
                     mode: 493,
                     directory_mode: 493,
                     owner_id: 7,
@@ -988,6 +1010,7 @@ write_archive(
                     kind: DeclaredArchiveEntryKind::File,
                     source: Some("src/app.conf".to_string()),
                     path: "etc/app.conf".to_string(),
+                    target: None,
                     mode: 420,
                     directory_mode: 493,
                     owner_id: 7,
@@ -997,9 +1020,80 @@ write_archive(
             ],
             output: ".once/out/p/layer.tar".to_string(),
             sha256_output: Some(".once/out/p/layer.tar.sha256".to_string()),
+            uncompressed_sha256_output: None,
             format: DeclaredArchiveFormat::Tar,
         })
     );
+}
+
+#[test]
+fn write_archive_declares_compressed_archives_and_symlinks() {
+    let tmp = TempDir::new().unwrap();
+    let store = store_for(tmp.path(), "p");
+    let (store, ()) = with_active_store(store, || {
+        run(r#"write_archive(
+    [
+        {"kind": "file", "source": "src/app", "path": "usr/bin/app", "mode": 493},
+        {"kind": "symlink", "path": "usr/bin/tool", "target": "/usr/bin/app"},
+    ],
+    ".once/out/p/layer.tar.gz",
+    sha256_output = ".once/out/p/layer.gz.sha256",
+    uncompressed_sha256_output = ".once/out/p/layer.tar.sha256",
+    format = "tar.gz",
+)"#)
+        .unwrap();
+    });
+    let action = &store.actions[0];
+    assert_eq!(action.inputs, vec!["src/app".to_string()]);
+    assert_eq!(
+        action.outputs,
+        vec![
+            ".once/out/p/layer.tar.gz".to_string(),
+            ".once/out/p/layer.gz.sha256".to_string(),
+            ".once/out/p/layer.tar.sha256".to_string(),
+        ]
+    );
+    let Some(DeclaredActionOperation::WriteArchive {
+        entries,
+        format,
+        uncompressed_sha256_output,
+        ..
+    }) = &action.operation
+    else {
+        panic!("expected an archive action");
+    };
+    assert_eq!(*format, DeclaredArchiveFormat::TarGz);
+    assert_eq!(
+        uncompressed_sha256_output.as_deref(),
+        Some(".once/out/p/layer.tar.sha256")
+    );
+    assert_eq!(entries[1].kind, DeclaredArchiveEntryKind::Symlink);
+    assert_eq!(entries[1].target.as_deref(), Some("/usr/bin/app"));
+}
+
+#[test]
+fn write_archive_rejects_inconsistent_symlinks_and_digests() {
+    for (script, message) in [
+        (
+            r#"write_archive([{"kind": "symlink", "path": "a"}], "out.tar")"#,
+            "target",
+        ),
+        (
+            r#"write_archive([{"kind": "file", "source": "s", "path": "a", "target": "b"}], "out.tar")"#,
+            "target",
+        ),
+        (
+            r#"write_archive([], "out.tar", uncompressed_sha256_output = "d")"#,
+            "tar.gz",
+        ),
+        (r#"write_archive([], "out.zip", format = "zip")"#, "tar.gz"),
+    ] {
+        let tmp = TempDir::new().unwrap();
+        let store = store_for(tmp.path(), "p");
+        let (_, result) = with_active_store(store, || run(script));
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains(message), "{script}: {error}");
+    }
 }
 
 #[test]
@@ -1752,6 +1846,40 @@ custom = {
     assert!(!failure.diagnostic.repairs.is_empty());
 }
 
+#[test]
+fn target_kinds_can_declare_their_own_structured_diagnostics() {
+    let engine = AnalysisEngine::from_source(
+        r#"
+def _impl(ctx):
+    fail("once.diagnostic.v1 " + '{"code": "custom_code", "message": "bad value", "attribute": "mode", "repairs": ["set it right"]}')
+
+custom = {
+    "_once_target_kind": True,
+    "kind": "custom",
+    "impl": _impl,
+}
+"#,
+    )
+    .unwrap();
+    let tmp = TempDir::new().unwrap();
+
+    let error = engine
+        .analyze_target(&target("custom"), tmp.path(), &[])
+        .unwrap_err();
+    let failure = error
+        .downcast_ref::<AnalysisFailure>()
+        .expect("structured analysis failure");
+
+    assert_eq!(failure.diagnostic.code, "custom_code");
+    assert_eq!(failure.diagnostic.message, "bad value");
+    assert_eq!(failure.diagnostic.attribute.as_deref(), Some("mode"));
+    assert_eq!(
+        failure.diagnostic.target.as_deref(),
+        Some("apps/ios/Sample")
+    );
+    assert_eq!(failure.diagnostic.repairs, vec!["set it right".to_string()]);
+}
+
 #[cfg(unix)]
 #[test]
 fn a_host_tool_that_refuses_to_run_is_reported_instead_of_the_traceback() {
@@ -2076,4 +2204,64 @@ fn select_branches_detects_canonical_shape() {
         ("else".to_string(), AttrValue::String("x".to_string())),
     ]));
     assert!(select_branches(&map_with_extra_key).is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn walk_files_can_include_directories_with_no_remaining_entries() {
+    let workspace = TempDir::new().unwrap();
+    let root = workspace.path();
+    std::fs::create_dir_all(root.join("tree/empty")).unwrap();
+    std::fs::create_dir_all(root.join("tree/only-ignored")).unwrap();
+    std::fs::create_dir_all(root.join("tree/full")).unwrap();
+    std::fs::write(root.join("tree/full/file"), "x").unwrap();
+    std::fs::write(root.join("tree/only-ignored/skip.log"), "x").unwrap();
+    let (_, listed) = with_active_store(store_for(root, ""), || {
+        eval_string(
+            r#"value = ",".join(walk_files("tree", excluded_names = ["skip.log"], include_empty_directories = True))"#,
+        )
+    });
+    assert_eq!(
+        listed.unwrap(),
+        "tree/empty,tree/full/file,tree/only-ignored"
+    );
+    let (_, plain) = with_active_store(store_for(root, ""), || {
+        eval_string(r#"value = ",".join(walk_files("tree", excluded_names = ["skip.log"]))"#)
+    });
+    assert_eq!(plain.unwrap(), "tree/full/file");
+}
+
+#[cfg(unix)]
+#[test]
+fn host_symlink_target_reports_links_and_is_revalidated() {
+    let workspace = TempDir::new().unwrap();
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("real"), "x").unwrap();
+    std::os::unix::fs::symlink("real", dir.path().join("link")).unwrap();
+    let source = format!(
+        "value = host_symlink_target({:?}) + \"|\" + host_symlink_target({:?})",
+        dir.path().join("link").to_str().unwrap(),
+        dir.path().join("real").to_str().unwrap()
+    );
+    let (_, result) =
+        with_active_store(store_for(workspace.path(), "test"), || eval_string(&source));
+    assert_eq!(result.unwrap(), "real|");
+}
+
+#[cfg(unix)]
+#[test]
+fn walk_symlinks_lists_each_link_with_its_target() {
+    let workspace = TempDir::new().unwrap();
+    let root = workspace.path();
+    std::fs::create_dir_all(root.join("ctx/sub")).unwrap();
+    std::fs::write(root.join("ctx/real"), "x").unwrap();
+    std::os::unix::fs::symlink("real", root.join("ctx/link")).unwrap();
+    std::os::unix::fs::symlink("../real", root.join("ctx/sub/up")).unwrap();
+    std::os::unix::fs::symlink("real", root.join("ctx/skip")).unwrap();
+    let (_, listed) = with_active_store(store_for(root, ""), || {
+        eval_string(
+            r#"value = "|".join([entry.replace(chr(0), "->") for entry in walk_symlinks("ctx", excluded_names = ["skip"])])"#,
+        )
+    });
+    assert_eq!(listed.unwrap(), "ctx/link->real|ctx/sub/up->../real");
 }

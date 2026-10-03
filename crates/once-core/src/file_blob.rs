@@ -54,6 +54,28 @@ pub(crate) fn file_blob_header(metadata: &std::fs::Metadata) -> Vec<u8> {
     header
 }
 
+/// Digest a source file for use as an action input. It matches
+/// [`digest_file_blob`] for every file whose mode has no special bits, and also
+/// covers the setuid, setgid, and sticky bits, which an action that runs on the
+/// host can observe.
+pub(crate) fn digest_source_file(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+) -> std::io::Result<Digest> {
+    #[cfg(unix)]
+    let mode = {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o7777
+    };
+    #[cfg(not(unix))]
+    let mode = 0o644_u32;
+    let mut header = Vec::with_capacity(FILE_BLOB_MAGIC.len() + 4);
+    header.extend_from_slice(FILE_BLOB_MAGIC);
+    header.extend_from_slice(&mode.to_le_bytes());
+    let file = std::fs::File::open(path)?;
+    Digest::of_parts_and_reader(&[&header], file)
+}
+
 pub(crate) fn digest_file_blob(
     path: &Path,
     metadata: &std::fs::Metadata,

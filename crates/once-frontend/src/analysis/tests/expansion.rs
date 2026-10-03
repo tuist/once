@@ -87,3 +87,19 @@ fn host_tree_identity_is_revalidated_between_analysis_sessions() {
         with_active_store(store_for(workspace.path(), "test"), || eval_string(&source));
     assert_ne!(first.unwrap(), second.unwrap());
 }
+
+#[test]
+fn host_file_size_reports_the_current_size_and_is_revalidated() {
+    let workspace = TempDir::new().unwrap();
+    let file = TempDir::new().unwrap();
+    let path = file.path().join("layer.tar");
+    std::fs::write(&path, "12345").unwrap();
+    let source = format!("value = str(host_file_size({:?}))", path.to_str().unwrap());
+    let (_, first) =
+        with_active_store(store_for(workspace.path(), "test"), || eval_string(&source));
+    std::fs::write(&path, "1234567890").unwrap();
+    let (_, second) =
+        with_active_store(store_for(workspace.path(), "test"), || eval_string(&source));
+    assert_eq!(first.unwrap(), "5");
+    assert_eq!(second.unwrap(), "10");
+}

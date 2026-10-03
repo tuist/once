@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::commands::change_tracker::ChangePosition;
 
-const SCHEMA: &str = "once.source-digests.v3";
+const SCHEMA: &str = "once.source-digests.v4";
 
 /// What a filesystem watcher can say about the window since this cache was
 /// written.

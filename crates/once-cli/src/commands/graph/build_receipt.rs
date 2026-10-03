@@ -552,8 +552,10 @@ mod tests {
         let initial = snapshot(3, 5);
         let environment = BTreeMap::new();
         let host_paths = BTreeSet::new();
-        let source_digests =
-            BTreeMap::from([("src/main.rs".to_string(), Digest::of_bytes(b"source"))]);
+        let source_digests = BTreeMap::from([(
+            "src/main.rs".to_string(),
+            once_core::digest_source_path(temporary.path(), "src/main.rs").unwrap(),
+        )]);
         store(
             temporary.path(),
             "app",

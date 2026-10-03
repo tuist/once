@@ -800,7 +800,43 @@ fn tool_failure_diagnostic(
     anyhow!(AnalysisFailure { diagnostic })
 }
 
+/// A target kind reports its own structured diagnostic by failing with
+/// `once.diagnostic.v1 ` followed by a JSON object holding `code`, `message`,
+/// and optionally `attribute` and `repairs`. The engine attaches the target.
+fn declared_diagnostic(target: &GraphTarget, message: &str) -> Option<Diagnostic> {
+    const MARKER: &str = "once.diagnostic.v1 ";
+    message.match_indices(MARKER).find_map(|(index, _)| {
+        let rest = &message[index + MARKER.len()..];
+        let value = serde_json::Deserializer::from_str(rest)
+            .into_iter::<serde_json::Value>()
+            .next()?
+            .ok()?;
+        let code = value.get("code")?.as_str()?;
+        let text = value
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or(code);
+        let mut diagnostic = Diagnostic::new(code, text).with_target(&target.label.id);
+        if let Some(attribute) = value.get("attribute").and_then(|v| v.as_str()) {
+            diagnostic = diagnostic.with_attribute(attribute);
+        }
+        for repair in value
+            .get("repairs")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_str())
+        {
+            diagnostic = diagnostic.with_repair(repair);
+        }
+        Some(diagnostic)
+    })
+}
+
 fn analysis_failure(target: &GraphTarget, stage: &str, message: &str) -> anyhow::Error {
+    if let Some(diagnostic) = declared_diagnostic(target, message) {
+        return anyhow!(AnalysisFailure { diagnostic });
+    }
     if let Some(failure) = causing_tool_failure(message) {
         return tool_failure_diagnostic(target, stage, &failure);
     }
