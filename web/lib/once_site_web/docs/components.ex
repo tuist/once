@@ -13,6 +13,7 @@ defmodule OnceSiteWeb.Docs.Components do
     "Start Here" => "book_2",
     "Scripted Automation" => "file_text",
     "Typed Graph" => "subtask",
+    "Toolchains" => "stack_2",
     "Infrastructure" => "server",
     "Memory" => "package",
     "Language Libraries" => "apps",
