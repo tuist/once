@@ -1397,6 +1397,26 @@ exit "$status"
         runner_type = _shell_quote("mix_test" if mix_config else "elixir_exunit"),
     )
 
+def _elixir_test_env(ctx, toolchain, home_dir, build_root):
+    mix_home = toolchain.get("mix_home")
+    env = {
+        "HOME": _elixir_from_package(ctx, home_dir),
+        "MIX_ENV": "test",
+        "MIX_BUILD_ROOT": _elixir_from_package(ctx, build_root),
+        "MIX_BUILD_PATH": _elixir_from_package(ctx, build_root + "/test"),
+        "MIX_HOME": mix_home or _elixir_from_package(ctx, home_dir + "/mix"),
+        "HEX_HOME": _elixir_from_package(ctx, home_dir + "/hex"),
+        "HEX_OFFLINE": "true",
+        "ERL_LIBS": _elixir_from_package(ctx, build_root + "/test/lib"),
+    }
+    if mix_home:
+        # `mix test` loads dependencies before running, and a Hex dependency
+        # needs the Hex archive on the load path. An inherited MIX_ARCHIVES
+        # pointing at a Mix home without Hex makes Mix prompt to install it,
+        # which blocks forever because the runner has no interactive stdin.
+        env["MIX_ARCHIVES"] = mix_home + "/archives"
+    return env
+
 def _elixir_test_impl(ctx):
     _elixir_reject_unsupported_attrs(ctx, ["ez_deps"])
     srcs = _elixir_test_sources(ctx)
@@ -1483,16 +1503,7 @@ def _elixir_test_impl(ctx):
         clean_paths = [home_dir, results, log, native_results],
         create_dirs = [home_dir, test_dir],
         cwd = _elixir_package_cwd(ctx),
-        env = _elixir_action_env_with(ctx, toolchain, {
-            "HOME": _elixir_from_package(ctx, home_dir),
-            "MIX_ENV": "test",
-            "MIX_BUILD_ROOT": _elixir_from_package(ctx, build_root),
-            "MIX_BUILD_PATH": _elixir_from_package(ctx, build_root + "/test"),
-            "MIX_HOME": toolchain.get("mix_home") or _elixir_from_package(ctx, home_dir + "/mix"),
-            "HEX_HOME": _elixir_from_package(ctx, home_dir + "/hex"),
-            "HEX_OFFLINE": "true",
-            "ERL_LIBS": _elixir_from_package(ctx, build_root + "/test/lib"),
-        }),
+        env = _elixir_action_env_with(ctx, toolchain, _elixir_test_env(ctx, toolchain, home_dir, build_root)),
         cacheable = _elixir_attr(ctx, "cacheable", True),
         toolchain_identity = toolchain["identity"] + ("\x00mix_test.v2" if mix_config else "\x00elixir_exunit.v2"),
         identifier = ctx["label"]["id"] + (":mix-test" if mix_config else ":elixir-test"),

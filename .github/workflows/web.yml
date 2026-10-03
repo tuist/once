@@ -38,20 +38,6 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    services:
-      postgres:
-        image: postgres:18
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: once_site_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925
@@ -89,16 +75,17 @@ jobs:
       - name: Build with Once
         run: target/debug/once build web/application_test
         env:
-          ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
+          ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist-web' || 'local' }}
 
       - name: Lint with Once
         run: target/debug/once run web/application_test
         env:
-          ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
+          ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist-web' || 'local' }}
 
-      - name: Test
-        working-directory: web
-        run: mise exec -- mix test
+      - name: Test with Once
+        run: target/debug/once test web/tests
+        env:
+          ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist-web' || 'local' }}
 
   release:
     name: release
@@ -145,7 +132,7 @@ jobs:
       - name: Assemble the production release with Once
         run: target/debug/once build web/release
         env:
-          ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
+          ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist-web' || 'local' }}
 
       - name: Surface mix release logs on failure
         if: failure()

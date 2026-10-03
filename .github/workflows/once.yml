@@ -133,8 +133,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust_ci == 'true'
     runs-on: ${{ matrix.os }}
-    env:
-      ONCE_CACHE_PROVIDER: local
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -157,10 +158,23 @@ jobs:
           shared-key: release-build-${{ matrix.os }}
           cache-on-failure: true
           cache-bin: false
+      - name: Resolve bootstrap Once
+        id: bootstrap
+        run: echo "bin=$(./mise/tasks/release/bootstrap-once.sh)" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ONCE_BOOTSTRAP_SOURCE: source
+      # Fork pull requests cannot mint an OpenID Connect token, so they
+      # fall back to the local cache and skip run reporting.
+      - name: Authenticate with Tuist
+        id: once-cache-auth
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
+        run: '"${{ steps.bootstrap.outputs.bin }}" auth login --provider tuist --no-browser'
       - name: Build release binary with Once
         run: |
           set -euo pipefail
-          once_bin="$(./mise/tasks/release/bootstrap-once.sh)"
+          once_bin="${{ steps.bootstrap.outputs.bin }}"
           host_target="$(rustc -vV | sed -n 's/^host: //p')"
           suffix="$(printf '%s' "${host_target}" | tr '.-' '__')"
           target_id="crates/once-cli/once_cli_${suffix}"
@@ -172,7 +186,7 @@ jobs:
           cp ".once/out/${target_id}/once" target/release/once
         env:
           GH_TOKEN: ${{ github.token }}
-          ONCE_BOOTSTRAP_SOURCE: source
+          ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
       - uses: actions/upload-artifact@v7
         with:
           name: once-${{ matrix.os }}
