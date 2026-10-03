@@ -41,6 +41,12 @@ mod xcode_scripts;
 #[path = "prelude/xcode_script_order.rs"]
 mod xcode_script_order;
 
+#[path = "prelude/dockerfile_instructions.rs"]
+mod dockerfile_instructions;
+
+#[path = "prelude/oci_containers.rs"]
+mod oci_containers;
+
 fn store_for(workspace: &Path, package: &str) -> AnalysisStore {
     AnalysisStore::new(
         workspace.to_path_buf(),
@@ -249,12 +255,24 @@ fn oci_prelude_source() -> String {
     )
 }
 
-fn dockerfile_prelude_source() -> String {
-    format!(
-        "{}\n{}",
+fn oci_containers_source() -> String {
+    [
         include_str!("../prelude/common.star"),
-        include_str!("../prelude/dockerfile.star")
-    )
+        include_str!("../prelude/oci.star"),
+        include_str!("../prelude/oci_registry.star"),
+    ]
+    .join("\n")
+}
+
+fn dockerfile_prelude_source() -> String {
+    [
+        include_str!("../prelude/common.star"),
+        include_str!("../prelude/lint.star"),
+        include_str!("../prelude/dockerfile_parser.star"),
+        include_str!("../prelude/dockerfile_actions.star"),
+        include_str!("../prelude/dockerfile.star"),
+    ]
+    .join("\n")
 }
 
 fn all_prelude_source() -> String {
@@ -271,7 +289,10 @@ fn all_prelude_source() -> String {
         include_str!("../prelude/cmake.star"),
         include_str!("../prelude/zig.star"),
         include_str!("../prelude/oci.star"),
+        include_str!("../prelude/dockerfile_parser.star"),
+        include_str!("../prelude/dockerfile_actions.star"),
         include_str!("../prelude/dockerfile.star"),
+        include_str!("../prelude/oci_registry.star"),
         include_str!("../prelude/swift.star"),
         include_str!("../prelude/kotlin.star"),
         include_str!("../prelude/elixir.star"),
@@ -1324,6 +1345,9 @@ fn dockerfile_image_schema_exposes_buildkit_outputs_and_example() {
         &[
             "build_args",
             "cacheable",
+            "cache_from",
+            "cache_to",
+            "export_cache",
             "context",
             "dockerfile",
             "format",
@@ -1347,7 +1371,7 @@ fn dockerfile_image_declares_an_isolated_buildx_action() {
 def host_which_optional(name):
     return "/tools/docker" if name == "docker" else None
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     if argv[1:3] == ["buildx", "version"]:
         return "github.com/docker/buildx v1.2.3\n"
     if argv[1:3] == ["buildx", "inspect"]:
@@ -1369,7 +1393,7 @@ ctx = {{
     "scratch_dir": ".once/tmp/analysis/containers/demo/image",
     "capability": "build",
 }}
-provider = _dockerfile_image_impl(ctx)
+provider = _dockerfile_buildkit_impl(ctx)
 result = repr(provider)
 "#,
         dockerfile_prelude_source()
@@ -1445,7 +1469,7 @@ fn dockerfile_image_infers_hidden_and_nested_context_inputs() {
 def host_which_optional(name):
     return "/tools/docker" if name == "docker" else None
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     if argv[1:3] == ["buildx", "version"]:
         return "github.com/docker/buildx v1.2.3\n"
     if argv[1:3] == ["buildx", "inspect"]:
@@ -1463,7 +1487,7 @@ ctx = {{
     "scratch_dir": ".once/tmp/analysis/containers/demo/image",
     "capability": "build",
 }}
-provider = _dockerfile_image_impl(ctx)
+provider = _dockerfile_buildkit_impl(ctx)
 result = repr(provider)
 "#,
         dockerfile_prelude_source()
@@ -1515,7 +1539,7 @@ fn dockerfile_image_normalizes_root_context_and_excludes_runtime_state() {
 def host_which_optional(name):
     return "/tools/docker" if name == "docker" else None
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     if argv[1:3] == ["buildx", "version"]:
         return "github.com/docker/buildx v1.2.3\n"
     if argv[1:3] == ["buildx", "inspect"]:
@@ -1533,7 +1557,7 @@ ctx = {{
     "scratch_dir": ".once/tmp/analysis/image",
     "capability": "build",
 }}
-result = repr(_dockerfile_image_impl(ctx))
+result = repr(_dockerfile_buildkit_impl(ctx))
 "#,
         dockerfile_prelude_source()
     );
@@ -1547,9 +1571,15 @@ result = repr(_dockerfile_image_impl(ctx))
 
     result.unwrap();
     let action = action_by_identifier(&store, "image:dockerfile-build");
+    // `nested` holds only Once runtime state, which the build definition
+    // ignores, so it remains as the empty directory a Docker context would have.
     assert_eq!(
         action.inputs,
-        vec!["Dockerfile".to_string(), "message.txt".to_string()]
+        vec![
+            "Dockerfile".to_string(),
+            "message.txt".to_string(),
+            "nested".to_string()
+        ]
     );
     assert_eq!(action.argv.last().map(String::as_str), Some("."));
 }
@@ -1564,7 +1594,7 @@ fn dockerfile_metadata_infers_inputs_without_probing_the_toolchain() {
 def host_which_optional(name):
     fail("metadata analysis must not resolve host tools")
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     fail("metadata analysis must not run host commands")
 
 ctx = {{
@@ -1575,7 +1605,7 @@ ctx = {{
     "scratch_dir": ".once/tmp/analysis/image",
     "capability": "metadata",
 }}
-result = repr(_dockerfile_image_impl(ctx))
+result = repr(_dockerfile_buildkit_impl(ctx))
 "#,
         dockerfile_prelude_source()
     );
@@ -1626,7 +1656,7 @@ fn dockerfile_image_keeps_inputs_when_ignore_rules_can_reinclude_them() {
 def host_which_optional(name):
     return "/tools/docker" if name == "docker" else None
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     if argv[1:3] == ["buildx", "version"]:
         return "github.com/docker/buildx v1.2.3\n"
     if argv[1:3] == ["buildx", "inspect"]:
@@ -1644,7 +1674,7 @@ ctx = {{
     "scratch_dir": ".once/tmp/analysis/containers/demo/image",
     "capability": "build",
 }}
-result = repr(_dockerfile_image_impl(ctx))
+result = repr(_dockerfile_buildkit_impl(ctx))
 "#,
         dockerfile_prelude_source()
     );
@@ -1690,7 +1720,7 @@ fn dockerfile_specific_ignore_controls_an_inferred_nested_context() {
 def host_which_optional(name):
     return "/tools/docker" if name == "docker" else None
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     if argv[1:3] == ["buildx", "version"]:
         return "github.com/docker/buildx v1.2.3\n"
     if argv[1:3] == ["buildx", "inspect"]:
@@ -1711,7 +1741,7 @@ ctx = {{
     "scratch_dir": ".once/tmp/analysis/containers/demo/image",
     "capability": "build",
 }}
-result = repr(_dockerfile_image_impl(ctx))
+result = repr(_dockerfile_buildkit_impl(ctx))
 "#,
         dockerfile_prelude_source()
     );
@@ -1748,7 +1778,7 @@ fn dockerfile_image_exports_directly_with_a_container_builder() {
 def host_which_optional(name):
     return "/tools/docker" if name == "docker" else None
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     if argv[1:3] == ["buildx", "version"]:
         return "github.com/docker/buildx v1.2.3\n"
     if argv[1:3] == ["buildx", "inspect"]:
@@ -1766,7 +1796,7 @@ ctx = {{
     "scratch_dir": ".once/tmp/analysis/containers/demo/image",
     "capability": "build",
 }}
-result = repr(_dockerfile_image_impl(ctx))
+result = repr(_dockerfile_buildkit_impl(ctx))
 "#,
         dockerfile_prelude_source()
     );
@@ -1797,8 +1827,145 @@ result = repr(_dockerfile_image_impl(ctx))
         vec![
             ".once/out/containers/demo/image/image.docker.tar".to_string(),
             ".once/out/containers/demo/image/build-metadata.json".to_string(),
+            ".once/out/containers/demo/image/layout".to_string(),
         ]
     );
+}
+
+#[test]
+fn dockerfile_remote_builder_declares_portable_layer_cache() {
+    let workspace = TempDir::new().unwrap();
+    std::fs::write(workspace.path().join("Dockerfile"), "FROM scratch\n").unwrap();
+    std::fs::write(workspace.path().join(".dockerignore"), "ignored\n!.once\n").unwrap();
+    let source = format!(
+        r#"{}
+def host_which_optional(name):
+    return "/tools/docker"
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
+    if argv[1:3] == ["buildx", "version"]:
+        return "buildx v1\n"
+    if argv[1:3] == ["buildx", "inspect"]:
+        if "remote-worker" not in argv:
+            fail("builder selection lost")
+        return "Driver: remote\nBuildKit version: v0.29.0\n"
+    fail("unexpected command")
+def host_env(name):
+    return "/agent/socket" if name == "SSH_AUTH_SOCK" else ""
+ctx = {{
+    "label": {{"package": "", "name": "image", "id": "image"}},
+    "attr": {{"builder": "remote-worker", "cacheable": True, "pull": False,
+               "platform": "linux/arm64", "export_cache": True, "cache_from": ["registry.example.com/base:cache"]}},
+    "deps_by_role": {{"caches": [{{"layer_cache": ".once/out/base/layer-cache"}}]}},
+    "srcs": [], "capability": "build",
+}}
+result = repr(_dockerfile_buildkit_impl(ctx))
+"#,
+        dockerfile_prelude_source()
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        String::new(),
+        ".once/out/image".to_string(),
+    );
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    let provider = result.unwrap();
+    assert!(provider.contains("layer_cache"));
+    assert_eq!(store.actions.len(), 3);
+    let ignore = action_by_identifier(
+        &store,
+        "write_path:.once/out/image/build-definition/Dockerfile.dockerignore",
+    );
+    let Some(DeclaredActionOperation::WriteFile { bytes, .. }) = &ignore.operation else {
+        panic!("expected generated ignore file");
+    };
+    assert_eq!(bytes, b"ignored\n!.once\n\n**/.once\n");
+    assert!(ignore
+        .outputs
+        .contains(&".once/out/image/build-definition/Dockerfile.dockerignore".to_string()));
+    let action = action_by_identifier(&store, "image:dockerfile-build");
+    assert!(action.cacheable);
+    assert_eq!(
+        action.env.get("SSH_AUTH_SOCK").map(String::as_str),
+        Some("/agent/socket")
+    );
+    assert!(action
+        .inputs
+        .contains(&".once/out/base/layer-cache".to_string()));
+    assert!(action
+        .outputs
+        .contains(&".once/out/image/layer-cache".to_string()));
+    for expected in [
+        "type=registry,ref=registry.example.com/base:cache",
+        "type=local,src={{once.execution_root}}/.once/out/base/layer-cache",
+        "type=local,dest={{once.execution_root}}/.once/out/image/layer-cache,mode=max",
+    ] {
+        assert!(
+            action.argv.iter().any(|arg| arg == expected),
+            "{expected}: {:?}",
+            action.argv
+        );
+    }
+    assert!(action
+        .argv
+        .windows(2)
+        .any(|args| args == ["--builder", "remote-worker"]));
+}
+
+#[test]
+fn dockerfile_cache_policy_rejects_skipped_publication_and_shared_engine_state() {
+    let workspace = TempDir::new().unwrap();
+    std::fs::write(workspace.path().join("Dockerfile"), "FROM scratch\n").unwrap();
+    for (driver, attrs, expected) in [
+        ("remote", r#"{"cacheable": True}"#, "requires pull = false"),
+        (
+            "remote",
+            r#"{"cacheable": True, "pull": False}"#,
+            "explicit platform",
+        ),
+        (
+            "docker",
+            r#"{"cacheable": True, "pull": False}"#,
+            "direct archive export",
+        ),
+        (
+            "remote",
+            r#"{"cacheable": True, "pull": False, "cache_to": ["example.com/image:cache"]}"#,
+            "publishes remote state",
+        ),
+    ] {
+        let source = format!(
+            r#"{}
+def host_which_optional(name):
+    return "/tools/docker"
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
+    if argv[1:3] == ["buildx", "version"]:
+        return "buildx v1"
+    return "Driver: {driver}\nBuildKit version: v0.29.0\n"
+ctx = {{"label": {{"package": "", "name": "image", "id": "image"}}, "attr": {attrs}, "srcs": [], "capability": "build"}}
+result = repr(_dockerfile_buildkit_impl(ctx))
+"#,
+            dockerfile_prelude_source()
+        );
+        let store = AnalysisStore::new(
+            workspace.path().to_path_buf(),
+            String::new(),
+            ".once/out/image".to_string(),
+        );
+        let (_, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+        let error = result.unwrap_err();
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[test]
+fn dockerfile_cache_references_cannot_inject_exporter_options() {
+    for reference in ["", "image,src=/private", "type=local", "image\nother"] {
+        let source = format!(
+            "{}\nresult = repr(_dockerfile_cache_reference({reference:?}))",
+            dockerfile_prelude_source()
+        );
+        assert!(eval_prelude_source_to_repr(source).is_err(), "{reference}");
+    }
 }
 
 #[test]
@@ -1890,6 +2057,7 @@ result = repr(provider)
         output,
         sha256_output,
         format,
+        ..
     }) = &action.operation
     else {
         panic!("expected a portable archive action");
@@ -9533,7 +9701,7 @@ def workspace_root():
     return "/workspace"
 
 commands = []
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     commands.append([argv, env, cwd])
     return "{{\"argv\": []}}"
 
@@ -14767,7 +14935,7 @@ def workspace_root():
 def host_file_exists(path):
     return path == "/workspace/Packages/Shared/Package.swift"
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     return '{{"name":"Shared","targets":[]}}'
 
 refs = {{
@@ -14798,7 +14966,7 @@ def glob(patterns):
 def host_which(name):
     return name
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     if argv == ["xcrun", "--find", "swift"]:
         return "swift"
     return '{{"name":"WMFComponents","platforms":[],"products":[{{"name":"WMFComponents","targets":["WMFComponents"]}}],"targets":[]}}'
@@ -14827,7 +14995,7 @@ def host_file_exists(path):
 def host_which(name):
     return name
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     if argv == ["xcrun", "--find", "swift"]:
         return "swift"
     return '{{"name":"WMFData","dependencies":[],"products":[],"targets":[]}}'
@@ -15467,7 +15635,7 @@ def host_file_exists(path):
 def host_which(name):
     return name
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     if argv[0] == "sh":
         created[argv[6]] = True
         return ""
@@ -16831,7 +16999,7 @@ def host_arch():
 def host_which(name):
     return "/usr/bin/" + name
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     tool = argv[0].split("/")[-1]
     if tool == "realpath":
         return argv[1] + "\n"
@@ -17039,7 +17207,7 @@ def host_arch():
 def host_which(name):
     return "/usr/bin/" + name
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     tool = argv[0].split("/")[-1]
     if tool == "plutil":
         return '{{"AvailableLibraries": [{{"LibraryIdentifier": "ios-arm64_x86_64-simulator", "SupportedPlatform": "ios", "SupportedPlatformVariant": "simulator", "SupportedArchitectures": ["arm64", "x86_64"]}}]}}'
@@ -17353,7 +17521,7 @@ def workspace_root():
 def host_which(name):
     return name
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     if argv[0] == "find":
         return "/workspace/Other.xcworkspace/xcshareddata/swiftpm/Package.resolved\n/workspace/ProtonVPN.xcworkspace/xcshareddata/swiftpm/Package.resolved"
     fail("unexpected host_command: " + str(argv))
@@ -17554,7 +17722,7 @@ fn prelude_xcode_workspace_resolver_lowers_native_targets() {
 def workspace_root():
     return ""
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     return {pbxproj:?}
 
 def host_file_exists(path):

@@ -355,10 +355,15 @@ def _json_string(value):
             out.append("\\r")
         elif ch == "\t":
             out.append("\\t")
+        elif ord(ch) < 32:
+            out.append("\\u00" + "0123456789abcdef"[ord(ch) // 16] + "0123456789abcdef"[ord(ch) % 16])
         else:
             out.append(ch)
     out.append("\"")
     return "".join(out)
+
+def _diagnostic_fail(code, attribute, message, repair):
+    fail("once.diagnostic.v1 " + _json_encode({"code": code, "message": message, "attribute": attribute, "repairs": [repair]}))
 
 def _json_encode(value):
     if value == None:

@@ -1,0 +1,22 @@
+[[target]]
+name = "base_image"
+kind = "dockerfile_image"
+
+[target.attrs]
+execution_mode = "buildkit"
+export_cache = true
+pull = false
+network = "none"
+
+[[target]]
+name = "image"
+kind = "dockerfile_image"
+
+[target.dependencies]
+caches = ["base_image"]
+
+[target.attrs]
+execution_mode = "buildkit"
+dockerfile = "context.Dockerfile"
+pull = false
+network = "none"
