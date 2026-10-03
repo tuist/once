@@ -3,7 +3,9 @@
 
 REPO_ROOT="$(cd "$SHELLSPEC_PROJECT_ROOT" && pwd)"
 ONCE_BIN="${REPO_ROOT}/target/release/once"
-export REPO_ROOT ONCE_BIN
+# Resolve before HOME isolation makes mise shims lose their configuration.
+SPEC_PYTHON3="$(python3 -c 'import sys; print(sys.executable)')"
+export REPO_ROOT ONCE_BIN SPEC_PYTHON3
 
 spec_helper_precheck() {
   if [ ! -x "$ONCE_BIN" ]; then
@@ -66,6 +68,28 @@ cleanup_workspace() {
     unset HOME
   fi
   unset XDG_CACHE_HOME XDG_STATE_HOME XDG_DATA_HOME XDG_CONFIG_HOME XDG_RUNTIME_DIR SPEC_ORIGINAL_HOME SPEC_ORIGINAL_MSB_PATH
+}
+
+python3() {
+  "$SPEC_PYTHON3" "$@"
+}
+
+wait_for_server_file() {
+  readiness_file="$1"
+  server_pid="$2"
+  attempts=0
+  while [ ! -s "$readiness_file" ]; do
+    if ! kill -0 "$server_pid" 2>/dev/null; then
+      printf 'test server exited before creating %s\n' "$readiness_file" >&2
+      return 1
+    fi
+    if [ "$attempts" -ge 200 ]; then
+      printf 'test server did not become ready within 10 seconds: %s\n' "$readiness_file" >&2
+      return 1
+    fi
+    attempts=$((attempts + 1))
+    sleep 0.05
+  done
 }
 
 once() {

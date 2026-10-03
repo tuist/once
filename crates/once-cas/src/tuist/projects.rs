@@ -323,22 +323,12 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::tuist::test_env::ENV_LOCK;
+    use crate::tuist::test_env::EnvGuard;
 
-    struct TokenGuard;
-
-    impl TokenGuard {
-        fn acquire() -> (Self, std::sync::MutexGuard<'static, ()>) {
-            let guard = ENV_LOCK.lock().unwrap();
-            std::env::set_var("TUIST_TOKEN", "test-token");
-            (Self, guard)
-        }
-    }
-
-    impl Drop for TokenGuard {
-        fn drop(&mut self) {
-            std::env::remove_var("TUIST_TOKEN");
-        }
+    fn token_env() -> EnvGuard {
+        let guard = EnvGuard::acquire(&["TUIST_TOKEN"]);
+        std::env::set_var("TUIST_TOKEN", "test-token");
+        guard
     }
 
     struct OneShotHttpServer {
@@ -436,7 +426,7 @@ mod tests {
 
     #[test]
     fn list_projects_parses_full_names() {
-        let (_guard, _lock) = TokenGuard::acquire();
+        let _guard = token_env();
         run(async {
             let server = OneShotHttpServer::new(
                 200,
@@ -469,7 +459,7 @@ mod tests {
 
     #[test]
     fn create_project_sends_full_handle() {
-        let (_guard, _lock) = TokenGuard::acquire();
+        let _guard = token_env();
         run(async {
             let server = OneShotHttpServer::new(200, r#"{"full_name":"acme/new"}"#);
             let projects =
@@ -487,7 +477,7 @@ mod tests {
 
     #[test]
     fn create_project_without_account_sends_name() {
-        let (_guard, _lock) = TokenGuard::acquire();
+        let _guard = token_env();
         run(async {
             let server = OneShotHttpServer::new(200, r#"{"full_name":"personal/new"}"#);
             let projects =
@@ -505,7 +495,7 @@ mod tests {
 
     #[test]
     fn create_project_surfaces_provider_error() {
-        let (_guard, _lock) = TokenGuard::acquire();
+        let _guard = token_env();
         run(async {
             let server = OneShotHttpServer::new(400, r#"{"message":"Project already exists."}"#);
             let projects =
@@ -523,7 +513,7 @@ mod tests {
 
     #[test]
     fn list_organizations_parses_names() {
-        let (_guard, _lock) = TokenGuard::acquire();
+        let _guard = token_env();
         run(async {
             let server = OneShotHttpServer::new(
                 200,

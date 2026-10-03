@@ -257,7 +257,7 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use crate::tuist::test_env::ENV_LOCK;
+    use crate::tuist::test_env::EnvGuard;
 
     const TEST_ENV_KEYS: &[&str] = &[
         "GITHUB_RUN_ID",
@@ -682,40 +682,11 @@ mod tests {
     }
 
     fn with_ci_env<T>(vars: &[(&'static str, String)], test: impl FnOnce() -> T) -> T {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let _env = EnvGuard::new(TEST_ENV_KEYS);
+        let _env = EnvGuard::acquire(TEST_ENV_KEYS);
         for (name, value) in vars {
             std::env::set_var(name, value);
         }
         test()
-    }
-
-    struct EnvGuard {
-        saved: Vec<(&'static str, Option<String>)>,
-    }
-
-    impl EnvGuard {
-        fn new(names: &'static [&'static str]) -> Self {
-            let saved = names
-                .iter()
-                .map(|name| (*name, std::env::var(name).ok()))
-                .collect();
-            for name in names {
-                std::env::remove_var(name);
-            }
-            Self { saved }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for (name, value) in &self.saved {
-                match value {
-                    Some(value) => std::env::set_var(name, value),
-                    None => std::env::remove_var(name),
-                }
-            }
-        }
     }
 
     struct OneShotHttpServer {

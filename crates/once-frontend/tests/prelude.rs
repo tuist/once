@@ -137,20 +137,22 @@ fn archive_prelude_source() -> String {
 }
 
 fn android_prelude_source() -> String {
-    format!(
-        "{}\n{}",
+    [
         include_str!("../prelude/common.star"),
-        include_str!("../prelude/android.star")
-    )
+        include_str!("../prelude/jvm_test_runner.star"),
+        include_str!("../prelude/android.star"),
+    ]
+    .join("\n")
 }
 
 fn react_native_prelude_source() -> String {
-    format!(
-        "{}\n{}\n{}",
+    [
         include_str!("../prelude/common.star"),
+        include_str!("../prelude/jvm_test_runner.star"),
         include_str!("../prelude/android.star"),
-        include_str!("../prelude/react_native.star")
-    )
+        include_str!("../prelude/react_native.star"),
+    ]
+    .join("\n")
 }
 
 fn go_prelude_source() -> String {
@@ -276,32 +278,31 @@ fn dockerfile_prelude_source() -> String {
 }
 
 fn all_prelude_source() -> String {
-    [
-        include_str!("../prelude/common.star"),
-        include_str!("../prelude/lint.star"),
-        include_str!("../prelude/apple_modules.star"),
-        include_str!("../prelude/apple.star"),
-        include_str!("../prelude/android.star"),
-        include_str!("../prelude/go.star"),
-        include_str!("../prelude/rust.star"),
-        include_str!("../prelude/xcode.star"),
-        include_str!("../prelude/c.star"),
-        include_str!("../prelude/cmake.star"),
-        include_str!("../prelude/zig.star"),
-        include_str!("../prelude/oci.star"),
-        include_str!("../prelude/dockerfile_parser.star"),
-        include_str!("../prelude/dockerfile_actions.star"),
-        include_str!("../prelude/dockerfile.star"),
-        include_str!("../prelude/oci_registry.star"),
-        include_str!("../prelude/swift.star"),
-        include_str!("../prelude/kotlin.star"),
-        include_str!("../prelude/elixir.star"),
-        include_str!("../prelude/python.star"),
-        include_str!("../prelude/ruby.star"),
-        include_str!("../prelude/javascript.star"),
-        include_str!("../prelude/react_native.star"),
-    ]
-    .join("\n")
+    static SOURCE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        Module::with_temp_heap(|module| {
+            let ast = AstModule::parse(
+                "index.star",
+                include_str!("../prelude/index.star").to_string(),
+                &Dialect::Standard,
+            )
+            .unwrap();
+            let globals = starlark::environment::GlobalsBuilder::standard().build();
+            Evaluator::new(&module).eval_module(ast, &globals).unwrap();
+            let paths = module.get("PRELUDE_SOURCES").unwrap();
+            ListRef::from_value(paths)
+                .unwrap()
+                .iter()
+                .map(|value| {
+                    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("prelude")
+                        .join(value.unpack_str().unwrap());
+                    std::fs::read_to_string(path).unwrap()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+    });
+    SOURCE.clone()
 }
 
 #[test]

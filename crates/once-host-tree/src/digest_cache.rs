@@ -31,9 +31,9 @@ use std::sync::Mutex;
 
 use sha2::Digest as _;
 
-use crate::{hex_lower, host_file_mode};
+use crate::digest::{hex_lower, host_file_mode, portable_path, utf8_path};
 
-const SCHEMA: &str = "once.tree_digests.v2";
+const SCHEMA: &str = "once.tree_digests.v3";
 
 /// Cap on remembered trees, so a long-lived workspace cannot grow the file
 /// without bound. Eviction is wholesale rather than least-recently-used: the
@@ -92,7 +92,10 @@ impl TreeDigestCache {
         if !enabled() {
             return compute();
         }
-        let slot = format!("{key}\u{0}{}", root.to_string_lossy());
+        let Some(root_text) = root.to_str() else {
+            return compute();
+        };
+        let slot = format!("{key}\u{0}{root_text}");
         if let Some(answer) = self.lock_answered().get(&slot) {
             return Ok(answer.clone());
         }
@@ -251,11 +254,7 @@ fn hash_stat_directory(
     for child in children {
         let path = child.path();
         let metadata = std::fs::symlink_metadata(&path)?;
-        let relative = path
-            .strip_prefix(root)
-            .map_err(std::io::Error::other)?
-            .to_string_lossy()
-            .replace('\\', "/");
+        let relative = portable_path(path.strip_prefix(root).map_err(std::io::Error::other)?)?;
         hasher.update(relative.as_bytes());
         hasher.update([0]);
         hasher.update(host_file_mode(&metadata).to_le_bytes());
@@ -264,7 +263,7 @@ fn hash_stat_directory(
         if metadata.file_type().is_symlink() {
             // The link's own text is cheap and is what the content digest
             // records, so include it rather than trusting its metadata alone.
-            hasher.update(std::fs::read_link(&path)?.to_string_lossy().as_bytes());
+            hasher.update(utf8_path(&std::fs::read_link(&path)?)?.as_bytes());
         } else if metadata.is_dir() {
             hash_stat_directory(root, &path, hasher, depth + 1)?;
         }

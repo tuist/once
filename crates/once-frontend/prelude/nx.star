@@ -289,8 +289,8 @@ def _nx_shell_argv(commands):
             joined += " && "
         joined += "( " + commands[index] + " )"
     if host_os() == "windows":
-        return ["cmd.exe", "/d", "/s", "/c", joined]
-    return ["/bin/sh", "-c", joined]
+        return [host_which("cmd.exe"), "/d", "/s", "/c", joined]
+    return [host_which("sh"), "-c", joined]
 
 def _nx_task_impl(ctx):
     project = _nx_attr(ctx, "project", "")

@@ -52,6 +52,30 @@ defmodule OnceSiteWeb.DocsLiveTest do
     assert html =~ "host_tree_sha256"
   end
 
+  test "directory pages link to their actual editable source", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/docs/guide/graph")
+
+    assert has_element?(
+             view,
+             "a[href='https://github.com/tuist/once/edit/main/web/priv/docs/guide/graph/index.md']"
+           )
+  end
+
+  test "generated reference pages do not offer edits to unpublished markdown", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/docs/reference/cli/build")
+
+    refute has_element?(view, "[data-part='edit-row']")
+    assert has_element?(view, "[data-part='markdown-link']")
+  end
+
+  test "guide pages offer a next step and a way back", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/docs/guide/getting-started")
+
+    assert has_element?(view, "nav[aria-label='Adjacent documentation pages']")
+    assert has_element?(view, "a[data-part='previous-page'][href='/docs/guide']")
+    assert has_element?(view, "a[data-part='next-page'][href='/docs/guide/why']")
+  end
+
   test "renders a not-found message for unknown pages", %{conn: conn} do
     {:ok, _view, html} = live(conn, ~p"/docs/nope/missing")
 

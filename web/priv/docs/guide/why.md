@@ -1,16 +1,20 @@
-# Why
+# Why Once
 
-Most developer automation was designed around a quiet assumption: one
-process is doing the work. A developer runs a task locally, or a continuous
-integration job runs it after a push. The task starts, reads the repository, writes its
-outputs, and exits. If it takes a minute, the person or pipeline waits a
-minute.
+You should not have to rebuild the same inputs just because the work moved
+from your laptop to continuous integration, or from one coding agent to
+another. Once makes that work reusable without asking you to replace every
+working tool in your repository first.
 
-That assumption shaped the tools around it. Caching, remote execution, and
-distributed compute made sense for large companies with monorepos, large
-teams, and enough repeated work to justify the infrastructure. Most
-projects did not need that kind of machinery because their automation was
-mostly serial, mostly local, and mostly driven by humans.
+The idea is simple: describe what an action reads, what it writes, and the
+environment it needs. Once gives that contract a content-based identity and
+stores the result. When the contract is unchanged, it restores the result
+instead of repeating the work.
+
+Build systems such as Bazel have demonstrated the value of explicit
+dependencies, shared caches, and remote execution. Once brings that model to
+existing repository automation through native project discovery, annotated
+scripts, and typed targets. The migration can start with one useful action,
+not a repository-wide rewrite.
 
 ## Agents Change The Shape
 
@@ -53,13 +57,23 @@ enough for agents to reason about, stable enough for providers to
 implement, and flexible enough for teams to keep using the tools they
 already have.
 
-The durable model is not a script product with a graph attached. It is a
-graph and action system with a script adapter for the automation
-repositories already have. Scripts are everywhere, and they already encode
-real repository knowledge, so Once lets them enter the model immediately.
+Scripts and typed targets share the same action model. Scripts already encode
+real repository knowledge, so Once lets them enter that model immediately.
 When that work needs richer dependencies, multiple capabilities,
 structured diagnostics, or agent-driven edits, it can move into typed graph
 targets while keeping the same cache, build, run, and test workflow.
+
+## What makes reuse trustworthy
+
+Caching is only correct when the action contract is complete. An undeclared
+file, a changing network response, or an untracked environment variable can
+make a recorded result stale. Once gives you explicit contracts and queryable
+plans, but it does not make an arbitrary command hermetic by default.
+
+Start locally, verify the inputs and outputs, and then share the result with
+your team. Move work to remote execution when its toolchain and runtime needs
+can be supplied by the chosen provider. This keeps performance improvements
+attached to a workflow you can inspect and trust.
 
 ## Next
 
