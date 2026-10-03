@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
-const HOST_COMMAND_OUTPUT_LIMIT: u64 = 16 * 1024 * 1024;
+pub(super) const HOST_COMMAND_OUTPUT_LIMIT: u64 = 16 * 1024 * 1024;
 
 /// A portable filesystem operation declared by a target kind impl.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -245,6 +245,11 @@ pub enum Observation {
         /// unanswerable.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         program: Option<String>,
+        /// Per-stream output bound the caller asked for. Absent means the
+        /// default analysis limit, so records written before this was
+        /// captured replay under the default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_output_bytes: Option<u64>,
     },
     FileDigest {
         path: String,
@@ -827,12 +832,24 @@ impl HostCache {
         cwd: Option<&Path>,
         merge_stderr: bool,
     ) -> Result<String> {
-        self.command_checked(argv, env, cwd, merge_stderr, true)
+        self.command_checked(
+            argv,
+            env,
+            cwd,
+            merge_stderr,
+            true,
+            HOST_COMMAND_OUTPUT_LIMIT,
+        )
     }
 
     /// Like [`Self::command`], but with `check` false a non-zero exit status
     /// still returns the captured output. Callers that tolerate failure use
     /// it for idempotent setup whose success they verify with a later probe.
+    ///
+    /// `max_output_bytes` bounds the captured output. The default keeps
+    /// discovery commands small; a command whose answer is inherently large
+    /// (a build-system action graph, for example) raises it deliberately. The
+    /// bound applies to each stream while capturing and to the merged result.
     pub(super) fn command_checked(
         &self,
         argv: &[String],
@@ -840,6 +857,7 @@ impl HostCache {
         cwd: Option<&Path>,
         merge_stderr: bool,
         check: bool,
+        max_output_bytes: u64,
     ) -> Result<String> {
         let key = CommandKey {
             argv: argv.to_vec(),
@@ -848,9 +866,16 @@ impl HostCache {
             merge_stderr,
             check,
         };
-        self.commands.get_or_compute(key, || {
-            self.run_command(argv, env, cwd, merge_stderr, check)
-        })
+        let output = self.commands.get_or_compute(key, || {
+            self.run_command(argv, env, cwd, merge_stderr, check, max_output_bytes)
+        })?;
+        // A cached answer was computed under whatever bound its first caller
+        // requested, so re-check it against this caller's bound instead of
+        // trusting the cache slot.
+        if output.len() as u64 > max_output_bytes {
+            return Err(output_limit_error(max_output_bytes));
+        }
+        Ok(output)
     }
 
     /// Spawn one host command and return its captured output.
@@ -861,6 +886,7 @@ impl HostCache {
         cwd: Option<&Path>,
         merge_stderr: bool,
         check: bool,
+        max_output_bytes: u64,
     ) -> Result<String> {
         let mut iter = argv.iter();
         let program = iter
@@ -879,7 +905,7 @@ impl HostCache {
         for (key, value) in env {
             command.env(key, value);
         }
-        let (status, stdout, stderr) = capture_host_command_output(&mut command)
+        let (status, stdout, stderr) = capture_host_command_output(&mut command, max_output_bytes)
             .with_context(|| format!("running `{program}`"))?;
         if check && !status.success() {
             let rendered_args = command_args
@@ -990,21 +1016,31 @@ impl HostCache {
     }
 }
 
-fn capture_host_command_output(command: &mut Command) -> Result<(ExitStatus, Vec<u8>, Vec<u8>)> {
+fn capture_host_command_output(
+    command: &mut Command,
+    max_output_bytes: u64,
+) -> Result<(ExitStatus, Vec<u8>, Vec<u8>)> {
     let stdout = tempfile::tempfile().context("creating host command stdout staging file")?;
     let stderr = tempfile::tempfile().context("creating host command stderr staging file")?;
     command.stdout(Stdio::from(stdout.try_clone()?));
     command.stderr(Stdio::from(stderr.try_clone()?));
     let status = command.status()?;
-    let stdout = read_host_command_output(stdout)?;
-    let stderr = read_host_command_output(stderr)?;
+    let stdout = read_host_command_output(stdout, max_output_bytes)?;
+    let stderr = read_host_command_output(stderr, max_output_bytes)?;
     Ok((status, stdout, stderr))
 }
 
-fn read_host_command_output(mut file: std::fs::File) -> Result<Vec<u8>> {
+fn output_limit_error(max_output_bytes: u64) -> anyhow::Error {
+    anyhow!(
+        "host command output exceeds the {} mebibyte analysis limit",
+        max_output_bytes / (1024 * 1024)
+    )
+}
+
+fn read_host_command_output(mut file: std::fs::File, max_output_bytes: u64) -> Result<Vec<u8>> {
     let len = file.metadata()?.len();
-    if len > HOST_COMMAND_OUTPUT_LIMIT {
-        anyhow::bail!("host command output exceeds the 16 mebibyte analysis limit");
+    if len > max_output_bytes {
+        return Err(output_limit_error(max_output_bytes));
     }
     file.rewind()?;
     let mut bytes = Vec::with_capacity(

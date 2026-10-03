@@ -708,9 +708,37 @@ fn host_command_can_tolerate_a_failing_exit_status() {
 
     assert!(cache.command(&argv, &env, None, false).is_err());
     let tolerated = cache
-        .command_checked(&argv, &env, None, false, false)
+        .command_checked(
+            &argv,
+            &env,
+            None,
+            false,
+            false,
+            super::store::HOST_COMMAND_OUTPUT_LIMIT,
+        )
         .unwrap();
     assert_eq!(tolerated, "partial");
+    assert!(cache.command(&argv, &env, None, false).is_err());
+}
+
+/// A caller can raise the per-stream bound when a command's answer is
+/// inherently larger than the default discovery limit. A later caller that
+/// keeps the default must not inherit the larger answer through the cache.
+#[cfg(unix)]
+#[test]
+fn host_command_can_raise_the_output_limit() {
+    let cache = HostCache::default();
+    let argv = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "dd if=/dev/zero bs=1048576 count=17 2>/dev/null".to_string(),
+    ];
+    let env = BTreeMap::new();
+
+    let output = cache
+        .command_checked(&argv, &env, None, false, true, 32 * 1024 * 1024)
+        .unwrap();
+    assert_eq!(output.len(), 17 * 1024 * 1024);
     assert!(cache.command(&argv, &env, None, false).is_err());
 }
 

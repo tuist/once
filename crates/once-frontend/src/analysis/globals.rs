@@ -18,7 +18,7 @@ use super::store::{
     analysis_active, observe, with_store, with_store_mut, AnalysisObservations, CommandPolicy,
     DeclaredAction, DeclaredActionOperation, DeclaredArchiveEntry, DeclaredArchiveEntryKind,
     DeclaredArchiveFormat, DeclaredArgFile, DeclaredArgFileFormat, DeclaredCopyPathMode,
-    DeclaredPreparePathMode, HostCache, Observation,
+    DeclaredPreparePathMode, HostCache, Observation, HOST_COMMAND_OUTPUT_LIMIT,
 };
 use super::values::{
     json_to_value, toml_value_to_starlark, unpack_byte_list, unpack_string_dict, unpack_string_list,
@@ -149,6 +149,12 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     /// host process env. Both `argv` and `env` participate in the
     /// cache key, so a different `DEVELOPER_DIR` resolves to a
     /// different cached result. When set, `cwd` must be absolute.
+    ///
+    /// The captured output is capped at the default analysis limit. Pass
+    /// `max_output_bytes` to raise that bound for a command whose answer is
+    /// inherently large, such as a build system's action graph. The bound is
+    /// part of the recorded observation, so a later validation re-runs the
+    /// command under the same bound.
     /// Schema parsing returns `""`.
     fn host_command<'v>(
         argv: Value<'v>,
@@ -156,6 +162,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         cwd: Option<&str>,
         merge_stderr: Option<bool>,
         check: Option<bool>,
+        max_output_bytes: Option<Value<'v>>,
     ) -> anyhow::Result<String> {
         if !analysis_active() {
             return Ok(String::new());
@@ -167,6 +174,19 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             .unwrap_or_default();
         let merge_stderr = merge_stderr.unwrap_or(false);
         let check = check.unwrap_or(true);
+        let max_output_bytes = match max_output_bytes {
+            None => HOST_COMMAND_OUTPUT_LIMIT,
+            Some(value) => {
+                let bytes = value.unpack_i32().ok_or_else(|| {
+                    anyhow!(
+                        "expected `max_output_bytes` to be an integer, got `{}`",
+                        value.get_type()
+                    )
+                })?;
+                u64::try_from(bytes)
+                    .map_err(|_| anyhow!("expected `max_output_bytes` to be positive"))?
+            }
+        };
         let output = with_store(|store| -> Result<String> {
             let store = store.ok_or_else(|| anyhow!("host_command called outside analysis"))?;
             if let Some(cwd) = cwd {
@@ -174,9 +194,14 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
                     return Err(anyhow!("host_command cwd must be absolute, got `{cwd}`"));
                 }
             }
-            store
-                .host_cache
-                .command_checked(&argv, &env, cwd.map(Path::new), merge_stderr, check)
+            store.host_cache.command_checked(
+                &argv,
+                &env,
+                cwd.map(Path::new),
+                merge_stderr,
+                check,
+                max_output_bytes,
+            )
         })?;
         // The output digest rather than the output: a discovery command's
         // answer can be megabytes, and replay only needs to know whether the
@@ -192,6 +217,8 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             check,
             output_sha256: sha256_hex(output.as_bytes()),
             program,
+            max_output_bytes: (max_output_bytes != HOST_COMMAND_OUTPUT_LIMIT)
+                .then_some(max_output_bytes),
         });
         Ok(output)
     }
@@ -1959,6 +1986,52 @@ fn file_attribute_holds(observation: &Observation) -> bool {
     }
 }
 
+fn command_observation_holds(
+    host_cache: &HostCache,
+    observation: &Observation,
+    policy: CommandPolicy,
+) -> bool {
+    let Observation::Command {
+        argv,
+        env,
+        cwd,
+        merge_stderr,
+        check,
+        output_sha256,
+        program,
+        max_output_bytes,
+    } = observation
+    else {
+        return false;
+    };
+    match policy {
+        // Ask the command again rather than reasoning about what it reads.
+        // It is memoised for the whole invocation, so this costs one run
+        // however many targets recorded it. A version probe answered from
+        // the persisted tool cache is gated on the fingerprints of the tool
+        // binaries themselves, so that answer is not older than the
+        // toolchain it describes.
+        CommandPolicy::Rerun => host_cache
+            .command_checked(
+                argv,
+                env,
+                cwd.as_deref().map(Path::new),
+                *merge_stderr,
+                *check,
+                max_output_bytes.unwrap_or(HOST_COMMAND_OUTPUT_LIMIT),
+            )
+            .is_ok_and(|output| sha256_hex(output.as_bytes()) == *output_sha256),
+        // The caller cannot afford to ask again, so the most it can
+        // establish is that the same program would answer. A record written
+        // before the program was described cannot establish even that.
+        CommandPolicy::TrustDeclaredInputs => program.as_ref().is_some_and(|recorded| {
+            argv.first()
+                .and_then(|name| host_cache.program_identity(name))
+                .is_some_and(|actual| &actual == recorded)
+        }),
+    }
+}
+
 fn observation_holds(
     workspace_root: &Path,
     host_cache: &HostCache,
@@ -1972,42 +2045,7 @@ fn observation_holds(
         Observation::Which { name, resolved } => {
             host_cache.which(name).ok().as_ref() == Some(resolved)
         }
-        Observation::Command {
-            argv,
-            env,
-            cwd,
-            merge_stderr,
-            check,
-            output_sha256,
-            program,
-        } => match policy {
-            // Ask the command again rather than reasoning about what it reads.
-            // It is memoised for the whole invocation, so this costs one run
-            // however many targets recorded it. A version probe answered from
-            // the persisted tool cache is gated on the fingerprints of the tool
-            // binaries themselves, so that answer is not older than the
-            // toolchain it describes.
-            CommandPolicy::Rerun => host_cache
-                .command_checked(
-                    argv,
-                    env,
-                    cwd.as_deref().map(Path::new),
-                    *merge_stderr,
-                    *check,
-                )
-                .is_ok_and(|output| &sha256_hex(output.as_bytes()) == output_sha256),
-            // The caller cannot afford to ask again, so the most it can
-            // establish is that the same program would answer. What it takes on
-            // in exchange is that the command's answer follows from the inputs
-            // the caller declared and from the rest of this ledger. A record
-            // written before the program was described cannot even establish
-            // that much.
-            CommandPolicy::TrustDeclaredInputs => program.as_ref().is_some_and(|recorded| {
-                argv.first()
-                    .and_then(|name| host_cache.program_identity(name))
-                    .is_some_and(|actual| &actual == recorded)
-            }),
-        },
+        Observation::Command { .. } => command_observation_holds(host_cache, observation, policy),
         Observation::SymlinkTarget { .. }
         | Observation::FileSize { .. }
         | Observation::FileExists { .. }

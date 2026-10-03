@@ -372,6 +372,12 @@ def _bazel_bazel_flags():
         "--experimental_convenience_symlinks=ignore",
     ]
 
+# A `deps()` aquery for a real workspace carries one record per transitive
+# action with its full argv, so its JSON is routinely tens of mebibytes and
+# grows with the dependency closure. Raise the discovery bound for this one
+# command instead of lowering it for every host probe.
+_BAZEL_AQUERY_MAX_OUTPUT_BYTES = 512 * 1024 * 1024
+
 def _bazel_aquery(ctx, bazel, workspace_abs):
     label = ctx["attr"]["bazel_label"]
     # `--include_file_write_contents` is what lets Once own the FileWrite,
@@ -388,6 +394,7 @@ def _bazel_aquery(ctx, bazel, workspace_abs):
         argv,
         cwd = workspace_abs,
         env = _bazel_env(),
+        max_output_bytes = _BAZEL_AQUERY_MAX_OUTPUT_BYTES,
     )
     return _bazel_parse_aquery(text)
 
