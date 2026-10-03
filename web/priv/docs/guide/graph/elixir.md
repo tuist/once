@@ -7,9 +7,10 @@ next: false
 
 Once can read an existing `mix.exs`, derive a typed build graph, and cache the
 compiled project and each locked dependency separately. You can build, lint,
-test, run Mix tasks, and assemble a release from the native Mix project.
+test, run Mix tasks, and assemble a release without first translating the
+project into `once.toml`.
 
-## Build an existing Mix project
+## Start With an Existing Mix Project
 
 ### Check the Toolchain
 
@@ -66,7 +67,7 @@ once query workspace
 once query targets
 ```
 
-The native Mix files remain authoritative for the discovered graph.
+No `once.toml` is required, and these commands do not write one.
 
 The identifiers printed by `once query targets` are the source of truth. For a
 Mix project at the workspace root, discovery normally derives:

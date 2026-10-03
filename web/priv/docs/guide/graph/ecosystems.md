@@ -69,7 +69,7 @@ Full build ecosystems have incremental guides with a first project,
 query-before-build workflow, current limitations, and follow-up steps:
 
 - [Bazel](/guide/graph/bazel) builds and tests an existing Bazel workspace
-  while Bazel retains its native graph and cache.
+  without a Once manifest while Bazel retains its native graph and cache.
 - [Apple](/guide/graph/apple) covers libraries, frameworks, applications, and
   tests written in Swift, Objective-C, C, and C++.
 - [Xcode Projects](/guide/graph/apple/xcode) covers reading an existing
@@ -140,15 +140,6 @@ Use these after the application builds without shared code. That sequence
 keeps toolchain and linking problems separate from the first graph setup.
 
 ## Adopt an Ecosystem Incrementally
-
-Start with the ecosystem's native project files when Once recognizes them.
-Run `once query targets`, then build a discovered target or the single
-buildable workspace root. The ecosystem guide shows the applicable command.
-Add `once.toml` when you need to configure a discovered target or declare a
-boundary that the native files do not express.
-
-For ecosystems that do not have native project discovery yet, start with a
-typed target:
 
 1. Pick the smallest artifact that has stable inputs and outputs.
 2. Declare one target and run `once query schema <kind>`.

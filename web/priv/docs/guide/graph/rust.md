@@ -6,12 +6,13 @@ next: false
 # Rust
 
 Once can read an existing `Cargo.toml`, derive a typed build graph, and cache
-each workspace package and locked dependency separately. Its `Cargo.toml` and
-lockfile remain the project configuration.
+each workspace package and locked dependency separately. You can build, run,
+and test the project without first translating it into `once.toml`.
 
-## Build an existing Cargo project
+## Start With an Existing Cargo Project
 
-From the directory that contains the root `Cargo.toml`, run:
+From the directory that contains the root `Cargo.toml`, try the complete path
+without creating `once.toml`:
 
 ```sh
 once query targets
@@ -66,7 +67,7 @@ once query targets --kind rust_library
 once query targets --kind rust_test
 ```
 
-The native Cargo files remain authoritative for the discovered graph.
+No `once.toml` is required, and these commands do not write one.
 
 The `cargo_workspace` seed runs Cargo metadata and emits
 first-party libraries, binaries, procedural macros, unit and integration test

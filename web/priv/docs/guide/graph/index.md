@@ -187,8 +187,8 @@ helps you decide when a typed target is a better fit than a script.
 
 ## Start From A Native Project
 
-Once recognizes supported native workspace descriptions as the normal starting
-point. A native integration supplies an ephemeral seed target, then
+Once can recognize supported native workspace descriptions before a package has
+an explicit target. A native integration supplies an ephemeral seed target, then
 the seed's ordinary resolver derives the detailed typed graph from native
 metadata.
 

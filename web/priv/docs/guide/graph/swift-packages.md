@@ -10,10 +10,10 @@ targets. Swift Package Manager remains authoritative for manifests, version
 selection, and `Package.resolved`; Once uses that information to build and
 cache the targets it derives.
 
-## Build an existing package
+## Start From a Native Package
 
 Once recognizes `Package.swift` automatically and lowers first-party package
-targets into the existing Apple target kinds. From the package directory, run:
+targets into the existing Apple target kinds. This works without `once.toml`:
 
 ```sh
 once query workspace
@@ -26,10 +26,9 @@ The generated `swift_package_workspace` seed reads the package manifest and
 derives first-party libraries, executables, macros, binary targets, and tests.
 Discovery skips generated `.build` and `.swiftpm` directories and does not
 write `once.toml`. `once build` selects the package workspace when it is the
-only discovered build root. `--ui` opens the Runs interface so the first
-compile is visible target by target. `once test` runs first-party test bundles
-and excludes test bundles that belong only to resolved packages. Use `once
-test --all` when you intentionally want the complete resolved test graph.
+only discovered build root. `once test` runs first-party test bundles and
+excludes test bundles that belong only to resolved packages. Use `once test
+--all` when you intentionally want the complete resolved test graph.
 
 Local path dependencies within the workspace are followed transitively,
 including sibling packages and shared dependencies reached through several
