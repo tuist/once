@@ -220,6 +220,11 @@ impl TuistCache {
                         message: source.to_string(),
                     })?;
             }
+            writer.shutdown().await.map_err(|source| Error::Remote {
+                provider: PROVIDER_NAME,
+                operation: "get blob",
+                message: source.to_string(),
+            })?;
             Ok::<_, Error>(())
         };
         let (mirrored, ()) = tokio::try_join!(self.local.put_stream(reader), download)?;
@@ -1750,6 +1755,10 @@ fn non_empty_str(value: &str) -> Option<&str> {
 fn is_empty_blob(digest: &Digest) -> bool {
     *digest == Digest::of_bytes(&[])
 }
+
+#[cfg(test)]
+#[path = "cache_stream_tests.rs"]
+mod stream_tests;
 
 #[cfg(test)]
 mod tests {
