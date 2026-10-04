@@ -155,6 +155,14 @@ jobs:
           fi
         env:
           ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
+      - name: Inspect failed graph tests
+        if: failure()
+        run: |
+          "${{ steps.bootstrap.outputs.bin }}" query evidence --limit 10000 --format json > once-test-evidence.json || true
+          find .once/out -type f -exec wc -c {} + > once-output-sizes.txt
+          "${{ steps.bootstrap.outputs.bin }}" test --changed-path crates --workers 1 --format json > once-tests-serial.json || true
+        env:
+          ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
       - name: Preserve failed test diagnostics
         if: failure()
         uses: actions/upload-artifact@v7
@@ -162,6 +170,11 @@ jobs:
           name: once-test-diagnostics-${{ matrix.os }}
           path: |
             once-tests.json
+            once-tests-serial.json
+            once-test-evidence.json
+            once-output-sizes.txt
+            ~/.local/state/once/logs/**
+            ~/Library/Logs/Once/**
             .once/out/**/test/**/*.log
             .once/out/**/test/**/test_results.json
           include-hidden-files: true
