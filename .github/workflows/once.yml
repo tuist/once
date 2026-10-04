@@ -157,16 +157,14 @@ jobs:
             exit 1
           fi
         env:
-          # Avoid incompatible Rust artifacts in the shared remote cache.
-          # Remote-cache coverage remains in the dedicated cache smoke job.
-          ONCE_CACHE_PROVIDER: local
+          ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
       - name: Inspect failed graph tests
         if: failure() && steps.graph-tests.outcome == 'failure'
         run: |
           "${{ steps.bootstrap.outputs.bin }}" query evidence --limit 10000 --format json > once-test-evidence.json || true
           find .once/out -type f -exec wc -c {} + > once-output-sizes.txt
         env:
-          ONCE_CACHE_PROVIDER: local
+          ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
       - name: Preserve failed test diagnostics
         if: failure()
         uses: actions/upload-artifact@v7
