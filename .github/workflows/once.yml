@@ -68,7 +68,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.9.3"
+          version: "2026.10.2"
           experimental: true
           cache: true
       - run: rustup component add rustfmt
@@ -87,7 +87,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.9.3"
+          version: "2026.10.2"
           experimental: true
           cache: true
       - run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
@@ -119,7 +119,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.9.3"
+          version: "2026.10.2"
           experimental: true
           cache: true
       - if: runner.os == 'Linux'
@@ -150,9 +150,7 @@ jobs:
       - name: Test with Once
         id: graph-tests
         run: |
-          # Test batches share .once/out. Serialize them to avoid cross-batch
-          # Rust metadata mismatches while their build outputs are not isolated.
-          if ! "${{ steps.bootstrap.outputs.bin }}" test --changed-path crates --jobs 1 --format json > once-tests.json; then
+          if ! "${{ steps.bootstrap.outputs.bin }}" test --changed-path crates --format json > once-tests.json; then
             jq '.runs[] | select(.success != true)' once-tests.json || cat once-tests.json
             exit 1
           fi
@@ -200,7 +198,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.9.3"
+          version: "2026.10.2"
           experimental: true
           cache: true
       - if: runner.os == 'Linux'
@@ -260,7 +258,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.9.3"
+          version: "2026.10.2"
           experimental: true
           cache: true
       - run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
@@ -345,7 +343,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.9.3"
+          version: "2026.10.2"
           experimental: true
           cache: true
       - if: runner.os == 'Linux'
@@ -378,7 +376,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.9.3"
+          version: "2026.10.2"
           experimental: true
           cache: true
       - uses: actions/download-artifact@v8
