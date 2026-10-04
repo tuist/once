@@ -33,7 +33,8 @@ where
     Fut: Future<Output = std::result::Result<T, Failure>>,
 {
     for attempt in 1..=ATTEMPTS {
-        match call().await {
+        // Boxed so callers' futures do not inline the RPC state of every attempt.
+        match Box::pin(call()).await {
             Ok(value) => return Ok(value),
             Err(Failure::Rpc(status)) if transient(status.code()) && attempt < ATTEMPTS => {
                 tracing::debug!(operation, attempt, code = ?status.code(), error = status.message(), source = ?std::error::Error::source(&status), "retrying Tuist cache RPC");
