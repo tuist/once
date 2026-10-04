@@ -293,12 +293,14 @@ runtime.
 Once carries a fixed mise version with each release. On first use it downloads
 the matching mise release binary, verifies its published checksum, and stores
 it in Once's data directory. A developer-installed mise is never required.
-When a graph build session starts, Once installs the union of its declared
-tools before analysis and resolves the declared executable names from that
-environment. Command actions and scripts then run through `mise exec` with
-implicit installation disabled. Once authorizes the selected workspace
-configuration for these managed invocations while keeping user-global mise
-configuration isolated.
+When a graph build session starts, Once resolves declared executable names from
+the workspace tool environment and attempts installation when a tool is not
+ready. If workspace resolution fails, an available host executable can be used
+instead. Mise shims are not treated as concrete tool executables, so a shim
+cannot silently route an action back through a developer's global configuration.
+Command actions and scripts then run through `mise exec` with implicit
+installation disabled. Once authorizes the selected workspace configuration for
+these managed invocations while keeping user-global mise configuration isolated.
 
 ## Starter Examples
 
