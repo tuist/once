@@ -540,40 +540,22 @@ fn restore_streamed_directory_file(
     entry: &StreamedDirectoryEntry,
     reader: &mut impl Read,
 ) -> Result<()> {
-    let mut output =
-        crate::file_blob::create_replacing_readonly(&entry.destination).map_err(|source| {
+    crate::restore_file::restore(
+        &entry.destination,
+        reader.take(entry.content_len),
+        entry.mode.max(0o400),
+        Some(entry.content_len),
+    )
+    .map_err(|source| {
+        if source.kind() == std::io::ErrorKind::UnexpectedEof {
+            invalid_directory(logical_path, "truncated entry content")
+        } else {
             Error::RestoreOutput {
                 path: logical_path.to_string(),
                 source,
             }
-        })?;
-    let copied =
-        std::io::copy(&mut reader.take(entry.content_len), &mut output).map_err(|source| {
-            Error::RestoreOutput {
-                path: logical_path.to_string(),
-                source,
-            }
-        })?;
-    if copied != entry.content_len {
-        return Err(invalid_directory(logical_path, "truncated entry content"));
-    }
-    output.flush().map_err(|source| Error::RestoreOutput {
-        path: logical_path.to_string(),
-        source,
-    })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(
-            &entry.destination,
-            std::fs::Permissions::from_mode(entry.mode.max(0o400)),
-        )
-        .map_err(|source| Error::RestoreOutput {
-            path: logical_path.to_string(),
-            source,
-        })?;
-    }
-    Ok(())
+        }
+    })
 }
 
 fn restore_streamed_directory_symlink(
