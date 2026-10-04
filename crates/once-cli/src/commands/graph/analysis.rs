@@ -965,14 +965,18 @@ async fn resolve_graph_tools(
                 resolve_graph_tool_executables(workspace, &tool_names, &executable_names).await?;
         }
     }
+    let all_managed = failures.is_empty();
     for (executable, error) in failures {
+        if let Some(path) = actions::host_executable_path(&executable) {
+            paths.insert(executable.clone(), path.to_string_lossy().into_owned());
+        }
         tracing::trace!(
             executable,
             %error,
             "graph tool executable is not ready"
         );
     }
-    if paths.len() == executable_names.len() {
+    if all_managed && paths.len() == executable_names.len() {
         if let Err(error) = write_graph_tool_cache(workspace, fingerprint, &paths, &[]) {
             tracing::debug!(%error, "failed to persist graph tool paths");
         }
@@ -1175,6 +1179,9 @@ fn graph_tool_cache_path_from(toolchain_root: &Path, workspace: &Path) -> PathBu
 fn graph_tool_paths_fingerprint(paths: &BTreeMap<String, String>) -> Option<Digest> {
     let mut bytes = Vec::new();
     for (name, path) in paths {
+        if once_core::is_mise_shim(Path::new(path)) {
+            return None;
+        }
         let metadata = std::fs::metadata(path).ok()?;
         if !metadata.is_file() {
             return None;

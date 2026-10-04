@@ -25,6 +25,13 @@ pub(super) fn build_action_path(
         .map(|path| path.to_string_lossy().into_owned())
 }
 
+pub fn is_mise_shim(path: &Path) -> bool {
+    path.file_stem().is_some_and(|name| name != "mise")
+        && path
+            .canonicalize()
+            .is_ok_and(|resolved| resolved.file_stem().is_some_and(|name| name == "mise"))
+}
+
 fn push_unique(dirs: &mut Vec<PathBuf>, dir: PathBuf) {
     if !dirs.iter().any(|existing| existing == &dir) {
         dirs.push(dir);
@@ -67,6 +74,27 @@ fn stable_system_path() -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn shim_detection_distinguishes_mise_from_real_tool_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let mise = directory.path().join("mise");
+        let real = directory.path().join("real-tool");
+        std::fs::write(&mise, b"mise").unwrap();
+        std::fs::write(&real, b"tool").unwrap();
+        let shim = directory.path().join("probe");
+        let tool = directory.path().join("linked-tool");
+        symlink(&mise, &shim).unwrap();
+        symlink(&real, &tool).unwrap();
+
+        assert!(is_mise_shim(&shim));
+        assert!(!is_mise_shim(&mise));
+        assert!(!is_mise_shim(&tool));
+        assert!(!is_mise_shim(&directory.path().join("missing")));
+    }
 
     #[test]
     fn action_path_omits_parent_path_from_mise_env() {
