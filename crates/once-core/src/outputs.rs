@@ -318,38 +318,11 @@ impl Drop for StagingDir {
     }
 }
 
-fn restore_legacy_file(rel: &str, abs: &Path, mut blob: impl Read) -> Result<()> {
-    if let Some(parent) = abs.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| Error::RestoreOutput {
-            path: rel.to_string(),
-            source,
-        })?;
-    }
-    let mut file = crate::file_blob::create_replacing_readonly(abs).map_err(|source| {
-        Error::RestoreOutput {
-            path: rel.to_string(),
-            source,
-        }
-    })?;
-    std::io::copy(&mut blob, &mut file).map_err(|source| Error::RestoreOutput {
+fn restore_legacy_file(rel: &str, abs: &Path, blob: impl Read) -> Result<()> {
+    crate::restore_file::restore(abs, blob, 0o755, None).map_err(|source| Error::RestoreOutput {
         path: rel.to_string(),
         source,
-    })?;
-    file.flush().map_err(|source| Error::RestoreOutput {
-        path: rel.to_string(),
-        source,
-    })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(abs, std::fs::Permissions::from_mode(0o755)).map_err(
-            |source| Error::RestoreOutput {
-                path: rel.to_string(),
-                source,
-            },
-        )?;
-    }
-    Ok(())
+    })
 }
 
 /// Hash and store every declared output in the CAS, returning the

@@ -27,6 +27,7 @@ mod plan;
 mod remote;
 mod reproducibility;
 mod resources;
+mod restore_file;
 mod runner;
 mod store;
 mod stream;

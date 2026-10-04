@@ -6,9 +6,21 @@ defmodule OnceSiteWeb.Docs.SidebarTest do
   alias OnceSiteWeb.Docs.Sidebar.Item
 
   test "picks the tab from the slug prefix" do
+    assert Sidebar.tab_for_slug("/docs/reference") == :reference
     assert Sidebar.tab_for_slug("/docs/reference/cli/exec") == :reference
+    assert Sidebar.tab_for_slug("/docs/reference-other") == :guides
     assert Sidebar.tab_for_slug("/docs/guide/why") == :guides
     assert Sidebar.tab_for_slug("/docs") == :guides
+  end
+
+  test "adjacent pages follow reading order without wrapping or linking to groups" do
+    assert Sidebar.adjacent_pages("/docs/guide").previous == nil
+    assert Sidebar.adjacent_pages("/docs/guide").next.slug == "/docs/guide/getting-started"
+    assert Sidebar.adjacent_pages("/docs/guide/getting-started").previous.slug == "/docs/guide"
+    assert Sidebar.adjacent_pages("/docs/reference/prelude/index").next == nil
+    assert Sidebar.adjacent_pages("/docs/reference/events").next == nil
+    assert Sidebar.adjacent_pages("/docs/reference").previous == nil
+    assert Sidebar.adjacent_pages("/docs/unknown") == %{previous: nil, next: nil}
   end
 
   test "trees are groups of items with /docs slugs" do

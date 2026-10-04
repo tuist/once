@@ -1203,7 +1203,44 @@ impl TuistCache {
         }
     }
 
+    /// Resolves the account's cache endpoints the way the Tuist CLI and Gradle
+    /// plugin do: the answer is persisted next to the local cache and reused
+    /// across Once processes until the `max-age` the server sends expires, so
+    /// most commands never ask. A request that cannot reach Tuist falls back to
+    /// the last answer, even an expired one, and otherwise reports
+    /// `reach endpoint discovery`, which cache reads treat as a miss.
     async fn fetch_endpoints(&self) -> Result<Vec<String>> {
+        let persisted = self.persisted_endpoints().await;
+        if let Some(persisted) = &persisted {
+            if persisted.is_fresh() {
+                return Ok(persisted.endpoints.clone());
+            }
+        }
+        match self.request_endpoints().await {
+            Ok((endpoints, max_age)) => {
+                self.persist_endpoints(&endpoints, max_age).await;
+                Ok(endpoints)
+            }
+            Err(error) => match (&error, persisted) {
+                (
+                    Error::Remote {
+                        operation: "reach endpoint discovery",
+                        ..
+                    },
+                    Some(stale),
+                ) => {
+                    tracing::warn!(
+                        error = %error,
+                        "using the last known Tuist cache endpoints because discovery is unreachable"
+                    );
+                    Ok(stale.endpoints)
+                }
+                _ => Err(error),
+            },
+        }
+    }
+
+    async fn request_endpoints(&self) -> Result<(Vec<String>, Option<Duration>)> {
         let url = self.endpoints_url()?;
         let token = self.auth_token().await?;
         let response = self
@@ -1214,24 +1251,84 @@ impl TuistCache {
             .await
             .map_err(|source| Error::Remote {
                 provider: PROVIDER_NAME,
-                operation: "discover endpoints",
+                operation: "reach endpoint discovery",
                 message: source.to_string(),
             })?;
-        match response.status() {
-            status if status.is_success() => {
-                let endpoints: EndpointResponse =
-                    response.json().await.map_err(|source| Error::Remote {
-                        provider: PROVIDER_NAME,
-                        operation: "decode endpoints",
-                        message: source.to_string(),
-                    })?;
-                Ok(endpoints.endpoints)
-            }
-            _ => Err(Error::Remote {
+        let status = response.status();
+        if status.is_success() {
+            let max_age = cache_control_max_age(response.headers());
+            let body = response.bytes().await.map_err(|source| Error::Remote {
                 provider: PROVIDER_NAME,
-                operation: "discover endpoints",
-                message: remote_status_message(response).await,
-            }),
+                operation: "reach endpoint discovery",
+                message: source.to_string(),
+            })?;
+            let endpoints: EndpointResponse =
+                serde_json::from_slice(&body).map_err(|source| Error::Remote {
+                    provider: PROVIDER_NAME,
+                    operation: "decode endpoints",
+                    message: source.to_string(),
+                })?;
+            return Ok((endpoints.endpoints, max_age));
+        }
+        // A server that cannot answer right now is unreachable; any other
+        // refusal, such as an unknown account or a rejected token, is a
+        // misconfiguration that has to surface.
+        let operation =
+            if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                "reach endpoint discovery"
+            } else {
+                "discover endpoints"
+            };
+        Err(Error::Remote {
+            provider: PROVIDER_NAME,
+            operation,
+            message: remote_status_message(response).await,
+        })
+    }
+
+    fn persisted_endpoints_path(&self) -> std::path::PathBuf {
+        let key = Sha256::digest(format!("{}\n{}", self.config.url, self.account()).as_bytes());
+        let key = key.iter().fold(String::new(), |mut hex, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        });
+        self.local
+            .root()
+            .join("remote-endpoints")
+            .join(format!("{key}.json"))
+    }
+
+    async fn persisted_endpoints(&self) -> Option<PersistedEndpoints> {
+        let bytes = tokio::fs::read(self.persisted_endpoints_path())
+            .await
+            .ok()?;
+        serde_json::from_slice::<PersistedEndpoints>(&bytes)
+            .ok()
+            .filter(|persisted| !persisted.endpoints.is_empty())
+    }
+
+    /// Best effort: failing to persist only means the next command asks again.
+    async fn persist_endpoints(&self, endpoints: &[String], max_age: Option<Duration>) {
+        if endpoints.is_empty() {
+            return;
+        }
+        let path = self.persisted_endpoints_path();
+        let persisted = PersistedEndpoints {
+            endpoints: endpoints.to_vec(),
+            expires_at_unix_ms: unix_ms_now()
+                .saturating_add(duration_ms(max_age.unwrap_or(DEFAULT_ENDPOINTS_MAX_AGE))),
+        };
+        let write = async {
+            let directory = path.parent().expect("endpoint file has a parent");
+            tokio::fs::create_dir_all(directory).await?;
+            let temporary =
+                directory.join(format!(".{}-{}.tmp", std::process::id(), unix_ms_now()));
+            tokio::fs::write(&temporary, serde_json::to_vec(&persisted)?).await?;
+            tokio::fs::rename(&temporary, &path).await
+        };
+        if let Err(error) = write.await {
+            tracing::debug!(error = %error, "could not persist Tuist cache endpoints");
         }
     }
 
@@ -1416,6 +1513,49 @@ impl TuistCache {
     }
 }
 
+/// How long discovered endpoints are reused when the server sends no
+/// `Cache-Control: max-age`, matching the Tuist CLI and Gradle plugin.
+const DEFAULT_ENDPOINTS_MAX_AGE: Duration = Duration::from_hours(1);
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PersistedEndpoints {
+    endpoints: Vec<String>,
+    expires_at_unix_ms: u64,
+}
+
+impl PersistedEndpoints {
+    fn is_fresh(&self) -> bool {
+        unix_ms_now() < self.expires_at_unix_ms
+    }
+}
+
+fn unix_ms_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, duration_ms)
+}
+
+fn duration_ms(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// Reads `max-age` from `Cache-Control`, ignoring the other directives.
+fn cache_control_max_age(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    headers
+        .get(reqwest::header::CACHE_CONTROL)?
+        .to_str()
+        .ok()?
+        .split(',')
+        .find_map(|directive| {
+            let (name, value) = directive.trim().split_once('=')?;
+            name.trim()
+                .eq_ignore_ascii_case("max-age")
+                .then(|| value.trim().parse::<u64>().ok())
+                .flatten()
+        })
+        .map(Duration::from_secs)
+}
+
 #[derive(Debug, serde::Deserialize)]
 struct EndpointResponse {
     endpoints: Vec<String>,
@@ -1490,7 +1630,10 @@ fn remote_action_read_error(error: Error) -> RemoteReadError {
         } if provider == PROVIDER_NAME
             && matches!(
                 operation,
-                "connect endpoint" | "get action result" | "pick fastest endpoint"
+                "connect endpoint"
+                    | "get action result"
+                    | "pick fastest endpoint"
+                    | "reach endpoint discovery"
             ) =>
         {
             RemoteReadError::miss(message)
@@ -1861,6 +2004,209 @@ mod tests {
         .unwrap()
     }
 
+    /// Answers each connection with the next response, counting requests.
+    async fn serve_discovery(
+        responses: Vec<String>,
+    ) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = requests.clone();
+        tokio::spawn(async move {
+            for response in responses {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut request = [0_u8; 4096];
+                let _ = stream.read(&mut request).await.unwrap();
+                stream.write_all(response.as_bytes()).await.unwrap();
+                let _ = stream.shutdown().await;
+            }
+        });
+        (format!("http://{address}"), requests)
+    }
+
+    fn endpoints_response(endpoint: &str, cache_control: &str) -> String {
+        let body = format!(r#"{{"endpoints":["{endpoint}"]}}"#);
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: {cache_control}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    fn status_response(status: &str) -> String {
+        format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+    }
+
+    /// A cache as a fresh Once process would open it on `temp`.
+    fn discovery_cache(temp: &TempDir, url: &str) -> TuistCache {
+        let mut cache = tuist_cache(temp, Some("once"));
+        cache.config.url = url.to_string();
+        cache.auth_token_cache.set(Ok("test-token".into())).unwrap();
+        cache
+    }
+
+    #[tokio::test]
+    async fn discovered_endpoints_are_reused_by_later_processes() {
+        let temp = TempDir::new().unwrap();
+        let (url, requests) = serve_discovery(vec![endpoints_response(
+            "https://cache.example.test",
+            "max-age=300",
+        )])
+        .await;
+
+        let first = discovery_cache(&temp, &url)
+            .fetch_endpoints()
+            .await
+            .unwrap();
+        let second = discovery_cache(&temp, &url)
+            .fetch_endpoints()
+            .await
+            .unwrap();
+
+        assert_eq!(first, ["https://cache.example.test"]);
+        assert_eq!(second, first);
+        assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn expired_endpoints_are_discovered_again() {
+        let temp = TempDir::new().unwrap();
+        let (url, requests) = serve_discovery(vec![
+            endpoints_response("https://old.example.test", "max-age=0"),
+            endpoints_response("https://new.example.test", "max-age=300"),
+        ])
+        .await;
+
+        discovery_cache(&temp, &url)
+            .fetch_endpoints()
+            .await
+            .unwrap();
+        let refreshed = discovery_cache(&temp, &url)
+            .fetch_endpoints()
+            .await
+            .unwrap();
+
+        assert_eq!(refreshed, ["https://new.example.test"]);
+        assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn unreachable_discovery_falls_back_to_the_last_known_endpoints() {
+        let temp = TempDir::new().unwrap();
+        let (url, _) = serve_discovery(vec![
+            endpoints_response("https://cache.example.test", "max-age=0"),
+            status_response("503 Service Unavailable"),
+        ])
+        .await;
+
+        discovery_cache(&temp, &url)
+            .fetch_endpoints()
+            .await
+            .unwrap();
+        let endpoints = discovery_cache(&temp, &url)
+            .fetch_endpoints()
+            .await
+            .unwrap();
+
+        assert_eq!(endpoints, ["https://cache.example.test"]);
+    }
+
+    #[tokio::test]
+    async fn unreachable_discovery_without_a_known_endpoint_is_a_read_miss() {
+        let temp = TempDir::new().unwrap();
+        let (url, _) = serve_discovery(vec![status_response("503 Service Unavailable")]).await;
+
+        let error = discovery_cache(&temp, &url)
+            .fetch_endpoints()
+            .await
+            .unwrap_err();
+
+        assert!(remote_action_read_error(error).is_read_miss());
+    }
+
+    #[tokio::test]
+    async fn interrupted_discovery_body_without_known_endpoints_is_a_read_miss() {
+        let temp = TempDir::new().unwrap();
+        let (url, _) = serve_discovery(vec![
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\nConnection: close\r\n\r\n".to_string(),
+        ])
+        .await;
+
+        let error = discovery_cache(&temp, &url)
+            .fetch_endpoints()
+            .await
+            .unwrap_err();
+
+        assert!(remote_action_read_error(error).is_read_miss());
+    }
+
+    #[tokio::test]
+    async fn interrupted_discovery_body_reuses_stale_endpoints() {
+        let temp = TempDir::new().unwrap();
+        let (url, _) = serve_discovery(vec![
+            endpoints_response("https://cache.example.test", "max-age=0"),
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\nConnection: close\r\n\r\n".to_string(),
+        ])
+        .await;
+
+        discovery_cache(&temp, &url)
+            .fetch_endpoints()
+            .await
+            .unwrap();
+        let endpoints = discovery_cache(&temp, &url)
+            .fetch_endpoints()
+            .await
+            .unwrap();
+
+        assert_eq!(endpoints, ["https://cache.example.test"]);
+    }
+
+    #[tokio::test]
+    async fn malformed_discovery_body_stays_fatal() {
+        let temp = TempDir::new().unwrap();
+        let (url, _) = serve_discovery(vec![
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n[]".to_string(),
+        ])
+        .await;
+
+        let error = discovery_cache(&temp, &url)
+            .fetch_endpoints()
+            .await
+            .unwrap_err();
+
+        assert!(!remote_action_read_error(error).is_read_miss());
+    }
+
+    #[tokio::test]
+    async fn refused_discovery_stays_fatal() {
+        let temp = TempDir::new().unwrap();
+        let (url, _) = serve_discovery(vec![status_response("403 Forbidden")]).await;
+
+        let error = discovery_cache(&temp, &url)
+            .fetch_endpoints()
+            .await
+            .unwrap_err();
+
+        assert!(!remote_action_read_error(error).is_read_miss());
+    }
+
+    #[test]
+    fn cache_control_max_age_ignores_other_directives() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::CACHE_CONTROL,
+            "private, MAX-AGE=42, must-revalidate".parse().unwrap(),
+        );
+        assert_eq!(
+            cache_control_max_age(&headers),
+            Some(Duration::from_secs(42))
+        );
+        assert_eq!(
+            cache_control_max_age(&reqwest::header::HeaderMap::new()),
+            None
+        );
+    }
+
     #[tokio::test]
     async fn data_plane_endpoint_prefers_the_override_over_discovery() {
         let temp = TempDir::new().unwrap();
@@ -2090,7 +2436,11 @@ mod tests {
 
     #[test]
     fn remote_endpoint_connectivity_errors_are_read_misses() {
-        for operation in ["connect endpoint", "pick fastest endpoint"] {
+        for operation in [
+            "connect endpoint",
+            "pick fastest endpoint",
+            "reach endpoint discovery",
+        ] {
             let error = Error::Remote {
                 provider: PROVIDER_NAME,
                 operation,

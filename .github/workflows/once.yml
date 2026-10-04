@@ -45,7 +45,7 @@ jobs:
           rust_ci=false
           while IFS= read -r path; do
             case "$path" in
-              Cargo.toml|Cargo.lock|mise.toml|once.toml|crates/*|spec/*|fixtures/*|mise/tasks/*|.cargo/*)
+              .github/workflows/once.yml|Cargo.toml|Cargo.lock|mise.toml|once.toml|crates/*|spec/*|fixtures/*|mise/tasks/*|.cargo/*)
                 rust_ci=true
                 ;;
             esac
@@ -68,7 +68,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.9.2"
+          version: "2026.9.3"
           experimental: true
           cache: true
       - run: rustup component add rustfmt
@@ -87,7 +87,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.9.2"
+          version: "2026.9.3"
           experimental: true
           cache: true
       - run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
@@ -119,7 +119,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.9.2"
+          version: "2026.9.3"
           experimental: true
           cache: true
       - if: runner.os == 'Linux'
@@ -148,9 +148,23 @@ jobs:
       # Selecting by the `crates` path schedules every Rust test target in
       # one run and leaves the website tests to the web workflow.
       - name: Test with Once
-        run: '"${{ steps.bootstrap.outputs.bin }}" test --changed-path crates'
+        run: |
+          if ! "${{ steps.bootstrap.outputs.bin }}" test --changed-path crates --format json > once-tests.json; then
+            jq '.runs[] | select(.success != true)' once-tests.json || cat once-tests.json
+            exit 1
+          fi
         env:
           ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
+      - name: Preserve failed test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: once-test-diagnostics-${{ matrix.os }}
+          path: |
+            once-tests.json
+            .once/out/**/test/**/*.log
+            .once/out/**/test/**/test_results.json
+          include-hidden-files: true
 
   release-build:
     name: release build (${{ matrix.os }})
@@ -172,7 +186,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.9.2"
+          version: "2026.9.3"
           experimental: true
           cache: true
       - if: runner.os == 'Linux'
@@ -232,7 +246,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.9.2"
+          version: "2026.9.3"
           experimental: true
           cache: true
       - run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
@@ -317,7 +331,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.9.2"
+          version: "2026.9.3"
           experimental: true
           cache: true
       - if: runner.os == 'Linux'
@@ -350,7 +364,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.9.2"
+          version: "2026.9.3"
           experimental: true
           cache: true
       - uses: actions/download-artifact@v8

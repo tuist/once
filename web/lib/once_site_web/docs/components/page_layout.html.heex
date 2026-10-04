@@ -67,12 +67,16 @@
     <span>Menu</span>
   </button>
   <button
+    :if={@headings != []}
     type="button"
     data-part="mobile-toc-btn"
     id="docs-mobile-toc-trigger"
     aria-expanded="false"
     aria-controls="docs-mobile-toc"
-    phx-click={JS.toggle_attribute({"data-state", "open", "closed"}, to: "#docs-mobile-toc")}
+    phx-click={
+      JS.toggle_attribute({"data-state", "open", "closed"}, to: "#docs-mobile-toc")
+      |> JS.toggle_attribute({"aria-expanded", "true", "false"}, to: "#docs-mobile-toc-trigger")
+    }
   >
     <span>On this page</span>
     <.icon name="news" />
@@ -81,11 +85,7 @@
 <div
   id="docs-mobile-sidebar-overlay"
   role="presentation"
-  phx-click={
-    JS.remove_attribute("data-sidebar-open", to: "body")
-    |> JS.remove_attribute("data-mobile-open", to: "#docs-sidebar")
-    |> JS.set_attribute({"aria-expanded", "false"}, to: "#docs-mobile-menu-trigger")
-  }
+  phx-click={close_mobile_navigation()}
 >
 </div>
 <main id="docs-page-layout" data-part="page">
@@ -103,7 +103,7 @@
       variant="primary"
       size="small"
       href="#"
-      phx-click={JS.set_attribute({"data-state", "closed"}, to: "#docs-mobile-toc")}
+      phx-click={close_mobile_toc()}
     />
     <.line_divider />
     <a
@@ -111,7 +111,7 @@
       href={"##{heading.id}"}
       data-part="mobile-toc-item"
       data-level={heading.level}
-      phx-click={JS.set_attribute({"data-state", "closed"}, to: "#docs-mobile-toc")}
+      phx-click={close_mobile_toc()}
     >
       {heading.text}
     </a>
@@ -119,14 +119,24 @@
   <div id="docs-layout">
     <nav id="docs-sidebar" aria-label="Documentation navigation">
       <div data-part="sidebar-scroll">
-        <.link :if={@tab == :guides} patch="/docs" data-part="nav-link">
+        <.link
+          :if={@tab == :guides}
+          patch="/docs"
+          data-part="nav-link"
+          phx-click={close_mobile_navigation()}
+        >
           <.tab_menu_vertical label="Overview" data-selected={@current_slug == "/docs"}>
             <:icon_left>
               <.icon name="smart_home" />
             </:icon_left>
           </.tab_menu_vertical>
         </.link>
-        <.link :if={@tab == :reference} patch="/docs/reference" data-part="nav-link">
+        <.link
+          :if={@tab == :reference}
+          patch="/docs/reference"
+          data-part="nav-link"
+          phx-click={close_mobile_navigation()}
+        >
           <.tab_menu_vertical
             label="Overview"
             data-selected={@current_slug == "/docs/reference"}

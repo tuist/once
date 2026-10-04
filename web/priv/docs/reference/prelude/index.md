@@ -39,6 +39,26 @@ See [Linting](/guide/graph/linting) for the shared result and failure-policy
 contract. Use [Custom lint target kinds](/reference/modules/linting) when the
 required analyzer is not built in.
 
+## Container target kinds
+
+Start with [Container Images](/guide/graph/containers) to choose between an
+existing Dockerfile and typed image composition.
+
+- [`dockerfile_image`](/reference/prelude/dockerfile_image): build an existing
+  Dockerfile with instruction snapshots or BuildKit.
+- [`oci_layer`](/reference/prelude/oci_layer): deterministic filesystem layer.
+- [`oci_image`](/reference/prelude/oci_image): image assembled from ordered layers.
+- [`oci_index`](/reference/prelude/oci_index): multi-platform image index.
+- [`oci_pull`](/reference/prelude/oci_pull): digest-pinned registry input.
+- [`oci_import`](/reference/prelude/oci_import): tracked image archive input.
+- [`oci_load`](/reference/prelude/oci_load): load built archives into a local engine.
+- [`oci_push`](/reference/prelude/oci_push): publish a built image or index.
+
+## Shell test target kinds
+
+[`shellspec_test`](/reference/prelude/shellspec_test) runs shell-based tests
+through the generic test capability with normalized results.
+
 ## Apple target kinds
 
 - [`apple_library`](/reference/prelude/apple_library): Swift,
@@ -49,6 +69,8 @@ required analyzer is not built in.
   compiler-plugin dynamic library loaded by `apple_library` dependencies
 - [`apple_framework`](/reference/prelude/apple_framework): dynamic
   Apple framework bundle
+- [`apple_executable`](/reference/prelude/apple_executable): Apple command-line
+  tool without an application bundle.
 - [`apple_application`](/reference/prelude/apple_application): Apple
   application bundle
 - [`apple_resource_bundle`](/reference/prelude/apple_resource_bundle):
@@ -62,6 +84,7 @@ required analyzer is not built in.
 
 ## Core target kinds
 
+- [`script`](/reference/prelude/script): adapter for annotated executable automation.
 - [`archive_download`](/reference/prelude/archive_download): checksum-pinned
   compressed archive materialized as a cacheable directory
 
