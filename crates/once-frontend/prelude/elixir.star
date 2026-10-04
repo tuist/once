@@ -2078,6 +2078,14 @@ case result do
   _ ->
     :ok
 end
+""" + _mix_materialize_app_directories_source() + """
+Enum.each(["priv", "include"], fn name ->
+  source = Path.join(project_dir, name)
+  destination = Path.join(app_dir, name)
+  if File.dir?(source) do
+    File.cp_r!(source, destination, fn _source, _destination -> false end)
+  end
+end)
 """
 
 def _mix_supported_manager(ctx):
@@ -2377,11 +2385,9 @@ def _mix_package_impl(ctx):
             }),
             stdout = compile_log,
             stderr = compile_warnings,
-            toolchain_identity = toolchain["identity"] + "\x00mix-package-compile.v3\x00" + mix_env + "\x00" + identity,
+            toolchain_identity = toolchain["identity"] + "\x00mix-package-compile.v4\x00" + mix_env + "\x00" + identity,
             identifier = ctx["label"]["id"] + ":mix-compile",
         )
-        _mix_stage_package_tree(ctx, source_root, "priv", priv_dir, ctx["label"]["id"] + ":mix-priv")
-        _mix_stage_package_tree(ctx, source_root, "include", include_dir, ctx["label"]["id"] + ":mix-include")
     else:
         toolchain, compile_metadata = _mix_rebar_package_action(
             ctx,
@@ -2403,8 +2409,8 @@ def _mix_package_impl(ctx):
         "source_root": workspace_source_root,
         "source_inputs": srcs,
         "full_source_tree": True,
-        "priv_inputs": package_priv,
-        "include_inputs": package_include,
+        "priv_inputs": package_priv + ([priv_dir] if manager == "mix" else []),
+        "include_inputs": package_include + ([include_dir] if manager == "mix" else []),
         "ebin_dir": ebin_dir,
         "priv_dir": priv_dir,
         "include_dir": include_dir,

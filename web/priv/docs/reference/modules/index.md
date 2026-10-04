@@ -183,6 +183,11 @@ not a replacement for the ecosystem package manager. Cargo, Mix and Hex, Swift
 Package Manager, Zig, or another native tool continues to own manifest
 semantics, registry behavior, version selection, and lockfile updates.
 
+Compiled package outputs must retain compiler-generated resources alongside
+static package resources. Restoring a cached package must restore both, without
+requiring generated files to remain in the dependency's source checkout. Static
+resource staging must not replace directories containing compiler outputs.
+
 The resolver receives a restricted context:
 
 - `ctx["label"]`: package, name, and stable target identifier.
