@@ -2314,6 +2314,7 @@ fn push_declared_action_metadata(
     for (key, value) in &canonical_env {
         builder.push_bytes(key.as_bytes());
         builder.push_bytes(value.as_bytes());
+        builder.record_bytes("environment", format!("variable:{key}"), value.as_bytes());
     }
     if !canonical_env.is_empty() {
         let encoded =
@@ -4098,6 +4099,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             ("action", "identifier"),
             ("command", "arguments"),
             ("environment", "declared"),
+            ("environment", "variable:TOKEN"),
             ("source", "input.txt"),
         ] {
             assert!(fingerprint
@@ -4105,6 +4107,14 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
                 .iter()
                 .any(|component| { component.category == category && component.label == label }));
         }
+        let variable = fingerprint
+            .components
+            .iter()
+            .find(|component| {
+                component.category == "environment" && component.label == "variable:TOKEN"
+            })
+            .unwrap();
+        assert_eq!(variable.digest, Digest::of_bytes(b"environment-secret"));
         let encoded = serde_json::to_string(&fingerprint).unwrap();
         assert!(!encoded.contains("command-secret"));
         assert!(!encoded.contains("environment-secret"));
