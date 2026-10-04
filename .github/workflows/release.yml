@@ -11,7 +11,8 @@ permissions:
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: true
+  # Publication must finish even when newer commits arrive.
+  cancel-in-progress: false
 
 env:
   MISE_VERSION: "2026.4.18"
