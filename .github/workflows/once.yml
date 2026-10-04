@@ -150,7 +150,9 @@ jobs:
       - name: Test with Once
         id: graph-tests
         run: |
-          if ! "${{ steps.bootstrap.outputs.bin }}" test --changed-path crates --format json > once-tests.json; then
+          # Test batches share .once/out. Serialize them to avoid cross-batch
+          # Rust metadata mismatches while their build outputs are not isolated.
+          if ! "${{ steps.bootstrap.outputs.bin }}" test --changed-path crates --jobs 1 --format json > once-tests.json; then
             jq '.runs[] | select(.success != true)' once-tests.json || cat once-tests.json
             exit 1
           fi
