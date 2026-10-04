@@ -35,6 +35,9 @@ mod apple_modules;
 #[path = "prelude/native_graphs.rs"]
 mod native_graphs;
 
+#[path = "prelude/cargo_paths.rs"]
+mod cargo_paths;
+
 #[path = "prelude/xcode_scripts.rs"]
 mod xcode_scripts;
 
