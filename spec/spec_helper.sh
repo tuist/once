@@ -4,7 +4,7 @@
 REPO_ROOT="$(cd "$SHELLSPEC_PROJECT_ROOT" && pwd)"
 ONCE_BIN="${REPO_ROOT}/target/release/once"
 # Resolve before HOME isolation makes mise shims lose their configuration.
-SPEC_PYTHON3="$(python3 -c 'import sys; print(sys.executable)')"
+SPEC_PYTHON3="${SPEC_PYTHON3:-$(python3 -c 'import sys; print(sys.executable)')}"
 export REPO_ROOT ONCE_BIN SPEC_PYTHON3
 
 spec_helper_precheck() {
@@ -72,6 +72,18 @@ cleanup_workspace() {
 
 python3() {
   "$SPEC_PYTHON3" "$@"
+}
+
+start_python_server() {
+  # A fixture must not keep ShellSpec's private pipes open after its test ends.
+  for fixture_fd in /dev/fd/*; do
+    fixture_fd="${fixture_fd##*/}"
+    case "$fixture_fd" in
+      0|1|2|*[!0-9]*) continue ;;
+    esac
+    eval "exec ${fixture_fd}>&-"
+  done
+  exec "$SPEC_PYTHON3" "$@" </dev/null
 }
 
 wait_for_server_file() {

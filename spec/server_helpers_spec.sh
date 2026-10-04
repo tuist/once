@@ -30,4 +30,36 @@ Describe 'test server readiness'
     The stdout should equal 'ready'
     The stderr should be blank
   End
+
+  assert_server_closes_harness_pipe() {
+    mkfifo "$WORKSPACE/harness-pipe"
+    (
+      cat "$WORKSPACE/harness-pipe" > "$WORKSPACE/pipe-output"
+      printf done > "$WORKSPACE/reader-done"
+    ) &
+    pipe_test_reader_pid=$!
+    exec 42>"$WORKSPACE/harness-pipe"
+    start_python_server "$REPO_ROOT/fixtures/tool_graph/http_server.py" \
+      "$WORKSPACE" "$WORKSPACE/server-port" > "$WORKSPACE/server.log" 2>&1 &
+    pipe_test_server_pid=$!
+    exec 42>&-
+
+    pipe_test_status=0
+    wait_for_server_file "$WORKSPACE/server-port" "$pipe_test_server_pid" &&
+      wait_for_server_file "$WORKSPACE/reader-done" "$pipe_test_reader_pid" &&
+      kill -0 "$pipe_test_server_pid" &&
+      [ ! -s "$WORKSPACE/pipe-output" ] || pipe_test_status=1
+
+    kill "$pipe_test_server_pid" "$pipe_test_reader_pid" 2>/dev/null || :
+    wait "$pipe_test_server_pid" 2>/dev/null || :
+    wait "$pipe_test_reader_pid" 2>/dev/null || :
+    return "$pipe_test_status"
+  }
+
+  It 'closes inherited harness pipes before starting a fixture server'
+    When call assert_server_closes_harness_pipe
+    The status should be success
+    The stdout should be blank
+    The stderr should be blank
+  End
 End

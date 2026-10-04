@@ -235,7 +235,7 @@ SH
 
   It 'runs a command through the daytona compute provider'
     copy_exec_fixture daytona
-    "$SPEC_PYTHON3" "$WORKSPACE/daytona_api.py" "$WORKSPACE/daytona_deleted" > "$WORKSPACE/daytona_port" &
+    start_python_server "$WORKSPACE/daytona_api.py" "$WORKSPACE/daytona_deleted" > "$WORKSPACE/daytona_port" &
     DAYTONA_SERVER_PID=$!
     wait_for_server_file "$WORKSPACE/daytona_port" "$DAYTONA_SERVER_PID" || return
     port="$(cat "$WORKSPACE/daytona_port")"

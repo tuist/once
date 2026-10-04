@@ -19,7 +19,7 @@ Describe 'graph tools'
     cp "$REPO_ROOT/fixtures/tool_graph/probe" "$WORKSPACE/tool-dist/probe"
     chmod +x "$WORKSPACE/tool-dist/probe"
 
-    "$SPEC_PYTHON3" "$REPO_ROOT/fixtures/tool_graph/http_server.py" \
+    start_python_server "$REPO_ROOT/fixtures/tool_graph/http_server.py" \
       "$WORKSPACE/tool-dist" "$WORKSPACE/tool-port" \
       >"$WORKSPACE/tool-server.log" 2>&1 &
     TOOL_SERVER_PID=$!
