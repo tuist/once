@@ -87,7 +87,7 @@ publish_npm() {
   (
     cd "${stage_dir}/js" &&
       npm version "${version}" --no-git-tag-version --allow-same-version &&
-      npm publish --access public
+      npm publish --access public --loglevel verbose
   )
 }
 
