@@ -2083,7 +2083,7 @@ Enum.each(["priv", "include"], fn name ->
   source = Path.join(project_dir, name)
   destination = Path.join(app_dir, name)
   if File.dir?(source) do
-    File.cp_r!(source, destination, fn _source, _destination -> false end)
+    File.cp_r!(source, destination, on_conflict: fn _source, _destination -> false end)
   end
 end)
 """

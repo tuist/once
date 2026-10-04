@@ -38,6 +38,9 @@ mod native_graphs;
 #[path = "prelude/cargo_paths.rs"]
 mod cargo_paths;
 
+#[path = "prelude/swift_package_paths.rs"]
+mod swift_package_paths;
+
 #[path = "prelude/xcode_scripts.rs"]
 mod xcode_scripts;
 
@@ -15181,7 +15184,7 @@ fn prelude_xcode_uses_swiftpm_resolved_system_target_path() {
 def host_which(name):
     return "/usr/bin/" + name
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     if argv == ["/usr/bin/xcrun", "--find", "swift"]:
         return "/usr/bin/swift\n"
     if "dump-package" in argv:
