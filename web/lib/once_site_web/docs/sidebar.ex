@@ -33,7 +33,8 @@ defmodule OnceSiteWeb.Docs.Sidebar do
   end
 
   @doc "Which tab (and therefore tree) a slug belongs to."
-  def tab_for_slug("/docs/reference" <> _), do: :reference
+  def tab_for_slug("/docs/reference"), do: :reference
+  def tab_for_slug("/docs/reference/" <> _), do: :reference
   def tab_for_slug(_), do: :guides
 
   def tree_for_tab(:reference), do: reference_tree()
@@ -46,14 +47,41 @@ defmodule OnceSiteWeb.Docs.Sidebar do
     slug == current_slug or Enum.any?(items, &item_or_children_active?(&1, current_slug))
   end
 
+  @doc "Adjacent pages in reading order, excluding navigation-only groups."
+  def adjacent_pages(slug) do
+    pages =
+      slug
+      |> tab_for_slug()
+      |> tree_for_tab()
+      |> Enum.flat_map(&flatten_pages(&1.items))
+
+    case Enum.find_index(pages, &(&1.slug == slug)) do
+      nil ->
+        %{previous: nil, next: nil}
+
+      index ->
+        %{
+          previous: if(index > 0, do: Enum.at(pages, index - 1)),
+          next: Enum.at(pages, index + 1)
+        }
+    end
+  end
+
+  defp flatten_pages(items) do
+    Enum.flat_map(items, fn item ->
+      page = if is_binary(item.slug), do: [item], else: []
+      page ++ flatten_pages(item.items)
+    end)
+  end
+
   def guide_tree do
     [
       %Group{
         label: "Start Here",
         items: [
           %Item{label: "Overview", slug: "/docs/guide"},
-          %Item{label: "Why Once", slug: "/docs/guide/why"},
           %Item{label: "Getting Started", slug: "/docs/guide/getting-started"},
+          %Item{label: "Why Once", slug: "/docs/guide/why"},
           %Item{label: "Coding Harnesses", slug: "/docs/guide/harness"}
         ]
       },
@@ -72,7 +100,13 @@ defmodule OnceSiteWeb.Docs.Sidebar do
           %Item{label: "Ecosystems", slug: "/docs/guide/graph/ecosystems"},
           %Item{label: "Configurations", slug: "/docs/guide/graph/configuration"},
           %Item{label: "Testing and Scheduling", slug: "/docs/guide/graph/testing"},
-          %Item{label: "Linting", slug: "/docs/guide/graph/linting"},
+          %Item{label: "Linting", slug: "/docs/guide/graph/linting"}
+        ]
+      },
+      %Group{
+        label: "Toolchains",
+        items: [
+          %Item{label: "Android", slug: "/docs/guide/graph/android", icon: "android"},
           %Item{
             label: "Apple",
             slug: "/docs/guide/graph/apple",
@@ -82,21 +116,25 @@ defmodule OnceSiteWeb.Docs.Sidebar do
               %Item{label: "Swift Packages", slug: "/docs/guide/graph/swift-packages"}
             ]
           },
-          %Item{label: "Android", slug: "/docs/guide/graph/android", icon: "android"},
-          %Item{label: "Bazel", slug: "/docs/guide/graph/bazel"},
+          %Item{label: "Bazel", slug: "/docs/guide/graph/bazel", icon: "bazel"},
           %Item{label: "C and C++", slug: "/docs/guide/graph/c", icon: "cplusplus"},
           %Item{label: "CMake", slug: "/docs/guide/graph/cmake", icon: "cplusplus"},
+          %Item{
+            label: "Container Images",
+            slug: "/docs/guide/graph/containers",
+            icon: "containers"
+          },
           %Item{label: "Elixir", slug: "/docs/guide/graph/elixir", icon: "elixir"},
-          %Item{label: "Kotlin", slug: "/docs/guide/graph/kotlin", icon: "kotlin"},
           %Item{label: "Go", slug: "/docs/guide/graph/go", icon: "go"},
-          %Item{label: "Rust", slug: "/docs/guide/graph/rust", icon: "rust"},
-          %Item{label: "Zig", slug: "/docs/guide/graph/zig", icon: "zig"},
+          %Item{label: "Kotlin", slug: "/docs/guide/graph/kotlin", icon: "kotlin"},
           %Item{label: "Nx", slug: "/docs/guide/graph/nx", icon: "nx"},
           %Item{
             label: "React Native",
             slug: "/docs/guide/graph/react-native",
             icon: "react-native"
-          }
+          },
+          %Item{label: "Rust", slug: "/docs/guide/graph/rust", icon: "rust"},
+          %Item{label: "Zig", slug: "/docs/guide/graph/zig", icon: "zig"}
         ]
       },
       %Group{
@@ -114,6 +152,7 @@ defmodule OnceSiteWeb.Docs.Sidebar do
         label: "Infrastructure",
         items: [
           %Item{label: "Overview", slug: "/docs/guide/infrastructure"},
+          %Item{label: "Connect A Project", slug: "/docs/guide/infrastructure/connect"},
           %Item{label: "Remote Execution", slug: "/docs/guide/infrastructure/remote-execution"},
           %Item{
             label: "Microsandbox",
@@ -177,6 +216,7 @@ defmodule OnceSiteWeb.Docs.Sidebar do
           %Item{label: "auth", slug: "/docs/reference/cli/auth"},
           %Item{label: "build", slug: "/docs/reference/cli/build"},
           %Item{label: "cache", slug: "/docs/reference/cli/cache"},
+          %Item{label: "connect", slug: "/docs/reference/cli/connect"},
           %Item{label: "edit", slug: "/docs/reference/cli/edit"},
           %Item{label: "exec", slug: "/docs/reference/cli/exec"},
           %Item{label: "lint", slug: "/docs/reference/cli/lint"},
@@ -200,10 +240,13 @@ defmodule OnceSiteWeb.Docs.Sidebar do
               target_group(
                 "Apple",
                 ~w(apple_library apple_system_module swift_macro apple_framework apple_application
-                apple_resource_bundle apple_thinned_package apple_test_bundle
+                apple_executable apple_resource_bundle apple_thinned_package apple_test_bundle
                 apple_xcframework_import swift_package_workspace swift_package_dependencies swift_package_pin)
               ),
-              target_group("Core", ~w(archive_download)),
+              target_group("Core", ~w(archive_download script)),
+              target_group("Containers", ~w(dockerfile_image oci_layer oci_image oci_index
+                oci_pull oci_import oci_load oci_push)),
+              target_group("Shell", ~w(shellspec_test)),
               target_group("Bazel", ~w(bazel_workspace bazel_target bazel_test bazel_binary)),
               target_group("Xcode", ~w(xcode_workspace)),
               target_group("Android", ~w(android_resource android_library android_local_test
@@ -212,17 +255,27 @@ defmodule OnceSiteWeb.Docs.Sidebar do
               target_group("Kotlin", ~w(kotlin_jvm_library kotlin_jvm_binary kotlin_jvm_test)),
               target_group("C and C++", ~w(c_library)),
               target_group("CMake", ~w(cmake_project cmake_workspace cmake_target)),
-              target_group("Elixir", ~w(mix_dependencies mix_package elixir_library elixir_test)),
+              target_group("Elixir", ~w(mix_workspace mix_dependencies mix_package mix_project
+                mix_release elixir_library elixir_test)),
               target_group("Python", ~w(pytest_test)),
               target_group("Ruby", ~w(rspec_test minitest_test)),
               target_group("JavaScript", ~w(vitest_test jest_test)),
               target_group("Nx", ~w(nx_workspace nx_task)),
               target_group(
+                "React Native",
+                ~w(react_native_dependencies react_native_module
+                react_native_bundle react_native_codegen react_native_autolinking
+                react_native_apple_application react_native_android_application react_native_metro)
+              ),
+              target_group(
                 "Go",
                 ~w(go_dependencies go_module go_source go_library go_binary go_test)
               ),
-              target_group("Rust", ~w(cargo_dependencies rust_library rust_mobile_library
-                rust_binary rust_test rust_crate rust_proc_macro)),
+              target_group(
+                "Rust",
+                ~w(cargo_workspace cargo_dependencies rust_library rust_mobile_library
+                rust_binary rust_test rust_crate rust_proc_macro)
+              ),
               target_group("Zig", ~w(zig_dependencies zig_package zig_library zig_c_library
                 zig_binary zig_static_library zig_shared_library zig_test zig_configure
                 zig_configure_binary zig_configure_test))

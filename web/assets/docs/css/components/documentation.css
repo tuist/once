@@ -42,15 +42,7 @@
   align-items: center;
   box-shadow: var(--noora-light-border-default);
   border-radius: var(--noora-radius-6);
-  background: linear-gradient(
-    180deg,
-    light-dark(var(--noora-purple-50), color-mix(in oklch, var(--noora-purple-700) 18%, transparent)) 0%,
-    light-dark(
-        color-mix(in oklch, var(--noora-purple-200) 32%, var(--noora-purple-50)),
-        color-mix(in oklch, var(--noora-purple-800) 32%, transparent)
-      )
-      100%
-  );
+  background: var(--once-card-gradient);
   height: 120px;
 }
 

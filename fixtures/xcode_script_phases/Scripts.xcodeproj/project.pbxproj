@@ -1,0 +1,27 @@
+// !$*UTF8*$!
+{
+ archiveVersion = 1;
+ objectVersion = 56;
+ objects = {
+  ROOT = {isa = PBXProject; mainGroup = GROUP; buildConfigurationList = CONFIGS; targets = (APP); };
+  GROUP = {isa = PBXGroup; sourceTree = "<group>"; children = (MAIN); };
+  MAIN = {isa = PBXFileReference; path = main.swift; sourceTree = "<group>"; };
+  SOURCE = {isa = PBXBuildFile; fileRef = MAIN; };
+  RESOURCE_FILE = {isa = PBXFileReference; path = "$(DERIVED_FILE_DIR)/generated-resource.txt"; sourceTree = SOURCE_ROOT; };
+  RESOURCE = {isa = PBXBuildFile; fileRef = RESOURCE_FILE; };
+  BUNDLE_FILE = {isa = PBXFileReference; path = "$(DERIVED_FILE_DIR)/Generated.bundle"; sourceTree = SOURCE_ROOT; };
+  BUNDLE_RESOURCE = {isa = PBXBuildFile; fileRef = BUNDLE_FILE; };
+  RESOURCES = {isa = PBXResourcesBuildPhase; files = (RESOURCE, BUNDLE_RESOURCE); };
+  SOURCES = {isa = PBXSourcesBuildPhase; files = (SOURCE); };
+  CONFIGS = {isa = XCConfigurationList; buildConfigurations = (DEBUG); defaultConfigurationName = Debug; };
+  DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {SDKROOT = macosx; MACOSX_DEPLOYMENT_TARGET = 13.0; SWIFT_VERSION = 6.0; PRODUCT_NAME = "Script App"; PRODUCT_BUNDLE_IDENTIFIER = dev.once.script-phases; CUSTOM_OUTPUT_DIR = "$(TARGET_TEMP_DIR)/custom"; }; };
+  APP = {isa = PBXNativeTarget; name = "Script App"; productType = "com.apple.product-type.application"; buildConfigurationList = CONFIGS; buildPhases = (PRE, SOURCES, GENERATE_RESOURCE, RESOURCES, POST, CHECK, OBSERVE, INSTALL); dependencies = (); };
+  GENERATE_RESOURCE = {isa = PBXShellScriptBuildPhase; name = "Generate after linking before packaging"; shellPath = /bin/sh; shellScript = "set -eu\ntest -x \"$TARGET_BUILD_DIR/$EXECUTABLE_PATH\"\ncat \"$SCRIPT_INPUT_FILE_0\" > \"$SCRIPT_OUTPUT_FILE_0\"\nmkdir -p \"$SCRIPT_OUTPUT_FILE_1\"\ncat \"$SCRIPT_INPUT_FILE_0\" > \"$SCRIPT_OUTPUT_FILE_1/value.txt\""; inputPaths = ("$(DERIVED_FILE_DIR)/prepared.txt", "$(TARGET_BUILD_DIR)/$(EXECUTABLE_PATH)"); outputPaths = ("$(DERIVED_FILE_DIR)/generated-resource.txt", "$(DERIVED_FILE_DIR)/Generated.bundle"); };
+  PRE = {isa = PBXShellScriptBuildPhase; name = "Prepare using native environment"; shellPath = /bin/sh; shellScript = "set -eu\nsh \"$SCRIPT_INPUT_FILE_0\""; inputPaths = ("$(SRCROOT)/scripts/prepare.sh"); inputFileListPaths = ("$(SRCROOT)/inputs.xcfilelist"); outputPaths = ("$(DERIVED_FILE_DIR)/prepared.txt"); };
+  POST = {isa = PBXShellScriptBuildPhase; name = "Write packaged resource"; shellPath = /bin/sh; shellScript = "set -eu\nsh \"$SCRIPT_INPUT_FILE_0\""; inputPaths = ("$(SRCROOT)/scripts/package.sh", "$(DERIVED_FILE_DIR)/prepared.txt", "$(TARGET_BUILD_DIR)/$(EXECUTABLE_PATH)"); outputFileListPaths = ("$(SRCROOT)/outputs.xcfilelist"); };
+  CHECK = {isa = PBXShellScriptBuildPhase; name = "Always check and update product"; alwaysOutOfDate = 1; shellPath = /bin/sh; shellScript = "set -eu\nsh \"$SRCROOT/scripts/verify.sh\""; inputPaths = (); outputPaths = (); };
+  OBSERVE = {isa = PBXShellScriptBuildPhase; name = "Consume the updated bundle"; shellPath = /bin/sh; shellScript = "set -eu\ncat \"$SCRIPT_INPUT_FILE_0\" > \"$SCRIPT_OUTPUT_FILE_0\""; inputPaths = ("$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/undeclared.txt"); outputPaths = ("$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/observed.txt"); };
+  INSTALL = {isa = PBXShellScriptBuildPhase; name = "Installation only"; runOnlyForDeploymentPostprocessing = 1; shellPath = /bin/sh; shellScript = "exit 99"; };
+ };
+ rootObject = ROOT;
+}

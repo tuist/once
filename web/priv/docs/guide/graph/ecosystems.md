@@ -83,6 +83,9 @@ query-before-build workflow, current limitations, and follow-up steps:
   libraries, and native consumers.
 - [CMake](/guide/graph/cmake) covers coarse cached execution, exact products,
   checked graph snapshots, and incremental adoption.
+- [Container Images](/guide/graph/containers) builds an existing Dockerfile as
+  a discovered image target, with optional Once configuration for custom paths
+  and cache policy.
 - [Elixir](/guide/graph/elixir) covers compiled applications and ExUnit tests.
 - [Kotlin](/guide/graph/kotlin) covers Java virtual machine libraries and
   binaries, Android Kotlin sources, and Kotlin/Native Apple frameworks.

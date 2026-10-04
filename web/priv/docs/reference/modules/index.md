@@ -7,6 +7,12 @@ turns one target into cacheable actions. Built-in and project target kinds use
 the same public contract, so a project can add a target kind without changing
 Once itself.
 
+Built-in analysis loads the target-kind families needed by the graph together
+with their helper dependencies. Shared, ecosystem-neutral utilities remain
+available across families; toolchain-specific helpers do not need to be loaded
+for unrelated targets. This keeps analysis work proportional to the graph
+without changing the schemas available through discovery.
+
 ## Loading Project Modules
 
 Project modules are listed from the root manifest:
@@ -242,10 +248,14 @@ without bound.
 
 Built-in native workspace resolvers record first-party test target names in
 the non-configurable `_default_test_roots` attribute. Targetless `once test`
-uses that metadata to avoid running test suites that belong only to resolved
-dependencies. A custom resolver can use the same convention by declaring the
-attribute as `list<string>` on its seed target kind and returning the generated
-test names through `attrs`.
+and native command compatibility adapters use that metadata to avoid running
+test suites that belong only to resolved dependencies. A custom resolver can
+use the same convention by declaring the attribute as `list<string>` on its
+seed target kind and returning the generated test names through `attrs`.
+
+A resolver can also return a non-configurable `_display_name` string for the
+owner. Generic run reporting uses it as the user-facing label without knowing
+which target kind produced it. When absent, reporting uses the target label.
 
 Resolvers should preserve the ecosystem's authoritative lockfile and source
 selection. They may invoke the native package manager when a missing lockfile
@@ -493,6 +503,13 @@ The implementation returns a dictionary of provider fields. Downstream
 target kinds should read provider fields from `ctx["deps"]` or
 `ctx["deps_by_role"]` instead of inspecting target identities.
 
+An implementation reports an actionable failure by calling `fail` with the text
+`once.diagnostic.v1 ` followed by one JSON object holding `code`, `message`,
+and optionally `attribute` and `repairs`. The engine attaches the target and
+returns a structured diagnostic with those fields, so agents receive the same
+`code`, `attribute`, and `repairs` shape as schema validation. Any other
+failure text is reported as a generic analysis failure.
+
 When an artifact has different link-time and runtime dependency closures,
 publish those closures as separate provider fields. Do not flatten them into
 one transitive list. Runtime bundle records should retain the owning target,
@@ -517,12 +534,25 @@ separate update workflow.
   string when it is unset.
 - `workspace_root()` returns the absolute workspace root.
 - `host_which(name)` resolves an executable on `PATH`.
-- `host_command(argv, env = {}, cwd = None, merge_stderr = False)` runs a
-  discovery command and returns standard output. Arguments, environment
-  values, the working directory, and stream merging participate in the
-  command-scoped cache key. When set, `cwd` must be an absolute path, normally
-  derived from `workspace_root()`. Each captured stream is limited to 16
-  mebibytes.
+- `host_command(argv, env = {}, cwd = None, merge_stderr = False, check = True, max_output_bytes = None)`
+  runs a discovery command and returns standard output. A non-zero exit status
+  fails analysis unless `check = False`, which returns the captured output
+  for idempotent setup that a later probe verifies. Arguments, environment
+  values, the working directory, stream merging, `check`, and the output limit
+  participate in the command-scoped cache key. When set, `cwd` must be an
+  absolute path, normally derived from `workspace_root()`. Standard input is
+  closed: discovery must not prompt or consume the caller's input. The
+  captured output is limited to 16 mebibytes by default. Pass
+  `max_output_bytes` to raise that bound for a command whose answer is
+  inherently large, such as a build system's dependency-closure action graph;
+  the bound applies while capturing each stream and to the merged result,
+  and is recorded with the observation so later validation re-runs the
+  command under the same limit.
+- `host_symlink_target(path)` returns where a host symbolic link points, as
+  written, or an empty string when the path is not a link. A planner uses it to
+  declare the files a linked input depends on.
+- `host_file_size(path)` returns the size in bytes of a host file, which a
+  deferred planner uses to describe an artifact produced by an earlier action.
 - `host_file_exists(path)` checks whether a host path is currently a
   file.
 - `host_path_exists(path)` checks whether a host path currently exists,
@@ -542,10 +572,16 @@ separate update workflow.
 - `glob(patterns, exclude = [])` expands patterns under the active package,
   omits matches selected by package-relative exclude patterns, and returns
   sorted workspace-relative file paths.
-- `walk_files(root, excluded_paths = [], excluded_names = [])` walks a
-  package-relative directory and returns sorted workspace-relative file and
-  symbolic-link paths. Exact root-relative exclusions and file names prune
-  whole trees before traversal.
+- `walk_files(root, excluded_paths = [], excluded_names = [], include_empty_directories = False)`
+  walks a package-relative directory and returns sorted workspace-relative file
+  and symbolic-link paths. Exact root-relative exclusions and file names prune
+  whole trees before traversal. With `include_empty_directories = True`, every
+  directory with no remaining entries is returned as well, so a consumer that
+  copies the tree keeps it.
+- `walk_symlinks(root, excluded_paths = [], excluded_names = [])` walks a
+  package-relative directory and returns one string per symbolic link, the
+  link's workspace path and its target joined by a NUL character. It follows
+  no link, so a planner learns every link and destination with one walk.
 - `walk_workspace_files(root, excluded_paths = [], excluded_names = [])` walks
   a workspace-relative directory without following symbolic links. Use it
   when a resolver must inspect a path shared by targets in different packages
@@ -595,14 +631,18 @@ separate update workflow.
 - `write_tree_digest(root, output, include_suffixes = [])` writes a
   deterministic digest listing for a workspace tree. The root is
   automatically declared as an input.
-- `write_archive(entries, output, sha256_output = None, format = "tar")`
-  writes a deterministic uncompressed
-  [tar archive](https://www.gnu.org/software/tar/manual/html_node/Standard.html).
-  Each entry declares a `file`, `directory`, or recursive `tree`, its archive
-  path, fixed mode, numeric owner and group identifiers, and modification
-  time. When requested, `sha256_output` records the
+- `write_archive(entries, output, sha256_output = None, format = "tar", uncompressed_sha256_output = None)`
+  writes a deterministic
+  [tar archive](https://www.gnu.org/software/tar/manual/html_node/Standard.html),
+  uncompressed by default. Each entry declares a `file`, `directory`,
+  recursive `tree`, or `symlink` (with a `target`), its archive path, fixed
+  mode, numeric owner and group identifiers, and modification time. When
+  requested, `sha256_output` records the
   [Secure Hash Algorithm 256-bit](https://csrc.nist.gov/pubs/fips/180-4/upd1/final)
-  digest.
+  digest. With `format = "tar.gz"` the archive is compressed with a gzip header
+  that carries no timestamp, name, or operating system, so identical entries
+  produce identical bytes on every machine; `sha256_output` then digests the
+  compressed bytes and `uncompressed_sha256_output` digests the tar inside.
 - `download_and_extract(url, sha256, destination, authorization_env = None)`
   streams a checksum-pinned [ZIP archive](https://www.loc.gov/preservation/digital/formats/fdd/fdd000354.shtml)
   into a declared directory output. An optional environment-variable name
@@ -624,6 +664,29 @@ layout.
 
 ## Actions
 
+Native adapters can use the Apple kinds' `prebuild_actions`,
+`prepackage_actions`, and `postbuild_actions` attributes for ordered serialized
+script declarations. Preparation actions precede compilation or resource
+processing. Pre-package actions run after linking but before resource processing.
+Shell script records execute in the workspace so absolute native settings and
+in-place product edits agree with the declared output locations. Their caching
+still depends on complete input and output declarations; it does not imply
+filesystem isolation.
+They can generate resource files and declared resource-bundle trees. Post-build
+actions follow product assembly and precede final signing. Records carry a
+shell or argument list, environment, workspace-relative inputs and outputs,
+working directory, and an explicit cacheability decision. Native Xcode
+records also retain their phase identifier and original build directory so
+the target kind can map environment values and paths to the configured
+execution directory. Scripts without complete declarations must bypass the
+cache. After an untracked product script, the bundle tree is captured again
+so later actions consume modified and newly created files and respect deletions.
+A replaced output tree supersedes earlier records for its children. Stale
+top-level signatures are removed before these scripts; final
+signing and subsequent scripts consume the updated tree.
+Native records may carry `unresolved_file_lists` to retain bootstrap-dependent
+phases during import; executing such a record fails until those settings resolve.
+
 `run_action` accepts:
 
 - `argv`: command and arguments as strings or `cmd_args` fragments.
@@ -632,6 +695,8 @@ layout.
 - `outputs`: workspace-relative outputs the action must produce. Once creates
   their parent directories. If a previous action version left a file where a
   managed output now requires a directory, Once replaces the stale file.
+  Later directory outputs supersede older child records. Later child outputs
+  override earlier directory snapshots during restoration.
 - `clean_paths`: workspace-relative paths to remove before a fresh
   command execution. Cache hits restore outputs without running the
   command.
@@ -660,8 +725,9 @@ layout.
   launched from the user's development shell. Explicit `env` values take
   precedence.
 - `depends_on_prior_actions`: `True` by default. When true, each action key
-  includes prior actions declared by the same target. Set `False` only for
-  independent actions that do not read earlier same-target outputs.
+  includes prior actions declared by the same target and acts as an ordering
+  barrier. With `False`, declared input and output paths determine ordering;
+  every consumed generated file must be listed in `inputs`.
 - `toolchain_identity`: optional string folded into the action digest.
 - `identifier`: stable diagnostic label.
 
@@ -672,9 +738,55 @@ Changing target-kind module source without changing that declaration does not
 invalidate the action. A rule edit that changes any declared behavior or input
 still produces a new digest.
 
-Actions inside one target run in declaration order because later actions
-may consume earlier outputs. Independent graph targets run concurrently
-once their analysis-backed dependencies are complete.
+Consecutive actions with `depends_on_prior_actions = False` may run concurrently
+when their declared reads, writes, argument files, and cleanup paths do not
+conflict. Uncacheable actions and ordering barriers remain sequential. Both
+target and action concurrency respect the command's memory budget. Independent
+graph targets become ready after their dependencies complete.
+
+## Deferred Action Planning
+
+`expand_actions(implementation, inputs, outputs, args)` declares a planning
+barrier. After preceding actions finish, Once restores its `inputs` and calls
+the named exported Starlark function from the same module environment. This
+lets a compiler's dependency scan describe further cacheable actions without
+running the compiler during initial analysis.
+
+The callback receives `ctx.args`, `ctx.inputs`, `ctx.outputs`, `ctx.build_dir`,
+and `ctx.label` (`id` and `package`). It declares ordinary actions and returns
+`None` on success, or one structured diagnostic with `code`, `message`,
+`target`, `attribute`, and `repairs`. Every promised output must be produced
+by a declared action. Recursive expansion is rejected. The callback runs under
+the resource budget, and its child actions use normal caching and scheduling.
+
+```python
+def finish_plan(ctx):
+    scan = json_decode(host_file_read(workspace_root() + "/" + ctx["inputs"][0]))
+    run_action(
+        argv = [ctx["args"]["compiler"]] + scan["arguments"],
+        inputs = scan["inputs"],
+        outputs = ctx["outputs"],
+    )
+```
+
+Initial action queries show the scan and planning barrier, not the expanded
+commands. Isolated contract validation reports this limitation rather than
+running prerequisite builds. Execution evidence contains the expanded actions.
+Targets with deferred actions currently replay planning on warm builds instead
+of using the whole-target shortcut; their individual actions still reuse cache
+entries.
+
+`content_sha256(text)` hashes text without filesystem access.
+`host_tree_sha256(path)` hashes an absolute host directory's contents and
+structure, using metadata-validated cached digests on later invocations.
+It records the tree as an analysis observation and rejects symbolic links
+that escape the tree. Entry paths and symlink targets must be valid UTF-8;
+invalid text is rejected rather than assigned an ambiguous digest. Literal
+backslashes in Unix names remain literal characters, while Windows directory
+separators use the portable forward-slash spelling.
+Together with `host_file_sha256(path)`, these primitives
+let target kinds include host tools and development kits in action identity.
+They identify host inputs; they do not make those inputs remotely available.
 
 ## Executable And Container Providers
 
@@ -686,13 +798,30 @@ of branching on the language that produced the program.
 The built-in `oci_layer` and `oci_image` target kinds use
 [`oci` as the abbreviation for Open Container Initiative](https://opencontainers.org/).
 An `oci_layer` packages native executable providers and source files into a
-deterministic filesystem layer. It can also pass through an existing
-uncompressed layer archive during incremental adoption. An `oci_image`
+deterministic filesystem layer, optionally gzip-compressed with `compress` and
+extended with `symlinks`. It can also pass through an existing uncompressed
+layer archive during incremental adoption. An `oci_image`
 assembles ordered layers, runtime configuration, a content-addressed image
 layout, and an archive accepted by
-[Docker](https://www.docker.com/).
+[Docker](https://www.docker.com/). Neither needs Docker or any interpreter:
+the layout is written by ordinary declared actions after the layers exist.
 Both native images and Dockerfile-backed images publish the shared
 `container_image` provider.
+
+An `oci_image` can extend a `base` dependency, any `container_image` provider
+that exports a layout. The new layers, runtime configuration, and history are
+appended to the base image's. `entrypoint` resets an inherited `cmd` unless
+`cmd` is also set, and `env`, `labels`, `exposed_ports`, and `volumes` merge
+with the base. `tag` and `tags` name the image, one layout entry per name.
+An `oci_index` combines single-platform images into one multi-platform
+index, rejecting two images for the same platform. An `oci_pull` fetches one
+image by content digest into a layout, keeping `platform` (or `all`), so the
+result is immutable and cacheable. An `oci_import` extracts an existing image layout archive (`.tar`, `.tar.gz`, `.tgz`) with `tar` and exposes it as an image. An `oci_load` target loads an image archive
+into a local engine when run, and an `oci_push` target publishes an image or
+index when run, keeping its manifest digest. Setting `sign` on an
+`oci_push` signs the pushed digest with cosign. Pull and push use
+[crane](https://github.com/google/go-containerregistry/blob/main/cmd/crane/doc/crane.md)
+and the Docker configuration for credentials; load uses `docker` or `podman`.
 
 ```toml
 [[target]]
@@ -723,12 +852,79 @@ or extend the runtime configuration. Layer metadata defaults to zero for the
 numeric owner, group, and modification time so identical inputs produce
 identical bytes.
 
-The `dockerfile_image` target kind gives complete Dockerfile semantics to
-[BuildKit](https://docs.docker.com/build/buildkit/). Starlark declares the
-context inputs, build arguments, platform, target stage, network policy,
-timestamp, archive format, and output contract. BuildKit interprets
-multi-stage files, resolves base images, and executes `RUN` instructions,
-including package installation.
+The `dockerfile_image` target kind defaults to `execution_mode = "auto"`, which
+translates instructions into separate actions and runs one whole-file BuildKit
+action when the Dockerfile uses syntax that cannot be translated or an option
+that needs whole-file execution. The provider records the resolved
+`execution_mode` and any `fallback_reason`, and the `lint` capability reports a
+`whole_file_execution` note naming the reason.
+Native project discovery creates an `image` target for each `Dockerfile`. The
+Dockerfile's directory supplies its build context. Once uses the selected
+Buildx builder when it supports image-layout exports. When Docker's built-in
+builder is the implicit default, Once provisions and reuses a dedicated
+container builder for the current Docker endpoint without changing the
+selection. Set `BUILDX_BUILDER` to select a remote builder, or declare a target
+to configure a different Dockerfile, context, and caching policy.
+Starlark translates instruction boundaries and stage references into separate
+actions. Each action consumes declared context files and prior image snapshots,
+then produces an [Open Container Initiative image layout](https://github.com/opencontainers/image-spec/blob/main/image-layout.md).
+[BuildKit](https://docs.docker.com/build/buildkit/) executes the individual
+instruction. `RUN` commands keep their image filesystem, environment, user,
+working directory, and shell. Stage-scoped arguments and environment values are
+resolved during analysis, following Docker's scope and inheritance rules, and
+written into each instruction's definition; an `ARG` default that depends on
+the base image's own environment is not translatable. Cross-stage `COPY` and bind mounts declare their source
+snapshots as action inputs. Only stages reachable from the selected stage
+execute, and archive export is a separate action.
+Intermediate layouts preserve filesystem timestamps between instructions;
+`source_date_epoch` fixes the image creation time. BuildKit does not rewrite
+layers imported from a snapshot, so file timestamps inside the archive reflect
+when each instruction ran unless `reproducible_layers = true`, which rewrites
+each instruction's layer to `source_date_epoch` as it is exported. Whole-file
+mode normalizes the final layers.
+
+Instruction mode requires a running Docker engine with Buildx and nothing
+else. Once provisions
+a container builder when the selected builder cannot export image layouts.
+That builder cannot see base images stored only in the local Docker image
+store. Use whole-file `buildkit` mode with Docker's built-in builder and
+`pull = false` for those images, or publish the base image to a registry and
+pin its digest.
+
+The `images` dependency role passes `container_image` targets to the Dockerfile
+as named build contexts, so `FROM name` and `COPY --from=name` resolve to a
+content-addressed layout instead of a registry. The `programs` role passes
+native executables the same way, as a directory holding the executable under
+its file name. A context is named after its target; `context_names` maps a
+target to another name, including a registry reference such as `alpine:3.23`,
+which then replaces that reference wherever the Dockerfile uses it and counts as
+pinned for `cacheable`. `tag` and `tags` name the archive entries. Builds with a
+container or remote builder also export a `layout` that other targets can use.
+
+Instruction execution exposes `layout` and `plan` output groups in addition to
+`archive` and `metadata`. The plan records source lines, instruction identities, snapshots,
+and advisory diagnostics. Metadata queries expose the parsed instructions and
+diagnostics without contacting Docker. Literal copy sources are tracked
+individually, together with the destinations of any symbolic links they reach.
+Wildcards, variable sources, and context bind mounts retain the full context
+input set conservatively. Empty directories in the context are inputs, so a
+copied tree keeps them. Generated definitions always exclude
+Once runtime state from the context.
+
+The `lint` capability uses the shared lint provider and emits warnings with
+`code`, `target`, `attribute`, source line, and suggested `repairs`. Checks cover
+mutable base references and syntax frontends, copy sources missing from the context, package repositories, downloaded pipelines, and
+authentication mounts. Findings are advisory, can have false positives, and
+never change the explicit `cacheable` decision. Clean results do not prove
+reproducibility.
+
+Set `execution_mode = "buildkit"` to delegate the complete recipe to BuildKit
+as one action. This mode supports heredocs, `ONBUILD`, `# syntax=` frontends,
+a backtick escape directive, multiple declarations in one `ARG`, and extended
+argument expressions. It also owns the `export_cache`, `cache_to`, and `caches`
+dependency contracts described below. With `execution_mode = "instructions"`,
+unsupported syntax fails with the source line and this setting; `auto` switches
+to it instead, and lint and metadata queries never fail on such syntax.
 Docker and its selected Docker Buildx builder must be reachable when Once
 analyzes a build so the toolchain identity can include the builder driver and
 BuildKit version. Metadata and affected-file queries infer context inputs
@@ -740,6 +936,7 @@ name = "service_image"
 kind = "dockerfile_image"
 
 [target.attrs]
+builder = "container-builder"
 tag = "service:latest"
 platform = "linux/arm64"
 build_args = { MODE = "release" }
@@ -773,9 +970,11 @@ host-network entitlement.
 
 Dockerfile actions are not stored in the Once action cache by default because
 image tags, package registries, and network instructions may change without a
-source edit. BuildKit still reuses its own layer cache. Set `format = "oci"`,
-`cacheable = true`, and `pull = false` only when every remote input is
-immutable, such as base images pinned by digest and network access disabled.
+source edit. BuildKit still reuses its own layer cache. Set `cacheable = true`,
+`pull = false`, and an explicit `platform` with a container or remote builder
+only when every remote input is immutable, such as base images pinned by digest
+and network access disabled. Every base image of a built stage must be pinned
+by digest; analysis fails otherwise.
 Open Container Initiative export requires a Docker Buildx builder that
 supports archive export.
 
@@ -786,6 +985,57 @@ loading and saving the requested tag. That compatibility path uses shared
 engine state, leaves the loaded image behind, and always bypasses the Once
 action cache. Use a container or remote builder when builds sharing the same
 tag may run concurrently.
+
+Set `export_cache = true` to export all intermediate BuildKit layers as a
+declared `layer_cache` directory alongside the archive. Once stores and restores
+that directory with the other outputs when action caching is enabled. Another
+image target can import it through a `caches` dependency:
+
+```toml
+[[target]]
+name = "base_image"
+kind = "dockerfile_image"
+
+[target.attrs]
+execution_mode = "buildkit"
+dockerfile = "Dockerfile.base"
+builder = "container-builder"
+export_cache = true
+
+[[target]]
+name = "service_image"
+kind = "dockerfile_image"
+
+[target.dependencies]
+caches = ["base_image"]
+
+[target.attrs]
+execution_mode = "buildkit"
+builder = "container-builder"
+```
+
+The dependency must enable `export_cache`. Its cache directory is an explicit
+input to the consuming action, so it is available in the isolated execution
+workspace. Once stages the build definition with the effective ignore rules
+and a final exclusion for runtime directories, so `COPY .` cannot include
+imported caches. BuildKit decides which layers match the consuming Dockerfile.
+Layer exports include intermediate stages, but do not include the mutable
+contents of Dockerfile `RUN --mount=type=cache` mounts.
+
+Use `cache_from` and `cache_to` lists of registry image references to share
+layers between independent builders, for example
+`cache_from = ["registry.example.com/service:build-cache"]`. Exports use
+`mode=max` to retain intermediate stages. Registry publication requires the
+builder's registry credentials. `cache_to` cannot be combined with
+`cacheable = true` because a Once cache hit would skip publication.
+
+Select an existing [remote BuildKit builder](https://docs.docker.com/build/builders/drivers/remote/)
+with `builder` to execute Dockerfile instructions remotely. The Buildx client
+transfers declared context inputs to that worker and returns the archive,
+metadata, and optional layer cache to Once. Remote builder provisioning,
+authentication, and worker resource limits are managed outside the target.
+Once budgets the local client process; it does not control the remote worker's
+memory budget.
 
 ## Lint Target Kinds
 

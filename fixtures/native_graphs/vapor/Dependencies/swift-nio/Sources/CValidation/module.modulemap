@@ -1,0 +1,4 @@
+module CValidation {
+    header "Validation.h"
+    export *
+}

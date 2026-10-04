@@ -52,7 +52,7 @@ defmodule OnceSiteWeb.Docs.HTML do
   @doc "Give headings a hover `#` anchor link."
   def add_heading_anchors(html) do
     Regex.replace(@heading_regex, html, fn _full, level, id, text ->
-      ~s(<h#{level} id="#{id}"><a class="heading-anchor" id="#{id}" href="##{id}">) <>
+      ~s(<h#{level} id="#{id}"><a class="heading-anchor" href="##{id}">) <>
         ~s(<span data-part="heading-text">#{text}</span><span data-part="hash">#</span></a></h#{level}>)
     end)
   end

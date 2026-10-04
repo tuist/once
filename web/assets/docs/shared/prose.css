@@ -101,8 +101,19 @@
   }
 
   & a:not(.heading-anchor):not([data-part="feature-card"]) {
-    color: light-dark(var(--noora-purple-500), var(--noora-purple-300));
+    color: var(--once-link-color);
     text-decoration: underline;
+    text-decoration-color: var(--once-link-underline);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.2em;
+    transition:
+      color 0.15s ease,
+      text-decoration-color 0.15s ease;
+
+    &:hover {
+      color: var(--once-link-color-hover);
+      text-decoration-color: currentColor;
+    }
   }
 
   & h1 {

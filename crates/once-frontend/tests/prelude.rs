@@ -14,6 +14,39 @@ use starlark::syntax::{AstModule, Dialect};
 use starlark::values::list::ListRef;
 use tempfile::TempDir;
 
+#[path = "prelude/swift_package_traits.rs"]
+mod swift_package_traits;
+
+#[path = "prelude/swift_macro_testing.rs"]
+mod swift_macro_testing;
+
+#[path = "prelude/swift_package_linking.rs"]
+mod swift_package_linking;
+
+#[path = "prelude/swift_testing_library.rs"]
+mod swift_testing_library;
+
+#[path = "prelude/swift_testing_results.rs"]
+mod swift_testing_results;
+
+#[path = "prelude/apple_modules.rs"]
+mod apple_modules;
+
+#[path = "prelude/native_graphs.rs"]
+mod native_graphs;
+
+#[path = "prelude/xcode_scripts.rs"]
+mod xcode_scripts;
+
+#[path = "prelude/xcode_script_order.rs"]
+mod xcode_script_order;
+
+#[path = "prelude/dockerfile_instructions.rs"]
+mod dockerfile_instructions;
+
+#[path = "prelude/oci_containers.rs"]
+mod oci_containers;
+
 fn store_for(workspace: &Path, package: &str) -> AnalysisStore {
     AnalysisStore::new(
         workspace.to_path_buf(),
@@ -88,8 +121,9 @@ fn fake_android_ndk_for_mobile_test(workspace: &Path) -> std::path::PathBuf {
 
 fn apple_prelude_source() -> String {
     format!(
-        "{}\n{}",
+        "{}\n{}\n{}",
         include_str!("../prelude/common.star"),
+        include_str!("../prelude/apple_modules.star"),
         include_str!("../prelude/apple.star")
     )
 }
@@ -103,20 +137,22 @@ fn archive_prelude_source() -> String {
 }
 
 fn android_prelude_source() -> String {
-    format!(
-        "{}\n{}",
+    [
         include_str!("../prelude/common.star"),
-        include_str!("../prelude/android.star")
-    )
+        include_str!("../prelude/jvm_test_runner.star"),
+        include_str!("../prelude/android.star"),
+    ]
+    .join("\n")
 }
 
 fn react_native_prelude_source() -> String {
-    format!(
-        "{}\n{}\n{}",
+    [
         include_str!("../prelude/common.star"),
+        include_str!("../prelude/jvm_test_runner.star"),
         include_str!("../prelude/android.star"),
-        include_str!("../prelude/react_native.star")
-    )
+        include_str!("../prelude/react_native.star"),
+    ]
+    .join("\n")
 }
 
 fn go_prelude_source() -> String {
@@ -129,8 +165,9 @@ fn go_prelude_source() -> String {
 
 fn xcode_prelude_source() -> String {
     format!(
-        "{}\n{}\n{}",
+        "{}\n{}\n{}\n{}",
         include_str!("../prelude/common.star"),
+        include_str!("../prelude/apple_modules.star"),
         include_str!("../prelude/apple.star"),
         include_str!("../prelude/xcode.star")
     )
@@ -164,6 +201,41 @@ result = repr(_unique_args(
 }
 
 #[test]
+fn prelude_apple_module_scan_uses_whole_module_optimization() {
+    // Swift 6.3's `-scan-dependencies` refuses to accept a compile invocation
+    // with several `.swift` sources unless it is also passed `-wmo` (whole-
+    // module optimization). Without `-wmo` the driver treats each source as
+    // its own translation unit and complains that a single `-o` cannot
+    // receive multiple outputs. `apple_test_bundle` almost always hits this,
+    // because Once appends a generated `OnceTestEntryPoint.swift` alongside
+    // the user's test sources. Adding `-wmo` to the scan argv is a no-op for
+    // single-file scans and unblocks multi-file ones.
+    let source = include_str!("../prelude/apple_modules.star");
+    assert!(
+        source.contains("\"-scan-dependencies\", \"-wmo\"")
+            || source.contains("\"-scan-dependencies\", \"-whole-module-optimization\""),
+        "apple_module_scan_argv must pass `-wmo` alongside `-scan-dependencies` to keep Swift 6.3+ swiftc happy on multi-source scans"
+    );
+}
+
+#[test]
+fn prelude_apple_module_host_roots_trust_platform_frameworks() {
+    // Swift Testing and XCTest ship as frameworks under the Xcode platform's
+    // `Developer/Library/Frameworks` directory. When an `apple_test_bundle`
+    // uses `explicit_modules = true` the dependency scan references the
+    // `_Testing_Foundation.swiftmodule` in that framework, and the module
+    // input check must recognise the platform's Library/Frameworks root as
+    // part of the trusted toolchain surface. Without this the test bundle
+    // fails with "Explicit module input is outside the workspace and
+    // identified toolchain".
+    let source = include_str!("../prelude/apple_modules.star");
+    assert!(
+        source.contains("\"/Library/Frameworks\""),
+        "apple_module_host_roots must include the platform's Developer/Library/Frameworks so Swift Testing and XCTest resolve under explicit modules"
+    );
+}
+
+#[test]
 fn prelude_apple_merges_link_options_as_complete_argument_groups() {
     let source = include_str!("../prelude/apple.star");
     assert!(
@@ -185,37 +257,54 @@ fn oci_prelude_source() -> String {
     )
 }
 
-fn dockerfile_prelude_source() -> String {
-    format!(
-        "{}\n{}",
+fn oci_containers_source() -> String {
+    [
         include_str!("../prelude/common.star"),
-        include_str!("../prelude/dockerfile.star")
-    )
+        include_str!("../prelude/oci.star"),
+        include_str!("../prelude/oci_registry.star"),
+    ]
+    .join("\n")
 }
 
-fn all_prelude_source() -> String {
+fn dockerfile_prelude_source() -> String {
     [
         include_str!("../prelude/common.star"),
         include_str!("../prelude/lint.star"),
-        include_str!("../prelude/apple.star"),
-        include_str!("../prelude/android.star"),
-        include_str!("../prelude/go.star"),
-        include_str!("../prelude/rust.star"),
-        include_str!("../prelude/xcode.star"),
-        include_str!("../prelude/c.star"),
-        include_str!("../prelude/cmake.star"),
-        include_str!("../prelude/zig.star"),
-        include_str!("../prelude/oci.star"),
+        include_str!("../prelude/dockerfile_parser.star"),
+        include_str!("../prelude/dockerfile_actions.star"),
         include_str!("../prelude/dockerfile.star"),
-        include_str!("../prelude/swift.star"),
-        include_str!("../prelude/kotlin.star"),
-        include_str!("../prelude/elixir.star"),
-        include_str!("../prelude/python.star"),
-        include_str!("../prelude/ruby.star"),
-        include_str!("../prelude/javascript.star"),
-        include_str!("../prelude/react_native.star"),
     ]
     .join("\n")
+}
+
+fn all_prelude_source() -> String {
+    static PRELUDE: include_dir::Dir<'_> = include_dir::include_dir!("$CARGO_MANIFEST_DIR/prelude");
+    static SOURCE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        Module::with_temp_heap(|module| {
+            let ast = AstModule::parse(
+                "index.star",
+                include_str!("../prelude/index.star").to_string(),
+                &Dialect::Standard,
+            )
+            .unwrap();
+            let globals = starlark::environment::GlobalsBuilder::standard().build();
+            Evaluator::new(&module).eval_module(ast, &globals).unwrap();
+            let paths = module.get("PRELUDE_SOURCES").unwrap();
+            ListRef::from_value(paths)
+                .unwrap()
+                .iter()
+                .map(|value| {
+                    PRELUDE
+                        .get_file(value.unpack_str().unwrap())
+                        .unwrap()
+                        .contents_utf8()
+                        .unwrap()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+    });
+    SOURCE.clone()
 }
 
 #[test]
@@ -1259,6 +1348,9 @@ fn dockerfile_image_schema_exposes_buildkit_outputs_and_example() {
         &[
             "build_args",
             "cacheable",
+            "cache_from",
+            "cache_to",
+            "export_cache",
             "context",
             "dockerfile",
             "format",
@@ -1282,7 +1374,7 @@ fn dockerfile_image_declares_an_isolated_buildx_action() {
 def host_which_optional(name):
     return "/tools/docker" if name == "docker" else None
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     if argv[1:3] == ["buildx", "version"]:
         return "github.com/docker/buildx v1.2.3\n"
     if argv[1:3] == ["buildx", "inspect"]:
@@ -1304,7 +1396,7 @@ ctx = {{
     "scratch_dir": ".once/tmp/analysis/containers/demo/image",
     "capability": "build",
 }}
-provider = _dockerfile_image_impl(ctx)
+provider = _dockerfile_buildkit_impl(ctx)
 result = repr(provider)
 "#,
         dockerfile_prelude_source()
@@ -1380,7 +1472,7 @@ fn dockerfile_image_infers_hidden_and_nested_context_inputs() {
 def host_which_optional(name):
     return "/tools/docker" if name == "docker" else None
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     if argv[1:3] == ["buildx", "version"]:
         return "github.com/docker/buildx v1.2.3\n"
     if argv[1:3] == ["buildx", "inspect"]:
@@ -1398,7 +1490,7 @@ ctx = {{
     "scratch_dir": ".once/tmp/analysis/containers/demo/image",
     "capability": "build",
 }}
-provider = _dockerfile_image_impl(ctx)
+provider = _dockerfile_buildkit_impl(ctx)
 result = repr(provider)
 "#,
         dockerfile_prelude_source()
@@ -1450,7 +1542,7 @@ fn dockerfile_image_normalizes_root_context_and_excludes_runtime_state() {
 def host_which_optional(name):
     return "/tools/docker" if name == "docker" else None
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     if argv[1:3] == ["buildx", "version"]:
         return "github.com/docker/buildx v1.2.3\n"
     if argv[1:3] == ["buildx", "inspect"]:
@@ -1468,7 +1560,7 @@ ctx = {{
     "scratch_dir": ".once/tmp/analysis/image",
     "capability": "build",
 }}
-result = repr(_dockerfile_image_impl(ctx))
+result = repr(_dockerfile_buildkit_impl(ctx))
 "#,
         dockerfile_prelude_source()
     );
@@ -1482,9 +1574,15 @@ result = repr(_dockerfile_image_impl(ctx))
 
     result.unwrap();
     let action = action_by_identifier(&store, "image:dockerfile-build");
+    // `nested` holds only Once runtime state, which the build definition
+    // ignores, so it remains as the empty directory a Docker context would have.
     assert_eq!(
         action.inputs,
-        vec!["Dockerfile".to_string(), "message.txt".to_string()]
+        vec![
+            "Dockerfile".to_string(),
+            "message.txt".to_string(),
+            "nested".to_string()
+        ]
     );
     assert_eq!(action.argv.last().map(String::as_str), Some("."));
 }
@@ -1499,7 +1597,7 @@ fn dockerfile_metadata_infers_inputs_without_probing_the_toolchain() {
 def host_which_optional(name):
     fail("metadata analysis must not resolve host tools")
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     fail("metadata analysis must not run host commands")
 
 ctx = {{
@@ -1510,7 +1608,7 @@ ctx = {{
     "scratch_dir": ".once/tmp/analysis/image",
     "capability": "metadata",
 }}
-result = repr(_dockerfile_image_impl(ctx))
+result = repr(_dockerfile_buildkit_impl(ctx))
 "#,
         dockerfile_prelude_source()
     );
@@ -1561,7 +1659,7 @@ fn dockerfile_image_keeps_inputs_when_ignore_rules_can_reinclude_them() {
 def host_which_optional(name):
     return "/tools/docker" if name == "docker" else None
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     if argv[1:3] == ["buildx", "version"]:
         return "github.com/docker/buildx v1.2.3\n"
     if argv[1:3] == ["buildx", "inspect"]:
@@ -1579,7 +1677,7 @@ ctx = {{
     "scratch_dir": ".once/tmp/analysis/containers/demo/image",
     "capability": "build",
 }}
-result = repr(_dockerfile_image_impl(ctx))
+result = repr(_dockerfile_buildkit_impl(ctx))
 "#,
         dockerfile_prelude_source()
     );
@@ -1625,7 +1723,7 @@ fn dockerfile_specific_ignore_controls_an_inferred_nested_context() {
 def host_which_optional(name):
     return "/tools/docker" if name == "docker" else None
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     if argv[1:3] == ["buildx", "version"]:
         return "github.com/docker/buildx v1.2.3\n"
     if argv[1:3] == ["buildx", "inspect"]:
@@ -1646,7 +1744,7 @@ ctx = {{
     "scratch_dir": ".once/tmp/analysis/containers/demo/image",
     "capability": "build",
 }}
-result = repr(_dockerfile_image_impl(ctx))
+result = repr(_dockerfile_buildkit_impl(ctx))
 "#,
         dockerfile_prelude_source()
     );
@@ -1683,7 +1781,7 @@ fn dockerfile_image_exports_directly_with_a_container_builder() {
 def host_which_optional(name):
     return "/tools/docker" if name == "docker" else None
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     if argv[1:3] == ["buildx", "version"]:
         return "github.com/docker/buildx v1.2.3\n"
     if argv[1:3] == ["buildx", "inspect"]:
@@ -1701,7 +1799,7 @@ ctx = {{
     "scratch_dir": ".once/tmp/analysis/containers/demo/image",
     "capability": "build",
 }}
-result = repr(_dockerfile_image_impl(ctx))
+result = repr(_dockerfile_buildkit_impl(ctx))
 "#,
         dockerfile_prelude_source()
     );
@@ -1732,8 +1830,145 @@ result = repr(_dockerfile_image_impl(ctx))
         vec![
             ".once/out/containers/demo/image/image.docker.tar".to_string(),
             ".once/out/containers/demo/image/build-metadata.json".to_string(),
+            ".once/out/containers/demo/image/layout".to_string(),
         ]
     );
+}
+
+#[test]
+fn dockerfile_remote_builder_declares_portable_layer_cache() {
+    let workspace = TempDir::new().unwrap();
+    std::fs::write(workspace.path().join("Dockerfile"), "FROM scratch\n").unwrap();
+    std::fs::write(workspace.path().join(".dockerignore"), "ignored\n!.once\n").unwrap();
+    let source = format!(
+        r#"{}
+def host_which_optional(name):
+    return "/tools/docker"
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
+    if argv[1:3] == ["buildx", "version"]:
+        return "buildx v1\n"
+    if argv[1:3] == ["buildx", "inspect"]:
+        if "remote-worker" not in argv:
+            fail("builder selection lost")
+        return "Driver: remote\nBuildKit version: v0.29.0\n"
+    fail("unexpected command")
+def host_env(name):
+    return "/agent/socket" if name == "SSH_AUTH_SOCK" else ""
+ctx = {{
+    "label": {{"package": "", "name": "image", "id": "image"}},
+    "attr": {{"builder": "remote-worker", "cacheable": True, "pull": False,
+               "platform": "linux/arm64", "export_cache": True, "cache_from": ["registry.example.com/base:cache"]}},
+    "deps_by_role": {{"caches": [{{"layer_cache": ".once/out/base/layer-cache"}}]}},
+    "srcs": [], "capability": "build",
+}}
+result = repr(_dockerfile_buildkit_impl(ctx))
+"#,
+        dockerfile_prelude_source()
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        String::new(),
+        ".once/out/image".to_string(),
+    );
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    let provider = result.unwrap();
+    assert!(provider.contains("layer_cache"));
+    assert_eq!(store.actions.len(), 3);
+    let ignore = action_by_identifier(
+        &store,
+        "write_path:.once/out/image/build-definition/Dockerfile.dockerignore",
+    );
+    let Some(DeclaredActionOperation::WriteFile { bytes, .. }) = &ignore.operation else {
+        panic!("expected generated ignore file");
+    };
+    assert_eq!(bytes, b"ignored\n!.once\n\n**/.once\n");
+    assert!(ignore
+        .outputs
+        .contains(&".once/out/image/build-definition/Dockerfile.dockerignore".to_string()));
+    let action = action_by_identifier(&store, "image:dockerfile-build");
+    assert!(action.cacheable);
+    assert_eq!(
+        action.env.get("SSH_AUTH_SOCK").map(String::as_str),
+        Some("/agent/socket")
+    );
+    assert!(action
+        .inputs
+        .contains(&".once/out/base/layer-cache".to_string()));
+    assert!(action
+        .outputs
+        .contains(&".once/out/image/layer-cache".to_string()));
+    for expected in [
+        "type=registry,ref=registry.example.com/base:cache",
+        "type=local,src={{once.execution_root}}/.once/out/base/layer-cache",
+        "type=local,dest={{once.execution_root}}/.once/out/image/layer-cache,mode=max",
+    ] {
+        assert!(
+            action.argv.iter().any(|arg| arg == expected),
+            "{expected}: {:?}",
+            action.argv
+        );
+    }
+    assert!(action
+        .argv
+        .windows(2)
+        .any(|args| args == ["--builder", "remote-worker"]));
+}
+
+#[test]
+fn dockerfile_cache_policy_rejects_skipped_publication_and_shared_engine_state() {
+    let workspace = TempDir::new().unwrap();
+    std::fs::write(workspace.path().join("Dockerfile"), "FROM scratch\n").unwrap();
+    for (driver, attrs, expected) in [
+        ("remote", r#"{"cacheable": True}"#, "requires pull = false"),
+        (
+            "remote",
+            r#"{"cacheable": True, "pull": False}"#,
+            "explicit platform",
+        ),
+        (
+            "docker",
+            r#"{"cacheable": True, "pull": False}"#,
+            "direct archive export",
+        ),
+        (
+            "remote",
+            r#"{"cacheable": True, "pull": False, "cache_to": ["example.com/image:cache"]}"#,
+            "publishes remote state",
+        ),
+    ] {
+        let source = format!(
+            r#"{}
+def host_which_optional(name):
+    return "/tools/docker"
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
+    if argv[1:3] == ["buildx", "version"]:
+        return "buildx v1"
+    return "Driver: {driver}\nBuildKit version: v0.29.0\n"
+ctx = {{"label": {{"package": "", "name": "image", "id": "image"}}, "attr": {attrs}, "srcs": [], "capability": "build"}}
+result = repr(_dockerfile_buildkit_impl(ctx))
+"#,
+            dockerfile_prelude_source()
+        );
+        let store = AnalysisStore::new(
+            workspace.path().to_path_buf(),
+            String::new(),
+            ".once/out/image".to_string(),
+        );
+        let (_, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+        let error = result.unwrap_err();
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[test]
+fn dockerfile_cache_references_cannot_inject_exporter_options() {
+    for reference in ["", "image,src=/private", "type=local", "image\nother"] {
+        let source = format!(
+            "{}\nresult = repr(_dockerfile_cache_reference({reference:?}))",
+            dockerfile_prelude_source()
+        );
+        assert!(eval_prelude_source_to_repr(source).is_err(), "{reference}");
+    }
 }
 
 #[test]
@@ -1825,6 +2060,7 @@ result = repr(provider)
         output,
         sha256_output,
         format,
+        ..
     }) = &action.operation
     else {
         panic!("expected a portable archive action");
@@ -7931,6 +8167,8 @@ def host_which(name):
         return "/bin/sh"
     if name == "find":
         return "/usr/bin/find"
+    if name == "awk":
+        return "/usr/bin/awk"
     fail("unexpected host_which: " + name)
 
 def host_command(argv, env = None, merge_stderr = None):
@@ -8306,6 +8544,83 @@ result = repr(provider["test_info"]["command"]["argv"])
 }
 
 #[test]
+fn prelude_apple_test_bundle_embeds_dependency_resource_bundles() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let package_dir = workspace.path().join("tests/Sources");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        package_dir.join("DataTests.swift"),
+        "import XCTest\nfinal class DataTests: XCTestCase { func testData() {} }\n",
+    )
+    .unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_which(name):
+    return "/usr/bin/" + name
+
+def host_command(argv, env = None, merge_stderr = None):
+    if "--find" in argv:
+        if argv[len(argv) - 1] == "swiftc":
+            return "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc\n"
+        return "/toolchain/" + argv[len(argv) - 1] + "\n"
+    if "--show-sdk-path" in argv:
+        return "/sdks/iPhoneSimulator.sdk\n"
+    if "--show-sdk-platform-path" in argv:
+        return "/Platforms/iPhoneSimulator.platform\n"
+    if "--version" in argv:
+        return "Swift version test\n"
+    fail("unexpected host_command: " + str(argv))
+
+ctx = {{
+    "label": {{"package": "tests", "name": "DataTests", "id": "tests/DataTests"}},
+    "attr": {{"platform": "ios", "minimum_os": "17.0", "sdk_variant": "simulator"}},
+    "deps": [{{
+        "label_id": "data/Data",
+        "transitive_archives": [".once/out/data/Data.a"],
+        "transitive_resource_bundles": [{{
+            "path": ".once/out/data/Data_Data.bundle",
+            "files": [
+                ".once/out/data/Data_Data.bundle/Info.plist",
+                ".once/out/data/Data_Data.bundle/fixture.json",
+            ],
+            "label_id": "data/Data",
+        }}],
+    }}],
+    "srcs": ["Sources/**/*.swift"],
+    "build_dir": ".once/out/tests/DataTests",
+    "capability": "test",
+}}
+provider = _apple_test_bundle_impl(ctx)
+result = repr(provider["test_bundle_path"])
+"#
+    );
+    let store = AnalysisStore::new(
+        workspace.path().to_path_buf(),
+        "tests".to_string(),
+        ".once/out/tests/DataTests".to_string(),
+    );
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let bundle = out.unwrap().trim_matches('"').to_string();
+    let copy = action_by_identifier(
+        &store,
+        "apple_test_bundle_embed_resource_copy_Data_Data.bundle",
+    );
+    assert_eq!(copy.outputs, [format!("{bundle}/Data_Data.bundle")]);
+    assert!(copy
+        .inputs
+        .iter()
+        .any(|input| input.ends_with("Data_Data.bundle/fixture.json")));
+    let codesign = action_by_identifier(&store, "apple_test_bundle_codesign_DataTests");
+    assert!(codesign
+        .inputs
+        .iter()
+        .any(|input| input.ends_with("Data_Data.bundle/_CodeSignature/CodeResources")));
+}
+
+#[test]
 fn prelude_apple_ui_xctestrun_uses_the_runner_and_application_under_test() {
     let prelude = apple_prelude_source();
     let source = format!(
@@ -8357,6 +8672,8 @@ def host_which(name):
         return "/usr/bin/codesign"
     if name == "sh":
         return "/bin/sh"
+    if name == "awk":
+        return "/usr/bin/awk"
     fail("unexpected host_which: " + name)
 
 def host_command(argv, env = None, merge_stderr = None):
@@ -9464,7 +9781,7 @@ def workspace_root():
     return "/workspace"
 
 commands = []
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     commands.append([argv, env, cwd])
     return "{{\"argv\": []}}"
 
@@ -10768,6 +11085,107 @@ result = repr(_cargo_dependencies_impl(ctx))
         "{out}"
     );
     assert!(out.contains("cargo_dependencies/transitive-1.0.0"), "{out}");
+}
+
+#[test]
+fn prelude_cargo_workspace_dependency_names_keep_roles_and_renames_apart() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+metadata = {{
+    "workspace_members": ["path+file:///ws#app@0.1.0"],
+    "packages": [
+        {{"id": "path+file:///ws#app@0.1.0", "name": "app", "source": None}},
+        {{"id": "registry+index#foo@1.0.0", "name": "foo", "source": "registry+index"}},
+        {{"id": "registry+index#bar@1.0.0", "name": "bar", "source": "registry+index"}},
+    ],
+    "resolve": {{"nodes": [{{
+        "id": "path+file:///ws#app@0.1.0",
+        "deps": [
+            {{"pkg": "registry+index#foo@1.0.0", "name": "normal_name", "dep_kinds": [{{"kind": None}}]}},
+            {{"pkg": "registry+index#foo@1.0.0", "name": "build_name", "dep_kinds": [{{"kind": "build"}}]}},
+            {{"pkg": "registry+index#bar@1.0.0", "name": "test_name", "dep_kinds": [{{"kind": "dev"}}]}},
+        ],
+    }}]}},
+}}
+names = {{"registry+index#foo@1.0.0": "foo-1.0.0", "registry+index#bar@1.0.0": "bar-1.0.0"}}
+result = repr(_cargo_workspace_dependency_names(metadata, names, names))
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert!(
+        out.contains("\"deps\": {\"app\": [\"foo-1.0.0\"]}"),
+        "{out}"
+    );
+    assert!(
+        out.contains("\"dev_deps\": {\"app\": [\"bar-1.0.0\"]}"),
+        "{out}"
+    );
+    assert!(
+        out.contains("\"build_deps\": {\"app\": [\"foo-1.0.0\"]}"),
+        "{out}"
+    );
+    assert!(
+        out.contains("\"dep_aliases\": {\"app\": {\"foo-1.0.0\": \"normal_name\"}}"),
+        "{out}"
+    );
+    assert!(
+        out.contains("\"dev_dep_aliases\": {\"app\": {\"bar-1.0.0\": \"test_name\"}}"),
+        "{out}"
+    );
+    assert!(
+        out.contains("\"build_dep_aliases\": {\"app\": {\"foo-1.0.0\": \"build_name\"}}"),
+        "{out}"
+    );
+}
+
+#[test]
+fn prelude_cargo_dependencies_exposes_dev_and_build_roles_per_package() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{
+        "package": "",
+        "name": "cargo_dependencies",
+        "id": "cargo_dependencies",
+    }},
+    "attr": {{
+        "_cargo_resolved": True,
+        "_cargo_workspace_deps": {{"app": ["foo-1.0.0"]}},
+        "_cargo_workspace_dev_deps": {{"app": ["bar-1.0.0"]}},
+        "_cargo_workspace_build_deps": {{"app": ["foo-1.0.0"]}},
+        "_cargo_workspace_dep_aliases": {{"app": {{"foo-1.0.0": "normal_name"}}}},
+        "_cargo_workspace_build_dep_aliases": {{"app": {{"foo-1.0.0": "build_name"}}}},
+    }},
+    "deps": [
+        {{
+            "label_id": "cargo_dependencies/foo-1.0.0",
+            "package_name": "foo",
+            "crate_name": "foo",
+            "rlib": ".once/out/cargo_dependencies/foo-1.0.0/libfoo.rlib",
+        }},
+        {{
+            "label_id": "cargo_dependencies/bar-1.0.0",
+            "package_name": "bar",
+            "crate_name": "bar",
+            "rlib": ".once/out/cargo_dependencies/bar-1.0.0/libbar.rlib",
+        }},
+    ],
+    "srcs": [],
+}}
+provider = _cargo_dependencies_impl(ctx)
+result = repr([
+    [dep.get("extern_name") for dep in provider["workspace_deps"]["app"]],
+    [dep["crate_name"] for dep in provider["workspace_dev_deps"]["app"]],
+    [dep.get("extern_name") for dep in provider["workspace_build_deps"]["app"]],
+])
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+
+    assert_eq!(out, "[[\"normal_name\"], [\"bar\"], [\"build_name\"]]");
 }
 
 #[test]
@@ -13140,6 +13558,10 @@ result = repr([codesign["codesign_path"], codesign["env"]])
 /// not contain xcrun even when discovery went through it. This
 /// keeps cache keys identical whether or not the user pins a
 /// developer dir.
+///
+/// A Swift toolchain installed outside Xcode contributes the compiler
+/// but not the linker, so the resolved environment has to carry the
+/// directory where the linker actually lives.
 #[test]
 fn prelude_resolve_swiftc_fallback_returns_direct_invocation() {
     let prelude = apple_prelude_source();
@@ -13152,7 +13574,9 @@ def host_which(name):
 
 def host_command(argv, env = None, merge_stderr = None):
     if "--find" in argv and argv[len(argv) - 1] == "swiftc":
-        return "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc\n"
+        return "/Toolchains/swift-snapshot.xctoolchain/usr/bin/swiftc\n"
+    if "--find" in argv and argv[len(argv) - 1] == "ld":
+        return "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld\n"
     if "--show-sdk-path" in argv:
         return "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk\n"
     if "--version" in argv:
@@ -13165,6 +13589,7 @@ result = repr([
     swiftc["swiftc_path"],
     swiftc["sdk_path"],
     swiftc["env"],
+    swiftc["identity"],
 ])
 "#
     );
@@ -13174,13 +13599,25 @@ result = repr([
         "fallback argv must not include xcrun: {out}"
     );
     assert!(
-        out.contains("XcodeDefault.xctoolchain/usr/bin/swiftc"),
+        out.contains("swift-snapshot.xctoolchain/usr/bin/swiftc"),
         "{out}"
     );
     assert!(out.contains("iPhoneSimulator.sdk"), "{out}");
     assert!(
         out.contains("\"SWIFT_DETERMINISTIC_HASHING\": \"1\""),
         "{out}"
+    );
+    assert!(
+        out.contains(
+            "\"PATH\": \"/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin:/usr/bin:/bin\""
+        ),
+        "the linker directory must reach actions through PATH: {out}"
+    );
+    assert_eq!(
+        out.matches("XcodeDefault.xctoolchain/usr/bin:/usr/bin:/bin")
+            .count(),
+        2,
+        "the tool search path must also partition the action cache: {out}"
     );
 }
 
@@ -14207,7 +14644,10 @@ result = repr(True)
     assert_eq!(generator.argv[0], "/bin/sh");
     assert_eq!(generator.argv[1], "-c");
     assert_eq!(generator.outputs, [".once/out/App/App/Generated.swift"]);
-    assert_eq!(generator.create_dirs, [".once/out/App/App"]);
+    assert_eq!(
+        generator.create_dirs,
+        [".once/out/App/App", ".once/out/App/App/Intermediates"]
+    );
     assert!(generator.cacheable);
     assert!(!generator.inherit_parent_env);
     assert!(generator
@@ -14448,12 +14888,12 @@ phase = _xcode_shell_script_phases(
     "",
     "AppTests",
 )
-result = repr([phase["actions"], phase["resource_inputs"], phase["structured_resource_inputs"]])
+result = repr([len(phase["actions"]), phase["resource_inputs"], phase["structured_resource_inputs"]])
 "#
     );
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
-        r#"[[], ["Tests/Fixtures"], ["Tests/Fixtures"]]"#
+        r#"[1, ["Tests/Fixtures"], ["Tests/Fixtures"]]"#
     );
 }
 
@@ -14614,7 +15054,7 @@ result = repr(_xcode_test_plan_settings(ctx))
 }
 
 #[test]
-fn prelude_xcode_shell_phase_ignores_non_source_outputs() {
+fn prelude_xcode_shell_phase_preserves_non_source_outputs() {
     let prelude = xcode_prelude_source();
     let objects = serde_json::json!({
         "PHASE": {
@@ -14641,10 +15081,13 @@ phase = _xcode_shell_script_phases(
     "App",
     "App",
 )
-result = repr([phase["sources"], phase["actions"]])
+result = repr([phase["sources"], json_decode(phase["actions"][0])["outputs"]])
 "#
     );
-    assert_eq!(eval_prelude_source_to_repr(source).unwrap(), r"[[], []]");
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[[], [".once/out/App/App/Frameworks/Example.framework"]]"#
+    );
 }
 
 #[test]
@@ -14673,7 +15116,7 @@ def workspace_root():
 def host_file_exists(path):
     return path == "/workspace/Packages/Shared/Package.swift"
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     return '{{"name":"Shared","targets":[]}}'
 
 refs = {{
@@ -14704,7 +15147,7 @@ def glob(patterns):
 def host_which(name):
     return name
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     if argv == ["xcrun", "--find", "swift"]:
         return "swift"
     return '{{"name":"WMFComponents","platforms":[],"products":[{{"name":"WMFComponents","targets":["WMFComponents"]}}],"targets":[]}}'
@@ -14733,7 +15176,7 @@ def host_file_exists(path):
 def host_which(name):
     return name
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     if argv == ["xcrun", "--find", "swift"]:
         return "swift"
     return '{{"name":"WMFData","dependencies":[],"products":[],"targets":[]}}'
@@ -14909,6 +15352,25 @@ result = repr([
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
         r#"[[], ["-package-name", "Modern Package"]]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_lowers_package_default_isolation_settings() {
+    let prelude = xcode_prelude_source();
+    let source = format!(
+        r#"{prelude}
+main_actor = {{"settings": [{{"tool": "swift", "kind": {{"defaultIsolation": {{"_0": "MainActor"}}}}}}]}}
+nonisolated = {{"settings": [{{"tool": "swift", "kind": {{"defaultIsolation": {{"_0": "nonisolated"}}}}}}]}}
+result = repr([
+    _xcode_swift_package_target_flags(main_actor, "ios", "5")["swift"],
+    _xcode_swift_package_target_flags(nonisolated, "ios", "6")["swift"],
+])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["-default-isolation", "MainActor"], ["-default-isolation", "nonisolated"]]"#
     );
 }
 
@@ -15373,7 +15835,7 @@ def host_file_exists(path):
 def host_which(name):
     return name
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     if argv[0] == "sh":
         created[argv[6]] = True
         return ""
@@ -15669,27 +16131,6 @@ result = repr([
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
         r#"[["DEBUG", "FEATURE_X"], ["DEBUG=1", "MY_FLAG=2", "APP_GROUP=group.dev.once.App"]]"#
-    );
-}
-
-#[test]
-fn prelude_xcode_orders_swift_package_default_traits() {
-    let prelude = xcode_prelude_source();
-    let source = format!(
-        r#"{prelude}
-package = {{
-    "info": {{
-        "traits": [
-            {{"name": "default", "enabledTraits": ["FoundationNetworking", "Clocks", "Foundation", "Clocks"]}},
-        ],
-    }},
-}}
-result = repr(_xcode_swift_package_default_traits(package))
-"#
-    );
-    assert_eq!(
-        eval_prelude_source_to_repr(source).unwrap(),
-        r#"["Clocks", "Foundation", "FoundationNetworking"]"#
     );
 }
 
@@ -16758,7 +17199,7 @@ def host_arch():
 def host_which(name):
     return "/usr/bin/" + name
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     tool = argv[0].split("/")[-1]
     if tool == "realpath":
         return argv[1] + "\n"
@@ -16966,7 +17407,7 @@ def host_arch():
 def host_which(name):
     return "/usr/bin/" + name
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     tool = argv[0].split("/")[-1]
     if tool == "plutil":
         return '{{"AvailableLibraries": [{{"LibraryIdentifier": "ios-arm64_x86_64-simulator", "SupportedPlatform": "ios", "SupportedPlatformVariant": "simulator", "SupportedArchitectures": ["arm64", "x86_64"]}}]}}'
@@ -17280,7 +17721,7 @@ def workspace_root():
 def host_which(name):
     return name
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     if argv[0] == "find":
         return "/workspace/Other.xcworkspace/xcshareddata/swiftpm/Package.resolved\n/workspace/ProtonVPN.xcworkspace/xcshareddata/swiftpm/Package.resolved"
     fail("unexpected host_command: " + str(argv))
@@ -17481,7 +17922,7 @@ fn prelude_xcode_workspace_resolver_lowers_native_targets() {
 def workspace_root():
     return ""
 
-def host_command(argv, env = None, cwd = None, merge_stderr = None):
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     return {pbxproj:?}
 
 def host_file_exists(path):
@@ -17490,7 +17931,7 @@ def host_file_exists(path):
 def host_file_read(path):
     return ""
 
-def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, sdk_variant, configuration = "Debug", lazy_products = {{}}, lazy_dependency = "", target_prefix = "SwiftPackage"):
+def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, sdk_variant, configuration = "Debug", lazy_products = {{}}, lazy_dependency = "", target_prefix = "SwiftPackage", root_identities = None):
     return {{
         "specs": [{{
             "name": "XcodePackage_swift-argument-parser_changelog-authors",
@@ -17534,9 +17975,17 @@ result = repr([
 "#
     );
 
-    let out = eval_prelude_source_to_repr(source).unwrap();
+    let out = eval_prelude_source_to_repr(source.clone()).unwrap();
     assert_eq!(
         out,
         r#"[["App"], ["AppTests"], ["apple_framework", "apple_application", "apple_test_bundle"], ["./Feature"], ["./App"], ["Source/Core/Feature.swift"], {"Source/Core/Feature.swift": "[\"-DNDEBUG\",\"-fno-objc-arc\"]"}, ["App.swift"], "dev.once.App", "CustomAppModule", "TEAM123", ["iphone", "ipad"], "16.0", True]"#
+    );
+    let explicit = source.replace(
+        "\"attr\": {\"project\": \"App.xcodeproj\"}",
+        "\"attr\": {\"project\": \"App.xcodeproj\", \"explicit_modules\": True, \"dependency_check\": \"error\"}",
+    ) + "\nresult = repr([all([spec[\"attrs\"].get(\"explicit_modules\") and spec[\"attrs\"].get(\"dependency_check\") == \"error\" for spec in graph[\"targets\"]]), specs[\"App\"][\"attrs\"][\"_declared_deps\"]])\n";
+    assert_eq!(
+        eval_prelude_source_to_repr(explicit).unwrap(),
+        r#"[True, ["./Feature"]]"#
     );
 }

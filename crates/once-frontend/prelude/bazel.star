@@ -315,7 +315,7 @@ def _bazel_prepare_shadow(ctx, bazel, workspace_abs):
     shadow_abs = workspace_abs + "/" + _bazel_shadow_dir(ctx)
     # Rebuild the shadow deterministically on each analysis pass so an old
     # layout cannot survive across queries: remove, then materialize.
-    host_command(["/bin/sh", "-c",
+    host_command([host_which("sh"), "-c",
         "rm -rf " + _shell_quote(shadow_abs) +
         " && mkdir -p " + _shell_quote(shadow_abs + "/bazel-out") +
         " && ln -sfn " + _shell_quote(output_base + "/external") + " " + _shell_quote(shadow_abs + "/external"),
@@ -337,7 +337,7 @@ def _bazel_link_workspace_sources(shadow_abs, workspace_abs):
     # symlink test is what makes the skip safe: a real directory that happens
     # to be named `bazel-rules/` (loaded by `//bazel-rules:defs.bzl`) is not
     # a convenience link and is mirrored like any other source directory.
-    host_command(["/bin/sh", "-c",
+    host_command([host_which("sh"), "-c",
         "for entry in \"" + workspace_abs + "\"/*; do " +
         "  name=$(basename \"$entry\");" +
         "  case \"$name\" in .once|external) continue ;; esac;" +
@@ -372,6 +372,12 @@ def _bazel_bazel_flags():
         "--experimental_convenience_symlinks=ignore",
     ]
 
+# A `deps()` aquery for a real workspace carries one record per transitive
+# action with its full argv, so its JSON is routinely tens of mebibytes and
+# grows with the dependency closure. Raise the discovery bound for this one
+# command instead of lowering it for every host probe.
+_BAZEL_AQUERY_MAX_OUTPUT_BYTES = 512 * 1024 * 1024
+
 def _bazel_aquery(ctx, bazel, workspace_abs):
     label = ctx["attr"]["bazel_label"]
     # `--include_file_write_contents` is what lets Once own the FileWrite,
@@ -388,6 +394,7 @@ def _bazel_aquery(ctx, bazel, workspace_abs):
         argv,
         cwd = workspace_abs,
         env = _bazel_env(),
+        max_output_bytes = _BAZEL_AQUERY_MAX_OUTPUT_BYTES,
     )
     return _bazel_parse_aquery(text)
 
@@ -468,7 +475,7 @@ def _bazel_emit_symlink_action(ctx, action, index, shadow_rel):
     parent_dirs = [shadow_rel + "/" + parent] if parent else []
     target = _bazel_relative_target(source, destination)
     run_action(
-        argv = ["/bin/sh", "-c", "ln -sfn " + _shell_quote(target) + " " + _shell_quote(destination)],
+        argv = [host_which("sh"), "-c", "ln -sfn " + _shell_quote(target) + " " + _shell_quote(destination)],
         inputs = [],
         outputs = [],
         cwd = shadow_rel,
@@ -494,7 +501,7 @@ def _bazel_emit_symlink_tree_action(ctx, action, index, shadow_rel):
     # is the shadow root, so the argv only carries the tail of the path.
     script_tail = ".bazel-tree-scripts/" + str(index) + ".sh"
     script_workspace_path = shadow_rel + "/" + script_tail
-    lines = ["#!/bin/sh", "set -e", "mkdir -p " + _shell_quote(destination)]
+    lines = ["set -e", "mkdir -p " + _shell_quote(destination)]
     for input_path in action["inputs"]:
         entry = destination + "/" + input_path
         parent = _parent_dir(entry)
@@ -504,7 +511,7 @@ def _bazel_emit_symlink_tree_action(ctx, action, index, shadow_rel):
         lines.append("ln -sfn " + _shell_quote(target) + " " + _shell_quote(entry))
     write_path(script_workspace_path, "\n".join(lines) + "\n")
     run_action(
-        argv = ["/bin/sh", script_tail],
+        argv = [host_which("sh"), script_tail],
         inputs = [],
         outputs = [],
         cwd = shadow_rel,

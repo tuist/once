@@ -1,0 +1,60 @@
+[[target]]
+name = "alpine"
+kind = "oci_pull"
+
+[target.attrs]
+image = "docker.io/library/alpine"
+digest = "sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659"
+
+[[target]]
+name = "hello"
+kind = "go_binary"
+srcs = ["main.go"]
+
+[target.attrs]
+goos = "linux"
+cgo = false
+strip = true
+
+[[target]]
+name = "hello_layer"
+kind = "oci_layer"
+
+[target.dependencies]
+programs = ["hello"]
+
+[[target]]
+name = "hello_image"
+kind = "oci_image"
+
+[target.dependencies]
+base = ["alpine"]
+layers = ["hello_layer"]
+
+[target.attrs]
+tag = "once-hello:latest"
+
+[[target]]
+name = "hello_load"
+kind = "oci_load"
+
+[target.dependencies]
+image = ["hello_image"]
+
+[[target]]
+name = "hello_push"
+kind = "oci_push"
+
+[target.dependencies]
+image = ["hello_image"]
+
+[target.attrs]
+repository = "registry.example.com/team/hello"
+remote_tags = ["latest"]
+
+[[target]]
+name = "hello_index"
+kind = "oci_index"
+
+[target.dependencies]
+images = ["hello_image"]

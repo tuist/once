@@ -8,6 +8,19 @@ Once works locally without configuration. Infrastructure becomes useful when
 you want to run an action on another machine or share a cached result with
 another developer or coding agent.
 
+## Create And Connect A Project
+
+Provision a remote project and bind this repository to it in one command:
+
+```sh
+once connect --provider tuist --create
+```
+
+Once signs you in when needed, creates the project with the provider, and
+records the binding in the repository root `once.toml`. Read
+[Connect A Project](/guide/infrastructure/connect) for account selection,
+binding an existing project, and previewing the write.
+
 ## Run An Action Somewhere Else
 
 Choose a named execution provider in the repository root `once.toml`:

@@ -3,9 +3,7 @@ use std::env;
 use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::fs::OpenOptions;
-use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,8 +29,12 @@ use once_frontend::GraphTarget;
 use serde::Serialize;
 use tokio::process::Command;
 
+use super::output_state;
 use super::source_digest_cache::SourceDigestCache;
-use super::{AvailableInput, BuildOutcome};
+use super::{AvailableInput, BuildOutcome, PerActionOutcome};
+
+mod runner;
+mod scheduling;
 
 const FAILURE_OUTPUT_LIMIT: usize = 16 * 1024;
 const EVIDENCE_FLUSH_BATCH_SIZE: usize = 128;
@@ -62,6 +64,15 @@ struct DeclaredActionOutcome {
     cache_state: EvidenceCacheState,
     result: ActionResult,
     evidence_record: Option<EvidenceRecord>,
+    /// Wall time spent hashing inputs, writing arg files, and
+    /// building the action digest (the "prepare" phase). Rendered as
+    /// a distinct sub-span so cache-hit runs still show what
+    /// consumed the wall clock instead of a 1 ms dash.
+    prepare_ms: i64,
+    /// Wall time spent inside cache probe + (on a miss) command
+    /// execution. On a hit this is dominated by the remote `GetActionResult`
+    /// round-trip; on a miss it's the command itself plus output upload.
+    execute_ms: i64,
 }
 
 struct DeclaredActionsState {
@@ -75,6 +86,7 @@ struct DeclaredActionsState {
     result: ActionResult,
     cached_results: Vec<ActionResult>,
     evidence_records: Vec<EvidenceRecord>,
+    per_action_outcomes: Vec<PerActionOutcome>,
 }
 
 impl DeclaredActionsState {
@@ -95,6 +107,7 @@ impl DeclaredActionsState {
             },
             cached_results: Vec::new(),
             evidence_records: Vec::new(),
+            per_action_outcomes: Vec::new(),
         }
     }
 
@@ -112,13 +125,24 @@ impl DeclaredActionsState {
         input_digests
     }
 
-    fn record(&mut self, outcome: DeclaredActionOutcome, streams: bool) {
+    fn record(
+        &mut self,
+        outcome: DeclaredActionOutcome,
+        streams: bool,
+        per_action: PerActionOutcome,
+    ) {
+        self.per_action_outcomes.push(per_action);
         self.prior_actions_digest = Some(extend_prior_actions_digest(
             self.prior_actions_digest,
             self.action_digests.len(),
             outcome.digest,
         ));
         self.action_digests.push(outcome.digest);
+        output_state::prune_replaced_descendants(
+            &mut self.available_inputs,
+            &outcome.result.outputs,
+        );
+        output_state::prune_replaced_descendants(&mut self.result.outputs, &outcome.result.outputs);
         self.available_inputs
             .extend(outcome.result.outputs.iter().map(|(path, digest)| {
                 (
@@ -176,6 +200,7 @@ impl DeclaredActionsState {
             cache_state,
             result: self.result,
             cached_results: self.cached_results,
+            per_action_outcomes: self.per_action_outcomes,
         }
     }
 }
@@ -196,6 +221,14 @@ struct DeclaredActionContext<'a> {
     record_success_evidence: bool,
     resources: &'a Arc<ResourcePool>,
     output_observer: Option<&'a dyn ActionOutputObserver>,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+struct ActionExecutionFailure {
+    message: String,
+    exit_code: i32,
+    was_cached: bool,
 }
 
 struct DeclaredActionFailure<'a> {
@@ -246,6 +279,25 @@ pub(super) async fn validate_declared_actions(
     let mut validations = Vec::new();
     for (index, declared) in actions.into_iter().enumerate() {
         let is_selected = selected_index.is_none_or(|selected| selected == index);
+        if matches!(
+            declared.operation,
+            Some(DeclaredActionOperation::ExpandActions { .. })
+        ) {
+            if !is_selected {
+                continue;
+            }
+            validations.push(DeclaredActionValidation {
+                index,
+                identifier: declared.identifier.unwrap_or_default(),
+                valid: true,
+                exit_code: 0,
+                diagnostics: Vec::new(),
+                limitations: vec![
+                    "Deferred actions require their planning inputs to be built first.".to_string(),
+                ],
+            });
+            continue;
+        }
         let mut input_action_digests = Vec::new();
         if declared.depends_on_prior_actions {
             if let Some(digest) = prior_actions_digest {
@@ -367,89 +419,7 @@ pub(super) async fn validate_declared_actions(
     Ok(validations)
 }
 
-/// Materialise each declared action through the action cache, then
-/// fold the analysis provider directly into the build outcome.
-///
-/// Returns a boxed future intentionally because the concrete future
-/// captures declared action state and cache execution state. Boxing at
-/// this boundary keeps parent graph futures small enough for
-/// `clippy::large_futures` and centralizes the allocation.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-pub(super) fn run_declared_actions<'a>(
-    workspace: &'a Path,
-    cache: &'a CacheProvider,
-    module_source_digest: Digest,
-    target: &'a GraphTarget,
-    capability: &'a str,
-    analysis: AnalysisResult,
-    dep_action_digests: &'a [(String, Digest)],
-    dependency_inputs: &'a BTreeMap<String, AvailableInput>,
-    tool_paths: &'a BTreeMap<String, String>,
-    source_digest_cache: Option<&'a SourceDigestCache>,
-    sandbox: SandboxMode,
-    resources: &'a Arc<ResourcePool>,
-    output_observer: Option<&'a dyn ActionOutputObserver>,
-) -> Pin<Box<dyn Future<Output = Result<BuildOutcome>> + Send + 'a>> {
-    Box::pin(async move {
-        let AnalysisResult {
-            mut actions,
-            provider,
-            ..
-        } = analysis;
-        expose_target_tools(workspace, target, &mut actions, Some(tool_paths)).await?;
-        tracing::trace!(
-            target = %target.label.id,
-            declared_actions = actions.len(),
-            dep_action_digests = dep_action_digests.len(),
-            "running declared graph actions"
-        );
-        let mut state = DeclaredActionsState::new(dependency_inputs);
-        // A single-action target is fully represented by the caller's
-        // capability-level record. Multi-action targets need per-action
-        // success evidence so individual streams and outputs stay visible.
-        let record_success_evidence = actions.len() > 1;
-
-        for (index, declared) in actions.into_iter().enumerate() {
-            state.outputs.extend(declared.outputs.iter().cloned());
-            let input_action_digests = state.input_action_digests(&declared, dep_action_digests);
-            let outcome = Box::pin(run_declared_action(DeclaredActionRun {
-                workspace,
-                cache,
-                module_source_digest,
-                target_id: &target.label.id,
-                capability,
-                index,
-                declared,
-                input_action_digests: &input_action_digests,
-                available_inputs: &state.available_inputs,
-                source_digest_cache,
-                prior_cached_results: &state.cached_results,
-                record_success_evidence,
-                sandbox,
-                resources,
-                output_observer,
-            }))
-            .await;
-            let outcome = match outcome {
-                Ok(outcome) => outcome,
-                Err(error) => {
-                    let records = state.take_evidence_records();
-                    crate::commands::evidence::append_records(workspace, &records).await;
-                    return Err(error);
-                }
-            };
-            state.record(outcome, !record_success_evidence);
-            if state.evidence_records.len() >= EVIDENCE_FLUSH_BATCH_SIZE {
-                let records = state.take_evidence_records();
-                crate::commands::evidence::append_records(workspace, &records).await;
-            }
-        }
-
-        let records = state.take_evidence_records();
-        crate::commands::evidence::append_records(workspace, &records).await;
-        Ok(state.finish(&target.label.id, provider))
-    })
-}
+pub(super) use runner::run_declared_actions;
 
 fn extend_prior_actions_digest(
     prior: Option<Digest>,
@@ -639,6 +609,7 @@ fn aggregate_declared_action_cache_state(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActionOutcome> {
     let DeclaredActionRun {
         workspace,
@@ -675,6 +646,7 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         outputs = declared.outputs.len(),
         "preparing declared graph action"
     );
+    let prepare_started = std::time::Instant::now();
     materialize_declared_arg_files(workspace, &declared.arg_files).with_context(|| {
         format!("writing arg files for action {index} for {target_id} ({identifier_for_error})")
     })?;
@@ -688,6 +660,7 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         sandbox,
     )
     .with_context(|| format!("building action {index} for {target_id} ({identifier_for_error})"))?;
+    let prepare_ms = i64::try_from(prepare_started.elapsed().as_millis()).unwrap_or(i64::MAX);
     let action = prepared.action;
     let context = DeclaredActionContext {
         workspace,
@@ -707,7 +680,8 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         output_observer,
     };
 
-    if cacheable {
+    let execute_started = std::time::Instant::now();
+    let outcome = if cacheable {
         run_cacheable_declared_action(context, action, &declared).await
     } else {
         materialize_prior_cached_results(
@@ -736,7 +710,13 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
                 format!("preparing action {index} for {target_id} ({identifier_for_error})")
             })?;
         run_uncacheable_declared_action(context, action, declared.inherit_parent_env).await
-    }
+    };
+    let execute_ms = i64::try_from(execute_started.elapsed().as_millis()).unwrap_or(i64::MAX);
+    outcome.map(|mut o| {
+        o.prepare_ms = prepare_ms;
+        o.execute_ms = execute_ms;
+        o
+    })
 }
 
 async fn prepare_declared_command_paths(workspace: &Path, declared: &DeclaredAction) -> Result<()> {
@@ -788,9 +768,8 @@ async fn run_cacheable_declared_action(
             &outcome.result,
         )
         .await;
-        anyhow::bail!(
-            "{}",
-            declared_action_failure_message(DeclaredActionFailure {
+        return Err(ActionExecutionFailure {
+            message: declared_action_failure_message(DeclaredActionFailure {
                 cache: context.cache,
                 identifier: context.identifier,
                 index: context.index,
@@ -800,8 +779,11 @@ async fn run_cacheable_declared_action(
                 arg_files: context.arg_files,
                 result: &outcome.result,
             })
-            .await
-        );
+            .await,
+            exit_code,
+            was_cached: matches!(outcome.cache, once_core::CacheState::Hit),
+        }
+        .into());
     }
     let cache_tag = crate::commands::util::cache_tag(outcome.cache);
     let cache_state = EvidenceCacheState::from(outcome.cache);
@@ -834,6 +816,10 @@ async fn run_cacheable_declared_action(
         cache_state,
         result: outcome.result,
         evidence_record,
+        // The outer `run_declared_action` fills these in after
+        // observing prepare + execute spans from the outside.
+        prepare_ms: 0,
+        execute_ms: 0,
     })
 }
 
@@ -1082,7 +1068,7 @@ async fn materialize_available_inputs(
         .inputs
         .iter()
         .filter_map(|input| enclosing_available_output(available_inputs, input))
-        .filter(|(_, input)| !input.same_target && !input.materialized)
+        .filter(|(_, input)| !input.materialized)
         .map(|(path, input)| (path.clone(), input.blob_digest))
         .collect::<BTreeMap<_, _>>();
     if outputs.is_empty() {
@@ -1135,9 +1121,8 @@ async fn run_uncacheable_declared_action(
             &result,
         )
         .await;
-        anyhow::bail!(
-            "{}",
-            declared_action_failure_message(DeclaredActionFailure {
+        return Err(ActionExecutionFailure {
+            message: declared_action_failure_message(DeclaredActionFailure {
                 cache: context.cache,
                 identifier: context.identifier,
                 index: context.index,
@@ -1147,8 +1132,11 @@ async fn run_uncacheable_declared_action(
                 arg_files: context.arg_files,
                 result: &result,
             })
-            .await
-        );
+            .await,
+            exit_code,
+            was_cached: false,
+        }
+        .into());
     }
     tracing::debug!(
         target = %context.target_id,
@@ -1178,6 +1166,8 @@ async fn run_uncacheable_declared_action(
         cache_state: EvidenceCacheState::Bypass,
         result,
         evidence_record,
+        prepare_ms: 0,
+        execute_ms: 0,
     })
 }
 
@@ -1842,6 +1832,9 @@ fn declared_arg_file_format_name(format: DeclaredArgFileFormat) -> &'static str 
 #[allow(clippy::too_many_lines)]
 fn operation_to_action(operation: DeclaredActionOperation, input_digest: Digest) -> Result<Action> {
     Ok(match operation {
+        DeclaredActionOperation::ExpandActions { .. } => {
+            anyhow::bail!("deferred actions must be expanded before execution")
+        }
         DeclaredActionOperation::WriteFile { path, bytes } => Action::WriteFile {
             path: workspace_path(&path, "write_path path")?,
             bytes,
@@ -1931,11 +1924,13 @@ fn operation_to_action(operation: DeclaredActionOperation, input_digest: Digest)
             entries,
             output,
             sha256_output,
+            uncompressed_sha256_output,
             format,
         } => archive_to_action(
             entries,
             &output,
             sha256_output.as_deref(),
+            uncompressed_sha256_output.as_deref(),
             format,
             input_digest,
         )?,
@@ -1958,6 +1953,7 @@ fn archive_to_action(
     entries: Vec<once_frontend::analysis::DeclaredArchiveEntry>,
     output: &str,
     sha256_output: Option<&str>,
+    uncompressed_sha256_output: Option<&str>,
     format: DeclaredArchiveFormat,
     input_digest: Digest,
 ) -> Result<Action> {
@@ -1969,6 +1965,7 @@ fn archive_to_action(
                     DeclaredArchiveEntryKind::File => ArchiveEntryKind::File,
                     DeclaredArchiveEntryKind::Directory => ArchiveEntryKind::Directory,
                     DeclaredArchiveEntryKind::Tree => ArchiveEntryKind::Tree,
+                    DeclaredArchiveEntryKind::Symlink => ArchiveEntryKind::Symlink,
                 },
                 source: entry
                     .source
@@ -1976,6 +1973,7 @@ fn archive_to_action(
                     .map(|source| workspace_path(source, "write_archive entry source"))
                     .transpose()?,
                 path: entry.path,
+                target: entry.target,
                 mode: entry.mode,
                 directory_mode: entry.directory_mode,
                 owner_id: entry.owner_id,
@@ -1990,8 +1988,12 @@ fn archive_to_action(
         sha256_output: sha256_output
             .map(|path| workspace_path(path, "write_archive sha256_output"))
             .transpose()?,
+        uncompressed_sha256_output: uncompressed_sha256_output
+            .map(|path| workspace_path(path, "write_archive uncompressed_sha256_output"))
+            .transpose()?,
         format: match format {
             DeclaredArchiveFormat::Tar => ArchiveFormat::Tar,
+            DeclaredArchiveFormat::TarGz => ArchiveFormat::TarGz,
         },
         input_digest: Some(input_digest),
     })
@@ -2470,6 +2472,12 @@ mod tests {
             Arc::new(ResourcePool::new(once_core::ResourceLimits::new(256, 0)))
         });
         &RESOURCES
+    }
+
+    fn test_workers() -> &'static crate::bus_events::WorkerSlots {
+        static WORKERS: std::sync::LazyLock<crate::bus_events::WorkerSlots> =
+            std::sync::LazyLock::new(|| crate::bus_events::WorkerSlots::new(256));
+        &WORKERS
     }
 
     #[test]
@@ -3172,6 +3180,7 @@ mod tests {
         };
 
         let outcome = run_declared_actions(
+            None,
             workspace.path(),
             &cache,
             module_digest(),
@@ -3185,6 +3194,8 @@ mod tests {
             SandboxMode::default(),
             test_resources(),
             None,
+            None,
+            test_workers(),
         )
         .await
         .unwrap();
@@ -3245,6 +3256,55 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn deferred_actions_restore_cached_planning_inputs_before_expansion() {
+        let workspace = tempfile::TempDir::new().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cache")));
+        let engine = once_frontend::analysis::AnalysisEngine::from_source(r#"
+def finish(ctx):
+    content = host_file_read(workspace_root() + "/scan.json")
+    write_path(ctx["outputs"][0], content)
+def impl(ctx):
+    write_path("scan.json", "planned result")
+    expand_actions(implementation = "finish", inputs = ["scan.json"], outputs = ["result.txt"], args = {})
+    return {}
+demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
+"#).unwrap();
+        let target = cached_test_target();
+        for expected in [EvidenceCacheState::Miss, EvidenceCacheState::Hit] {
+            let analysis = engine
+                .analyze_target(&target, workspace.path(), &[])
+                .unwrap();
+            let outcome = run_declared_actions(
+                Some(&engine),
+                workspace.path(),
+                &cache,
+                module_digest(),
+                &target,
+                "build",
+                analysis,
+                &[],
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                None,
+                SandboxMode::default(),
+                test_resources(),
+                None,
+                None,
+                test_workers(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(outcome.cache_state, expected);
+            assert_eq!(
+                std::fs::read_to_string(workspace.path().join("scan.json")).unwrap(),
+                "planned result"
+            );
+            assert!(outcome.result.outputs.contains_key("result.txt"));
+            std::fs::remove_file(workspace.path().join("scan.json")).unwrap();
+        }
+    }
+
     fn cached_test_analysis(dependency_path: &str) -> AnalysisResult {
         AnalysisResult {
             actions: vec![DeclaredAction {
@@ -3299,6 +3359,7 @@ mod tests {
 
         // First run misses the cache and executes the command.
         let first = run_declared_actions(
+            None,
             workspace.path(),
             &cache,
             module_digest(),
@@ -3312,6 +3373,8 @@ mod tests {
             SandboxMode::default(),
             test_resources(),
             None,
+            None,
+            test_workers(),
         )
         .await
         .unwrap();
@@ -3341,6 +3404,7 @@ mod tests {
         // Second run hits the cache. The command never executes, so its
         // clean_paths must not delete the untracked file.
         let second = run_declared_actions(
+            None,
             workspace.path(),
             &cache,
             module_digest(),
@@ -3354,6 +3418,8 @@ mod tests {
             SandboxMode::default(),
             test_resources(),
             None,
+            None,
+            test_workers(),
         )
         .await
         .unwrap();
@@ -3405,6 +3471,7 @@ mod tests {
         ];
 
         let outcome = run_declared_actions(
+            None,
             workspace.path(),
             &cache,
             module_digest(),
@@ -3418,6 +3485,8 @@ mod tests {
             SandboxMode::default(),
             test_resources(),
             None,
+            None,
+            test_workers(),
         )
         .await
         .unwrap();
@@ -3457,6 +3526,7 @@ mod tests {
         ];
 
         run_declared_actions(
+            None,
             workspace.path(),
             &cache,
             module_digest(),
@@ -3470,6 +3540,8 @@ mod tests {
             SandboxMode::default(),
             test_resources(),
             None,
+            None,
+            test_workers(),
         )
         .await
         .unwrap();
@@ -3494,6 +3566,7 @@ mod tests {
         };
 
         let first = run_declared_actions(
+            None,
             workspace.path(),
             &cache,
             module_digest(),
@@ -3507,6 +3580,8 @@ mod tests {
             SandboxMode::default(),
             test_resources(),
             None,
+            None,
+            test_workers(),
         )
         .await
         .unwrap();
@@ -3516,6 +3591,7 @@ mod tests {
         std::fs::remove_file(workspace.path().join(".once/out/out.txt")).unwrap();
 
         let second = run_declared_actions(
+            None,
             workspace.path(),
             &cache,
             module_digest(),
@@ -3529,6 +3605,8 @@ mod tests {
             SandboxMode::default(),
             test_resources(),
             None,
+            None,
+            test_workers(),
         )
         .await
         .unwrap();
@@ -3539,6 +3617,7 @@ mod tests {
         );
 
         let third = run_declared_actions(
+            None,
             workspace.path(),
             &cache,
             module_digest(),
@@ -3552,6 +3631,8 @@ mod tests {
             SandboxMode::default(),
             test_resources(),
             None,
+            None,
+            test_workers(),
         )
         .await
         .unwrap();
@@ -3714,6 +3795,7 @@ mod tests {
         };
 
         let outcome = run_declared_actions(
+            None,
             workspace.path(),
             &cache,
             module_digest(),
@@ -3727,6 +3809,8 @@ mod tests {
             SandboxMode::default(),
             test_resources(),
             None,
+            None,
+            test_workers(),
         )
         .await
         .unwrap();
@@ -3838,6 +3922,7 @@ mod tests {
         };
 
         let first = run_declared_actions(
+            None,
             workspace.path(),
             &cache,
             module_digest(),
@@ -3851,12 +3936,15 @@ mod tests {
             SandboxMode::default(),
             test_resources(),
             None,
+            None,
+            test_workers(),
         )
         .await
         .unwrap();
         assert_eq!(first.cache_state, EvidenceCacheState::Miss);
 
         let second = run_declared_actions(
+            None,
             workspace.path(),
             &cache,
             module_digest(),
@@ -3870,6 +3958,8 @@ mod tests {
             SandboxMode::default(),
             test_resources(),
             None,
+            None,
+            test_workers(),
         )
         .await
         .unwrap();
@@ -4363,5 +4453,91 @@ mod tests {
 
         assert_eq!(original, same);
         assert_ne!(original, reordered);
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn emits_each_action_before_a_later_action_fails() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        std::fs::write(workspace.path().join("input.txt"), "input").unwrap();
+        let target = cached_test_target();
+        let mut analysis = cached_test_analysis("input.txt");
+        analysis.actions[0].identifier = Some("prepare".to_string());
+        let mut failure = analysis.actions[0].clone();
+        failure.identifier = Some("compile".to_string());
+        failure.argv = vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "exit 7".to_string(),
+        ];
+        analysis.actions.push(failure);
+        let bus = once_core::RunEventBus::new(8);
+        let mut rx = bus.subscribe();
+        let error = run_declared_actions(
+            None,
+            workspace.path(),
+            &cache,
+            module_digest(),
+            &target,
+            "build",
+            analysis,
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            None,
+            SandboxMode::default(),
+            test_resources(),
+            None,
+            Some(&bus),
+            test_workers(),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("exit code 7"));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            once_core::RunEvent::ActionAttemptStarted {
+                action_index: 0,
+                attempt: 1,
+                ..
+            }
+        ));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            once_core::RunEvent::ActionAttemptCompleted {
+                action_index: 0,
+                attempt: 1,
+                exit_code: 0,
+                ..
+            }
+        ));
+        assert!(
+            matches!(rx.try_recv().unwrap(), once_core::RunEvent::ActionCompleted {
+            action_index: 0, identifier: Some(id), exit_code: 0, selected_attempt: 1, ..
+        } if id == "prepare")
+        );
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            once_core::RunEvent::ActionAttemptStarted {
+                action_index: 1,
+                attempt: 1,
+                ..
+            }
+        ));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            once_core::RunEvent::ActionAttemptCompleted {
+                action_index: 1,
+                attempt: 1,
+                exit_code: 7,
+                ..
+            }
+        ));
+        assert!(
+            matches!(rx.try_recv().unwrap(), once_core::RunEvent::ActionCompleted {
+            action_index: 1, identifier: Some(id), exit_code: 7, selected_attempt: 1, ..
+        } if id == "compile")
+        );
+        assert!(rx.try_recv().is_err());
     }
 }

@@ -25,7 +25,6 @@ once-frontend = { version = "0.0.0", path = "crates/once-frontend" }
 once-host-tree = { version = "0.0.0", path = "crates/once-host-tree" }
 
 anyhow = "1"
-axum = "0.8"
 bazel-remote-apis = "0.27"
 base64 = "0.22"
 blake3 = "1"
@@ -41,7 +40,7 @@ notify = "8.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
-sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+sysinfo = { version = "0.39.6", default-features = false, features = ["system", "network"] }
 starlark = "0.14.2"
 toml = "1.0"
 toon-rust = { package = "toon-format", version = "0.5", default-features = false }
@@ -62,6 +61,7 @@ uuid = { version = "1", features = ["v7"] }
 walkdir = "2"
 zstd = "0.13"
 tar = "0.4"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [workspace.lints.rust]

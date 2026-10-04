@@ -3,6 +3,67 @@ use std::sync::atomic::Ordering;
 
 use super::{KnownChanges, SourceDigestCache};
 
+#[tokio::test]
+async fn restoring_a_tree_preserves_a_matching_newer_child() {
+    use once_cas::{CacheProvider, Cas};
+    use once_core::{Action, CopyPathMode, WorkspacePath};
+
+    let workspace = tempfile::tempdir().unwrap();
+    let cache = CacheProvider::Local(Cas::open(workspace.path().join("cache")));
+    let digests = SourceDigestCache::open(workspace.path());
+    std::fs::create_dir(workspace.path().join("seed")).unwrap();
+    std::fs::write(workspace.path().join("seed/file"), "old").unwrap();
+    let tree = Action::CopyPath {
+        sources: vec![WorkspacePath::try_from("seed").unwrap()],
+        destination: WorkspacePath::try_from("out/tree").unwrap(),
+        mode: CopyPathMode::Tree,
+        input_digest: None,
+    };
+    let mut result = once_core::run_uncached(&tree, workspace.path(), &cache, false)
+        .await
+        .unwrap();
+    let original_tree = result.clone();
+    digests.record_outputs(&result, workspace.path());
+    let child = Action::WriteFile {
+        path: WorkspacePath::try_from("out/tree/file").unwrap(),
+        bytes: b"new".to_vec(),
+        input_digest: None,
+    };
+    let updated = once_core::run_uncached(&child, workspace.path(), &cache, false)
+        .await
+        .unwrap();
+    digests.record_outputs(&updated, workspace.path());
+    result.outputs.extend(updated.outputs.clone());
+    digests
+        .materialize_outputs(&result, workspace.path(), &cache)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(workspace.path().join("out/tree/file")).unwrap(),
+        "new"
+    );
+    digests
+        .materialize_outputs(&original_tree, workspace.path(), &cache)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(workspace.path().join("out/tree/file")).unwrap(),
+        "old"
+    );
+    digests.with_known_changes(KnownChanges::Since {
+        sources: BTreeSet::new(),
+        outputs: BTreeSet::new(),
+    });
+    digests
+        .materialize_outputs(&updated, workspace.path(), &cache)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(workspace.path().join("out/tree/file")).unwrap(),
+        "new"
+    );
+}
+
 #[test]
 fn unchanged_files_reuse_the_persisted_digest() {
     let workspace = tempfile::tempdir().unwrap();

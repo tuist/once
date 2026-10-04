@@ -18,7 +18,7 @@ targets into the existing Apple target kinds. This works without `once.toml`:
 ```sh
 once query workspace
 once query targets
-once build --ui
+once build
 once test
 ```
 
@@ -26,12 +26,26 @@ The generated `swift_package_workspace` seed reads the package manifest and
 derives first-party libraries, executables, macros, binary targets, and tests.
 Discovery skips generated `.build` and `.swiftpm` directories and does not
 write `once.toml`. `once build` selects the package workspace when it is the
-only discovered build root. `--ui` opens the Runs interface so the first
-compile is visible target by target. `once test` runs first-party test bundles
-and excludes test bundles that belong only to resolved packages. Use `once
-test --all` when you intentionally want the complete resolved test graph.
+only discovered build root. `once test` runs first-party test bundles and
+excludes test bundles that belong only to resolved packages. Use `once test
+--all` when you intentionally want the complete resolved test graph.
+
+Local path dependencies within the workspace are followed transitively,
+including sibling packages and shared dependencies reached through several
+products. An entirely local graph does not need `Package.resolved` and does not
+run dependency resolution.
+If a local dependency introduces a remote package, Swift Package Manager still
+resolves that package through the root package's lockfile.
 
 ## Keep Swift Package Manager Commands
+
+For explicit module builds, add `explicit_modules = true` to your
+`swift_package_workspace` seed's attributes. Optional
+`dependency_check = "error"` checks source imports against declared package
+dependencies. Once propagates these settings through the resolved package
+graph; `Package.swift` remains the source of target and dependency declarations.
+See [explicit Apple modules](/guide/graph/apple#explicit-modules-and-dependency-checks)
+for requirements and current limits.
 
 Once can sit behind the `swift` command for one native [Swift Package
 Manager](https://www.swift.org/documentation/package-manager/) package. Add
@@ -91,6 +105,25 @@ xcrun --find swift
 xcrun swift --version
 ```
 
+Once selects the Swift compiler through `xcrun`. A Swiftly `.swift-version`
+file does not change that selection. If a package requires a separately
+installed Swift toolchain, select its bundle identifier for the build:
+
+```sh
+TOOLCHAINS=your.toolchain.bundle.identifier once build
+```
+
+Check the selection with `TOOLCHAINS=your.toolchain.bundle.identifier xcrun
+swift --version`. The selected compiler must support the package's
+`swift-tools-version`.
+
+A Swift toolchain installed beside Xcode contributes the compiler and the
+macros it loads, while Xcode still contributes the linker and the software
+development kit. Once resolves each of those separately, so builds that mix
+them link and expand macros against matching tools. Swift Testing follows the
+same rule: when the selected compiler ships its own copy, tests compile and
+link against that one rather than the version Xcode publishes.
+
 Start with the [Apple guide](/guide/graph/apple) if a first-party Apple target
 does not build yet. Package integration is easier to diagnose after the local
 compiler, software development kit, linker, and code-signing path work.
@@ -115,3 +148,9 @@ once build SwiftPackage_MyPackage_MyLibrary
 There is no Once initialization step. A first build can access the network when
 Swift Package Manager must create `Package.resolved` or Once must materialize a
 pinned source dependency.
+
+Once preserves package traits requested by dependencies, including traits that
+enable other traits and conditional requests. Code guarded by a dependency's
+opt-in trait is compiled with that trait enabled. Explicit empty trait lists
+disable defaults for that dependency declaration; requests from other packages
+are still combined according to Swift Package Manager's rules.

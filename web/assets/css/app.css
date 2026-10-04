@@ -1,8 +1,9 @@
 /* Marketing site styling, built on the Noora design tokens (imported below) so
-   it matches the documentation surface: Inter typography, the Once purple
-   brand, and light-purple gradients. */
+   it matches the documentation surface: the Once type pairing, warm
+   neutrals, and the indigo accent. */
 
 @import "noora/noora.css";
+@import "../docs/shared/theme.css";
 @import "../docs/fonts.css";
 @import "../docs/shared/code-window.css";
 
@@ -25,8 +26,8 @@ body {
   color: var(--noora-surface-label-primary);
   font-family: var(--noora-font-body);
   background:
-    radial-gradient(60% 50% at 50% -10%, oklch(53.2% 0.276 286.9 / 0.14), transparent 70%),
-    linear-gradient(180deg, #f6f5ff 0%, var(--noora-surface-background-primary) 640px);
+    radial-gradient(60% 50% at 50% -10%, oklch(from var(--noora-purple-500) l c h / 0.14), transparent 70%),
+    linear-gradient(180deg, var(--noora-purple-50) 0%, var(--noora-surface-background-primary) 640px);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -158,7 +159,7 @@ a {
   width: 720px;
   max-width: 100%;
   height: 420px;
-  background: radial-gradient(50% 50% at 50% 50%, oklch(70.7% 0.161 286.8 / 0.28), transparent 70%);
+  background: radial-gradient(50% 50% at 50% 50%, oklch(from var(--noora-purple-300) l c h / 0.28), transparent 70%);
   filter: blur(20px);
   pointer-events: none;
 }
@@ -192,7 +193,7 @@ a {
 }
 
 [data-part="oss-badge"]:hover {
-  box-shadow: 0 0 0 3px oklch(53.2% 0.276 286.9 / 0.14);
+  box-shadow: 0 0 0 3px oklch(from var(--noora-purple-500) l c h / 0.14);
 }
 
 [data-part="oss-icon"] {
@@ -283,7 +284,7 @@ a {
   background: oklch(21.5% 0.006 236.9);
   box-shadow:
     0 1px 2px oklch(21.5% 0.006 236.9 / 0.2),
-    0 24px 60px oklch(53.2% 0.276 286.9 / 0.22);
+    0 24px 60px oklch(from var(--noora-purple-500) l c h / 0.22);
   text-align: left;
 }
 
@@ -425,11 +426,7 @@ a {
   padding: 22px;
   height: 150px;
   overflow: hidden;
-  background: linear-gradient(
-    180deg,
-    var(--noora-purple-50) 0%,
-    color-mix(in oklch, var(--noora-purple-200) 32%, var(--noora-purple-50)) 100%
-  );
+  background: var(--once-card-gradient);
 }
 
 [data-part="feature-card"] [data-part="icon"] {
@@ -523,7 +520,7 @@ a {
 }
 
 [data-part="language-chip"]:hover {
-  box-shadow: 0 0 0 3px oklch(53.2% 0.276 286.9 / 0.12);
+  box-shadow: 0 0 0 3px oklch(from var(--noora-purple-500) l c h / 0.12);
 }
 
 [data-part="language-chip"] [data-part="lang-icon"] {
@@ -679,7 +676,7 @@ a {
 
 [data-part^="entry-kind-"] {
   border-radius: 999px;
-  background: var(--noora-purple-soft, oklch(53.2% 0.276 286.9 / 0.12));
+  background: var(--noora-purple-soft, oklch(from var(--noora-purple-500) l c h / 0.12));
   padding: 3px 10px;
   color: var(--noora-purple-600);
   font-size: 12px;
@@ -960,7 +957,7 @@ a {
 [data-part="blog-entry"]:hover {
   transform: translateY(-2px);
   border-color: color-mix(in oklch, var(--noora-purple-500) 42%, transparent);
-  box-shadow: 0 12px 30px oklch(53.2% 0.276 286.9 / 0.1);
+  box-shadow: 0 12px 30px oklch(from var(--noora-purple-500) l c h / 0.1);
 }
 
 [data-part="blog-entry-link"] {

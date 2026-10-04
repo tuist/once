@@ -44,19 +44,21 @@ impl Invocation {
     }
 
     /// Resolve the Once target id that stands for the requested Bazel label.
-    /// The `bazel_workspace` resolver emits every rule as a `bazel_target` and
-    /// records the original label on `bazel_label`; this is the reverse
-    /// lookup that keeps the wrapper honest about what it will build.
+    /// A compatible target declares the native label and the executable it
+    /// delegates to. This reverse lookup does not depend on its target kind.
     pub(super) fn target(&self, graph: &[GraphTarget]) -> Option<String> {
         let matches = graph
             .iter()
             .filter(|target| {
-                is_bazel_target_kind(&target.kind)
-                    && target
-                        .attrs
-                        .get("bazel_label")
-                        .and_then(AttrValue::as_str)
-                        .is_some_and(|value| value == self.label)
+                target.tools.iter().any(|tool| {
+                    tool.executables
+                        .iter()
+                        .any(|executable| executable == "bazel")
+                }) && target
+                    .attrs
+                    .get("bazel_label")
+                    .and_then(AttrValue::as_str)
+                    .is_some_and(|value| value == self.label)
                     && required_capability(target, self.command)
             })
             .map(|target| target.label.id.clone())
@@ -66,10 +68,6 @@ impl Invocation {
         };
         Some(target.clone())
     }
-}
-
-fn is_bazel_target_kind(kind: &str) -> bool {
-    matches!(kind, "bazel_target" | "bazel_test" | "bazel_binary")
 }
 
 fn required_capability(target: &GraphTarget, command: Command) -> bool {
@@ -129,7 +127,10 @@ mod tests {
                 })
                 .collect(),
             providers: Vec::new(),
-            tools: Vec::new(),
+            tools: vec![once_frontend::ToolRequirement {
+                name: "test-toolchain".to_string(),
+                executables: vec!["bazel".to_string()],
+            }],
             diagnostics: Vec::new(),
         }
     }

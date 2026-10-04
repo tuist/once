@@ -8,12 +8,17 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
-const HOST_COMMAND_OUTPUT_LIMIT: u64 = 16 * 1024 * 1024;
+pub(super) const HOST_COMMAND_OUTPUT_LIMIT: u64 = 16 * 1024 * 1024;
 
 /// A portable filesystem operation declared by a target kind impl.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DeclaredActionOperation {
+    ExpandActions {
+        implementation: String,
+        args: serde_json::Value,
+        build_dir: String,
+    },
     WriteFile {
         path: String,
         bytes: Vec<u8>,
@@ -50,6 +55,7 @@ pub enum DeclaredActionOperation {
         entries: Vec<DeclaredArchiveEntry>,
         output: String,
         sha256_output: Option<String>,
+        uncompressed_sha256_output: Option<String>,
         format: DeclaredArchiveFormat,
     },
     DownloadAndExtract {
@@ -65,6 +71,8 @@ pub struct DeclaredArchiveEntry {
     pub kind: DeclaredArchiveEntryKind,
     pub source: Option<String>,
     pub path: String,
+    #[serde(default)]
+    pub target: Option<String>,
     pub mode: u32,
     pub directory_mode: u32,
     pub owner_id: u64,
@@ -78,12 +86,14 @@ pub enum DeclaredArchiveEntryKind {
     File,
     Directory,
     Tree,
+    Symlink,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DeclaredArchiveFormat {
     Tar,
+    TarGz,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -225,6 +235,9 @@ pub enum Observation {
         env: BTreeMap<String, String>,
         cwd: Option<String>,
         merge_stderr: bool,
+        /// False when a non-zero exit status was an acceptable answer.
+        #[serde(default = "default_check", skip_serializing_if = "is_true")]
+        check: bool,
         output_sha256: String,
         /// Description of the program that answered, so a caller that cannot
         /// afford to ask again has something to compare. Absent in records
@@ -232,10 +245,25 @@ pub enum Observation {
         /// unanswerable.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         program: Option<String>,
+        /// Per-stream output bound the caller asked for. Absent means the
+        /// default analysis limit, so records written before this was
+        /// captured replay under the default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_output_bytes: Option<u64>,
     },
     FileDigest {
         path: String,
         sha256: String,
+    },
+    /// The size in bytes of one host file.
+    FileSize {
+        path: String,
+        bytes: i64,
+    },
+    /// Where one host path links to, or empty when it is not a link.
+    SymlinkTarget {
+        path: String,
+        target: String,
     },
     TreeDigest {
         path: String,
@@ -430,6 +458,12 @@ struct CommandKey {
     env: BTreeMap<String, String>,
     cwd: Option<PathBuf>,
     merge_stderr: bool,
+    check: bool,
+    max_output_bytes: u64,
+}
+
+fn default_check() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -570,6 +604,7 @@ pub(super) struct HostCache {
     paths: Arc<Mutex<BTreeSet<PathBuf>>>,
     globs: Arc<SingleFlight<GlobKey, Arc<Vec<String>>>>,
     host_file_digests: Arc<SingleFlight<PathBuf, String>>,
+    host_tree_digests: Arc<SingleFlight<PathBuf, String>>,
     host_env: Arc<HostEnvLookup>,
     tool_paths: Arc<BTreeMap<String, String>>,
 }
@@ -590,6 +625,7 @@ impl Clone for HostCache {
             paths: Arc::clone(&self.paths),
             globs: Arc::clone(&self.globs),
             host_file_digests: Arc::clone(&self.host_file_digests),
+            host_tree_digests: Arc::clone(&self.host_tree_digests),
             host_env: Arc::clone(&self.host_env),
             tool_paths: Arc::clone(&self.tool_paths),
         }
@@ -612,6 +648,7 @@ impl HostCache {
             paths: Arc::new(Mutex::new(BTreeSet::new())),
             globs: Arc::new(SingleFlight::new()),
             host_file_digests: Arc::new(SingleFlight::new()),
+            host_tree_digests: Arc::new(SingleFlight::new()),
             host_env: Arc::new(host_env),
             tool_paths: Arc::new(BTreeMap::new()),
         }
@@ -636,6 +673,8 @@ impl HostCache {
                     env: command.env,
                     cwd: command.cwd,
                     merge_stderr: command.merge_stderr,
+                    check: true,
+                    max_output_bytes: HOST_COMMAND_OUTPUT_LIMIT,
                 },
                 command.output,
             );
@@ -726,6 +765,14 @@ impl HostCache {
             .get_or_compute(path.to_path_buf(), hash)
     }
 
+    pub(super) fn host_tree_digest<F>(&self, path: &Path, hash: F) -> Result<String>
+    where
+        F: FnOnce() -> Result<String>,
+    {
+        self.host_tree_digests
+            .get_or_compute(path.to_path_buf(), hash)
+    }
+
     pub(super) fn observed_paths(&self) -> BTreeSet<PathBuf> {
         self.paths
             .lock()
@@ -779,6 +826,7 @@ impl HostCache {
     /// The lock is released before `Command::output` so other analyses
     /// running on sibling targets aren't blocked by a slow external
     /// process spawn (toolchain discovery, version probes, etc).
+    #[cfg(test)]
     pub(super) fn command(
         &self,
         argv: &[String],
@@ -786,14 +834,49 @@ impl HostCache {
         cwd: Option<&Path>,
         merge_stderr: bool,
     ) -> Result<String> {
+        self.command_checked(
+            argv,
+            env,
+            cwd,
+            merge_stderr,
+            true,
+            HOST_COMMAND_OUTPUT_LIMIT,
+        )
+    }
+
+    /// Like [`Self::command`], but with `check` false a non-zero exit status
+    /// still returns the captured output. Callers that tolerate failure use
+    /// it for idempotent setup whose success they verify with a later probe.
+    ///
+    /// `max_output_bytes` bounds the captured output. The default keeps
+    /// discovery commands small; a command whose answer is inherently large
+    /// (a build-system action graph, for example) raises it deliberately. The
+    /// bound applies to each stream while capturing and to the merged result.
+    pub(super) fn command_checked(
+        &self,
+        argv: &[String],
+        env: &BTreeMap<String, String>,
+        cwd: Option<&Path>,
+        merge_stderr: bool,
+        check: bool,
+        max_output_bytes: u64,
+    ) -> Result<String> {
         let key = CommandKey {
             argv: argv.to_vec(),
             env: env.clone(),
             cwd: cwd.map(Path::to_path_buf),
             merge_stderr,
+            check,
+            max_output_bytes,
         };
-        self.commands
-            .get_or_compute(key, || self.run_command(argv, env, cwd, merge_stderr))
+        let output = self.commands.get_or_compute(key, || {
+            self.run_command(argv, env, cwd, merge_stderr, check, max_output_bytes)
+        })?;
+        // Merging can exceed the bound even when each stream fits separately.
+        if output.len() as u64 > max_output_bytes {
+            return Err(output_limit_error(max_output_bytes));
+        }
+        Ok(output)
     }
 
     /// Spawn one host command and return its captured output.
@@ -803,6 +886,8 @@ impl HostCache {
         env: &BTreeMap<String, String>,
         cwd: Option<&Path>,
         merge_stderr: bool,
+        check: bool,
+        max_output_bytes: u64,
     ) -> Result<String> {
         let mut iter = argv.iter();
         let program = iter
@@ -821,9 +906,9 @@ impl HostCache {
         for (key, value) in env {
             command.env(key, value);
         }
-        let (status, stdout, stderr) = capture_host_command_output(&mut command)
+        let (status, stdout, stderr) = capture_host_command_output(&mut command, max_output_bytes)
             .with_context(|| format!("running `{program}`"))?;
-        if !status.success() {
+        if check && !status.success() {
             let rendered_args = command_args
                 .iter()
                 .map(|arg| arg.as_str())
@@ -896,7 +981,11 @@ impl HostCache {
         self.commands
             .answers()
             .into_iter()
-            .filter(|(key, _)| self.is_cacheable_tool_command(key))
+            .filter(|(key, _)| {
+                key.check
+                    && key.max_output_bytes == HOST_COMMAND_OUTPUT_LIMIT
+                    && self.is_cacheable_tool_command(key)
+            })
             .map(|(key, output)| CachedToolCommand {
                 argv: key.argv,
                 env: key.env,
@@ -932,21 +1021,32 @@ impl HostCache {
     }
 }
 
-fn capture_host_command_output(command: &mut Command) -> Result<(ExitStatus, Vec<u8>, Vec<u8>)> {
+fn capture_host_command_output(
+    command: &mut Command,
+    max_output_bytes: u64,
+) -> Result<(ExitStatus, Vec<u8>, Vec<u8>)> {
     let stdout = tempfile::tempfile().context("creating host command stdout staging file")?;
     let stderr = tempfile::tempfile().context("creating host command stderr staging file")?;
+    command.stdin(Stdio::null());
     command.stdout(Stdio::from(stdout.try_clone()?));
     command.stderr(Stdio::from(stderr.try_clone()?));
     let status = command.status()?;
-    let stdout = read_host_command_output(stdout)?;
-    let stderr = read_host_command_output(stderr)?;
+    let stdout = read_host_command_output(stdout, max_output_bytes)?;
+    let stderr = read_host_command_output(stderr, max_output_bytes)?;
     Ok((status, stdout, stderr))
 }
 
-fn read_host_command_output(mut file: std::fs::File) -> Result<Vec<u8>> {
+fn output_limit_error(max_output_bytes: u64) -> anyhow::Error {
+    anyhow!(
+        "host command output exceeds the {} mebibyte analysis limit",
+        max_output_bytes / (1024 * 1024)
+    )
+}
+
+fn read_host_command_output(mut file: std::fs::File, max_output_bytes: u64) -> Result<Vec<u8>> {
     let len = file.metadata()?.len();
-    if len > HOST_COMMAND_OUTPUT_LIMIT {
-        anyhow::bail!("host command output exceeds the 16 mebibyte analysis limit");
+    if len > max_output_bytes {
+        return Err(output_limit_error(max_output_bytes));
     }
     file.rewind()?;
     let mut bytes = Vec::with_capacity(
@@ -1029,6 +1129,30 @@ pub(super) fn which_candidate_names_for(
         }
     }
     candidates
+}
+
+#[cfg(all(test, unix))]
+mod command_io_tests {
+    use std::io::{Seek, Write};
+    use std::process::{Command, Stdio};
+
+    use super::{capture_host_command_output, HOST_COMMAND_OUTPUT_LIMIT};
+
+    #[test]
+    fn host_commands_cannot_consume_the_callers_input() {
+        let mut input = tempfile::tempfile().unwrap();
+        input.write_all(b"caller input").unwrap();
+        input.rewind().unwrap();
+        let mut command = Command::new("cat");
+        command.stdin(Stdio::from(input));
+
+        let (status, stdout, stderr) =
+            capture_host_command_output(&mut command, HOST_COMMAND_OUTPUT_LIMIT).unwrap();
+
+        assert!(status.success());
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+    }
 }
 
 #[cfg(test)]

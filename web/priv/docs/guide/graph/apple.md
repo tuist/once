@@ -26,6 +26,65 @@ xcrun --find swiftc
 Running this guide's iOS application also requires an installed Simulator
 runtime. Building a library does not require a running simulator.
 
+## Explicit Modules and Dependency Checks
+
+Set `explicit_modules = true` in an Apple target's attributes to turn imported
+Swift interfaces and Clang modules into separate cacheable build actions.
+Once first runs the Swift compiler's dependency scanner, builds the discovered
+modules, then compiles the target with implicit module building disabled.
+Independent module actions share the command's memory budget, and identical
+module actions can reuse results across targets.
+Scans use separate, cleared scratch directories. Module output paths include
+their compiler commands and input identities, so different modules cannot
+overwrite one another merely because their names match.
+
+```toml
+[[target]]
+name = "Core"
+kind = "apple_library"
+srcs = ["Sources/Core/**/*.swift"]
+deps = ["Models"]
+
+[target.attrs]
+platform = "macos"
+explicit_modules = true
+dependency_check = "error"
+```
+
+The same attributes are available on Swift macros, frameworks, applications,
+executables, and test bundles. Set them on a `swift_package_workspace` or
+`xcode_workspace` seed to propagate them to resolved Swift targets. Native
+Xcode targets also honor `SWIFT_ENABLE_EXPLICIT_MODULES = YES`.
+
+`dependency_check` defaults to `"off"`. With `"error"`, source imports of
+workspace modules must name direct dependencies, even when a transitive or
+inferred dependency makes the module available. System modules are exempt.
+An error identifies the consuming target, the missing module, and a suggested
+manifest repair. Checking requires explicit modules and a Swift compiler whose
+scan reports source-import information; unsupported compilers fail clearly.
+
+Compiler binaries, development-kit contents, Clang resources, and host Swift
+plugins contribute to module cache identity. Changing a declared header or
+interface invalidates the corresponding module action. Existing projects keep
+implicit modules by default.
+
+This is not a downloadable hermetic Apple toolchain. Builds still require the
+selected Xcode installation, and cached scanner commands retain its host paths.
+Module inputs outside the workspace and the identified development-kit and
+toolchain directories are rejected instead of being silently omitted from
+cache identity. Move such dependencies into the workspace or use implicit
+modules for those targets.
+Compiler scans that require auxiliary files created only inside their temporary
+cache are also rejected with a repair diagnostic. Keep interfaces and headers
+in the workspace, or leave explicit modules disabled for those targets.
+The scheduler currently reserves the default 250 mebibytes per module action.
+This is an admission estimate, not a hard limit on compiler memory use; large
+module builds can need more memory.
+Standalone C-family compilation is unchanged. Initial graph queries show the
+scan and deferred planning step; execution evidence records the module actions
+discovered at build time. Target scheduling still waits for dependency targets
+to complete, rather than releasing consumers as soon as one module is ready.
+
 ## Declare the Application
 
 Create `apps/Hello/once.toml` with a reusable library and an application that

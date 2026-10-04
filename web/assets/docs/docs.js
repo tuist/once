@@ -21,7 +21,7 @@ const liveSocket = new LiveSocket("/live", Socket, {
   },
 });
 
-topbar.config({ barColors: { 0: "#7c3aed" }, shadowColor: "rgba(0, 0, 0, .3)" });
+topbar.config({ barColors: { 0: "#4f46e5" }, shadowColor: "rgba(0, 0, 0, .3)" });
 
 function closeMobileSidebar() {
   document.body.removeAttribute("data-sidebar-open");

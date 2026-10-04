@@ -74,7 +74,7 @@ A literal `once exec` command uses its action digest as its subject. Use the
 structured output when you need to select or compare those command records.
 
 Tools can request the same record shape through
-[`once_query_evidence`](/reference/mcp/tools#once-query-evidence) in the
+[`once_query_evidence`](/reference/mcp/tools#once_query_evidence) in the
 [Model Context Protocol](https://modelcontextprotocol.io/) catalog.
 
 ## Read A Record

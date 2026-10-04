@@ -1,0 +1,38 @@
+{
+  "build-independent-targets-in-parallel": false,
+  "default-configuration": "Debug",
+  "configurations": [
+    "Debug",
+  ],
+  "localizations": {
+    "development": "en",
+    "supported": [
+      "Base",
+    ],
+  },
+  "files": [
+    { "path": "Hello.swift", "target-membership": [ "Hello/compile-sources" ] },
+  ],
+  "targets": [
+    {
+      "name": "Hello",
+      "id": "CC300000",
+      "product-type": "framework",
+      "build-phases": [
+        "compile-sources",
+      ],
+      "build-settings": {
+        "PRODUCT_BUNDLE_IDENTIFIER": "dev.once.Hello",
+        "PRODUCT_NAME": "$(TARGET_NAME)",
+      },
+    },
+  ],
+  "build-settings": {
+    "ALWAYS_SEARCH_USER_PATHS": "NO",
+    "IPHONEOS_DEPLOYMENT_TARGET": "16.0",
+    "SDKROOT": "iphoneos",
+    "SWIFT_VERSION": "5.0",
+  },
+  "products-group": [
+  ],
+}

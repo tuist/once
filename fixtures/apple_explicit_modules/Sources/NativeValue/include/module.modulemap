@@ -1,0 +1,4 @@
+module NativeValue {
+    header "NativeValue.h"
+    export *
+}

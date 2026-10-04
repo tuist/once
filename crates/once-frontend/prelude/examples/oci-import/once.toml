@@ -1,0 +1,13 @@
+[[target]]
+name = "base"
+kind = "oci_import"
+
+[target.attrs]
+archive = "base.oci.tar"
+
+[[target]]
+name = "base_load"
+kind = "oci_load"
+
+[target.dependencies]
+image = ["base"]

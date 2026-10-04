@@ -18,9 +18,25 @@ struct Manifest {
     infrastructure: InfrastructureToml,
     infrastructures: BTreeMap<String, InfrastructureProviderToml>,
     cache_provider: Option<CacheProviderToml>,
+    reporting: Option<ReportingToml>,
     modules: Option<ModulesToml>,
     rules: Option<ModulesToml>,
     target: Vec<TargetToml>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ReportingToml {
+    #[serde(rename = "argv_privacy")]
+    _argv_privacy: ArgvPrivacy,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ArgvPrivacy {
+    #[default]
+    Strict,
+    Workspace,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -218,6 +234,12 @@ pub(crate) fn load_toml_with_configuration(
         return Err(Error::ManifestSchema {
             path: display_name.to_string(),
             kind: ManifestSchemaError::ModulePathsInPackage,
+        });
+    }
+    if manifest.reporting.is_some() && !package.is_empty() {
+        return Err(Error::ManifestSchema {
+            path: display_name.to_string(),
+            kind: ManifestSchemaError::ReportingInPackage,
         });
     }
     manifest
@@ -739,6 +761,24 @@ paths = ["rules/*.star"]
         .unwrap_err();
 
         assert!(err.to_string().contains("root once.toml"));
+    }
+
+    #[test]
+    fn reporting_privacy_is_root_only_and_rejects_unknown_modes() {
+        let source = "[reporting]\nargv_privacy = 'workspace'\n";
+        assert!(load_toml_with("once.toml", source, Path::new("."), "").is_ok());
+        let error = load_toml_with("apps/once.toml", source, Path::new("."), "apps").unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("reporting settings are only loaded from the root"));
+        let error = load_toml_with(
+            "once.toml",
+            "[reporting]\nargv_privacy = 'public'\n",
+            Path::new("."),
+            "",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("unknown variant"));
     }
 
     #[test]

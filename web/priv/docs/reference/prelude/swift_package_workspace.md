@@ -10,6 +10,10 @@ tests into the existing Apple target kinds. The package manifest remains
 authoritative for products, target dependencies, source layout, compiler
 settings, resources, and platform constraints.
 
+The resolved package name becomes the display label in generic run reporting.
+The reporting layer reads resolver metadata and does not identify this target
+kind by name.
+
 Executable products are linked into Apple application bundles, so their
 compiled executable is a declared build output alongside the bundle metadata.
 
@@ -17,6 +21,14 @@ Once discovers a workspace automatically from `Package.swift`. A repository
 without `once.toml` can therefore query and build its first-party package
 targets directly. Discovery skips generated package-manager state such as
 `.build` and `.swiftpm`.
+
+Local path dependencies within the workspace are expanded transitively and
+shared package identities are deduplicated. A graph containing only local
+dependencies requires no lockfile or dependency-resolution command. Remote dependencies introduced by a
+local package still use the root package's resolved dependency versions.
+
+A product can group several targets. Depending on that product includes every
+target it exports, even when one target has the same name as the product.
 
 For source-control dependencies, the resolver uses `Package.resolved` or asks
 Swift Package Manager to create it when it is absent. It materializes the
@@ -26,7 +38,26 @@ Swift Package Manager supplies manifest and lockfile metadata, but does not
 build the dependency products. Registry dependencies are not supported by
 native package lowering yet.
 
+Library targets are force-loaded into whatever links them, matching how Swift
+Package Manager hands the linker every object file a target produced. A source
+file whose only contribution is a protocol conformance would otherwise be
+dropped, and the conformance would be missing at runtime.
+
+Package traits follow the declarations in `Package.swift`. Once enables the
+root package's defaults, combines traits requested by all packages that use a
+dependency, and expands traits that enable other traits. Explicit dependency
+trait lists replace that dependency declaration's defaults; an empty list
+enables none. Conditional trait requests activate when any of their required
+traits is enabled. The resolved traits control compilation conditions,
+compiler settings, and optional target dependencies, including macro builds.
+
 ## Attributes
+
+`explicit_modules` is a boolean, defaulting to `false`, that enables
+compiler-scanned, cacheable Swift and Clang module actions.
+`dependency_check` accepts `"off"` (the default) or `"error"`; checking
+requires explicit modules. See [explicit modules](/guide/graph/apple#explicit-modules-and-dependency-checks)
+for native propagation, dependency errors, and current limitations.
 
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
