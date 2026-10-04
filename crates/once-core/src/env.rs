@@ -20,6 +20,7 @@ pub use mise::{
     workspace_tool_env, workspace_tool_env_with_executables, workspace_tool_var, ToolEnvError,
 };
 pub use mise_runtime::{managed_mise, managed_mise_path, MANAGED_MISE_VERSION};
+pub use path::is_mise_shim;
 
 /// Variables every spawned tool action wants regardless of toolchain.
 /// `PATH` and `HOME` are universal; adding more here would silently

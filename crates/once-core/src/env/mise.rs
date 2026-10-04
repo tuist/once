@@ -133,7 +133,15 @@ async fn workspace_tool_without_prepare(
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
         });
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if super::is_mise_shim(Path::new(&path)) {
+        return Err(ToolEnvError::MiseFailed {
+            command: format!("mise which {tool}"),
+            status: 1,
+            stderr: format!("resolved a mise shim instead of the underlying executable: {path}"),
+        });
+    }
+    Ok(path)
 }
 
 /// Build an action environment from the workspace's pinned mise
