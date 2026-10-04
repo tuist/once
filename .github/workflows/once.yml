@@ -148,6 +148,7 @@ jobs:
       # Selecting by the `crates` path schedules every Rust test target in
       # one run and leaves the website tests to the web workflow.
       - name: Test with Once
+        id: graph-tests
         run: |
           if ! "${{ steps.bootstrap.outputs.bin }}" test --changed-path crates --format json > once-tests.json; then
             jq '.runs[] | select(.success != true)' once-tests.json || cat once-tests.json
@@ -156,8 +157,16 @@ jobs:
         env:
           ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
       - name: Diagnose missing Rust crate metadata
-        if: failure() && runner.os == 'Linux'
+        if: failure() && steps.graph-tests.outcome == 'failure' && runner.os == 'Linux'
         run: python3 mise/tasks/ci/diagnose-rust-deps.py
+      - name: Inspect failed graph tests
+        if: failure() && steps.graph-tests.outcome == 'failure'
+        run: |
+          "${{ steps.bootstrap.outputs.bin }}" query evidence --limit 10000 --format json > once-test-evidence.json || true
+          find .once/out -type f -exec wc -c {} + > once-output-sizes.txt
+          "${{ steps.bootstrap.outputs.bin }}" test --changed-path crates --jobs 1 --format json > once-tests-serial.json || true
+        env:
+          ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
       - name: Preserve failed test diagnostics
         if: failure()
         uses: actions/upload-artifact@v7
@@ -165,6 +174,11 @@ jobs:
           name: once-test-diagnostics-${{ matrix.os }}
           path: |
             once-tests.json
+            once-tests-serial.json
+            once-test-evidence.json
+            once-output-sizes.txt
+            ~/.local/state/once/logs/**
+            ~/Library/Logs/Once/**
             .once/out/**/test/**/*.log
             .once/out/**/test/**/test_results.json
           include-hidden-files: true
