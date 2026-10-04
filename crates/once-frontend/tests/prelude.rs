@@ -278,6 +278,7 @@ fn dockerfile_prelude_source() -> String {
 }
 
 fn all_prelude_source() -> String {
+    static PRELUDE: include_dir::Dir<'_> = include_dir::include_dir!("$CARGO_MANIFEST_DIR/prelude");
     static SOURCE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
         Module::with_temp_heap(|module| {
             let ast = AstModule::parse(
@@ -293,10 +294,11 @@ fn all_prelude_source() -> String {
                 .unwrap()
                 .iter()
                 .map(|value| {
-                    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-                        .join("prelude")
-                        .join(value.unpack_str().unwrap());
-                    std::fs::read_to_string(path).unwrap()
+                    PRELUDE
+                        .get_file(value.unpack_str().unwrap())
+                        .unwrap()
+                        .contents_utf8()
+                        .unwrap()
                 })
                 .collect::<Vec<_>>()
                 .join("\n")
