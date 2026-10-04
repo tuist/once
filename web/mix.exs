@@ -51,7 +51,7 @@ defmodule OnceSite.MixProject do
       {:jason, "~> 1.2"},
       {:dns_cluster, "~> 0.3.0"},
       {:bandit, "~> 1.5"},
-      {:mdex, "~> 0.13"},
+      {:mdex, "~> 0.14"},
       {:nimble_publisher, "~> 2.0", runtime: false},
       {:flop, "~> 0.29.0"},
       {:lumis, "~> 0.6"},
