@@ -3341,9 +3341,10 @@ def _cargo_workspace_target_enabled(target, node):
 
 def _cargo_workspace_attrs(package, target, node, source_root, aliases):
     package_inputs = _cargo_package_source_globs(source_root)
+    source_prefix = "" if source_root == "." else source_root + "/"
     attrs = {
         "crate_name": _cargo_crate_name(package, target),
-        "crate_root": source_root + "/" + _cargo_source_rel(package, target),
+        "crate_root": source_prefix + _cargo_source_rel(package, target),
         "edition": target.get("edition") or package.get("edition") or "2021",
         "features": node.get("features") or [],
         "rustc_env": _cargo_rustc_env(package, target, source_root),
@@ -3357,7 +3358,7 @@ def _cargo_workspace_attrs(package, target, node, source_root, aliases):
         attrs["_binary_output_name"] = target.get("name") or package["name"]
     build_script = _cargo_build_script_target(package)
     if build_script != None:
-        attrs["build_script"] = source_root + "/" + _cargo_source_rel(package, build_script)
+        attrs["build_script"] = source_prefix + _cargo_source_rel(package, build_script)
     return attrs
 
 # Cargo resolves development dependencies for anything that exercises the
