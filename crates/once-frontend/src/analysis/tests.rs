@@ -742,6 +742,52 @@ fn host_command_can_raise_the_output_limit() {
     assert!(cache.command(&argv, &env, None, false).is_err());
 }
 
+#[cfg(unix)]
+#[test]
+fn host_command_cache_enforces_the_stderr_limit_for_each_caller() {
+    let cache = HostCache::default();
+    let argv = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "printf done; printf 123456789 >&2".to_string(),
+    ];
+    let env = BTreeMap::new();
+
+    assert_eq!(
+        cache
+            .command_checked(&argv, &env, None, false, true, 16)
+            .unwrap(),
+        "done"
+    );
+    assert!(cache
+        .command_checked(&argv, &env, None, false, true, 8)
+        .is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn tool_command_cache_does_not_persist_answers_with_custom_output_limits() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().unwrap();
+    let tool = tmp.path().join("demo-tool");
+    std::fs::write(&tool, "#!/bin/sh\nprintf done; printf 123456789 >&2\n").unwrap();
+    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let cache = HostCache::with_tool_paths(BTreeMap::from([(
+        "demo".to_string(),
+        tool.display().to_string(),
+    )]));
+    let argv = vec!["demo".to_string(), "--version".to_string()];
+
+    assert_eq!(
+        cache
+            .command_checked(&argv, &BTreeMap::new(), None, false, true, 16)
+            .unwrap(),
+        "done"
+    );
+    assert!(cache.cacheable_tool_commands().is_empty());
+}
+
 /// Two calls with the same argv but different `env` must spawn the
 /// process twice, with no shared cache slot. This keeps host
 /// discovery probes partitioned by their environment overrides.

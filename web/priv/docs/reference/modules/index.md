@@ -532,8 +532,8 @@ separate update workflow.
   runs a discovery command and returns standard output. A non-zero exit status
   fails analysis unless `check = False`, which returns the captured output
   for idempotent setup that a later probe verifies. Arguments, environment
-  values, the working directory, stream merging, and `check` participate in the
-  command-scoped cache key. When set, `cwd` must be an absolute path, normally
+  values, the working directory, stream merging, `check`, and the output limit
+  participate in the command-scoped cache key. When set, `cwd` must be an absolute path, normally
   derived from `workspace_root()`. The captured output is limited to 16
   mebibytes by default. Pass `max_output_bytes` to raise that bound for a
   command whose answer is inherently large, such as a build system's

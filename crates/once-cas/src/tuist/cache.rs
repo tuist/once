@@ -1257,8 +1257,13 @@ impl TuistCache {
         let status = response.status();
         if status.is_success() {
             let max_age = cache_control_max_age(response.headers());
+            let body = response.bytes().await.map_err(|source| Error::Remote {
+                provider: PROVIDER_NAME,
+                operation: "reach endpoint discovery",
+                message: source.to_string(),
+            })?;
             let endpoints: EndpointResponse =
-                response.json().await.map_err(|source| Error::Remote {
+                serde_json::from_slice(&body).map_err(|source| Error::Remote {
                     provider: PROVIDER_NAME,
                     operation: "decode endpoints",
                     message: source.to_string(),
@@ -2117,6 +2122,59 @@ mod tests {
             .unwrap_err();
 
         assert!(remote_action_read_error(error).is_read_miss());
+    }
+
+    #[tokio::test]
+    async fn interrupted_discovery_body_without_known_endpoints_is_a_read_miss() {
+        let temp = TempDir::new().unwrap();
+        let (url, _) = serve_discovery(vec![
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\nConnection: close\r\n\r\n".to_string(),
+        ])
+        .await;
+
+        let error = discovery_cache(&temp, &url)
+            .fetch_endpoints()
+            .await
+            .unwrap_err();
+
+        assert!(remote_action_read_error(error).is_read_miss());
+    }
+
+    #[tokio::test]
+    async fn interrupted_discovery_body_reuses_stale_endpoints() {
+        let temp = TempDir::new().unwrap();
+        let (url, _) = serve_discovery(vec![
+            endpoints_response("https://cache.example.test", "max-age=0"),
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\nConnection: close\r\n\r\n".to_string(),
+        ])
+        .await;
+
+        discovery_cache(&temp, &url)
+            .fetch_endpoints()
+            .await
+            .unwrap();
+        let endpoints = discovery_cache(&temp, &url)
+            .fetch_endpoints()
+            .await
+            .unwrap();
+
+        assert_eq!(endpoints, ["https://cache.example.test"]);
+    }
+
+    #[tokio::test]
+    async fn malformed_discovery_body_stays_fatal() {
+        let temp = TempDir::new().unwrap();
+        let (url, _) = serve_discovery(vec![
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n[]".to_string(),
+        ])
+        .await;
+
+        let error = discovery_cache(&temp, &url)
+            .fetch_endpoints()
+            .await
+            .unwrap_err();
+
+        assert!(!remote_action_read_error(error).is_read_miss());
     }
 
     #[tokio::test]

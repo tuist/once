@@ -459,6 +459,7 @@ struct CommandKey {
     cwd: Option<PathBuf>,
     merge_stderr: bool,
     check: bool,
+    max_output_bytes: u64,
 }
 
 fn default_check() -> bool {
@@ -673,6 +674,7 @@ impl HostCache {
                     cwd: command.cwd,
                     merge_stderr: command.merge_stderr,
                     check: true,
+                    max_output_bytes: HOST_COMMAND_OUTPUT_LIMIT,
                 },
                 command.output,
             );
@@ -865,13 +867,12 @@ impl HostCache {
             cwd: cwd.map(Path::to_path_buf),
             merge_stderr,
             check,
+            max_output_bytes,
         };
         let output = self.commands.get_or_compute(key, || {
             self.run_command(argv, env, cwd, merge_stderr, check, max_output_bytes)
         })?;
-        // A cached answer was computed under whatever bound its first caller
-        // requested, so re-check it against this caller's bound instead of
-        // trusting the cache slot.
+        // Merging can exceed the bound even when each stream fits separately.
         if output.len() as u64 > max_output_bytes {
             return Err(output_limit_error(max_output_bytes));
         }
@@ -980,7 +981,11 @@ impl HostCache {
         self.commands
             .answers()
             .into_iter()
-            .filter(|(key, _)| key.check && self.is_cacheable_tool_command(key))
+            .filter(|(key, _)| {
+                key.check
+                    && key.max_output_bytes == HOST_COMMAND_OUTPUT_LIMIT
+                    && self.is_cacheable_tool_command(key)
+            })
             .map(|(key, output)| CachedToolCommand {
                 argv: key.argv,
                 env: key.env,
