@@ -4,7 +4,7 @@
 //! This format stores the mode beside the contents while keeping directory
 //! output encoding separate.
 
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::Path;
 
 use once_cas::Digest;
@@ -12,21 +12,6 @@ use once_cas::Digest;
 use crate::{Error, Result};
 
 pub(crate) const FILE_BLOB_MAGIC: &[u8] = b"once.file.v1\0";
-
-/// Open `abs` for writing, replacing a read-only file left by an earlier
-/// restore. Two actions can declare the same output path with different
-/// content (a linked binary and its re-signed copy); when the first restore
-/// materializes the blob's read-only mode, truncating it in place fails with
-/// a permission error, so fall back to unlinking and recreating the path.
-pub(crate) fn create_replacing_readonly(abs: &Path) -> std::io::Result<std::fs::File> {
-    match std::fs::File::create(abs) {
-        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied && abs.is_file() => {
-            std::fs::remove_file(abs)?;
-            std::fs::File::create(abs)
-        }
-        result => result,
-    }
-}
 
 #[cfg(test)]
 pub(crate) fn capture_file_blob(path: &Path) -> std::io::Result<Vec<u8>> {
@@ -105,50 +90,10 @@ pub(crate) fn restore_file_blob_from_reader(
         }
     }
     let (mode, _) = decode_file_blob(logical_path, &header[..filled])?;
-    if let Some(parent) = abs.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| Error::RestoreOutput {
-            path: logical_path.to_string(),
-            source,
-        })?;
-    }
-    let mut output = create_replacing_readonly(abs).map_err(|source| Error::RestoreOutput {
+    crate::restore_file::restore(abs, reader, mode, None).map_err(|source| Error::RestoreOutput {
         path: logical_path.to_string(),
         source,
-    })?;
-    std::io::copy(&mut reader, &mut output).map_err(|source| Error::RestoreOutput {
-        path: logical_path.to_string(),
-        source,
-    })?;
-    output.flush().map_err(|source| Error::RestoreOutput {
-        path: logical_path.to_string(),
-        source,
-    })?;
-    drop(output);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(abs, std::fs::Permissions::from_mode(mode)).map_err(|source| {
-            Error::RestoreOutput {
-                path: logical_path.to_string(),
-                source,
-            }
-        })?;
-    }
-    #[cfg(not(unix))]
-    {
-        let mut permissions = std::fs::metadata(abs)
-            .map_err(|source| Error::RestoreOutput {
-                path: logical_path.to_string(),
-                source,
-            })?
-            .permissions();
-        permissions.set_readonly(mode & 0o222 == 0);
-        std::fs::set_permissions(abs, permissions).map_err(|source| Error::RestoreOutput {
-            path: logical_path.to_string(),
-            source,
-        })?;
-    }
-    Ok(())
+    })
 }
 
 fn decode_file_blob<'a>(logical_path: &str, bytes: &'a [u8]) -> Result<(u32, &'a [u8])> {
@@ -174,6 +119,45 @@ fn decode_file_blob<'a>(logical_path: &str, bytes: &'a [u8]) -> Result<(u32, &'a
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn restoring_a_file_preserves_existing_readers() {
+        use std::io::Seek;
+
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("output");
+        std::fs::write(&path, b"original output").unwrap();
+        let mut reader = std::fs::File::open(&path).unwrap();
+        let mut blob = file_blob_header(&std::fs::metadata(&path).unwrap());
+        blob.extend_from_slice(b"replacement output");
+
+        restore_file_blob_from_reader("output", &path, std::io::Cursor::new(blob)).unwrap();
+
+        reader.rewind().unwrap();
+        let mut original = Vec::new();
+        reader.read_to_end(&mut original).unwrap();
+        assert_eq!(original, b"original output");
+        assert_eq!(std::fs::read(path).unwrap(), b"replacement output");
+    }
+
+    #[test]
+    fn failed_file_restore_preserves_the_existing_output() {
+        struct FailedReader;
+        impl Read for FailedReader {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("interrupted blob read"))
+            }
+        }
+
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("output");
+        std::fs::write(&path, b"original output").unwrap();
+        let header = file_blob_header(&std::fs::metadata(&path).unwrap());
+        let reader = std::io::Cursor::new(header).chain(FailedReader);
+
+        assert!(restore_file_blob_from_reader("output", &path, reader).is_err());
+        assert_eq!(std::fs::read(path).unwrap(), b"original output");
+    }
 
     #[test]
     fn decode_rejects_missing_magic() {
