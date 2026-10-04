@@ -121,6 +121,19 @@ steps:
 
 The resulting session remains available for the rest of the job.
 
+## Connection recovery
+
+Once retries transient failures during blob existence checks, uploads, and
+action-result publication with at most three attempts per RPC. This includes
+HTTP/2 connection retirement, where the cache asks the client to use a new
+connection. Interrupted uploads restart from the beginning with a fresh upload
+resource and a newly opened file or stream.
+
+Authentication failures, permission refusals, invalid requests, quota refusals,
+requests that exceed the request timeout, and local file errors are not
+retried, so a cache that stops responding fails after one timeout rather than
+three. Retries do not provide resumable uploads.
+
 ## Next
 
 Add an [execution provider](/guide/infrastructure/remote-execution) when the
