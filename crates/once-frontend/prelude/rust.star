@@ -604,6 +604,8 @@ def _rust_manifest_dir(ctx, manifest_dir):
 
 def _rust_compile_action_env(ctx, target, host_triple):
     env = _rust_compile_env(ctx)
+    if host_os() == "windows":
+        env["MISE_VERBOSE"] = "1"
     _rust_merge_env_lower_precedence(env, _rust_android_compile_env(ctx, target or host_triple))
     _rust_merge_env_lower_precedence(env, _rust_c_tool_env(target or host_triple, host_triple))
     return env
