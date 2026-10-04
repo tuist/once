@@ -534,15 +534,20 @@ separate update workflow.
   string when it is unset.
 - `workspace_root()` returns the absolute workspace root.
 - `host_which(name)` resolves an executable on `PATH`.
-- `host_command(argv, env = {}, cwd = None, merge_stderr = False, check = True)`
+- `host_command(argv, env = {}, cwd = None, merge_stderr = False, check = True, max_output_bytes = None)`
   runs a discovery command and returns standard output. A non-zero exit status
   fails analysis unless `check = False`, which returns the captured output
   for idempotent setup that a later probe verifies. Arguments, environment
-  values, the working directory, stream merging, and `check` participate in the
-  command-scoped cache key. When set, `cwd` must be an absolute path, normally
-  derived from `workspace_root()`. Standard input is closed: discovery must
-  not prompt or consume the caller's input. Each captured stream is limited
-  to 16 mebibytes.
+  values, the working directory, stream merging, `check`, and the output limit
+  participate in the command-scoped cache key. When set, `cwd` must be an
+  absolute path, normally derived from `workspace_root()`. Standard input is
+  closed: discovery must not prompt or consume the caller's input. The
+  captured output is limited to 16 mebibytes by default. Pass
+  `max_output_bytes` to raise that bound for a command whose answer is
+  inherently large, such as a build system's dependency-closure action graph;
+  the bound applies while capturing each stream and to the merged result,
+  and is recorded with the observation so later validation re-runs the
+  command under the same limit.
 - `host_symlink_target(path)` returns where a host symbolic link points, as
   written, or an empty string when the path is not a link. A planner uses it to
   declare the files a linked input depends on.
