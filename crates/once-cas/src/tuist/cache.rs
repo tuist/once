@@ -25,7 +25,7 @@ use tonic::{Code, Request, Status};
 use uuid::Uuid;
 
 use super::{
-    env_token, join_url, remote_status_message, TuistAuth, TuistCacheConfig, ENDPOINTS_PATH,
+    env_token, join_url, remote_status_message, retry, TuistAuth, TuistCacheConfig, ENDPOINTS_PATH,
     PROVIDER_NAME,
 };
 use crate::{ActionResult, Cas, Digest, Error, Result};
@@ -755,7 +755,7 @@ impl TuistCache {
         let capabilities = self.remote_capabilities().await;
         let (data, compressor) = encode_reapi_blob(bytes, capabilities.zstd_batches, operation)?;
         let channel = self.grpc_channel().await?;
-        let mut client = ContentAddressableStorageClient::new(channel);
+        let client = ContentAddressableStorageClient::new(channel);
         let request = reapi::BatchUpdateBlobsRequest {
             instance_name: self.instance_name(),
             requests: vec![reapi::batch_update_blobs_request::Request {
@@ -765,11 +765,31 @@ impl TuistCache {
             }],
             digest_function: SHA256_DIGEST_FUNCTION,
         };
-        let response = client
-            .batch_update_blobs(self.authorized_grpc_request(request, operation).await?)
-            .await
-            .map_err(|source| grpc_error(operation, &source))?
-            .into_inner();
+        let response = retry::grpc(operation, || {
+            let mut client = client.clone();
+            let request = request.clone();
+            async move {
+                let response = client
+                    .batch_update_blobs(self.authorized_grpc_request(request, operation).await?)
+                    .await?
+                    .into_inner();
+                if let Some(status) = response
+                    .responses
+                    .first()
+                    .and_then(|blob| blob.status.as_ref())
+                {
+                    if status.code != REAPI_STATUS_OK {
+                        return Err(Status::new(
+                            Code::from_i32(status.code),
+                            status.message.clone(),
+                        )
+                        .into());
+                    }
+                }
+                Ok(response)
+            }
+        })
+        .await?;
         let Some(status) = response
             .responses
             .first()
@@ -858,6 +878,18 @@ impl TuistCache {
         bytes: &[u8],
         operation: &'static str,
     ) -> Result<()> {
+        retry::grpc(operation, || {
+            self.write_reapi_blob_stream_attempt(digest, bytes, operation)
+        })
+        .await
+    }
+
+    async fn write_reapi_blob_stream_attempt(
+        &self,
+        digest: &reapi::Digest,
+        bytes: &[u8],
+        operation: &'static str,
+    ) -> std::result::Result<(), retry::Failure> {
         let capabilities = self.remote_capabilities().await;
         let (body, compressor) = encode_reapi_blob(bytes, capabilities.zstd_streams, operation)?;
         let channel = self.grpc_channel().await?;
@@ -889,8 +921,7 @@ impl TuistCache {
         );
         let response = client
             .write(self.authorized_grpc_request(requests, operation).await?)
-            .await
-            .map_err(|source| grpc_error(operation, &source))?
+            .await?
             .into_inner();
         if ![
             -1,
@@ -906,7 +937,8 @@ impl TuistCache {
                     "byte stream committed {} of {total} bytes",
                     response.committed_size
                 ),
-            });
+            }
+            .into());
         }
         Ok(())
     }
@@ -917,6 +949,18 @@ impl TuistCache {
         path: &Path,
         operation: &'static str,
     ) -> Result<()> {
+        retry::grpc(operation, || {
+            self.write_reapi_blob_file_stream_attempt(digest, path, operation)
+        })
+        .await
+    }
+
+    async fn write_reapi_blob_file_stream_attempt(
+        &self,
+        digest: &reapi::Digest,
+        path: &Path,
+        operation: &'static str,
+    ) -> std::result::Result<(), retry::Failure> {
         let file = tokio::fs::File::open(path)
             .await
             .map_err(|source| Error::Io {
@@ -985,11 +1029,10 @@ impl TuistCache {
             return Err(Error::Io {
                 path: path.to_path_buf(),
                 source: std::io::Error::other(message),
-            });
+            }
+            .into());
         }
-        let response = response
-            .map_err(|source| grpc_error(operation, &source))?
-            .into_inner();
+        let response = response?.into_inner();
         if ![-1, total].contains(&response.committed_size) {
             return Err(Error::Remote {
                 provider: PROVIDER_NAME,
@@ -998,7 +1041,8 @@ impl TuistCache {
                     "byte stream committed {} of {total} bytes",
                     response.committed_size
                 ),
-            });
+            }
+            .into());
         }
         Ok(())
     }
@@ -1096,17 +1140,23 @@ impl TuistCache {
 
     async fn reapi_blob_exists(&self, digest: &reapi::Digest) -> Result<bool> {
         let channel = self.grpc_channel().await?;
-        let mut client = ContentAddressableStorageClient::new(channel);
+        let client = ContentAddressableStorageClient::new(channel);
         let request = reapi::FindMissingBlobsRequest {
             instance_name: self.instance_name(),
             blob_digests: vec![digest.clone()],
             digest_function: SHA256_DIGEST_FUNCTION,
         };
-        let response = client
-            .find_missing_blobs(self.authorized_grpc_request(request, "head blob").await?)
-            .await
-            .map_err(|source| grpc_error("head blob", &source))?
-            .into_inner();
+        let response = retry::grpc("head blob", || {
+            let mut client = client.clone();
+            let request = request.clone();
+            async move {
+                Ok(client
+                    .find_missing_blobs(self.authorized_grpc_request(request, "head blob").await?)
+                    .await?)
+            }
+        })
+        .await?
+        .into_inner();
         Ok(response.missing_blob_digests.is_empty())
     }
 
@@ -1171,7 +1221,7 @@ impl TuistCache {
         operation: &'static str,
     ) -> Result<()> {
         let channel = self.grpc_channel().await?;
-        let mut client = ActionCacheClient::new(channel);
+        let client = ActionCacheClient::new(channel);
         let request = reapi::UpdateActionResultRequest {
             instance_name: self.instance_name(),
             action_digest: Some(action_digest.clone()),
@@ -1179,10 +1229,16 @@ impl TuistCache {
             results_cache_policy: None,
             digest_function: SHA256_DIGEST_FUNCTION,
         };
-        client
-            .update_action_result(self.authorized_grpc_request(request, operation).await?)
-            .await
-            .map_err(|source| grpc_error(operation, &source))?;
+        retry::grpc(operation, || {
+            let mut client = client.clone();
+            let request = request.clone();
+            async move {
+                Ok(client
+                    .update_action_result(self.authorized_grpc_request(request, operation).await?)
+                    .await?)
+            }
+        })
+        .await?;
         Ok(())
     }
 
@@ -1584,10 +1640,7 @@ impl BlobReadFailure {
 /// stream resets, which tonic reports as `h2 protocol error`, and
 /// `Cancelled` covers a stream the transport tore down mid-read.
 fn is_transient_status(code: Code) -> bool {
-    matches!(
-        code,
-        Code::Unavailable | Code::Internal | Code::Unknown | Code::Aborted | Code::Cancelled
-    )
+    retry::transient(code)
 }
 
 #[derive(Debug)]
@@ -1735,7 +1788,7 @@ fn authorized_grpc_request_with_token<T>(
     Ok(request)
 }
 
-fn grpc_error(operation: &'static str, status: &Status) -> Error {
+pub(super) fn grpc_error(operation: &'static str, status: &Status) -> Error {
     Error::Remote {
         provider: PROVIDER_NAME,
         operation,
@@ -1983,6 +2036,10 @@ fn is_empty_blob(digest: &Digest) -> bool {
 #[cfg(test)]
 #[path = "cache_stream_tests.rs"]
 mod stream_tests;
+
+#[cfg(test)]
+#[path = "cache_upload_tests.rs"]
+mod upload_tests;
 
 #[cfg(test)]
 mod tests {
