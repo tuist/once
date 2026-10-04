@@ -103,8 +103,10 @@ Input fingerprint components make that change explainable. Components contain a
 category, label, and digest. They never include raw command arguments or
 environment values. Compare components with the same category and label across
 two records to identify the source, dependency, toolchain, or action property
-that changed. Literal commands and older evidence records may omit the optional
-fingerprint.
+that changed. Declared environment variables also have individual components
+labeled `variable:<name>`, so you can identify which variable changed without
+exposing its value. These extra components do not change action cache keys.
+Literal commands and older evidence records may omit the optional fingerprint.
 
 ## Next
 

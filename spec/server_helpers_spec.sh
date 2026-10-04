@@ -56,6 +56,35 @@ Describe 'test server readiness'
     return "$pipe_test_status"
   }
 
+  assert_server_does_not_resolve_loopback() {
+    cat > "$WORKSPACE/sitecustomize.py" <<'PY'
+import socket
+
+def unavailable_reverse_dns(*args, **kwargs):
+    raise RuntimeError("reverse DNS is unavailable")
+
+socket.getfqdn = unavailable_reverse_dns
+PY
+    PYTHONPATH="$WORKSPACE" start_python_server \
+      "$REPO_ROOT/fixtures/tool_graph/http_server.py" \
+      "$WORKSPACE" "$WORKSPACE/server-port" > "$WORKSPACE/server.log" 2>&1 &
+    loopback_server_pid=$!
+    loopback_status=0
+    wait_for_server_file "$WORKSPACE/server-port" "$loopback_server_pid" || loopback_status=1
+    kill "$loopback_server_pid" 2>/dev/null || :
+    wait "$loopback_server_pid" 2>/dev/null || :
+    return "$loopback_status"
+  }
+
+  It 'starts a loopback fixture server without reverse DNS'
+    When call assert_server_does_not_resolve_loopback
+    The status should be success
+    The stdout should be blank
+    The stderr should be blank
+    The path "$WORKSPACE/server-port" should be file
+    The contents of file "$WORKSPACE/server.log" should be blank
+  End
+
   It 'closes inherited harness pipes before starting a fixture server'
     When call assert_server_closes_harness_pipe
     The status should be success

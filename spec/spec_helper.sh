@@ -83,7 +83,7 @@ start_python_server() {
     esac
     eval "exec ${fixture_fd}>&-"
   done
-  exec "$SPEC_PYTHON3" "$@" </dev/null
+  exec "$SPEC_PYTHON3" "$REPO_ROOT/fixtures/server_launcher.py" "$@" </dev/null
 }
 
 wait_for_server_file() {
