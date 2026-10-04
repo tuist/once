@@ -162,7 +162,7 @@ pub(crate) fn host_file_mode(metadata: &std::fs::Metadata) -> u32 {
 }
 
 #[cfg(not(unix))]
-fn host_file_mode(_metadata: &std::fs::Metadata) -> u32 {
+pub(crate) fn host_file_mode(_metadata: &std::fs::Metadata) -> u32 {
     0
 }
 
