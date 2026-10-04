@@ -497,7 +497,7 @@ async fn expose_target_tools(
     Ok(())
 }
 
-fn host_executable_path(executable: &str) -> Option<PathBuf> {
+pub(super) fn host_executable_path(executable: &str) -> Option<PathBuf> {
     let paths = env::var_os("PATH")?;
     let path_ext = env::var_os("PATHEXT");
     host_executable_path_in(executable, &paths, path_ext.as_deref())
@@ -532,7 +532,7 @@ fn host_executable_path_in(
                 .iter()
                 .map(move |candidate| directory.join(candidate))
         })
-        .find(|candidate| candidate.is_file())
+        .find(|candidate| candidate.is_file() && !once_core::is_mise_shim(candidate))
 }
 
 fn apply_tool_execution(
@@ -2462,6 +2462,34 @@ mod tests {
             host_executable_path_in("fallback-tool", &paths, Some(OsStr::new(".COM;.EXE;.CMD"))),
             Some(executable)
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn host_executable_fallback_skips_mise_shims() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let directory = tempfile::tempdir().unwrap();
+        let shims = directory.path().join("shims");
+        let tools = directory.path().join("tools");
+        std::fs::create_dir(&shims).unwrap();
+        std::fs::create_dir(&tools).unwrap();
+        let mise = directory.path().join("mise");
+        let tool = tools.join("probe");
+        for (path, script) in [
+            (&mise, b"#!/bin/sh\nprintf shim".as_slice()),
+            (&tool, b"#!/bin/sh\nprintf real-tool".as_slice()),
+        ] {
+            std::fs::write(path, script).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        symlink(&mise, shims.join("probe")).unwrap();
+        let paths = env::join_paths([shims, tools]).unwrap();
+        let resolved = host_executable_path_in("probe", &paths, None).unwrap();
+        let output = std::process::Command::new(resolved).output().unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"real-tool");
     }
 
     fn module_digest() -> Digest {
