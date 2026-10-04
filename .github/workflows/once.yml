@@ -148,11 +148,21 @@ jobs:
       # Selecting by the `crates` path schedules every Rust test target in
       # one run and leaves the website tests to the web workflow.
       - name: Test with Once
+        id: graph-tests
         run: |
-          if ! "${{ steps.bootstrap.outputs.bin }}" test --changed-path crates --format json > once-tests.json; then
+          # Test batches share .once/out. Serialize them to avoid cross-batch
+          # Rust metadata mismatches while their build outputs are not isolated.
+          if ! "${{ steps.bootstrap.outputs.bin }}" test --changed-path crates --jobs 1 --format json > once-tests.json; then
             jq '.runs[] | select(.success != true)' once-tests.json || cat once-tests.json
             exit 1
           fi
+        env:
+          ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
+      - name: Inspect failed graph tests
+        if: failure() && steps.graph-tests.outcome == 'failure'
+        run: |
+          "${{ steps.bootstrap.outputs.bin }}" query evidence --limit 10000 --format json > once-test-evidence.json || true
+          find .once/out -type f -exec wc -c {} + > once-output-sizes.txt
         env:
           ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
       - name: Preserve failed test diagnostics
@@ -162,6 +172,10 @@ jobs:
           name: once-test-diagnostics-${{ matrix.os }}
           path: |
             once-tests.json
+            once-test-evidence.json
+            once-output-sizes.txt
+            ~/.local/state/once/logs/**
+            ~/Library/Logs/Once/**
             .once/out/**/test/**/*.log
             .once/out/**/test/**/test_results.json
           include-hidden-files: true

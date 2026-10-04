@@ -209,6 +209,21 @@ fn graph_tool_cache_invalidates_configuration_and_missing_executables() {
     assert!(read_graph_tool_cache_at(&cache_path, second).is_none());
 }
 
+#[cfg(unix)]
+#[test]
+fn graph_tool_cache_rejects_mise_shim_paths() {
+    use std::os::unix::fs::symlink;
+
+    let workspace = tempfile::tempdir().unwrap();
+    let mise = workspace.path().join("mise");
+    std::fs::write(&mise, b"mise").unwrap();
+    let shim = workspace.path().join("probe");
+    symlink(&mise, &shim).unwrap();
+    let paths = BTreeMap::from([("probe".to_string(), shim.display().to_string())]);
+
+    assert!(graph_tool_paths_fingerprint(&paths).is_none());
+}
+
 #[test]
 fn graph_tool_cache_path_is_host_cached_and_workspace_scoped() {
     let cache_home = Path::new("/cache/once/toolchains");
