@@ -83,9 +83,30 @@ jobs:
           ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist-web' || 'local' }}
 
       - name: Test with Once
+        id: graph-tests
         run: target/debug/once test web/tests
         env:
           ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist-web' || 'local' }}
+
+      - name: Surface native test logs on failure
+        if: failure() && steps.graph-tests.outcome == 'failure'
+        run: |
+          find .once/out/web/tests/test -type f -name '*.log' -print0 |
+            while IFS= read -r -d '' log; do
+              echo "::group::$log"
+              cat "$log"
+              echo "::endgroup::"
+            done
+
+      - name: Preserve failing test diagnostics
+        if: failure() && steps.graph-tests.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: web-test-diagnostics
+          include-hidden-files: true
+          path: |
+            .once/out/web/tests/test/
+            ~/.local/state/once/logs/
 
   release:
     name: release
