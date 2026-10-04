@@ -184,41 +184,25 @@ impl TuistCache {
             return Ok(());
         }
         let remote_digest = self.remote_blob_digest(digest).await?;
-        let mut attempt = 1;
-        loop {
-            match self.stream_remote_blob(digest, &remote_digest).await {
-                Ok(()) => return Ok(()),
-                Err(BlobReadFailure::Transient(error)) if attempt < BLOB_READ_ATTEMPTS => {
-                    tracing::warn!(
-                        blob_digest = %digest,
-                        attempt,
-                        error = %error,
-                        "retrying remote blob read after a transient failure"
-                    );
-                    tokio::time::sleep(BLOB_READ_RETRY_DELAY * attempt).await;
-                    attempt += 1;
-                }
-                Err(BlobReadFailure::Transient(error) | BlobReadFailure::Final(error)) => {
-                    return Err(error)
-                }
-            }
-        }
+        retry::grpc("get blob", || {
+            self.stream_remote_blob(digest, &remote_digest)
+        })
+        .await
     }
 
-    /// Streams one remote blob into the local store. Transport failures
-    /// that a fresh stream can recover from, such as a dropped HTTP/2
-    /// stream, are reported as transient so the caller can retry.
+    /// Streams one remote blob into the local store. Each attempt opens a
+    /// fresh read stream, so a dropped HTTP/2 stream can be retried.
     async fn stream_remote_blob(
         &self,
         digest: &Digest,
         remote_digest: &reapi::Digest,
-    ) -> std::result::Result<(), BlobReadFailure> {
+    ) -> std::result::Result<(), retry::Failure> {
         let _permit = self
             .transfer_limit
             .acquire()
             .await
             .expect("transfer semaphore remains open");
-        let channel = self.grpc_channel().await.map_err(BlobReadFailure::Final)?;
+        let channel = self.grpc_channel().await?;
         let mut client =
             ByteStreamClient::new(channel).max_decoding_message_size(BYTE_STREAM_MESSAGE_LIMIT);
         let request = bytestream::ReadRequest {
@@ -231,57 +215,39 @@ impl TuistCache {
             read_limit: 0,
         };
         let response = match client
-            .read(
-                self.authorized_grpc_request(request, "get blob")
-                    .await
-                    .map_err(BlobReadFailure::Final)?,
-            )
+            .read(self.authorized_grpc_request(request, "get blob").await?)
             .await
         {
             Ok(response) => response,
             Err(status) if status.code() == Code::NotFound => {
-                return Err(BlobReadFailure::Final(Error::BlobNotFound(*digest)));
+                return Err(Error::BlobNotFound(*digest).into());
             }
-            Err(status) => return Err(BlobReadFailure::from_status(&status)),
+            Err(status) => return Err(status.into()),
         };
         let mut stream = response.into_inner();
         let (mut writer, reader) = tokio::io::duplex(64 * 1024);
         let download = async {
-            while let Some(response) = stream
-                .message()
-                .await
-                .map_err(|source| BlobReadFailure::from_status(&source))?
-            {
-                writer.write_all(&response.data).await.map_err(|source| {
-                    BlobReadFailure::Final(Error::Remote {
-                        provider: PROVIDER_NAME,
-                        operation: "get blob",
-                        message: source.to_string(),
-                    })
-                })?;
+            while let Some(response) = stream.message().await? {
+                writer
+                    .write_all(&response.data)
+                    .await
+                    .map_err(|source| local_mirror_error(&source))?;
             }
-            writer.shutdown().await.map_err(|source| {
-                BlobReadFailure::Final(Error::Remote {
-                    provider: PROVIDER_NAME,
-                    operation: "get blob",
-                    message: source.to_string(),
-                })
-            })?;
-            Ok::<_, BlobReadFailure>(())
-        };
-        let store = async {
-            self.local
-                .put_stream(reader)
+            writer
+                .shutdown()
                 .await
-                .map_err(BlobReadFailure::Final)
+                .map_err(|source| local_mirror_error(&source))?;
+            Ok::<_, retry::Failure>(())
         };
+        let store = async { Ok(self.local.put_stream(reader).await?) };
         let (mirrored, ()) = tokio::try_join!(store, download)?;
         if mirrored != *digest {
-            return Err(BlobReadFailure::Final(Error::Remote {
+            return Err(Error::Remote {
                 provider: PROVIDER_NAME,
                 operation: "get blob",
                 message: format!("remote blob {digest} did not match requested digest"),
-            }));
+            }
+            .into());
         }
         Ok(())
     }
@@ -765,7 +731,7 @@ impl TuistCache {
             }],
             digest_function: SHA256_DIGEST_FUNCTION,
         };
-        let response = retry::grpc(operation, || {
+        retry::grpc(operation, || {
             let mut client = client.clone();
             let request = request.clone();
             async move {
@@ -773,43 +739,10 @@ impl TuistCache {
                     .batch_update_blobs(self.authorized_grpc_request(request, operation).await?)
                     .await?
                     .into_inner();
-                if let Some(status) = response
-                    .responses
-                    .first()
-                    .and_then(|blob| blob.status.as_ref())
-                {
-                    if status.code != REAPI_STATUS_OK {
-                        return Err(Status::new(
-                            Code::from_i32(status.code),
-                            status.message.clone(),
-                        )
-                        .into());
-                    }
-                }
-                Ok(response)
+                batch_upload_outcome(&response, operation)
             }
         })
-        .await?;
-        let Some(status) = response
-            .responses
-            .first()
-            .and_then(|response| response.status.as_ref())
-        else {
-            return Err(Error::Remote {
-                provider: PROVIDER_NAME,
-                operation,
-                message: "Kura returned no status for blob upload".to_string(),
-            });
-        };
-        if status.code == REAPI_STATUS_OK {
-            Ok(())
-        } else {
-            Err(Error::Remote {
-                provider: PROVIDER_NAME,
-                operation,
-                message: rpc_status_message(status),
-            })
-        }
+        .await
     }
 
     async fn read_reapi_blob(
@@ -1617,30 +1550,47 @@ struct EndpointResponse {
     endpoints: Vec<String>,
 }
 
-const BLOB_READ_ATTEMPTS: u32 = 3;
-const BLOB_READ_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
-
-enum BlobReadFailure {
-    Transient(Error),
-    Final(Error),
-}
-
-impl BlobReadFailure {
-    fn from_status(status: &Status) -> Self {
-        let error = grpc_error("get blob", status);
-        if is_transient_status(status.code()) {
-            Self::Transient(error)
-        } else {
-            Self::Final(error)
-        }
+fn local_mirror_error(source: &std::io::Error) -> retry::Failure {
+    Error::Remote {
+        provider: PROVIDER_NAME,
+        operation: "get blob",
+        message: source.to_string(),
     }
+    .into()
 }
 
-/// gRPC codes a retried read can recover from. `Internal` covers HTTP/2
-/// stream resets, which tonic reports as `h2 protocol error`, and
-/// `Cancelled` covers a stream the transport tore down mid-read.
-fn is_transient_status(code: Code) -> bool {
-    retry::transient(code)
+/// Per-blob statuses use the gRPC code space, so a transient one is retried
+/// like a failed RPC. Permanent ones keep the REAPI status wording.
+fn batch_upload_outcome(
+    response: &reapi::BatchUpdateBlobsResponse,
+    operation: &'static str,
+) -> std::result::Result<(), retry::Failure> {
+    let Some(status) = response
+        .responses
+        .first()
+        .and_then(|response| response.status.as_ref())
+    else {
+        return Err(Error::Remote {
+            provider: PROVIDER_NAME,
+            operation,
+            message: "Kura returned no status for blob upload".to_string(),
+        }
+        .into());
+    };
+    if status.code == REAPI_STATUS_OK {
+        return Ok(());
+    }
+    let rpc = Status::new(Code::from_i32(status.code), status.message.clone());
+    if retry::retryable(&rpc) {
+        Err(rpc.into())
+    } else {
+        Err(Error::Remote {
+            provider: PROVIDER_NAME,
+            operation,
+            message: rpc_status_message(status),
+        }
+        .into())
+    }
 }
 
 #[derive(Debug)]

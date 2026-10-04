@@ -36,8 +36,15 @@ where
         // Boxed so callers' futures do not inline the RPC state of every attempt.
         match Box::pin(call()).await {
             Ok(value) => return Ok(value),
-            Err(Failure::Rpc(status)) if transient(status.code()) && attempt < ATTEMPTS => {
-                tracing::debug!(operation, attempt, code = ?status.code(), error = status.message(), source = ?std::error::Error::source(&status), "retrying Tuist cache RPC");
+            Err(Failure::Rpc(status)) if retryable(&status) && attempt < ATTEMPTS => {
+                tracing::warn!(
+                    operation,
+                    attempt,
+                    code = ?status.code(),
+                    error = status.message(),
+                    source = ?std::error::Error::source(&status),
+                    "retrying Tuist cache RPC after a transient failure"
+                );
                 tokio::time::sleep(RETRY_DELAY * attempt).await;
             }
             Err(Failure::Rpc(status)) => return Err(super::cache::grpc_error(operation, &status)),
@@ -47,12 +54,30 @@ where
     unreachable!("the last attempt returns its result")
 }
 
-// Tonic reports GOAWAY(NO_ERROR) as Internal and cancels other in-flight RPCs.
-pub(super) fn transient(code: Code) -> bool {
+pub(super) fn retryable(status: &Status) -> bool {
+    transient(status.code()) && !timed_out(status)
+}
+
+// Tonic reports GOAWAY(NO_ERROR) and h2 stream resets as Internal, and
+// cancels other in-flight RPCs on the retired connection.
+fn transient(code: Code) -> bool {
     matches!(
         code,
         Code::Unavailable | Code::Internal | Code::Unknown | Code::Aborted | Code::Cancelled
     )
+}
+
+// Tonic also reports its own request timeout as Cancelled. Retrying it would
+// multiply the configured timeout instead of recovering a dropped connection.
+fn timed_out(status: &Status) -> bool {
+    let mut source = std::error::Error::source(status);
+    while let Some(error) = source {
+        if error.is::<tonic::TimeoutExpired>() {
+            return true;
+        }
+        source = error.source();
+    }
+    false
 }
 
 #[cfg(test)]
@@ -66,7 +91,7 @@ mod tests {
             Err(Failure::Rpc(Status::internal(
                 "h2 protocol error: http2 error",
             ))),
-            Err(Failure::Rpc(Status::cancelled("Timeout expired"))),
+            Err(Failure::Rpc(Status::cancelled("operation was canceled"))),
             Ok(42),
         ]);
         assert_eq!(
@@ -156,6 +181,21 @@ mod tests {
             "1200 live RPCs completed in {} attempts",
             attempts.load(Ordering::Relaxed)
         );
+    }
+
+    #[tokio::test]
+    async fn request_timeouts_are_not_retried() {
+        let mut calls = 0;
+        let error = grpc::<(), _, _>("put blob", || {
+            calls += 1;
+            let mut status = Status::cancelled("Timeout expired");
+            status.set_source(std::sync::Arc::new(tonic::TimeoutExpired(())));
+            std::future::ready(Err(Failure::Rpc(status)))
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(calls, 1);
+        assert!(error.to_string().contains("Timeout expired"));
     }
 
     #[tokio::test]

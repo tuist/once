@@ -21,6 +21,7 @@ struct Observations {
     writes: Vec<Vec<bytestream::WriteRequest>>,
     failures: HashMap<&'static str, VecDeque<Status>>,
     batch_statuses: VecDeque<Code>,
+    action_delay: Option<Duration>,
 }
 
 #[derive(Clone, Default)]
@@ -125,6 +126,10 @@ impl ActionCache for UploadServer {
         let mut state = self.0.lock().await;
         state.actions.push(request.get_ref().clone());
         fail(&mut state, "action")?;
+        if let Some(delay) = state.action_delay {
+            drop(state);
+            tokio::time::sleep(delay).await;
+        }
         Ok(Response::new(request.into_inner().action_result.unwrap()))
     }
 }
@@ -174,6 +179,13 @@ impl ByteStream for UploadServer {
 async fn fixture(
     temp: &tempfile::TempDir,
 ) -> (TuistCache, UploadServer, tokio::task::JoinHandle<()>) {
+    fixture_with_timeout(temp, None).await
+}
+
+async fn fixture_with_timeout(
+    temp: &tempfile::TempDir,
+    timeout: Option<Duration>,
+) -> (TuistCache, UploadServer, tokio::task::JoinHandle<()>) {
     let service = UploadServer::default();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -202,13 +214,13 @@ async fn fixture(
         },
     )
     .unwrap();
+    let mut endpoint = Endpoint::from_shared(format!("http://{address}")).unwrap();
+    if let Some(timeout) = timeout {
+        endpoint = endpoint.timeout(timeout);
+    }
     cache
         .grpc_channel_cache
-        .set(Ok(Endpoint::from_shared(format!("http://{address}"))
-            .unwrap()
-            .connect()
-            .await
-            .unwrap()))
+        .set(Ok(endpoint.connect().await.unwrap()))
         .unwrap();
     cache.auth_token_cache.set(Ok("test-token".into())).unwrap();
     *cache.capabilities_cache.lock().await = Some(RemoteCapabilities::default());
@@ -262,6 +274,11 @@ async fn batch_upload_retries_individual_transient_status_but_not_permission_den
             .upload_reapi_blob(&sha256_digest(bytes).unwrap(), bytes, "put blob")
             .await;
         assert_eq!(result.is_ok(), succeeds);
+        if let Err(error) = result {
+            assert!(error
+                .to_string()
+                .contains("REAPI status 7: injected blob status"));
+        }
         assert_eq!(service.0.lock().await.blobs.len(), calls);
         server.abort();
     }
@@ -326,5 +343,54 @@ async fn streamed_upload_reopens_file_and_restarts_memory_body_with_fresh_resour
             bytes
         );
         server.abort();
+    }
+}
+
+#[tokio::test]
+async fn request_timeouts_are_not_retried() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let (cache, service, server) =
+        fixture_with_timeout(&temp, Some(Duration::from_millis(100))).await;
+    service.0.lock().await.action_delay = Some(Duration::from_secs(5));
+    let digest = sha256_digest(b"action").unwrap();
+    let error = tokio::time::timeout(
+        Duration::from_secs(2),
+        cache.update_reapi_action_result(&digest, reapi::ActionResult::default(), "put action"),
+    )
+    .await
+    .expect("a timed out request must not be retried until the test deadline")
+    .unwrap_err();
+    assert!(error.to_string().contains("Timeout expired"), "{error}");
+    assert_eq!(service.0.lock().await.actions.len(), 1);
+    server.abort();
+}
+
+#[test]
+fn batch_upload_outcome_classifies_per_blob_statuses() {
+    let response = |status: Option<Code>| reapi::BatchUpdateBlobsResponse {
+        responses: vec![reapi::batch_update_blobs_response::Response {
+            digest: None,
+            status: status.map(|code| bazel_remote_apis::google::rpc::Status {
+                code: code as i32,
+                message: "blob status".into(),
+                details: vec![],
+            }),
+        }],
+    };
+    assert!(batch_upload_outcome(&response(Some(Code::Ok)), "put blob").is_ok());
+    for code in [Code::Unavailable, Code::Internal] {
+        assert!(matches!(
+            batch_upload_outcome(&response(Some(code)), "put blob"),
+            Err(retry::Failure::Rpc(status)) if status.code() == code
+        ));
+    }
+    for (status, message) in [
+        (Some(Code::InvalidArgument), "REAPI status 3: blob status"),
+        (None, "Kura returned no status for blob upload"),
+    ] {
+        assert!(matches!(
+            batch_upload_outcome(&response(status), "put blob"),
+            Err(retry::Failure::Local(error)) if error.to_string().contains(message)
+        ));
     }
 }

@@ -130,8 +130,9 @@ connection. Interrupted uploads restart from the beginning with a fresh upload
 resource and a newly opened file or stream.
 
 Authentication failures, permission refusals, invalid requests, quota refusals,
-and local file errors are not retried. These retries do not change the existing
-request timeout or provide resumable uploads.
+requests that exceed the request timeout, and local file errors are not
+retried, so a cache that stops responding fails after one timeout rather than
+three. Retries do not provide resumable uploads.
 
 ## Next
 
