@@ -7,6 +7,12 @@ turns one target into cacheable actions. Built-in and project target kinds use
 the same public contract, so a project can add a target kind without changing
 Once itself.
 
+Built-in analysis loads the target-kind families needed by the graph together
+with their helper dependencies. Shared, ecosystem-neutral utilities remain
+available across families; toolchain-specific helpers do not need to be loaded
+for unrelated targets. This keeps analysis work proportional to the graph
+without changing the schemas available through discovery.
+
 ## Loading Project Modules
 
 Project modules are listed from the root manifest:
@@ -533,13 +539,15 @@ separate update workflow.
   fails analysis unless `check = False`, which returns the captured output
   for idempotent setup that a later probe verifies. Arguments, environment
   values, the working directory, stream merging, `check`, and the output limit
-  participate in the command-scoped cache key. When set, `cwd` must be an absolute path, normally
-  derived from `workspace_root()`. The captured output is limited to 16
-  mebibytes by default. Pass `max_output_bytes` to raise that bound for a
-  command whose answer is inherently large, such as a build system's
-  dependency-closure action graph; the bound applies while capturing each
-  stream and to the merged result, and is recorded with the observation so
-  later validation re-runs the command under the same limit.
+  participate in the command-scoped cache key. When set, `cwd` must be an
+  absolute path, normally derived from `workspace_root()`. Standard input is
+  closed: discovery must not prompt or consume the caller's input. The
+  captured output is limited to 16 mebibytes by default. Pass
+  `max_output_bytes` to raise that bound for a command whose answer is
+  inherently large, such as a build system's dependency-closure action graph;
+  the bound applies while capturing each stream and to the merged result,
+  and is recorded with the observation so later validation re-runs the
+  command under the same limit.
 - `host_symlink_target(path)` returns where a host symbolic link points, as
   written, or an empty string when the path is not a link. A planner uses it to
   declare the files a linked input depends on.
@@ -772,7 +780,11 @@ entries.
 `host_tree_sha256(path)` hashes an absolute host directory's contents and
 structure, using metadata-validated cached digests on later invocations.
 It records the tree as an analysis observation and rejects symbolic links
-that escape the tree. Together with `host_file_sha256(path)`, these primitives
+that escape the tree. Entry paths and symlink targets must be valid UTF-8;
+invalid text is rejected rather than assigned an ambiguous digest. Literal
+backslashes in Unix names remain literal characters, while Windows directory
+separators use the portable forward-slash spelling.
+Together with `host_file_sha256(path)`, these primitives
 let target kinds include host tools and development kits in action identity.
 They identify host inputs; they do not make those inputs remotely available.
 

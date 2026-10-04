@@ -1027,6 +1027,7 @@ fn capture_host_command_output(
 ) -> Result<(ExitStatus, Vec<u8>, Vec<u8>)> {
     let stdout = tempfile::tempfile().context("creating host command stdout staging file")?;
     let stderr = tempfile::tempfile().context("creating host command stderr staging file")?;
+    command.stdin(Stdio::null());
     command.stdout(Stdio::from(stdout.try_clone()?));
     command.stderr(Stdio::from(stderr.try_clone()?));
     let status = command.status()?;
@@ -1128,6 +1129,30 @@ pub(super) fn which_candidate_names_for(
         }
     }
     candidates
+}
+
+#[cfg(all(test, unix))]
+mod command_io_tests {
+    use std::io::{Seek, Write};
+    use std::process::{Command, Stdio};
+
+    use super::{capture_host_command_output, HOST_COMMAND_OUTPUT_LIMIT};
+
+    #[test]
+    fn host_commands_cannot_consume_the_callers_input() {
+        let mut input = tempfile::tempfile().unwrap();
+        input.write_all(b"caller input").unwrap();
+        input.rewind().unwrap();
+        let mut command = Command::new("cat");
+        command.stdin(Stdio::from(input));
+
+        let (status, stdout, stderr) =
+            capture_host_command_output(&mut command, HOST_COMMAND_OUTPUT_LIMIT).unwrap();
+
+        assert!(status.success());
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+    }
 }
 
 #[cfg(test)]

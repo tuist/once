@@ -42,6 +42,8 @@ defmodule OnceSiteWeb.DocsLive do
          socket
          |> assign(
            page: page,
+           adjacent_pages: Sidebar.adjacent_pages(current_slug),
+           edit_href: edit_href(segments),
            slug_id: Enum.join(segments, "-"),
            current_slug: current_slug,
            tab: Sidebar.tab_for_slug(current_slug),
@@ -83,19 +85,15 @@ defmodule OnceSiteWeb.DocsLive do
         <section data-part="hero">
           <h1>Once documentation</h1>
           <p>
-            Once makes repository automation reusable across developers, coding agents, and
-            machines by giving each action explicit inputs, outputs, environment, and execution
-            policy.
+            Build once, then reuse the result. Start with a working project or one script,
+            verify it locally, and share the cache when you are ready. No account is needed
+            for your first build.
           </p>
         </section>
         <div data-part="feature-cards">
           <.link :for={card <- overview_cards()} navigate={card.href} data-part="feature-card">
-            <div data-part="image">
-              <span data-part="title">{card.title}</span>
-            </div>
-            <div data-part="body">
-              <p>{card.description}</p>
-            </div>
+            <h2>{card.title}</h2>
+            <p>{card.description}</p>
           </.link>
         </div>
       </div>
@@ -127,6 +125,24 @@ defmodule OnceSiteWeb.DocsLive do
         {raw(@page.html)}
       </article>
       <footer id="docs-page-footer">
+        <nav data-part="page-navigation" aria-label="Adjacent documentation pages">
+          <.link
+            :if={@adjacent_pages.previous}
+            navigate={@adjacent_pages.previous.slug}
+            data-part="previous-page"
+          >
+            <span>Previous</span>
+            <strong>{@adjacent_pages.previous.label}</strong>
+          </.link>
+          <.link
+            :if={@adjacent_pages.next}
+            navigate={@adjacent_pages.next.slug}
+            data-part="next-page"
+          >
+            <span>Next</span>
+            <strong>{@adjacent_pages.next.label}</strong>
+          </.link>
+        </nav>
         <div data-part="markdown-link">
           <span>View</span>
           <.link_button
@@ -136,12 +152,12 @@ defmodule OnceSiteWeb.DocsLive do
             href={markdown_href(@current_slug)}
           />
         </div>
-        <div data-part="edit-row">
+        <div :if={@edit_href} data-part="edit-row">
           <.link_button
             label="Edit this page"
             variant="primary"
             size="large"
-            href={edit_href(@current_slug)}
+            href={@edit_href}
           >
             <:icon_left><.icon name="pencil" /></:icon_left>
           </.link_button>
@@ -155,7 +171,8 @@ defmodule OnceSiteWeb.DocsLive do
     [
       %{
         title: "Getting Started",
-        description: "Install Once and run your first cacheable script.",
+        description:
+          "Install Once, reuse a script result, and restore an output in a self-contained example.",
         href: "/docs/guide/getting-started"
       },
       %{
@@ -170,12 +187,12 @@ defmodule OnceSiteWeb.DocsLive do
       },
       %{
         title: "Typed Graph",
-        description: "Grow workflows into typed targets and capabilities.",
+        description: "Discover native projects or declare targets with explicit dependencies.",
         href: "/docs/guide/graph"
       },
       %{
         title: "Infrastructure",
-        description: "Run actions remotely on hosted sandboxes.",
+        description: "Share cached results with your team or move suitable work to a sandbox.",
         href: "/docs/guide/infrastructure"
       },
       %{
@@ -191,8 +208,13 @@ defmodule OnceSiteWeb.DocsLive do
   defp markdown_href("/docs/" <> rest), do: "/docs-markdown/" <> rest
   defp markdown_href(_), do: "/docs-markdown"
 
-  defp edit_href("/docs/" <> rest),
-    do: "https://github.com/tuist/once/edit/main/web/priv/docs/#{rest}.md"
+  defp edit_href(["reference", "cli" | _]), do: nil
+  defp edit_href(["reference", "mcp", "tools"]), do: nil
+  defp edit_href(["reference", "events"]), do: nil
 
-  defp edit_href(_), do: "https://github.com/tuist/once/tree/main/web/priv/docs"
+  defp edit_href(segments) do
+    {:ok, source} = Docs.source_path(segments)
+    relative = Path.relative_to(source, Docs.root())
+    "https://github.com/tuist/once/edit/main/web/priv/docs/#{relative}"
+  end
 end

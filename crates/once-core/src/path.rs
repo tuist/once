@@ -59,8 +59,9 @@ impl WorkspacePath {
         package: &str,
         src: &str,
     ) -> std::result::Result<Self, WorkspacePathError> {
+        let src = Self::try_from(src)?;
         let joined = if package.is_empty() {
-            src.to_string()
+            src.0
         } else {
             format!("{package}/{src}")
         };
@@ -190,6 +191,14 @@ mod tests {
         assert_eq!(inside.as_str(), "crates/foo/src/main.rs");
         let root = WorkspacePath::from_package_relative("", "main.rs").unwrap();
         assert_eq!(root.as_str(), "main.rs");
+    }
+
+    #[test]
+    fn from_package_relative_rejects_absolute_sources() {
+        assert!(matches!(
+            WorkspacePath::from_package_relative("pkg", "/tmp/source.rs"),
+            Err(WorkspacePathError::Absolute(_))
+        ));
     }
 
     #[test]

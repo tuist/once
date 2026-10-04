@@ -1,8 +1,16 @@
-# Guides
+# Build with Once
 
-Once meets a project where it is. Start from native workspace metadata, cache the
-automation that already works, and add a typed graph only where more structure
-helps.
+A fast build is often a build you do not have to run. Once gives work a stable
+identity so a result produced by you, a teammate, or a coding agent can be
+reused instead of repeated.
+
+Start with [Getting Started](/guide/getting-started). In a small, self-contained
+example, you will run a script, reuse its result, restore a deleted output, and
+see an input change trigger fresh work. No account or remote service is needed.
+
+Then choose the path that fits your repository. Once can read supported native
+workspace metadata, cache the automation that already works, and add a typed
+graph where more structure helps. You do not need to adopt all three at once.
 
 ## Start with an existing project
 

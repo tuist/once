@@ -19,11 +19,11 @@ Describe 'graph tools'
     cp "$REPO_ROOT/fixtures/tool_graph/probe" "$WORKSPACE/tool-dist/probe"
     chmod +x "$WORKSPACE/tool-dist/probe"
 
-    python3 "$REPO_ROOT/fixtures/tool_graph/http_server.py" \
+    start_python_server "$REPO_ROOT/fixtures/tool_graph/http_server.py" \
       "$WORKSPACE/tool-dist" "$WORKSPACE/tool-port" \
       >"$WORKSPACE/tool-server.log" 2>&1 &
     TOOL_SERVER_PID=$!
-    while [ ! -s "$WORKSPACE/tool-port" ]; do sleep 0.05; done
+    wait_for_server_file "$WORKSPACE/tool-port" "$TOOL_SERVER_PID" || return
     tool_port="$(cat "$WORKSPACE/tool-port")"
 
     cat > "$WORKSPACE/once.toml" <<'EOF'

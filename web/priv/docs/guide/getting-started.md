@@ -20,16 +20,23 @@ not, prefix each `once` command with `mise exec --`.
 
 ## Try an Existing Project
 
-If the repository already uses Cargo, Swift Package Manager, Xcode, or Bazel,
-try it before writing Once configuration:
+If you already have a working Cargo, Swift Package Manager, Xcode, or Bazel
+project, try it before writing Once configuration. Keep its existing toolchain
+installed: Once reuses the native project metadata, but does not replace the
+compiler or SDK.
+
+Start by discovering what Once can build:
 
 ```sh
 cd path/to/project
 once query targets
 once build
 once test
-once lint
 ```
+
+Run `once lint` when the discovered graph includes a lint target. A project
+without one reports that no lint targets are available, rather than silently
+skipping analysis.
 
 Once recognizes the native workspace from its existing files. `once build`,
 `once test`, and `once lint` each default to the workspace's own targets: the
@@ -50,7 +57,16 @@ prerequisites, native dependency behavior, and current boundaries.
 
 ## Run a Cacheable Script
 
-Create `scripts/greet.sh` in a repository:
+For a self-contained example, create an empty directory and a place for the
+script. You can also follow these steps in an existing repository:
+
+```sh
+mkdir once-demo
+cd once-demo
+mkdir -p scripts
+```
+
+Save the following as `scripts/greet.sh`:
 
 ```sh
 #!/usr/bin/env -S once exec -- bash
@@ -73,7 +89,8 @@ chmod +x scripts/greet.sh
 cat build/greeting.txt
 ```
 
-The first invocation ends with a trailer containing `cache miss`. Run the
+The first invocation ends with a trailer containing `cache miss`. The local
+cache works without an account or a remote service. Run the
 same command again:
 
 ```sh
@@ -83,8 +100,26 @@ same command again:
 The second trailer contains `cache hit`. Once reused the recorded result and
 restored the declared output without running the script body again.
 
-Change `message.txt` and run the command once more. The input changed, so
-Once reports another miss and records the new output.
+Prove that Once can restore the output, not just remember that the command
+succeeded:
+
+```sh
+rm build/greeting.txt
+./scripts/greet.sh
+cat build/greeting.txt
+```
+
+You should see another cache hit and `hello from Once` in the restored file.
+Now change the input:
+
+```sh
+printf 'hello again\n' > message.txt
+./scripts/greet.sh
+```
+
+Once reports a miss and writes `hello again`. You have now checked both sides
+of the contract: unchanged inputs reuse the result, and changed inputs run the
+work again.
 
 ## What Once Learned
 
@@ -95,7 +130,15 @@ The three `# once` lines form the action contract:
 - `cwd` chooses the working directory for the script.
 
 The script itself is also part of the cache key. Changing either the script
-or its declared input causes the work to run again.
+or its declared input causes the work to run again. Paths in these headers are
+relative to the script's directory, which is why `../message.txt` names the
+file at the repository root.
+
+Correct reuse depends on an honest contract. Declare every file and environment
+variable that affects the result, and every output you need restored. Once
+cannot infer a dependency that the script reads but does not declare. Do not
+cache commands whose purpose is an external side effect, such as publishing a
+release or sending a notification.
 
 ## Choose Your Next Path
 
