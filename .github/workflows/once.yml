@@ -155,6 +155,9 @@ jobs:
           fi
         env:
           ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
+      - name: Diagnose missing Rust crate metadata
+        if: failure() && runner.os == 'Linux'
+        run: python3 mise/tasks/ci/diagnose-rust-deps.py
       - name: Preserve failed test diagnostics
         if: failure()
         uses: actions/upload-artifact@v7
