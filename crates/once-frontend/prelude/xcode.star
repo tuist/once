@@ -2402,12 +2402,19 @@ def _xcode_swift_package_info(ctx, package_dir, identity = "", cache = None):
     xcrun = host_which("xcrun")
     swift = host_command([xcrun, "--find", "swift"]).strip()
     info = json_decode(host_command([swift, "package", "dump-package", "--package-path", absolute]))
-    if any([not target.get("path") for target in info.get("targets") or []]):
+    unresolved = [
+        target
+        for target in info.get("targets") or []
+        if not target.get("path") and (target.get("type") or "") != "binary" and not host_path_exists(absolute + "/" + _xcode_swift_package_target_path(target))
+    ]
+    if unresolved:
         # `dump-package` preserves manifest details but omits target paths computed
-        # by SwiftPM. `describe` supplies those paths. This is needed when the
-        # computed location differs from the default `Sources/<target>`, such as
-        # `CustomPath/MyLibrary`.
-        description = json_decode(host_command([
+        # by SwiftPM. `describe` supplies those paths when the computed location
+        # differs from the default `Sources/<target>`, such as `Source/MyLibrary`.
+        # `describe` also validates the package layout and local binary artifacts,
+        # which `dump-package` does not, so a failure keeps the dumped manifest
+        # instead of failing analysis.
+        output = host_command([
             swift,
             "package",
             "--package-path",
@@ -2416,7 +2423,8 @@ def _xcode_swift_package_info(ctx, package_dir, identity = "", cache = None):
             "describe",
             "--type",
             "json",
-        ]))
+        ], check = False).strip()
+        description = json_decode(output) if output.startswith("{") else {}
         paths = {}
         for target in description.get("targets") or []:
             name = target.get("name") or ""

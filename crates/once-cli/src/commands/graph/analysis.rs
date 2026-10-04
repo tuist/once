@@ -910,9 +910,10 @@ async fn materialize_cached_outputs_with_events(
 ///   walking `PATH` (and verifying existence) as before.
 /// * A declared tool the workspace does not actually pin (for example a
 ///   rust target in a node-only workspace) is not managed by mise. Its
-///   preparation and resolution failures are logged and the executable is
-///   left out of the map, so the target falls back to the host toolchain
-///   instead of aborting the whole session.
+///   preparation and resolution failures are logged and the executable
+///   resolves from the host `PATH`, skipping mise shims, so the target
+///   falls back to the host toolchain instead of aborting the whole
+///   session.
 async fn resolve_graph_tools(
     workspace: &Path,
     graph: &[GraphTarget],
@@ -976,14 +977,19 @@ async fn resolve_graph_tools(
             "graph tool executable is not ready"
         );
     }
-    if all_managed && paths.len() == executable_names.len() {
+    // Host fallbacks must not be cached: a later run would reuse them and
+    // skip mise resolution until the configuration changes. Leaving the
+    // session without a fingerprint also stops `persist_graph_tool_cache`
+    // from writing them after the build.
+    let cacheable = all_managed && paths.len() == executable_names.len();
+    if cacheable {
         if let Err(error) = write_graph_tool_cache(workspace, fingerprint, &paths, &[]) {
             tracing::debug!(%error, "failed to persist graph tool paths");
         }
     }
     Ok(ResolvedGraphTools {
         paths,
-        fingerprint: Some(fingerprint),
+        fingerprint: cacheable.then_some(fingerprint),
         commands: Vec::new(),
     })
 }
