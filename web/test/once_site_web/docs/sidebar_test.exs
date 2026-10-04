@@ -6,9 +6,21 @@ defmodule OnceSiteWeb.Docs.SidebarTest do
   alias OnceSiteWeb.Docs.Sidebar.Item
 
   test "picks the tab from the slug prefix" do
+    assert Sidebar.tab_for_slug("/docs/reference") == :reference
     assert Sidebar.tab_for_slug("/docs/reference/cli/exec") == :reference
+    assert Sidebar.tab_for_slug("/docs/reference-other") == :guides
     assert Sidebar.tab_for_slug("/docs/guide/why") == :guides
     assert Sidebar.tab_for_slug("/docs") == :guides
+  end
+
+  test "adjacent pages follow reading order without wrapping or linking to groups" do
+    assert Sidebar.adjacent_pages("/docs/guide").previous == nil
+    assert Sidebar.adjacent_pages("/docs/guide").next.slug == "/docs/guide/getting-started"
+    assert Sidebar.adjacent_pages("/docs/guide/getting-started").previous.slug == "/docs/guide"
+    assert Sidebar.adjacent_pages("/docs/reference/prelude/index").next == nil
+    assert Sidebar.adjacent_pages("/docs/reference/events").next == nil
+    assert Sidebar.adjacent_pages("/docs/reference").previous == nil
+    assert Sidebar.adjacent_pages("/docs/unknown") == %{previous: nil, next: nil}
   end
 
   test "trees are groups of items with /docs slugs" do
@@ -39,6 +51,7 @@ defmodule OnceSiteWeb.Docs.SidebarTest do
       |> Enum.find(&(&1.label == "Infrastructure"))
 
     assert Map.new(infrastructure.items, &{&1.label, &1.icon}) == %{
+             "Connect A Project" => nil,
              "Daytona" => "daytona",
              "E2B" => "e2b",
              "Microsandbox" => "microsandbox",
@@ -46,6 +59,18 @@ defmodule OnceSiteWeb.Docs.SidebarTest do
              "Remote Execution" => nil,
              "Tuist" => "tuist"
            }
+  end
+
+  test "natively supported toolchains live in their own group with logos" do
+    toolchains = Enum.find(Sidebar.guide_tree(), &(&1.label == "Toolchains"))
+    typed_graph = Enum.find(Sidebar.guide_tree(), &(&1.label == "Typed Graph"))
+
+    labels = Enum.map(toolchains.items, & &1.label)
+
+    assert labels == Enum.sort(labels)
+    assert Enum.all?(toolchains.items, &is_binary(&1.icon))
+    assert Enum.find(toolchains.items, &(&1.label == "Bazel")).icon == "bazel"
+    refute Enum.any?(typed_graph.items, &(&1.label in labels))
   end
 
   test "exposes linting guides, commands, modules, and target kinds" do

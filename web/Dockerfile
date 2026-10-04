@@ -54,6 +54,7 @@ RUN mix deps.compile
 COPY web/priv priv
 COPY web/lib lib
 COPY web/assets assets
+COPY crates/once-events-client/proto /crates/once-events-client/proto
 
 # The reference generator (Mix.Tasks.Compile.OnceReference) runs during
 # `mix compile`; point it at the binary built in the Rust stage.

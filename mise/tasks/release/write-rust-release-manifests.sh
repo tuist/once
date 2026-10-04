@@ -34,6 +34,7 @@ manifest_files=(
   crates/once-cas/once.toml
   crates/once-host-tree/once.toml
   crates/once-core/once.toml
+  crates/once-events-client/once.toml
   crates/once-frontend/once.toml
   crates/once/once.toml
   crates/once-cli/once.toml
@@ -72,6 +73,7 @@ fi
 
 suffix="$(printf '%s' "${target}" | tr '.-' '__')"
 dependency_target="cargo_dependencies_${suffix}"
+
 case "${target}" in
   *-apple-ios*)
     release_flags='["-C", "opt-level=3", "-C", "codegen-units=1"]'
@@ -178,6 +180,33 @@ CARGO_PKG_VERSION = "${version}"
 # once release generated targets end
 EOF
 
+cat >>crates/once-events-client/once.toml <<EOF
+# once release generated targets start
+[[target]]
+name = "once_events_client_${suffix}"
+kind = "rust_library"
+deps = [
+  "crates/once-core/once_core_${suffix}",
+  "${dependency_target}",
+]
+srcs = ["src/**/*.rs", "proto/**/*.proto", "build.rs"]
+
+[target.attrs]
+crate_name = "once_events_client"
+crate_root = "src/lib.rs"
+edition = "2021"
+build_script = "build.rs"
+target = "${target}"
+rustc_flags = ${release_flags}
+cargo_package = "once-events-client"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/once-events-client"
+CARGO_PKG_NAME = "once-events-client"
+CARGO_PKG_VERSION = "${version}"
+# once release generated targets end
+EOF
+
 cat >>crates/once-frontend/once.toml <<EOF
 # once release generated targets start
 [[target]]
@@ -269,6 +298,7 @@ deps = [
   "crates/once-cas/once_cas_${suffix}",
   "crates/once-host-tree/once_host_tree_${suffix}",
   "crates/once-core/once_core_${suffix}",
+  "crates/once-events-client/once_events_client_${suffix}",
   "crates/once-frontend/once_frontend_${suffix}",
   "${dependency_target}",
 ]

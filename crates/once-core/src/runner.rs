@@ -574,6 +574,62 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn copied_input_sandbox_keeps_directory_modes_and_special_bits() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (tmp, cas) = fresh_cas();
+        std::fs::create_dir_all(tmp.path().join("tree/private")).unwrap();
+        std::fs::write(tmp.path().join("tree/private/tool"), "tool").unwrap();
+        std::fs::write(tmp.path().join("tree/open"), "open").unwrap();
+        let set = |path: &str, mode: u32| {
+            std::fs::set_permissions(tmp.path().join(path), std::fs::Permissions::from_mode(mode))
+                .unwrap();
+        };
+        set("tree/private/tool", 0o4755);
+        set("tree/private", 0o700);
+        set("tree", 0o750);
+        let output = WorkspacePath::try_from("out/modes.txt").unwrap();
+        let script = "{ ls -ld tree | cut -c1-10; ls -ld tree/private | cut -c1-10; \
+            [ -u tree/private/tool ] && echo setuid; } > out/modes.txt";
+        let action = Action::RunCommand {
+            argv: vec!["/bin/sh".into(), "-c".into(), script.into()],
+            env: BTreeMap::new(),
+            cwd: None,
+            input_digest: Some(Digest::of_bytes(b"sandbox-modes")),
+            inputs: vec![
+                WorkspacePath::try_from("tree/private/tool").unwrap(),
+                WorkspacePath::try_from("tree/open").unwrap(),
+            ],
+            outputs: vec![output.clone()],
+            stdout_path: None,
+            stderr_path: None,
+            output_symlink_mode: OutputSymlinkMode::default(),
+            resources: ResourceRequest::default(),
+            sandbox: SandboxMode::CopiedInputs,
+            network: NetworkPolicy::default(),
+            timeout_ms: None,
+            success_exit_codes: vec![0],
+            remote: None,
+        };
+
+        let first = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+
+        assert_eq!(first.result.exit_code, 0);
+        assert_eq!(
+            std::fs::read_to_string(output.resolve(tmp.path())).unwrap(),
+            "drwxr-x---\ndrwx------\nsetuid\n"
+        );
+        // Restrictive directories are restored for the next run to clean up.
+        let second = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+        assert_eq!(second.result.exit_code, 0);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn input_sandbox_creates_declared_cwd() {
         let (tmp, cas) = fresh_cas();
         let output = WorkspacePath::try_from("pkg/result.txt").unwrap();
@@ -755,6 +811,7 @@ mod tests {
                 kind: ArchiveEntryKind::File,
                 source: Some(WorkspacePath::try_from("src/hello").unwrap()),
                 path: "usr/local/bin/hello".to_string(),
+                target: None,
                 mode: 0o755,
                 directory_mode: 0o755,
                 owner_id: 0,
@@ -763,6 +820,7 @@ mod tests {
             }],
             output: WorkspacePath::try_from("out/layer.tar").unwrap(),
             sha256_output: Some(WorkspacePath::try_from("out/layer.tar.sha256").unwrap()),
+            uncompressed_sha256_output: None,
             format: ArchiveFormat::Tar,
             input_digest: Some(Digest::of_bytes(b"write-archive")),
         };

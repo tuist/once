@@ -1,0 +1,107 @@
+[[target]]
+name = "NativeValue"
+kind = "apple_system_module"
+srcs = ["Sources/NativeValue/include/*"]
+
+[target.attrs]
+modulemap = "Sources/NativeValue/include/module.modulemap"
+headers = ["Sources/NativeValue/include/NativeValue.h"]
+
+[[target]]
+name = "Left"
+kind = "apple_library"
+srcs = ["Sources/Left/*.swift"]
+deps = ["NativeValue"]
+
+[target.attrs]
+platform = "macos"
+explicit_modules = true
+exported_deps = ["NativeValue"]
+dependency_check = "error"
+
+[[target]]
+name = "Right"
+kind = "apple_library"
+srcs = ["Sources/Right/*.swift"]
+deps = ["NativeValue"]
+
+[target.attrs]
+platform = "macos"
+explicit_modules = true
+exported_deps = ["NativeValue"]
+dependency_check = "error"
+
+[[target]]
+name = "Main"
+kind = "apple_executable"
+srcs = ["Sources/Main/*.swift"]
+deps = ["Left", "Right"]
+
+[target.attrs]
+platform = "macos"
+explicit_modules = true
+dependency_check = "error"
+
+[[target]]
+name = "native"
+kind = "swift_package_workspace"
+srcs = ["Package.swift", "Sources/**/*"]
+
+[target.attrs]
+explicit_modules = true
+dependency_check = "error"
+
+[[target]]
+name = "Bridged"
+kind = "apple_library"
+srcs = ["Sources/Bridged/*.swift"]
+deps = ["NativeValue"]
+
+[target.attrs]
+platform = "macos"
+explicit_modules = true
+dependency_check = "error"
+bridging_header = "Sources/Bridged/Bridge.h"
+
+[[target]]
+name = "TestableApp"
+kind = "apple_application"
+srcs = ["Sources/TestableApp/*.swift"]
+
+[target.attrs]
+platform = "macos"
+bundle_id = "dev.once.explicit.testable"
+enable_testing = true
+explicit_modules = true
+
+[[target]]
+name = "AppAccess"
+kind = "apple_library"
+srcs = ["Sources/AppAccess/*.swift"]
+deps = ["TestableApp"]
+
+[target.attrs]
+platform = "macos"
+explicit_modules = true
+dependency_check = "error"
+
+[[target]]
+name = "Frame"
+kind = "apple_framework"
+srcs = ["Sources/Frame/*.swift"]
+
+[target.attrs]
+platform = "macos"
+bundle_id = "dev.once.explicit.frame"
+explicit_modules = true
+
+[[target]]
+name = "FrameAccess"
+kind = "apple_library"
+srcs = ["Sources/FrameAccess/*.swift"]
+deps = ["Frame"]
+
+[target.attrs]
+platform = "macos"
+explicit_modules = true
+dependency_check = "error"

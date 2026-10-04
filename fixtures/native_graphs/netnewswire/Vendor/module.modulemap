@@ -1,0 +1,4 @@
+framework module GraphVendor {
+    umbrella header "GraphVendor.h"
+    export *
+}

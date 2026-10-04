@@ -18,7 +18,7 @@ use super::store::{
     analysis_active, observe, with_store, with_store_mut, AnalysisObservations, CommandPolicy,
     DeclaredAction, DeclaredActionOperation, DeclaredArchiveEntry, DeclaredArchiveEntryKind,
     DeclaredArchiveFormat, DeclaredArgFile, DeclaredArgFileFormat, DeclaredCopyPathMode,
-    DeclaredPreparePathMode, HostCache, Observation,
+    DeclaredPreparePathMode, HostCache, Observation, HOST_COMMAND_OUTPUT_LIMIT,
 };
 use super::values::{
     json_to_value, toml_value_to_starlark, unpack_byte_list, unpack_string_dict, unpack_string_list,
@@ -149,12 +149,20 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     /// host process env. Both `argv` and `env` participate in the
     /// cache key, so a different `DEVELOPER_DIR` resolves to a
     /// different cached result. When set, `cwd` must be absolute.
+    ///
+    /// The captured output is capped at the default analysis limit. Pass
+    /// `max_output_bytes` to raise that bound for a command whose answer is
+    /// inherently large, such as a build system's action graph. The bound is
+    /// part of the recorded observation, so a later validation re-runs the
+    /// command under the same bound.
     /// Schema parsing returns `""`.
     fn host_command<'v>(
         argv: Value<'v>,
         env: Option<Value<'v>>,
         cwd: Option<&str>,
         merge_stderr: Option<bool>,
+        check: Option<bool>,
+        max_output_bytes: Option<Value<'v>>,
     ) -> anyhow::Result<String> {
         if !analysis_active() {
             return Ok(String::new());
@@ -165,6 +173,20 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             .transpose()?
             .unwrap_or_default();
         let merge_stderr = merge_stderr.unwrap_or(false);
+        let check = check.unwrap_or(true);
+        let max_output_bytes = match max_output_bytes {
+            None => HOST_COMMAND_OUTPUT_LIMIT,
+            Some(value) => {
+                let bytes = value.unpack_i32().ok_or_else(|| {
+                    anyhow!(
+                        "expected `max_output_bytes` to be an integer, got `{}`",
+                        value.get_type()
+                    )
+                })?;
+                u64::try_from(bytes)
+                    .map_err(|_| anyhow!("expected `max_output_bytes` to be positive"))?
+            }
+        };
         let output = with_store(|store| -> Result<String> {
             let store = store.ok_or_else(|| anyhow!("host_command called outside analysis"))?;
             if let Some(cwd) = cwd {
@@ -172,9 +194,14 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
                     return Err(anyhow!("host_command cwd must be absolute, got `{cwd}`"));
                 }
             }
-            store
-                .host_cache
-                .command(&argv, &env, cwd.map(Path::new), merge_stderr)
+            store.host_cache.command_checked(
+                &argv,
+                &env,
+                cwd.map(Path::new),
+                merge_stderr,
+                check,
+                max_output_bytes,
+            )
         })?;
         // The output digest rather than the output: a discovery command's
         // answer can be megabytes, and replay only needs to know whether the
@@ -187,8 +214,11 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             env,
             cwd: cwd.map(ToOwned::to_owned),
             merge_stderr,
+            check,
             output_sha256: sha256_hex(output.as_bytes()),
             program,
+            max_output_bytes: (max_output_bytes != HOST_COMMAND_OUTPUT_LIMIT)
+                .then_some(max_output_bytes),
         });
         Ok(output)
     }
@@ -209,6 +239,67 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             })
         })?;
         observe(Observation::FileDigest {
+            path: path.to_string(),
+            sha256: digest.clone(),
+        });
+        Ok(digest)
+    }
+
+    /// Return the size in bytes of one host file. This lets a deferred
+    /// planner describe a produced artifact, such as an archive layer, without
+    /// reading it into memory.
+    fn host_file_size(path: &str) -> anyhow::Result<i64> {
+        if !analysis_active() {
+            return Ok(0);
+        }
+        observe_host_path(Path::new(path))?;
+        let bytes = std::fs::metadata(path)
+            .with_context(|| format!("reading the size of host file `{path}`"))?
+            .len();
+        let bytes = i64::try_from(bytes).context("host file is larger than the supported size")?;
+        observe(Observation::FileSize {
+            path: path.to_string(),
+            bytes,
+        });
+        Ok(bytes)
+    }
+
+    /// Return where a host symbolic link points, exactly as written, or an
+    /// empty string when the path is not a symbolic link. A target kind uses
+    /// it to declare the files a linked input depends on.
+    fn host_symlink_target(path: &str) -> anyhow::Result<String> {
+        if !analysis_active() {
+            return Ok(String::new());
+        }
+        observe_host_path(Path::new(path))?;
+        let target = std::fs::read_link(path)
+            .map(|target| target.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        observe(Observation::SymlinkTarget {
+            path: path.to_string(),
+            target: target.clone(),
+        });
+        Ok(target)
+    }
+
+    #[allow(clippy::unnecessary_wraps)]
+    fn content_sha256(text: &str) -> anyhow::Result<String> {
+        Ok(sha256_hex(text.as_bytes()))
+    }
+
+    fn host_tree_sha256(path: &str) -> anyhow::Result<String> {
+        if !analysis_active() {
+            return Ok(String::new());
+        }
+        let source = Path::new(path);
+        if !source.is_absolute() || !source.is_dir() {
+            anyhow::bail!("host_tree_sha256 requires an absolute directory path");
+        }
+        let digest = with_store(|store| -> anyhow::Result<String> {
+            let store = store.context("host_tree_sha256 called outside analysis")?;
+            cached_host_tree_digest(&store.host_cache, &store.workspace_root, source)
+        })?;
+        observe(Observation::TreeDigest {
             path: path.to_string(),
             sha256: digest.clone(),
         });
@@ -357,6 +448,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         root: &str,
         excluded_paths: Option<Value<'v>>,
         excluded_names: Option<Value<'v>>,
+        include_empty_directories: Option<bool>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
         let heap = eval.heap();
@@ -380,8 +472,44 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             .iter()
             .map(|path| format!("path:{path}"))
             .chain(excluded_names.iter().map(|name| format!("name:{name}")))
+            .chain(
+                include_empty_directories
+                    .unwrap_or(false)
+                    .then(|| "empty-dirs".to_string()),
+            )
             .collect::<Vec<_>>();
         let resolved = observed_paths("walk_files", &[root.to_string()], &excludes)?;
+        Ok(heap.alloc(resolved.as_ref().clone()))
+    }
+
+    /// Walk a package-relative directory and return one `path<NUL>target` string
+    /// for every symbolic link under it, without following any. A target kind
+    /// uses it to declare the files a linked input depends on with one walk
+    /// and one recorded observation.
+    fn walk_symlinks<'v>(
+        root: &str,
+        excluded_paths: Option<Value<'v>>,
+        excluded_names: Option<Value<'v>>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<Value<'v>> {
+        let heap = eval.heap();
+        if !analysis_active() {
+            return Ok(heap.alloc(Vec::<String>::new()));
+        }
+        let excluded_paths = excluded_paths
+            .map(|value| unpack_string_list(value, "excluded_paths"))
+            .transpose()?
+            .unwrap_or_default();
+        let excluded_names = excluded_names
+            .map(|value| unpack_string_list(value, "excluded_names"))
+            .transpose()?
+            .unwrap_or_default();
+        let excludes = excluded_paths
+            .iter()
+            .map(|path| format!("path:{path}"))
+            .chain(excluded_names.iter().map(|name| format!("name:{name}")))
+            .collect::<Vec<_>>();
+        let resolved = observed_paths("walk_symlinks", &[root.to_string()], &excludes)?;
         Ok(heap.alloc(resolved.as_ref().clone()))
     }
 
@@ -435,6 +563,52 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             }
             None => Ok(name.to_string()),
         })
+    }
+
+    fn expand_actions<'v>(
+        implementation: &str,
+        inputs: Value<'v>,
+        outputs: Value<'v>,
+        args: Value<'v>,
+    ) -> anyhow::Result<NoneType> {
+        let inputs = unpack_string_list(inputs, "inputs")?;
+        let outputs = unpack_string_list(outputs, "outputs")?;
+        let args = args
+            .to_json_value()
+            .context("action planner arguments must be serializable data")?;
+        if implementation.is_empty() {
+            anyhow::bail!("expand_actions requires an implementation function name");
+        }
+        with_store_mut(|store| {
+            if let Some(store) = store {
+                store.actions.push(DeclaredAction {
+                    operation: Some(DeclaredActionOperation::ExpandActions {
+                        implementation: implementation.to_string(),
+                        args,
+                        build_dir: store.build_dir.clone(),
+                    }),
+                    argv: Vec::new(),
+                    arg_files: Vec::new(),
+                    inputs,
+                    outputs,
+                    stdout: None,
+                    stderr: None,
+                    clean_paths: Vec::new(),
+                    create_dirs: Vec::new(),
+                    cwd: None,
+                    env: BTreeMap::new(),
+                    sandbox: None,
+                    network: None,
+                    success_exit_codes: vec![0],
+                    cacheable: true,
+                    inherit_parent_env: false,
+                    depends_on_prior_actions: true,
+                    toolchain_identity: None,
+                    identifier: Some(format!("expand_actions:{implementation}")),
+                });
+            }
+        });
+        Ok(NoneType)
     }
 
     /// Declare a portable action that writes text or bytes at the
@@ -823,6 +997,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     /// a dict with `kind`, `path`, optional `source`, and explicit
     /// metadata. The initial `tar` format supports files, directories,
     /// and recursively expanded trees.
+    #[allow(clippy::too_many_arguments)]
     fn write_archive<'v>(
         entries: Value<'v>,
         output: &str,
@@ -831,12 +1006,18 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         inputs: Option<Value<'v>>,
         identifier: Option<String>,
         cacheable: Option<bool>,
+        uncompressed_sha256_output: Option<String>,
     ) -> anyhow::Result<NoneType> {
         if !analysis_active() {
             return Ok(NoneType);
         }
         let entries = unpack_archive_entries(entries)?;
         let format = parse_archive_format(format.as_deref())?;
+        if uncompressed_sha256_output.is_some() && format == DeclaredArchiveFormat::Tar {
+            anyhow::bail!(
+                "`write_archive.uncompressed_sha256_output` requires `format = \"tar.gz\"`"
+            );
+        }
         let mut inputs = inputs
             .map(|value| unpack_string_list(value, "inputs"))
             .transpose()?
@@ -845,7 +1026,10 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         inputs.sort();
         inputs.dedup();
         let mut outputs = vec![output.to_string()];
-        if let Some(path) = &sha256_output {
+        for path in [&sha256_output, &uncompressed_sha256_output]
+            .into_iter()
+            .flatten()
+        {
             outputs.push(path.clone());
         }
         let action = DeclaredAction {
@@ -853,6 +1037,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
                 entries,
                 output: output.to_string(),
                 sha256_output,
+                uncompressed_sha256_output,
                 format,
             }),
             argv: Vec::new(),
@@ -1202,8 +1387,9 @@ fn parse_prepare_path_mode(kind: &str) -> Result<DeclaredPreparePathMode> {
 fn parse_archive_format(format: Option<&str>) -> Result<DeclaredArchiveFormat> {
     match format.unwrap_or("tar") {
         "tar" => Ok(DeclaredArchiveFormat::Tar),
+        "tar.gz" => Ok(DeclaredArchiveFormat::TarGz),
         other => Err(anyhow!(
-            "expected `write_archive.format` to be `tar`, got `{other}`"
+            "expected `write_archive.format` to be `tar` or `tar.gz`, got `{other}`"
         )),
     }
 }
@@ -1234,20 +1420,29 @@ fn unpack_archive_entry(value: Value<'_>, index: usize) -> Result<DeclaredArchiv
         "file" => DeclaredArchiveEntryKind::File,
         "directory" => DeclaredArchiveEntryKind::Directory,
         "tree" => DeclaredArchiveEntryKind::Tree,
+        "symlink" => DeclaredArchiveEntryKind::Symlink,
         other => {
             return Err(anyhow!(
-                "expected `{field}.kind` to be `file`, `directory`, or `tree`, got `{other}`"
+                "expected `{field}.kind` to be `file`, `directory`, `tree`, or `symlink`, got `{other}`"
             ));
         }
     };
     let source = optional_string_field(&dict, "source")?;
+    let target = optional_string_field(&dict, "target")?;
+    if (kind == DeclaredArchiveEntryKind::Symlink) != target.is_some() {
+        return Err(anyhow!(
+            "expected `{field}.target` only on, and always on, a symlink entry"
+        ));
+    }
     match kind {
         DeclaredArchiveEntryKind::File | DeclaredArchiveEntryKind::Tree if source.is_none() => {
             return Err(anyhow!("expected `{field}` to contain `source`"));
         }
-        DeclaredArchiveEntryKind::Directory if source.is_some() => {
+        DeclaredArchiveEntryKind::Directory | DeclaredArchiveEntryKind::Symlink
+            if source.is_some() =>
+        {
             return Err(anyhow!(
-                "expected `{field}.source` to be omitted for a directory"
+                "expected `{field}.source` to be omitted for a directory or symlink"
             ));
         }
         _ => {}
@@ -1273,6 +1468,7 @@ fn unpack_archive_entry(value: Value<'_>, index: usize) -> Result<DeclaredArchiv
         kind,
         source,
         path: required_string_field(&dict, &field, "path")?,
+        target,
         mode,
         directory_mode,
         owner_id: u64::from(
@@ -1614,7 +1810,7 @@ fn expand_observed_paths(
 ) -> Result<Vec<String>> {
     match kind {
         "glob" => expand_globs_with_excludes(workspace_root, package, patterns, excludes),
-        "walk_files" | "walk_workspace_files" => {
+        "walk_files" | "walk_workspace_files" | "walk_symlinks" => {
             let root = patterns
                 .first()
                 .ok_or_else(|| anyhow!("{kind} requires a root"))?;
@@ -1628,12 +1824,14 @@ fn expand_observed_paths(
                 .filter_map(|entry| entry.strip_prefix("name:"))
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>();
-            walk_package_files(
+            walk_package_entries(
                 workspace_root,
                 package,
                 root,
                 &excluded_paths,
                 &excluded_names,
+                excludes.iter().any(|entry| entry == "empty-dirs"),
+                kind == "walk_symlinks",
             )
         }
         other => Err(anyhow!("unknown path expansion `{other}`")),
@@ -1741,7 +1939,7 @@ pub fn expansion_could_differ(
             return false;
         };
         match &compiled {
-            Some(patterns) => patterns.iter().any(|pattern| pattern.matches(relative)),
+            Some(patterns) => patterns.iter().any(|p| pattern_matches(p, relative)),
             None => patterns.iter().any(|root| {
                 let root = root.strip_prefix("./").unwrap_or(root);
                 relative == root || relative.starts_with(&format!("{root}/"))
@@ -1771,6 +1969,69 @@ pub(super) fn first_stale_observation(
         .map(|observation| format!("{observation:?}"))
 }
 
+/// Replay a recorded answer about one host file's size or link destination.
+fn file_attribute_holds(observation: &Observation) -> bool {
+    match observation {
+        Observation::SymlinkTarget { path, target } => {
+            std::fs::read_link(path)
+                .map(|actual| actual.to_string_lossy().into_owned())
+                .unwrap_or_default()
+                == *target
+        }
+        Observation::FileSize { path, bytes } => std::fs::metadata(path)
+            .is_ok_and(|metadata| i64::try_from(metadata.len()).ok().as_ref() == Some(bytes)),
+        Observation::FileExists { path, exists } => Path::new(path).is_file() == *exists,
+        Observation::PathExists { path, exists } => Path::new(path).exists() == *exists,
+        _ => false,
+    }
+}
+
+fn command_observation_holds(
+    host_cache: &HostCache,
+    observation: &Observation,
+    policy: CommandPolicy,
+) -> bool {
+    let Observation::Command {
+        argv,
+        env,
+        cwd,
+        merge_stderr,
+        check,
+        output_sha256,
+        program,
+        max_output_bytes,
+    } = observation
+    else {
+        return false;
+    };
+    match policy {
+        // Ask the command again rather than reasoning about what it reads.
+        // It is memoised for the whole invocation, so this costs one run
+        // however many targets recorded it. A version probe answered from
+        // the persisted tool cache is gated on the fingerprints of the tool
+        // binaries themselves, so that answer is not older than the
+        // toolchain it describes.
+        CommandPolicy::Rerun => host_cache
+            .command_checked(
+                argv,
+                env,
+                cwd.as_deref().map(Path::new),
+                *merge_stderr,
+                *check,
+                max_output_bytes.unwrap_or(HOST_COMMAND_OUTPUT_LIMIT),
+            )
+            .is_ok_and(|output| sha256_hex(output.as_bytes()) == *output_sha256),
+        // The caller cannot afford to ask again, so the most it can
+        // establish is that the same program would answer. A record written
+        // before the program was described cannot establish even that.
+        CommandPolicy::TrustDeclaredInputs => program.as_ref().is_some_and(|recorded| {
+            argv.first()
+                .and_then(|name| host_cache.program_identity(name))
+                .is_some_and(|actual| &actual == recorded)
+        }),
+    }
+}
+
 fn observation_holds(
     workspace_root: &Path,
     host_cache: &HostCache,
@@ -1784,49 +2045,20 @@ fn observation_holds(
         Observation::Which { name, resolved } => {
             host_cache.which(name).ok().as_ref() == Some(resolved)
         }
-        Observation::Command {
-            argv,
-            env,
-            cwd,
-            merge_stderr,
-            output_sha256,
-            program,
-        } => match policy {
-            // Ask the command again rather than reasoning about what it reads.
-            // It is memoised for the whole invocation, so this costs one run
-            // however many targets recorded it. A version probe answered from
-            // the persisted tool cache is gated on the fingerprints of the tool
-            // binaries themselves, so that answer is not older than the
-            // toolchain it describes.
-            CommandPolicy::Rerun => host_cache
-                .command(argv, env, cwd.as_deref().map(Path::new), *merge_stderr)
-                .is_ok_and(|output| &sha256_hex(output.as_bytes()) == output_sha256),
-            // The caller cannot afford to ask again, so the most it can
-            // establish is that the same program would answer. What it takes on
-            // in exchange is that the command's answer follows from the inputs
-            // the caller declared and from the rest of this ledger. A record
-            // written before the program was described cannot even establish
-            // that much.
-            CommandPolicy::TrustDeclaredInputs => program.as_ref().is_some_and(|recorded| {
-                argv.first()
-                    .and_then(|name| host_cache.program_identity(name))
-                    .is_some_and(|actual| &actual == recorded)
-            }),
-        },
+        Observation::Command { .. } => command_observation_holds(host_cache, observation, policy),
+        Observation::SymlinkTarget { .. }
+        | Observation::FileSize { .. }
+        | Observation::FileExists { .. }
+        | Observation::PathExists { .. } => file_attribute_holds(observation),
         Observation::FileDigest { path, sha256 } => host_cache
             .host_file_digest(Path::new(path), || file_sha256_hex(Path::new(path)))
             .is_ok_and(|actual| &actual == sha256),
         Observation::TreeDigest { path, sha256 } => {
             let source = Path::new(path);
             source.is_dir()
-                && host_tree_digest_cache(workspace_root)
-                    .digest("host-tree", source, || {
-                        once_host_tree::host_tree_sha256_hex(source)
-                    })
+                && cached_host_tree_digest(host_cache, workspace_root, source)
                     .is_ok_and(|actual| &actual == sha256)
         }
-        Observation::FileExists { path, exists } => Path::new(path).is_file() == *exists,
-        Observation::PathExists { path, exists } => Path::new(path).exists() == *exists,
         Observation::PathWithin { path, root, within } => {
             let resolved = |value: &str| std::fs::canonicalize(Path::new(value)).ok();
             match (resolved(path), resolved(root)) {
@@ -1897,6 +2129,7 @@ fn path_expansion_kind(kind: &str) -> &'static str {
         "glob" => "glob",
         "walk_files" => "walk_files",
         "walk_workspace_files" => "walk_workspace_files",
+        "walk_symlinks" => "walk_symlinks",
         _ => "unknown",
     }
 }
@@ -1974,6 +2207,26 @@ fn host_os_str() -> &'static str {
 /// Windows junctions are not exercised by tests yet; the `canonicalize` call
 /// covers them in production but a dedicated Windows test should land
 /// alongside Windows CI.
+///
+/// Glob match options used across `srcs`, `exclude`, and change-tracking
+/// pattern checks. `require_literal_separator` gives `*` and `?` shell-like
+/// semantics: a single `*` matches one path segment only, and matching across
+/// path separators requires `**`. Without this, `*.swift` at a package root
+/// silently absorbs every `.swift` file in every descendant directory,
+/// including files that belong to another package with its own `once.toml`.
+pub(super) const GLOB_MATCH_OPTIONS: glob::MatchOptions = glob::MatchOptions {
+    case_sensitive: true,
+    require_literal_separator: true,
+    require_literal_leading_dot: false,
+};
+
+/// Shorthand for `pattern.matches_with(path, GLOB_MATCH_OPTIONS)` so call
+/// sites stay readable when they inline several checks against the same
+/// pattern list.
+fn pattern_matches(pattern: &glob::Pattern, path: &str) -> bool {
+    pattern.matches_with(path, GLOB_MATCH_OPTIONS)
+}
+
 #[cfg(test)]
 pub(super) fn expand_globs(
     workspace_root: &Path,
@@ -2142,9 +2395,8 @@ fn collect_glob_matches(
                 return true;
             };
             let package_relative = workspace_path_relative_to_package(package, &ws_rel);
-            !excludes.iter().any(|pattern| {
-                pattern.matches(&format!("{package_relative}/__once_glob_descendant__"))
-            })
+            let descendant = format!("{package_relative}/__once_glob_descendant__");
+            !excludes.iter().any(|p| pattern_matches(p, &descendant))
         });
     for entry in walker {
         let entry = entry.with_context(|| {
@@ -2172,21 +2424,18 @@ fn collect_glob_matches(
         let ws_rel = normalize_logical_workspace_path(logical)?;
         let package_relative = workspace_path_relative_to_package(package, &ws_rel);
         let symlink_tree = metadata.file_type().is_symlink() && path.is_dir();
-        let matches = patterns.iter().any(|pattern| {
-            pattern.matches(&package_relative)
-                || symlink_tree
-                    && pattern.matches(&format!("{package_relative}/__once_glob_descendant__"))
+        let descendant = format!("{package_relative}/__once_glob_descendant__");
+        let matches = patterns.iter().any(|p| {
+            pattern_matches(p, &package_relative) || symlink_tree && pattern_matches(p, &descendant)
         });
         if !matches {
             continue;
         }
         let is_excluded = excludes
             .iter()
-            .any(|pattern| pattern.matches(&package_relative));
-        let excluded_symlink_tree = symlink_tree
-            && excludes.iter().any(|pattern| {
-                pattern.matches(&format!("{package_relative}/__once_glob_descendant__"))
-            });
+            .any(|p| pattern_matches(p, &package_relative));
+        let excluded_symlink_tree =
+            symlink_tree && excludes.iter().any(|p| pattern_matches(p, &descendant));
         if is_excluded || excluded_symlink_tree {
             continue;
         }
@@ -2285,6 +2534,23 @@ fn host_tree_digest_cache(workspace_root: &Path) -> Arc<once_host_tree::TreeDige
     )
 }
 
+fn cached_host_tree_digest(
+    host_cache: &HostCache,
+    workspace: &Path,
+    source: &Path,
+) -> Result<String> {
+    host_cache.host_tree_digest(source, || {
+        let cache = once_host_tree::TreeDigestCache::open(
+            workspace
+                .join(".once/host-tree-identities")
+                .join(sha256_hex(source.to_string_lossy().as_bytes())),
+        );
+        Ok(cache.digest("host-tree", source, || {
+            once_host_tree::host_tree_sha256_hex(source)
+        })?)
+    })
+}
+
 fn workspace_path_relative_to_package(package: &str, workspace_path: &str) -> String {
     let package_parts = package
         .split('/')
@@ -2334,12 +2600,37 @@ fn normalize_logical_workspace_path(path: &Path) -> Result<String> {
     Ok(parts.join("/"))
 }
 
+#[cfg(test)]
 pub(super) fn walk_package_files(
     workspace_root: &Path,
     package: &str,
     root: &str,
     excluded_paths: &[String],
     excluded_names: &[String],
+) -> Result<Vec<String>> {
+    walk_package_entries(
+        workspace_root,
+        package,
+        root,
+        excluded_paths,
+        excluded_names,
+        false,
+        false,
+    )
+}
+
+/// Walk a package directory and return its files and symbolic links, plus,
+/// when asked, every directory that has no remaining entries. An archive or
+/// build context that copies a tree needs those directories to exist, and a
+/// list of files alone cannot say so.
+fn walk_package_entries(
+    workspace_root: &Path,
+    package: &str,
+    root: &str,
+    excluded_paths: &[String],
+    excluded_names: &[String],
+    include_empty_directories: bool,
+    symlink_targets: bool,
 ) -> Result<Vec<String>> {
     let package_dir = if package.is_empty() {
         workspace_root.to_path_buf()
@@ -2393,10 +2684,14 @@ pub(super) fn walk_package_files(
                         .any(|excluded| relative == excluded || relative.starts_with(excluded)))
         });
     let mut out = Vec::new();
+    let mut empty_directories = EmptyDirectories::default();
     for entry in walker {
         let entry =
             entry.with_context(|| format!("walking directory `{}`", requested_root.display()))?;
         let file_type = entry.file_type();
+        if include_empty_directories {
+            empty_directories.observe(&entry, &canonical_workspace);
+        }
         if !file_type.is_file() && !file_type.is_symlink() {
             continue;
         }
@@ -2414,13 +2709,65 @@ pub(super) fn walk_package_files(
             .map(|component| component.as_os_str().to_string_lossy().into_owned())
             .collect::<Vec<_>>()
             .join("/");
+        if symlink_targets {
+            if file_type.is_symlink() && !workspace_relative.is_empty() {
+                out.push(symlink_record(&workspace_relative, entry.path())?);
+            }
+            continue;
+        }
         if !workspace_relative.is_empty() {
             out.push(workspace_relative);
         }
     }
+    out.extend(empty_directories.finish());
     out.sort();
     out.dedup();
     Ok(out)
+}
+
+/// Directories seen during a walk, and which of them have an entry inside.
+#[derive(Default)]
+struct EmptyDirectories {
+    directories: std::collections::BTreeSet<String>,
+    occupied: std::collections::BTreeSet<String>,
+}
+
+impl EmptyDirectories {
+    fn observe(&mut self, entry: &walkdir::DirEntry, workspace: &Path) {
+        if entry.depth() == 0 {
+            return;
+        }
+        let relative = |path: &Path| {
+            path.strip_prefix(workspace)
+                .ok()
+                .map(|path| path.to_string_lossy().into_owned())
+        };
+        if let Some(parent) = entry.path().parent().and_then(relative) {
+            self.occupied.insert(parent);
+        }
+        if entry.file_type().is_dir() {
+            if let Some(directory) = relative(entry.path()) {
+                self.directories.insert(directory);
+            }
+        }
+    }
+
+    fn finish(self) -> Vec<String> {
+        self.directories
+            .into_iter()
+            .filter(|directory| !self.occupied.contains(directory))
+            .map(|directory| directory.replace(std::path::MAIN_SEPARATOR, "/"))
+            .collect()
+    }
+}
+
+fn symlink_record(workspace_relative: &str, path: &Path) -> Result<String> {
+    let target =
+        std::fs::read_link(path).with_context(|| format!("reading link `{}`", path.display()))?;
+    Ok(format!(
+        "{workspace_relative}\0{}",
+        target.to_string_lossy()
+    ))
 }
 
 fn normalize_walk_path(path: &str, field: &str, allow_empty: bool) -> Result<std::path::PathBuf> {
@@ -2516,10 +2863,12 @@ mod observation_completeness_tests {
     /// the same call with the same arguments cannot produce a different answer.
     const PURE: &[&str] = &[
         "cmd_args",
+        "content_sha256",
         "copy_path",
         "declare_output",
         "download_and_extract",
         "execution_path",
+        "expand_actions",
         "json_decode",
         "link_path",
         "prepare_path",
@@ -2541,14 +2890,18 @@ mod observation_completeness_tests {
         "host_file_exists",
         "host_file_read",
         "host_file_sha256",
+        "host_file_size",
         "host_os",
+        "host_symlink_target",
         "host_path_exists",
         "host_path_is_within",
         "host_read_dir",
+        "host_tree_sha256",
         "host_which",
         "host_which_optional",
         "glob",
         "walk_files",
+        "walk_symlinks",
         "walk_workspace_files",
         "materialize_host_file",
         "materialize_host_tree",

@@ -285,8 +285,12 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
                 "Expand package source patterns into sorted workspace paths, omitting matches selected by package-relative exclude patterns.",
             ),
             entry(
-                "walk_files(root, excluded_paths = [], excluded_names = [])",
+                "walk_files(root, excluded_paths = [], excluded_names = [], include_empty_directories = False)",
                 "Walk a package-relative directory into sorted workspace file and symbolic-link paths while pruning exact root-relative paths and names.",
+            ),
+            entry(
+                "walk_symlinks(root, excluded_paths = [], excluded_names = [])",
+                "Walk a package-relative directory and return one `path<NUL>target` string per symbolic link, without following links.",
             ),
             entry("host_arch()", "Read the normalized host architecture."),
             entry("host_os()", "Read the normalized host operating system."),
@@ -295,14 +299,18 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
             entry("host_which(name)", "Resolve a required executable."),
             entry("host_which_optional(name)", "Resolve an optional executable."),
             entry(
-                "host_command(argv, env = {}, cwd = None, merge_stderr = False)",
-                "Run a trusted discovery command whose arguments, environment, and working directory participate in analysis caching. It may write scratch state only under .once/tmp.",
+                "host_command(argv, env = {}, cwd = None, merge_stderr = False, check = True)",
+                "Run a trusted discovery command whose arguments, environment, and working directory participate in analysis caching. It may write scratch state only under .once/tmp. With check = False a non-zero exit returns the captured output instead of failing, for idempotent setup that a later probe verifies.",
             ),
             entry("host_file_exists(path)", "Test whether a host file exists."),
             entry("host_path_exists(path)", "Test whether a host file or directory exists."),
             entry("host_path_is_within(path, root)", "Test canonical host-path containment, resolving symbolic links."),
             entry("host_file_read(path)", "Read a host text file during analysis."),
             entry("host_file_sha256(path)", "Digest a host file used during analysis."),
+            entry("host_symlink_target(path)", "Read where a host symbolic link points, or an empty string when the path is not a link."),
+            entry("host_file_size(path)", "Read the size in bytes of a host file, for deferred planners that describe produced artifacts."),
+            entry("host_tree_sha256(path)", "Digest an absolute host directory, including file contents and tree structure. Reuses metadata-validated digests and records the tree as an analysis observation."),
+            entry("content_sha256(text)", "Digest text deterministically without reading the filesystem."),
             entry("host_file_contains(path, needle)", "Search a host text file."),
             entry("host_read_dir(path)", "List sorted names in a host directory."),
             entry(
@@ -319,6 +327,7 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
                 "Resolve a workspace-relative path against the local, sandbox, or remote execution root immediately before process launch.",
             ),
             entry("write_path(path, content)", "Declare a portable file-writing action."),
+            entry("expand_actions(implementation, inputs, outputs, args)", "After prior actions finish, materialize inputs and invoke an exported Starlark planner with ctx.args, ctx.inputs, ctx.outputs, ctx.build_dir and ctx.label. The planner declares actions producing every promised output and returns None or a structured diagnostic. Recursive expansion is rejected."),
             entry(
                 "copy_path(source, destination, kind = \"file\", inputs = [], toolchain_identity = None, identifier = None, cacheable = True)",
                 "Copy one workspace path by value, automatically hashing each source, materializing a directory symlink at the destination, or merge directory contents while preserving their symlink layout.",
@@ -344,8 +353,8 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
                 "Declare a deterministic workspace tree digest action that automatically hashes its root.",
             ),
             entry(
-                "write_archive(entries, output, sha256_output = None, format = \"tar\", inputs = [], identifier = None, cacheable = True)",
-                "Declare a deterministic archive from explicit file, directory, and tree entries with fixed metadata.",
+                "write_archive(entries, output, sha256_output = None, format = \"tar\", inputs = [], identifier = None, cacheable = True, uncompressed_sha256_output = None)",
+                "Declare a deterministic archive from explicit file, directory, tree, and symlink entries with fixed metadata. Format tar.gz compresses with a fixed gzip header; sha256_output then digests the compressed bytes and uncompressed_sha256_output the tar.",
             ),
             entry(
                 "download_and_extract(url, sha256, destination, authorization_env = None, identifier = None, cacheable = True)",

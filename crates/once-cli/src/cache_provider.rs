@@ -117,7 +117,7 @@ pub(crate) fn credentials_root(xdg: &Xdg) -> PathBuf {
     xdg.config_home.join("once").join("credentials")
 }
 
-fn resolve_config(workspace: &Path, xdg: &Xdg) -> Result<ResolvedCacheProviderConfig> {
+pub(crate) fn resolve_config(workspace: &Path, xdg: &Xdg) -> Result<ResolvedCacheProviderConfig> {
     resolve_config_with_env(workspace, xdg, std::env::var(ONCE_CACHE_PROVIDER_ENV).ok())
 }
 
@@ -477,6 +477,31 @@ fn non_empty_str(value: &str) -> Option<&str> {
         None
     } else {
         Some(trimmed)
+    }
+}
+
+/// The Tuist account this workspace's cache is configured against.
+///
+/// Read from the resolved cache provider config so the live reporter's
+/// gRPC target and the credentials it uses are the same the cache leg
+/// of the workspace is already using. Returns `None` when the workspace
+/// has no Tuist cache provider configured.
+pub fn account(workspace: &std::path::Path) -> Option<String> {
+    let xdg = once_core::Xdg::from_env();
+    match resolve_config(workspace, &xdg).ok()? {
+        ResolvedCacheProviderConfig::Tuist(config) => config.account,
+        ResolvedCacheProviderConfig::Local => None,
+    }
+}
+
+/// The Tuist project this workspace's cache is configured against.
+///
+/// Mirrors [`account`] - same resolution path, same `None` meaning.
+pub fn project(workspace: &std::path::Path) -> Option<String> {
+    let xdg = once_core::Xdg::from_env();
+    match resolve_config(workspace, &xdg).ok()? {
+        ResolvedCacheProviderConfig::Tuist(config) => config.project,
+        ResolvedCacheProviderConfig::Local => None,
     }
 }
 

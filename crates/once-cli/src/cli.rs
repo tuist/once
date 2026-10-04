@@ -233,9 +233,11 @@ pub enum Cmd {
     /// match a cached action key reuse the prior outputs; everything
     /// else runs and lands its declared outputs in
     /// `<workspace>/.once/out/<target>/`. Use `once query targets` to
-    /// list available ids. When no target is supplied, Once builds the
-    /// single discovered workspace root. An ambiguous or explicitly authored
-    /// graph still requires a target.
+    /// list available ids. With no target and no `--all`, Once builds
+    /// every workspace-owned target that exposes `build`, in id order,
+    /// and fails fast when one build fails. Pass `--all` to include
+    /// every build-capable target in the loaded graph, including targets
+    /// reached through vendored dependencies.
     Build {
         /// Local filesystem sandbox policy for command actions.
         #[usage(long, default = "off")]
@@ -249,16 +251,14 @@ pub enum Cmd {
         #[usage(long, value_name = "KEY=VALUE")]
         config: Vec<String>,
 
-        /// Start the local Runs interface for this Once build.
-        ///
-        /// Once serves the client interface from this process. The page
-        /// receives the build target, dependency graph, cache decision,
-        /// duration, action digest, and output as the build progresses.
-        #[usage(long)]
-        ui: bool,
+        /// Build every build-capable target in the loaded graph, including
+        /// targets reached through vendored dependencies. Without it the
+        /// targetless default builds only workspace-owned targets.
+        #[usage(long, conflicts = "target")]
+        all: bool,
 
-        /// Target id, such as `services/api/Api` or `./Api`. Omit it to build
-        /// the single automatically discovered workspace root.
+        /// Target id, such as `services/api/Api` or `./Api`. Omit it to
+        /// build every workspace-owned build target discovered in the graph.
         target: Option<String>,
     },
 
@@ -266,6 +266,11 @@ pub enum Cmd {
     ///
     /// Executes the target's `lint` capability, normalizes its report,
     /// and returns a failing status when a finding meets `--fail-on`.
+    /// With no target and no `--all`, Once lints every workspace-owned
+    /// target that exposes `lint`, runs each one to completion, and
+    /// returns a failing status when any finding meets `--fail-on`.
+    /// Pass `--all` to include every lint-capable target in the loaded
+    /// graph, including targets reached through vendored dependencies.
     Lint {
         /// Local filesystem sandbox policy for command actions.
         #[usage(long, default = "off")]
@@ -279,7 +284,14 @@ pub enum Cmd {
         #[usage(long, default = "warning")]
         fail_on: LintSeverity,
 
-        /// Target id, such as `quality/python` or `./python`.
+        /// Lint every lint-capable target in the loaded graph, including
+        /// targets reached through vendored dependencies. Without it the
+        /// targetless default lints only workspace-owned targets.
+        #[usage(long, conflicts = "target")]
+        all: bool,
+
+        /// Target id, such as `quality/python` or `./python`. Omit it to
+        /// lint every workspace-owned lint target discovered in the graph.
         target: Option<String>,
     },
 
@@ -344,10 +356,6 @@ pub enum Cmd {
         /// Override the workspace build configuration. See `once build --config`.
         #[usage(long, value_name = "KEY=VALUE")]
         config: Vec<String>,
-
-        /// Start the local Runs interface for this Once test run.
-        #[usage(long)]
-        ui: bool,
 
         /// Maximum number of test batches to execute concurrently.
         /// Defaults to the host's available parallelism for an affected plan.
@@ -486,6 +494,38 @@ pub enum Cmd {
     Auth {
         #[usage(subcommand)]
         cmd: Option<AuthCmd>,
+    },
+
+    /// Provision a remote project and bind this workspace to it.
+    ///
+    /// Resolves an infrastructure provider by name, asks it to create or
+    /// select a project, and records the provider binding in the root
+    /// `once.toml` under `[infrastructures.<name>]` plus
+    /// `[infrastructure.cache]`. Provider protocol details stay behind the
+    /// provider, so a project is provisioned without coupling Once to any
+    /// one host.
+    Connect {
+        /// Provider reference, resolved like `once auth login --provider`.
+        #[usage(long)]
+        provider: String,
+
+        /// Account or organization that owns the project.
+        #[usage(long)]
+        account: Option<String>,
+
+        /// Project handle. Defaults to the workspace directory name when
+        /// `--create` is set.
+        #[usage(long)]
+        project: Option<String>,
+
+        /// Create the project when it does not exist, instead of only
+        /// binding an existing one.
+        #[usage(long)]
+        create: bool,
+
+        /// Print the binding without writing `once.toml`.
+        #[usage(long)]
+        dry_run: bool,
     },
 
     /// Inspect the project toolchain contract.
@@ -685,7 +725,6 @@ impl Cli {
         }
 
         match self.command.as_ref()? {
-            Cmd::Lint { target: None, .. } => Some(&["lint"]),
             Cmd::Run { target: None, .. } => Some(&["run"]),
             Cmd::Exec { argv, .. } if argv.is_empty() => Some(&["exec"]),
             Cmd::Cache { cmd: None } => Some(&["cache"]),
@@ -745,6 +784,7 @@ impl Cmd {
                 }
                 path
             }
+            Self::Connect { .. } => vec!["connect"],
             Self::Toolchain { cmd } => {
                 let mut path = vec!["toolchain"];
                 if let Some(cmd) = cmd {

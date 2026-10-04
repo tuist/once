@@ -45,7 +45,7 @@ jobs:
           rust_ci=false
           while IFS= read -r path; do
             case "$path" in
-              Cargo.toml|Cargo.lock|mise.toml|once.toml|crates/*|spec/*|mise/tasks/*|.cargo/*)
+              .github/workflows/once.yml|Cargo.toml|Cargo.lock|mise.toml|once.toml|crates/*|spec/*|fixtures/*|mise/tasks/*|.cargo/*)
                 rust_ci=true
                 ;;
             esac
@@ -68,7 +68,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.9.2"
+          version: "2026.9.3"
           experimental: true
           cache: true
       - run: rustup component add rustfmt
@@ -87,7 +87,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.9.2"
+          version: "2026.9.3"
           experimental: true
           cache: true
       - run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
@@ -104,6 +104,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust_ci == 'true'
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -116,7 +119,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.9.2"
+          version: "2026.9.3"
           experimental: true
           cache: true
       - if: runner.os == 'Linux'
@@ -126,15 +129,51 @@ jobs:
           shared-key: tests-${{ matrix.os }}
           cache-on-failure: true
           cache-bin: false
-      - run: mise exec -- cargo test --workspace --all-targets
+      # The tests exercise this change's target kinds, so they run through a
+      # Once built from the checked-out source rather than the latest release.
+      - name: Resolve bootstrap Once
+        id: bootstrap
+        run: echo "bin=$(./mise/tasks/release/bootstrap-once.sh)" >> "$GITHUB_OUTPUT"
+        env:
+          ONCE_BOOTSTRAP_SOURCE: source
+      - name: Materialize Rust graph dependencies
+        run: ./mise/tasks/release/prepare-rust-graph-deps.sh
+      # Fork pull requests cannot mint an OpenID Connect token, so they
+      # fall back to the local cache and skip run reporting.
+      - name: Authenticate with Tuist
+        id: once-cache-auth
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
+        run: '"${{ steps.bootstrap.outputs.bin }}" auth login --provider tuist --no-browser'
+      # Selecting by the `crates` path schedules every Rust test target in
+      # one run and leaves the website tests to the web workflow.
+      - name: Test with Once
+        run: |
+          if ! "${{ steps.bootstrap.outputs.bin }}" test --changed-path crates --format json > once-tests.json; then
+            jq '.runs[] | select(.success != true)' once-tests.json || cat once-tests.json
+            exit 1
+          fi
+        env:
+          ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
+      - name: Preserve failed test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: once-test-diagnostics-${{ matrix.os }}
+          path: |
+            once-tests.json
+            .once/out/**/test/**/*.log
+            .once/out/**/test/**/test_results.json
+          include-hidden-files: true
 
   release-build:
     name: release build (${{ matrix.os }})
     needs: changes
     if: needs.changes.outputs.rust_ci == 'true'
     runs-on: ${{ matrix.os }}
-    env:
-      ONCE_CACHE_PROVIDER: local
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -147,7 +186,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.9.2"
+          version: "2026.9.3"
           experimental: true
           cache: true
       - if: runner.os == 'Linux'
@@ -157,10 +196,23 @@ jobs:
           shared-key: release-build-${{ matrix.os }}
           cache-on-failure: true
           cache-bin: false
+      - name: Resolve bootstrap Once
+        id: bootstrap
+        run: echo "bin=$(./mise/tasks/release/bootstrap-once.sh)" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ONCE_BOOTSTRAP_SOURCE: source
+      # Fork pull requests cannot mint an OpenID Connect token, so they
+      # fall back to the local cache and skip run reporting.
+      - name: Authenticate with Tuist
+        id: once-cache-auth
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
+        run: '"${{ steps.bootstrap.outputs.bin }}" auth login --provider tuist --no-browser'
       - name: Build release binary with Once
         run: |
           set -euo pipefail
-          once_bin="$(./mise/tasks/release/bootstrap-once.sh)"
+          once_bin="${{ steps.bootstrap.outputs.bin }}"
           host_target="$(rustc -vV | sed -n 's/^host: //p')"
           suffix="$(printf '%s' "${host_target}" | tr '.-' '__')"
           target_id="crates/once-cli/once_cli_${suffix}"
@@ -172,7 +224,7 @@ jobs:
           cp ".once/out/${target_id}/once" target/release/once
         env:
           GH_TOKEN: ${{ github.token }}
-          ONCE_BOOTSTRAP_SOURCE: source
+          ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
       - uses: actions/upload-artifact@v7
         with:
           name: once-${{ matrix.os }}
@@ -194,7 +246,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.9.2"
+          version: "2026.9.3"
           experimental: true
           cache: true
       - run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
@@ -279,7 +331,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.9.2"
+          version: "2026.9.3"
           experimental: true
           cache: true
       - if: runner.os == 'Linux'
@@ -312,7 +364,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.9.2"
+          version: "2026.9.3"
           experimental: true
           cache: true
       - uses: actions/download-artifact@v8

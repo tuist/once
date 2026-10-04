@@ -9,7 +9,11 @@
     </.link>
   <% else %>
     <%= if Enum.empty?(item.items) do %>
-      <.link patch={docs_path(item.slug)} data-part="nav-link">
+      <.link
+        patch={docs_path(item.slug)}
+        data-part="nav-link"
+        phx-click={close_mobile_navigation()}
+      >
         <.tab_menu_vertical
           label={item.label}
           data-selected={Sidebar.item_active?(item, @current_slug)}
@@ -28,7 +32,11 @@
         <div data-part="root">
           <%= if item.slug do %>
             <div data-part="nav-row">
-              <.link patch={docs_path(item.slug)} data-part="nav-link">
+              <.link
+                patch={docs_path(item.slug)}
+                data-part="nav-link"
+                phx-click={close_mobile_navigation()}
+              >
                 <.tab_menu_vertical
                   label={item.label}
                   data-selected={Sidebar.item_active?(item, @current_slug)}

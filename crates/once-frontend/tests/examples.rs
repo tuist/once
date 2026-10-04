@@ -579,12 +579,13 @@ fn local_swift_package(root: &Path) -> (String, String) {
     fs::create_dir_all(remote.join("Sources/RemoteSupport")).expect("remote source directory");
     fs::write(
         remote.join("Package.swift"),
-        r#"// swift-tools-version: 6.0
+        r#"// swift-tools-version: 6.1
 import PackageDescription
 
 let package = Package(
     name: "RemoteSupport",
     products: [.library(name: "RemoteSupport", targets: ["RemoteSupport"])],
+    traits: [.trait(name: "RemoteFeature")],
     targets: [.target(name: "RemoteSupport")]
 )
 "#,
@@ -592,7 +593,7 @@ let package = Package(
     .expect("remote package manifest");
     fs::write(
         remote.join("Sources/RemoteSupport/RemoteSupport.swift"),
-        "public func remoteValue() -> Int { 42 }\n",
+        "#if RemoteFeature\npublic func remoteValue() -> Int { 42 }\n#endif\n",
     )
     .expect("remote source");
     for args in [
@@ -629,13 +630,13 @@ fn swift_package_native_project_lowers_remote_packages_directly() {
     fs::write(
         tmp.path().join("Package.swift"),
         format!(
-            r#"// swift-tools-version: 6.0
+            r#"// swift-tools-version: 6.1
 import PackageDescription
 
 let package = Package(
     name: "LazyRemote",
     dependencies: [
-        .package(url: "{remote_url}", exact: "1.0.0"),
+        .package(url: "{remote_url}", exact: "1.0.0", traits: ["RemoteFeature"]),
     ],
     targets: [
         .target(name: "App", dependencies: [
@@ -650,23 +651,16 @@ let package = Package(
     .expect("package manifest");
     fs::write(
         tmp.path().join("Package.resolved"),
-        format!(
-            r#"{{
-  "version": 3,
-  "pins": [
-    {{
-      "identity": "remote-support",
-      "kind": "remoteSourceControl",
-      "location": "{remote_url}",
-      "state": {{
-        "revision": "{revision}",
-        "version": "1.0.0"
-      }}
-    }}
-  ]
-}}
-"#
-        ),
+        serde_json::to_vec(&serde_json::json!({
+            "version": 3,
+            "pins": [{
+                "identity": "remote-support",
+                "kind": "remoteSourceControl",
+                "location": remote_url,
+                "state": {"revision": revision, "version": "1.0.0"},
+            }],
+        }))
+        .expect("package lock encoding"),
     )
     .expect("package lock");
     fs::write(
@@ -706,6 +700,11 @@ let package = Package(
                     == Some(&AttrValue::String("RemoteSupport".to_string()))
         })
         .expect("directly lowered remote library");
+    assert!(matches!(
+        remote.attrs.get("defines"),
+        Some(AttrValue::List(defines))
+            if defines.contains(&AttrValue::String("RemoteFeature".to_string()))
+    ));
     let app = graph
         .iter()
         .find(|target| target.label.id == "SwiftPackage_LazyRemote_App")

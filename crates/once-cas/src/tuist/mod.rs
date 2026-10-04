@@ -1,5 +1,8 @@
 mod auth;
 mod cache;
+mod projects;
+#[cfg(test)]
+pub(crate) mod test_env;
 
 use reqwest::Url;
 
@@ -7,6 +10,7 @@ use crate::{Error, Result};
 
 pub use auth::{TuistAuth, TuistAuthPrompt, TUIST_APP_OAUTH_CLIENT_ID, TUIST_OAUTH_CLIENT_ID_ENV};
 pub use cache::TuistCache;
+pub use projects::{ProjectCreateError, RemoteProject, TuistProjects};
 
 const PROVIDER_NAME: &str = "tuist";
 const ENDPOINTS_PATH: &str = "api/cache/endpoints";

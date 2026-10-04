@@ -37,7 +37,35 @@ directory, stages the required testing frameworks, and launches the declared
 application under test. Compilation, linking, packaging, and signing remain
 Once build actions.
 
+A bundle that depends on a Swift macro links the macro and imports its module,
+so code guarded by `canImport` of the macro module compiles. A macro only ever
+builds for the host, so a test bundle that depends on one builds for the host
+as well, along with everything it depends on.
+
+## Reported Results
+
+A Swift Testing bundle reports every test and what became of it. The testing
+library records the run and Once turns that record into normalized results, so
+a test that was filtered out, skipped, or never reached is reported as such
+rather than as a pass, and an issue the test marked as known is not a failure.
+
+Where results come from the XCTest host, Once translates the host's per-case
+completion records into normalized outcomes and durations. This includes Swift
+Testing cases that the host runs alongside XCTest cases. Once also lists cases
+found in sources so a shard can address them; a case without a completion
+record stays unknown rather than being credited with a pass. A bundle stays
+with the XCTest host when it holds XCTest cases, which only that host runs, and
+when it runs anywhere other than macOS.
+
 ## Attributes
+
+`explicit_modules` is a boolean, defaulting to `false`, that enables
+compiler-scanned, cacheable Swift and Clang module actions.
+`dependency_check` accepts `"off"` (the default) or `"error"`; checking
+requires explicit modules. See [explicit modules](/guide/graph/apple#explicit-modules-and-dependency-checks)
+for native propagation, dependency errors, and current limitations.
+The resolver-owned `_declared_deps` metadata preserves declarations before
+import inference and should not be authored manually.
 
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -79,6 +107,17 @@ Once build actions.
 | `swift_testing` | bool | no | `false` | Run sources that use Swift Testing (`import Testing`) through the generic Once test capability |
 | `ui_testing` | bool | no | `false` | Package the bundle inside the platform test runner and launch an application under test |
 | `labels` | list&lt;string&gt; | no | `[]` | Agent-readable labels used for filtering or policy |
+
+The `prepackage_actions` attribute accepts an ordered `list<string>` of
+serialized script records, defaulting to `[]`. These run after linking and
+before resource processing, so generated resources feed packaging.
+
+The `postbuild_actions` attribute accepts an ordered `list<string>` of
+serialized script records, defaulting to `[]`. These actions run after
+product assembly and before final signing. Complete declarations may be
+cached; untracked scripts rerun and publish changes to known product files.
+See [native script phases](/docs/guide/graph/apple/xcode#script-build-phases)
+for mapped build settings and file-list variables.
 
 ## Dependency Edges
 

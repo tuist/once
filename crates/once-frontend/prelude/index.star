@@ -2,7 +2,9 @@ PRELUDE_SOURCES = [
     "common.star",
     "archive.star",
     "lint.star",
+    "apple_modules.star",
     "apple.star",
+    "jvm_test_runner.star",
     "android.star",
     "go.star",
     "rust.star",
@@ -20,11 +22,19 @@ PRELUDE_SOURCES = [
     "nx.star",
     "react_native.star",
     "oci.star",
+    "dockerfile_parser.star",
+    "dockerfile_actions.star",
     "dockerfile.star",
+    "oci_registry.star",
     "bazel.star",
 ]
 
 PRELUDE_DEPENDENCIES = {
+    "dockerfile.star": ["dockerfile_parser.star", "dockerfile_actions.star", "lint.star"],
+    "oci_registry.star": ["oci.star"],
+    "apple.star": ["apple_modules.star"],
+    "android.star": ["jvm_test_runner.star"],
+    "kotlin.star": ["jvm_test_runner.star"],
     "xcode.star": ["apple.star", "archive.star"],
     "react_native.star": ["android.star"],
     "swift_package.star": ["apple.star", "xcode.star"],
@@ -146,6 +156,13 @@ PRELUDE_TARGET_KINDS = {
     "oci.star": [
         "oci_layer",
         "oci_image",
+        "oci_index",
+    ],
+    "oci_registry.star": [
+        "oci_import",
+        "oci_pull",
+        "oci_load",
+        "oci_push",
     ],
     "dockerfile.star": [
         "dockerfile_image",

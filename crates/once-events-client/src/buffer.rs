@@ -10,6 +10,7 @@
 use std::collections::VecDeque;
 
 use crate::proto::RunEvent;
+use prost::Message;
 
 /// A single unacknowledged event awaiting send or ack.
 #[derive(Clone, Debug)]
@@ -28,6 +29,9 @@ pub enum RingPushOutcome {
         first: u64,
         last: u64,
     },
+    OversizedDropped {
+        seq: u64,
+    },
 }
 
 /// Bounded ring holding unacknowledged non-terminal events plus a
@@ -41,6 +45,9 @@ pub enum RingPushOutcome {
 pub struct RingBuffer {
     events: VecDeque<PendingEvent>,
     ordinary_capacity: usize,
+    max_encoded_bytes: usize,
+    encoded_bytes: usize,
+    finalizing_slot: Option<PendingEvent>,
     terminal_slot: Option<PendingEvent>,
 }
 
@@ -49,9 +56,16 @@ impl RingBuffer {
     /// terminal slot is always exactly one; supplying zero is treated
     /// as one so producers can never wedge on an empty ring.
     pub fn new(ordinary_capacity: usize) -> Self {
+        Self::with_byte_capacity(ordinary_capacity, 8 * 1024 * 1024)
+    }
+
+    pub fn with_byte_capacity(ordinary_capacity: usize, max_encoded_bytes: usize) -> Self {
         Self {
             events: VecDeque::with_capacity(ordinary_capacity.max(1)),
             ordinary_capacity: ordinary_capacity.max(1),
+            max_encoded_bytes,
+            encoded_bytes: 0,
+            finalizing_slot: None,
             terminal_slot: None,
         }
     }
@@ -61,17 +75,27 @@ impl RingBuffer {
     /// caller can extend its loss interval, and then place the new
     /// event.
     pub fn push_ordinary(&mut self, event: PendingEvent) -> RingPushOutcome {
-        if self.events.len() < self.ordinary_capacity {
+        let bytes = event.event.encoded_len();
+        if bytes > self.max_encoded_bytes {
+            return RingPushOutcome::OversizedDropped { seq: event.seq };
+        }
+        if self.events.len() < self.ordinary_capacity
+            && self.encoded_bytes + bytes <= self.max_encoded_bytes
+        {
+            self.encoded_bytes += bytes;
             self.events.push_back(event);
             return RingPushOutcome::Accepted;
         }
         let mut first_dropped = u64::MAX;
         let mut last_dropped = 0;
-        while self.events.len() >= self.ordinary_capacity {
+        while self.events.len() >= self.ordinary_capacity
+            || self.encoded_bytes + bytes > self.max_encoded_bytes
+        {
             let dropped = self
                 .events
                 .pop_front()
                 .expect("ordinary_capacity > 0 by construction");
+            self.encoded_bytes -= dropped.event.encoded_len();
             if dropped.seq < first_dropped {
                 first_dropped = dropped.seq;
             }
@@ -79,6 +103,7 @@ impl RingBuffer {
                 last_dropped = dropped.seq;
             }
         }
+        self.encoded_bytes += bytes;
         self.events.push_back(event);
         RingPushOutcome::OverflowDropped {
             first: first_dropped,
@@ -94,14 +119,33 @@ impl RingBuffer {
         self.terminal_slot = Some(event);
     }
 
+    pub fn place_finalizing(&mut self, event: PendingEvent) {
+        self.finalizing_slot.get_or_insert(event);
+    }
+
     /// Snapshot the current ordinary queue (in order) plus the
     /// terminal slot (last), for a send pass. The caller is expected
     /// to acknowledge them via [`Self::acknowledge_up_to`] once the
     /// server confirms.
     pub fn snapshot(&self) -> Vec<PendingEvent> {
-        let mut out: Vec<PendingEvent> = self.events.iter().cloned().collect();
-        if let Some(term) = &self.terminal_slot {
-            out.push(term.clone());
+        self.snapshot_up_to(
+            self.events.len()
+                + usize::from(self.finalizing_slot.is_some())
+                + usize::from(self.terminal_slot.is_some()),
+        )
+    }
+
+    pub fn snapshot_up_to(&self, max: usize) -> Vec<PendingEvent> {
+        let mut out: Vec<PendingEvent> = self.events.iter().take(max).cloned().collect();
+        if out.len() < max {
+            if let Some(finalizing) = &self.finalizing_slot {
+                out.push(finalizing.clone());
+            }
+        }
+        if out.len() < max {
+            if let Some(term) = &self.terminal_slot {
+                out.push(term.clone());
+            }
         }
         out
     }
@@ -111,7 +155,12 @@ impl RingBuffer {
     pub fn acknowledge_up_to(&mut self, acked_seq: u64) {
         while let Some(head) = self.events.front() {
             if head.seq <= acked_seq {
-                self.events.pop_front();
+                self.encoded_bytes -= self
+                    .events
+                    .pop_front()
+                    .expect("head exists")
+                    .event
+                    .encoded_len();
             } else {
                 break;
             }
@@ -120,6 +169,13 @@ impl RingBuffer {
             if term.seq <= acked_seq {
                 self.terminal_slot = None;
             }
+        }
+        if self
+            .finalizing_slot
+            .as_ref()
+            .is_some_and(|event| event.seq <= acked_seq)
+        {
+            self.finalizing_slot = None;
         }
     }
 
@@ -136,7 +192,7 @@ impl RingBuffer {
     /// True when neither the queue nor the terminal slot hold
     /// anything: the run has drained.
     pub fn is_empty(&self) -> bool {
-        self.events.is_empty() && self.terminal_slot.is_none()
+        self.events.is_empty() && self.finalizing_slot.is_none() && self.terminal_slot.is_none()
     }
 }
 
@@ -176,7 +232,7 @@ mod tests {
                 assert_eq!(first, 1);
                 assert_eq!(last, 1);
             }
-            other @ RingPushOutcome::Accepted => panic!("expected overflow, got {other:?}"),
+            other => panic!("expected overflow, got {other:?}"),
         }
         assert_eq!(ring.ordinary_len(), 2);
         let seqs: Vec<u64> = ring.snapshot().iter().map(|e| e.seq).collect();
@@ -195,7 +251,7 @@ mod tests {
                     assert!(first <= last);
                     assert!(first >= 1);
                 }
-                other @ RingPushOutcome::Accepted => panic!("expected overflow, got {other:?}"),
+                other => panic!("expected overflow, got {other:?}"),
             }
         }
         let seqs: Vec<u64> = ring.snapshot().iter().map(|e| e.seq).collect();
