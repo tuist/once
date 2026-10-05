@@ -54,7 +54,7 @@ defmodule OnceSite.MixProject do
       {:mdex, "~> 0.14"},
       {:nimble_publisher, "~> 2.0", runtime: false},
       {:flop, "~> 0.29.0"},
-      {:lumis, "~> 0.6"},
+      {:lumis, "~> 0.10"},
       {:floki, ">= 0.30.0"},
       {:noora, "~> 0.84"},
       {:carta, "~> 0.2"},
