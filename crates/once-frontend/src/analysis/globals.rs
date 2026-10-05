@@ -2325,10 +2325,7 @@ fn narrow_walk_root(package_dir: &Path, patterns: &[glob::Pattern]) -> Option<Pa
         } else if let Some(stripped) = literal.strip_suffix('/') {
             stripped
         } else {
-            match literal.rfind('/') {
-                Some(pos) => &literal[..pos],
-                None => return None,
-            }
+            &literal[..literal.rfind('/')?]
         };
         if dir_str.is_empty() {
             return None;

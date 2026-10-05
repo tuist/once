@@ -1490,7 +1490,7 @@ async fn run_uncached_redirected(
             .with_context(|| format!("declared action timed out after {ms}ms"))??,
         None => wait.await?,
     };
-    debug_assert!(capture_stderr == stderr_blob.is_some());
+    debug_assert_eq!(capture_stderr, stderr_blob.is_some());
     Ok(ActionResult {
         exit_code: status.code().unwrap_or(-1),
         stdout: None,

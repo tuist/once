@@ -465,7 +465,7 @@ mod tests {
 
         std::fs::remove_file(&link).unwrap();
         symlink(external.path().join("missing.txt"), &link).unwrap();
-        assert!(digest() != first);
+        assert_ne!(digest(), first);
     }
 
     #[test]

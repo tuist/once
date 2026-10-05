@@ -81,6 +81,9 @@ missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 module_name_repetitions = "allow"
 must_use_candidate = "allow"
+# Its suggested `assert_eq!(x, [] as [T; 0])` rewrite reads worse than
+# `assert!(x.is_empty())` across the test suite.
+assert_is_empty = "allow"
 
 [profile.release]
 lto = "thin"
