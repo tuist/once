@@ -49,7 +49,7 @@ thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io"] }
 tonic = { version = "0.14", features = ["tls-native-roots", "tls-ring"] }
-tree-sitter = "0.26.9"
+tree-sitter = "0.27.0"
 tree-sitter-cypher = "0.2.6"
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "multipart", "query", "rustls", "stream"] }
 sea-orm = { version = "1.1.20", default-features = false, features = ["macros", "runtime-tokio-rustls", "sqlx-sqlite"] }
