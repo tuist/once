@@ -3769,7 +3769,7 @@ name = "once-core"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
+ "base64 0.23.1",
  "blake3",
  "fd-lock",
  "flate2",
@@ -3820,7 +3820,7 @@ name = "once-frontend"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
+ "base64 0.23.1",
  "glob",
  "include_dir",
  "once-host-tree",
