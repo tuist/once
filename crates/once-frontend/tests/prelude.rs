@@ -35,6 +35,12 @@ mod rust_test_results;
 #[path = "prelude/test_result_adapters.rs"]
 mod test_result_adapters;
 
+#[path = "prelude/elixir_test_results.rs"]
+mod elixir_test_results;
+
+#[path = "prelude/shellspec_test_results.rs"]
+mod shellspec_test_results;
+
 #[path = "prelude/apple_modules.rs"]
 mod apple_modules;
 
@@ -58,6 +64,12 @@ mod dockerfile_instructions;
 
 #[path = "prelude/oci_containers.rs"]
 mod oci_containers;
+
+#[path = "prelude/zig_test_results.rs"]
+mod zig_test_results;
+
+#[path = "prelude/android_instrumentation_results.rs"]
+mod android_instrumentation_results;
 
 fn store_for(workspace: &Path, package: &str) -> AnalysisStore {
     AnalysisStore::new(

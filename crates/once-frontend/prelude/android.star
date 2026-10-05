@@ -1016,16 +1016,29 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public final class OnceAndroidInstrumentationRunner {
+  private static final int FAILURE_MESSAGE_LIMIT = 4000;
+
   private static final class CommandResult {
     final int exitCode;
     final String output;
+    final List<String> lines;
+    final List<Long> lineNanos;
 
     CommandResult(int exitCode, String output) {
+      this(exitCode, output, null, null);
+    }
+
+    CommandResult(int exitCode, String output, List<String> lines, List<Long> lineNanos) {
       this.exitCode = exitCode;
       this.output = output;
+      this.lines = lines;
+      this.lineNanos = lineNanos;
     }
   }
 
@@ -1034,6 +1047,8 @@ public final class OnceAndroidInstrumentationRunner {
     String name;
     String suite;
     String status;
+    long durationMs = -1;
+    String failure = "";
 
     TestCase(String id, String name, String suite, String status) {
       this.id = id;
@@ -1099,12 +1114,12 @@ public final class OnceAndroidInstrumentationRunner {
       command.add("-r");
       command.addAll(instrumentationArgs);
       command.add(component);
-      instrumentation = run(command);
+      instrumentation = runStreaming(command);
       appendCommand(nativeText, command, instrumentation);
     }
 
     boolean completed = instrumentation.exitCode == 0 && setupFailure.isEmpty() && instrumentationCompleted(instrumentation.output);
-    List<TestCase> cases = parseCases(target, instrumentation.output);
+    List<TestCase> cases = parseCases(target, instrumentation);
     if (cases.isEmpty()) {
       String status = completed ? "passed" : "failed";
       cases.add(new TestCase(target + "::instrumentation", "instrumentation", component, status));
@@ -1202,6 +1217,73 @@ public final class OnceAndroidInstrumentationRunner {
     }
   }
 
+  // `am instrument -r` prints a status block when each test starts (status
+  // code 1) and another when it ends. Reading the stream as it arrives lets
+  // the runner time each test between the two blocks as the host observes
+  // them; the raw output is kept byte for byte for the log.
+  private static CommandResult runStreaming(List<String> command) {
+    try {
+      Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
+      InputStream stream = process.getInputStream();
+      ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+      ByteArrayOutputStream line = new ByteArrayOutputStream();
+      List<String> lines = new ArrayList<>();
+      List<Long> lineNanos = new ArrayList<>();
+      byte[] chunk = new byte[8192];
+      // Only status lines and the start of stack values feed the parser, so
+      // other output is kept just once, in the raw log buffer.
+      boolean inStack = false;
+      int stackChars = 0;
+      while (true) {
+        int read = stream.read(chunk);
+        if (read < 0) {
+          break;
+        }
+        long now = System.nanoTime();
+        buffer.write(chunk, 0, read);
+        for (int i = 0; i < read; i++) {
+          if (chunk[i] == 10) {
+            String text = stripCarriageReturns(line.toString(StandardCharsets.UTF_8));
+            boolean keep;
+            if (text.startsWith("INSTRUMENTATION_")) {
+              inStack = text.startsWith("INSTRUMENTATION_STATUS: stack=");
+              stackChars = text.length();
+              keep = true;
+            } else {
+              keep = inStack && stackChars < FAILURE_MESSAGE_LIMIT * 2;
+              stackChars += text.length();
+            }
+            if (keep) {
+              lines.add(text);
+              lineNanos.add(now);
+            }
+            line.reset();
+          } else if (line.size() < 65536) {
+            // Status lines are short; the rest of a longer line stays only in
+            // the raw log buffer.
+            line.write(chunk[i]);
+          }
+        }
+      }
+      if (line.size() > 0) {
+        lines.add(stripCarriageReturns(line.toString(StandardCharsets.UTF_8)));
+        lineNanos.add(System.nanoTime());
+      }
+      int exitCode = process.waitFor();
+      return new CommandResult(exitCode, buffer.toString(StandardCharsets.UTF_8), lines, lineNanos);
+    } catch (Exception error) {
+      return new CommandResult(1, error.toString() + System.lineSeparator());
+    }
+  }
+
+  private static String stripCarriageReturns(String value) {
+    int end = value.length();
+    while (end > 0 && value.charAt(end - 1) == 13) {
+      end--;
+    }
+    return value.substring(0, end);
+  }
+
   private static String read(InputStream stream) throws Exception {
     ByteArrayOutputStream buffer = new ByteArrayOutputStream();
     byte[] chunk = new byte[8192];
@@ -1235,26 +1317,64 @@ public final class OnceAndroidInstrumentationRunner {
     return out.toString();
   }
 
-  private static List<TestCase> parseCases(String target, String output) {
+  private static List<TestCase> parseCases(String target, CommandResult result) {
     List<TestCase> cases = new ArrayList<>();
+    List<String> lines = new ArrayList<>();
+    List<Long> lineNanos = result.lineNanos;
+    if (result.lines != null) {
+      lines.addAll(result.lines);
+    } else {
+      Collections.addAll(lines, result.output.split("\\\\R"));
+    }
+    Map<String, Long> started = new HashMap<>();
     String className = "";
     String testName = "";
-    for (String line : output.split("\\\\R")) {
+    StringBuilder stack = null;
+    boolean inStack = false;
+    for (int index = 0; index < lines.size(); index++) {
+      String line = lines.get(index);
+      if (line.startsWith("INSTRUMENTATION_")) {
+        inStack = false;
+      } else if (inStack) {
+        stack.append((char)10).append(line);
+        continue;
+      }
       if (line.startsWith("INSTRUMENTATION_STATUS: class=")) {
         className = line.substring("INSTRUMENTATION_STATUS: class=".length()).trim();
       } else if (line.startsWith("INSTRUMENTATION_STATUS: test=")) {
         testName = line.substring("INSTRUMENTATION_STATUS: test=".length()).trim();
+      } else if (line.startsWith("INSTRUMENTATION_STATUS: stack=")) {
+        stack = new StringBuilder(line.substring("INSTRUMENTATION_STATUS: stack=".length()));
+        inStack = true;
       } else if (line.startsWith("INSTRUMENTATION_STATUS_CODE: ")) {
         String code = line.substring("INSTRUMENTATION_STATUS_CODE: ".length()).trim();
-        if (!className.isEmpty() && !testName.isEmpty() && !"1".equals(code)) {
+        String key = className + "#" + testName;
+        Long observed = lineNanos == null ? null : lineNanos.get(index);
+        if ("1".equals(code)) {
+          if (observed != null) {
+            started.put(key, observed);
+          }
+        } else if (!className.isEmpty() && !testName.isEmpty()) {
           String status = "failed";
           if ("0".equals(code)) {
             status = "passed";
           } else if ("-3".equals(code)) {
             status = "skipped";
           }
-          cases.add(new TestCase(target + "::" + className + "." + testName, testName, className, status));
+          TestCase testCase = new TestCase(target + "::" + className + "." + testName, testName, className, status);
+          Long start = started.remove(key);
+          // Lines that arrive in the same read share one timestamp, so a test
+          // whose start and end came together has no observed duration.
+          if (observed != null && start != null && observed > start && !"skipped".equals(status)) {
+            testCase.durationMs = (observed - start) / 1_000_000L;
+          }
+          if ("failed".equals(status) && stack != null) {
+            String message = stack.toString().strip();
+            testCase.failure = message.length() > FAILURE_MESSAGE_LIMIT ? message.substring(0, FAILURE_MESSAGE_LIMIT) : message;
+          }
+          cases.add(testCase);
         }
+        stack = null;
       }
     }
     return cases;
@@ -1386,7 +1506,20 @@ public final class OnceAndroidInstrumentationRunner {
       field(out, "attempts");
       out.append("[{");
       field(out, "status");
-      out.append(jsonString(testCase.status)).append("}],");
+      out.append(jsonString(testCase.status));
+      if (testCase.durationMs >= 0) {
+        out.append(',');
+        field(out, "duration_ms");
+        out.append(testCase.durationMs);
+      }
+      if ("failed".equals(testCase.status) && !testCase.failure.isEmpty()) {
+        out.append(',');
+        field(out, "failure");
+        out.append('{');
+        field(out, "message");
+        out.append(jsonString(testCase.failure)).append('}');
+      }
+      out.append("}],");
       field(out, "runner_metadata");
       out.append("{}");
       out.append('}');

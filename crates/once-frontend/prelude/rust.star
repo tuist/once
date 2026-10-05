@@ -2141,8 +2141,9 @@ fn parse_list(text: &str) -> Vec<String> {
 fn parse_outcomes(text: &str, cases: &[String], passed_run: bool) -> BTreeMap<String, CaseOutcome> {
     let known = cases.iter().map(String::as_str).collect::<BTreeSet<_>>();
     let lines = text.lines().collect::<Vec<_>>();
-    let mut out = BTreeMap::new();
+    let mut out: BTreeMap<String, CaseOutcome> = BTreeMap::new();
     let mut failure_order = Vec::new();
+    let mut conflicting = BTreeSet::new();
     // libtest prints captured output only in the `successes:` and `failures:`
     // sections after every result line, so result lines are read only before
     // the first section header that follows each case's first result line. A
@@ -2176,10 +2177,24 @@ fn parse_outcomes(text: &str, cases: &[String], passed_run: bool) -> BTreeMap<St
         if passed_run && outcome.status == "failed" {
             continue;
         }
-        if outcome.status == "failed" && !failure_order.contains(&name) {
+        // libtest prints one verdict per test. A second, different verdict
+        // for the same case means a test printed a look-alike under
+        // `--nocapture`, and the real one cannot be told apart, so the case
+        // reports no verdict rather than a guessed one.
+        if let Some(existing) = out.get(&name) {
+            if existing.status != outcome.status {
+                conflicting.insert(name);
+            }
+            continue;
+        }
+        if outcome.status == "failed" {
             failure_order.push(name.clone());
         }
         out.insert(name, outcome);
+    }
+    for name in &conflicting {
+        out.remove(name);
+        failure_order.retain(|failed| failed != name);
     }
     for (name, message) in parse_failure_messages(&lines[sections..], &failure_order) {
         if let Some(outcome) = out.get_mut(&name) {

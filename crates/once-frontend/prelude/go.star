@@ -641,6 +641,7 @@ type attempt struct {
 type caseDetails struct {
 	durations map[string]int64
 	outputs map[string]*strings.Builder
+	messages map[string]string
 }
 
 type testCase struct {
@@ -821,7 +822,7 @@ func exactPattern(names []string) string {
 
 func parseEvents(native []byte) (map[string]string, caseDetails, string, bool) {
 	statuses := map[string]string{}
-	details := caseDetails{durations: map[string]int64{}, outputs: map[string]*strings.Builder{}}
+	details := caseDetails{durations: map[string]int64{}, outputs: map[string]*strings.Builder{}, messages: map[string]string{}}
 	log := strings.Builder{}
 	packageFailed := false
 	scanner := bufio.NewScanner(strings.NewReader(string(native)))
@@ -844,6 +845,7 @@ func parseEvents(native []byte) (map[string]string, caseDetails, string, bool) {
 			case "fail":
 				statuses[value.Test] = "failed"
 				details.recordElapsed(value.Test, value.Elapsed)
+				details.finishFailure(value.Test)
 			case "skip":
 				statuses[value.Test] = "skipped"
 				delete(details.outputs, value.Test)
@@ -873,8 +875,46 @@ func (details caseDetails) appendOutput(name, output string) {
 		builder = &strings.Builder{}
 		details.outputs[name] = builder
 	}
-	if builder.Len() < 4*failureMessageLimit {
-		builder.WriteString(output)
+	builder.WriteString(tailBytes(output, 4*failureMessageLimit))
+	// Keep the tail: a failing test's assertion or panic is printed last.
+	if builder.Len() > 8*failureMessageLimit {
+		tail := tailBytes(builder.String(), 4*failureMessageLimit)
+		builder.Reset()
+		builder.WriteString(tail)
+	}
+}
+
+// tailBytes keeps at most limit trailing bytes, starting on a character
+// boundary so no character is split.
+func tailBytes(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	start := len(value) - limit
+	for start < len(value) && !utf8.RuneStart(value[start]) {
+		start++
+	}
+	return value[start:]
+}
+
+// A failed test's output is reduced to its bounded message as soon as the
+// test ends, so only in-flight tests hold raw output.
+func (details caseDetails) finishFailure(name string) {
+	builder, ok := details.outputs[name]
+	if !ok {
+		return
+	}
+	delete(details.outputs, name)
+	if _, done := details.messages[name]; done {
+		return
+	}
+	message := strings.TrimRight(builder.String(), " \t\r\n")
+	if utf8.RuneCountInString(message) > failureMessageLimit {
+		runes := []rune(message)
+		message = string(runes[len(runes)-failureMessageLimit:])
+	}
+	if message != "" {
+		details.messages[name] = message
 	}
 }
 
@@ -886,14 +926,9 @@ func (details caseDetails) attempt(name, status string) attempt {
 		}
 	}
 	if status == "failed" {
-		if builder, ok := details.outputs[name]; ok {
-			message := strings.TrimRight(builder.String(), " \t\r\n")
-			if utf8.RuneCountInString(message) > failureMessageLimit {
-				message = string([]rune(message)[:failureMessageLimit])
-			}
-			if message != "" {
-				value.Failure = &failure{Message: message}
-			}
+		details.finishFailure(name)
+		if message, ok := details.messages[name]; ok {
+			value.Failure = &failure{Message: message}
 		}
 	}
 	return value

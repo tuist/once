@@ -431,10 +431,34 @@ enum OnceTestReport {
         var suite: String
         var file: String
         var status: String
+        var startedAt: Double? = nil
+        var durationMs: Int? = nil
+        var failures: [String] = []
+        var cancelled = false
     }
 
     static let quote = String(UnicodeScalar(34))
     static let backslash = String(UnicodeScalar(92))
+    static let newline = String(UnicodeScalar(10))
+    static let failureMessageLimit = 4000
+
+    static func instant(_ payload: [String: Any]) -> Double? {
+        let instant = payload["instant"] as? [String: Any] ?? [:]
+        return (instant["absolute"] as? NSNumber)?.doubleValue
+    }
+
+    /// An issue's messages describe the failed expectation and any comment
+    /// attached to it; its source location names where it was recorded.
+    static func issueDescription(_ payload: [String: Any], issue: [String: Any]) -> String {
+        let messages = payload["messages"] as? [[String: Any]] ?? []
+        let text = messages.compactMap { $0["text"] as? String }.joined(separator: newline)
+        let location = issue["sourceLocation"] as? [String: Any] ?? [:]
+        if let file = location["fileID"] as? String ?? location["_filePath"] as? String,
+           let line = location["line"] as? NSNumber, !text.isEmpty {
+            return file + ":" + line.stringValue + ": " + text
+        }
+        return text
+    }
 
     static func environmentPath(_ name: String) -> String? {
         guard let value = ProcessInfo.processInfo.environment[name], !value.isEmpty else {
@@ -539,20 +563,30 @@ enum OnceTestReport {
                 switch kind {
                 case "testStarted":
                     entry.status = "unknown"
+                    entry.startedAt = instant(payload)
                 case "testSkipped":
                     entry.status = "skipped"
                 case "testCancelled", "testCaseCancelled":
                     entry.status = "unknown"
+                    entry.cancelled = true
                 case "issueRecorded":
                     let issue = payload["issue"] as? [String: Any] ?? [:]
                     let isFailure = issue["isFailure"] as? Bool ?? true
                     let isKnown = issue["isKnown"] as? Bool ?? false
                     if isFailure && !isKnown {
                         entry.status = "failed"
+                        let description = issueDescription(payload, issue: issue)
+                        let kept = entry.failures.reduce(0) { $0 + $1.count }
+                        if !description.isEmpty && kept < failureMessageLimit {
+                            entry.failures.append(String(description.prefix(failureMessageLimit)))
+                        }
                     }
                 case "testEnded":
-                    if entry.status == "unknown" {
+                    if entry.status == "unknown" && !entry.cancelled {
                         entry.status = "passed"
+                    }
+                    if let start = entry.startedAt, let end = instant(payload), end >= start {
+                        entry.durationMs = Int(((end - start) * 1000).rounded())
                     }
                 default:
                     break
@@ -582,7 +616,15 @@ enum OnceTestReport {
             encoded += quoted("suite") + ":" + quoted(entry.suite) + ","
             encoded += quoted("file") + ":" + quoted(entry.file) + ","
             encoded += quoted("status") + ":" + quoted(entry.status) + ","
-            encoded += quoted("attempts") + ":[{" + quoted("status") + ":" + quoted(entry.status) + "}],"
+            var attempt = quoted("status") + ":" + quoted(entry.status)
+            if let durationMs = entry.durationMs, entry.status == "passed" || entry.status == "failed" {
+                attempt += "," + quoted("duration_ms") + ":" + String(durationMs)
+            }
+            if entry.status == "failed" && !entry.failures.isEmpty {
+                let message = String(entry.failures.joined(separator: newline).prefix(failureMessageLimit))
+                attempt += "," + quoted("failure") + ":{" + quoted("message") + ":" + quoted(message) + "}"
+            }
+            encoded += quoted("attempts") + ":[{" + attempt + "}],"
             encoded += quoted("runner_metadata") + ":{" + quoted("runner") + ":" + quoted("swift_testing") + "}}"
             encodedCases.append(encoded)
         }
@@ -1276,6 +1318,269 @@ def _apple_ui_test_install_script(xcrun, bundle_id, app_path):
         app_path = _shell_literal(app_path),
     )
 
+def _shellspec_selects_reports(args):
+    for arg in args:
+        if arg in ["-o", "--output", "--reportdir"] or arg.startswith("--output=") or arg.startswith("--reportdir="):
+            return True
+    return False
+
+# The JUnit report a target's own arguments ask for, read in place of the one
+# the runner would otherwise request.
+def _shellspec_requested_junit(args):
+    junit = False
+    reportdir = "report"
+    for index in range(len(args)):
+        arg = args[index]
+        value = None
+        if arg in ["-o", "--output"] and index + 1 < len(args):
+            value = args[index + 1]
+        elif arg.startswith("--output="):
+            value = arg[len("--output="):]
+        if value != None and ("junit" in value.split(",") or "j" in value.split(",")):
+            junit = True
+        if arg == "--reportdir" and index + 1 < len(args):
+            reportdir = args[index + 1]
+        elif arg.startswith("--reportdir="):
+            reportdir = arg[len("--reportdir="):]
+    if not junit:
+        return ""
+    return reportdir + "/results_junit.xml"
+
+def _shellspec_profiles(args):
+    for arg in args:
+        if arg in ["-p", "--profile", "--boost"]:
+            return True
+    return False
+
+# ShellSpec's JUnit report carries each example's outcome and failure. The
+# examples scanned from the spec sources keep their identities, take the
+# outcome of the report entry for the same example, and report entries that
+# the source scan misses are added after them. JUnit `time` is only measured
+# under the profiler, so durations are reported only then.
+def _shellspec_results_awk():
+    return r"""
+function attribute(line, name, marker, start, rest, stop) {
+    marker = " " name "=" sprintf("%c", 34)
+    start = index(line, marker)
+    if (!start) return ""
+    rest = substr(line, start + length(marker))
+    stop = index(rest, sprintf("%c", 34))
+    return stop ? substr(rest, 1, stop - 1) : ""
+}
+function unescape(value) {
+    gsub(/&lt;/, "<", value)
+    gsub(/&gt;/, ">", value)
+    gsub(/&quot;/, sprintf("%c", 34), value)
+    gsub(/&apos;/, sprintf("%c", 39), value)
+    gsub(/&#10;/, "\n", value)
+    gsub(/&amp;/, "\\&", value)
+    return value
+}
+function quoted(value, result, i, char, slash) {
+    slash = sprintf("%c", 92)
+    result = sprintf("%c", 34)
+    for (i = 1; i <= length(value); i++) {
+        char = substr(value, i, 1)
+        if (char == slash || char == sprintf("%c", 34)) result = result slash char
+        else if (char == "\t") result = result slash "t"
+        else if (char == "\r") result = result slash "r"
+        else if (char == "\n") result = result slash "n"
+        else if (char in control_code) result = result slash sprintf("u%04x", control_code[char])
+        else result = result char
+    }
+    return result sprintf("%c", 34)
+}
+function truncated(text, size, at, value, needed) {
+    if (length(text) <= 4000) return text
+    text = substr(text, 1, 4000)
+    size = length(text)
+    at = size
+    while (at > 0 && (value = byte_value[substr(text, at, 1)]) >= 128 && value < 192) at--
+    if (at > 0) {
+        value = byte_value[substr(text, at, 1)]
+        needed = value >= 240 ? 4 : (value >= 224 ? 3 : (value >= 192 ? 2 : 1))
+        if (size - at + 1 < needed) text = substr(text, 1, at - 1)
+    }
+    return text
+}
+function capture(text, end_at) {
+    end_at = index(text, "]]>")
+    if (end_at) {
+        text = substr(text, 1, end_at - 1)
+        in_body = 0
+    } else {
+        text = text "\n"
+    }
+    if (length(body) < 8192) body = body substr(text, 1, 8192)
+}
+function finish_failure() {
+    if (failure_open) {
+        sub(/[[:space:]]+$/, "", body)
+        message = failure_message
+        if (body != "") message = message == "" ? body : message "\n" body
+        if (report_message[current] != "") message = report_message[current] "\n" message
+        report_message[current] = substr(message, 1, 8192)
+    }
+    failure_open = 0
+    in_body = 0
+    body = ""
+}
+function emit(id, name, suite, file, status, duration, message, attempt) {
+    attempt = "{" sprintf("%c", 34) "status" sprintf("%c", 34) ":" quoted(status)
+    if (duration != "" && (status == "passed" || status == "failed")) attempt = attempt "," sprintf("%c", 34) "duration_ms" sprintf("%c", 34) ":" duration
+    if (status == "failed" && message != "") attempt = attempt "," sprintf("%c", 34) "failure" sprintf("%c", 34) ":{" sprintf("%c", 34) "message" sprintf("%c", 34) ":" quoted(truncated(message)) "}"
+    attempt = attempt "}"
+    if (total++) printf ",\n"
+    printf "{%s:%s,%s:%s,%s:%s,%s:%s,%s:%s,%s:[%s],%s:{}}", quoted("id"), quoted(id), quoted("name"), quoted(name), quoted("suite"), quoted(suite), quoted("file"), quoted(file), quoted("status"), quoted(status), quoted("attempts"), attempt, quoted("runner_metadata")
+    if (status == "passed") passed++
+    else if (status == "failed") failed++
+    else if (status == "skipped") skipped++
+}
+function duration_of(index_value, seconds) {
+    if (profiled != "1") return ""
+    seconds = report_time[index_value]
+    if (seconds !~ /^[0-9]+([.][0-9]+)?$/) return ""
+    return sprintf("%.0f", seconds * 1000)
+}
+function suite_of(spec, suite) {
+    suite = spec
+    sub(/^spec\//, "", suite)
+    sub(/_spec[.]sh$/, "", suite)
+    return suite
+}
+BEGIN {
+    for (code = 1; code < 32; code++) control_code[sprintf("%c", code)] = code
+    for (code = 128; code < 256; code++) byte_value[sprintf("%c", code)] = code
+    quote = sprintf("%c", 39)
+}
+junit_file != "" && FILENAME == junit_file {
+    line = $0
+    if (in_body) {
+        capture(line)
+        if (!in_body && (index(line, "</failure>") || index(line, "</error>"))) finish_failure()
+        next
+    }
+    # Captured output is CDATA that may hold anything, including text shaped
+    # like report elements, so it is skipped rather than parsed.
+    if (in_output) {
+        if (index(line, "]]>")) in_output = 0
+        next
+    }
+    if (line ~ /^[[:space:]]*<system-(out|err)>/) {
+        cdata = index(line, "<![CDATA[")
+        if (cdata && !index(substr(line, cdata + 9), "]]>")) in_output = 1
+        next
+    }
+    if (line ~ /^[[:space:]]*<testcase /) {
+        finish_failure()
+        current = ++report_count
+        report_class[current] = unescape(attribute(line, "classname"))
+        report_name[current] = unescape(attribute(line, "name"))
+        report_time[current] = attribute(line, "time")
+        report_status[current] = "passed"
+        class_count[report_class[current]]++
+        report_at[report_class[current], class_count[report_class[current]]] = current
+        next
+    }
+    if (!current) next
+    if (line ~ /^[[:space:]]*<(failure|error)[ >\/]/) {
+        report_status[current] = "failed"
+        failure_open = 1
+        failure_message = substr(unescape(attribute(line, "message")), 1, 8192)
+        body = ""
+        cdata = index(line, "<![CDATA[")
+        if (cdata) {
+            in_body = 1
+            capture(substr(line, cdata + 9))
+        }
+        if (!in_body && (index(line, "/>") || index(line, "</failure>") || index(line, "</error>"))) finish_failure()
+        next
+    }
+    if (line ~ /^[[:space:]]*<skip(ped)?[ >\/]/) report_status[current] = "skipped"
+    if (line ~ /^[[:space:]]*<\/(failure|error)>/) finish_failure()
+    next
+}
+{
+    if (!seen_source[FILENAME]++) finish_failure()
+    marker = index($0, "It " quote)
+    if (!marker) next
+    name = substr($0, marker + 4)
+    stop = index(name, quote)
+    if (stop) name = substr(name, 1, stop - 1)
+    source_spec[++source_count] = FILENAME
+    source_name[source_count] = name
+    if (!name_seen[FILENAME, name]++) spec_names[FILENAME, ++spec_name_count[FILENAME]] = name
+}
+function ends_with_example(full, name) {
+    return full == name || substr(full, length(full) - length(name)) == " " name
+}
+# A report entry belongs to the longest scanned example name it ends with, so
+# `works` never takes the entry for a sibling example named `nested works`.
+function belongs(candidate, spec, name, k, other) {
+    if (!ends_with_example(report_name[candidate], name)) return 0
+    for (k = 1; k <= spec_name_count[spec]; k++) {
+        other = spec_names[spec, k]
+        if (length(other) > length(name) && ends_with_example(report_name[candidate], other)) return 0
+    }
+    return 1
+}
+# Report entries follow execution order, which `--random` can shuffle, so
+# each example takes the first unmatched entry for the same example. An
+# example name repeated in one spec file under different groups cannot be
+# told apart without its group, so those report entries stand on their own.
+function ambiguous(spec, name, k, candidate, first) {
+    if (name_seen[spec, name] < 2) return 0
+    first = ""
+    for (k = 1; k <= class_count[spec]; k++) {
+        candidate = report_at[spec, k]
+        if (!belongs(candidate, spec, name)) continue
+        if (first == "") first = report_name[candidate]
+        else if (report_name[candidate] != first) return 1
+    }
+    return 0
+}
+END {
+    finish_failure()
+    for (s = 1; s <= source_count; s++) {
+        spec = source_spec[s]
+        name = source_name[s]
+        if (report_count > 0 && ambiguous(spec, name)) continue
+        status = exit_status == 0 ? "passed" : "unknown"
+        duration = ""
+        message = ""
+        found = 0
+        for (k = 1; k <= class_count[spec]; k++) {
+            candidate = report_at[spec, k]
+            if (matched[candidate]) continue
+            if (belongs(candidate, spec, name)) {
+                found = candidate
+                break
+            }
+        }
+        if (found) {
+            matched[found] = 1
+            status = report_status[found]
+            duration = duration_of(found)
+            message = report_message[found]
+        }
+        emit(spec "::" name, name, suite_of(spec), spec, status, duration, message)
+    }
+    for (i = 1; i <= report_count; i++) {
+        if (matched[i]) continue
+        emit(report_class[i] "::" report_name[i], report_name[i], suite_of(report_class[i]), report_class[i], report_status[i], duration_of(i), report_message[i])
+    }
+    if (report_count == 0) {
+        if (exit_status == 0) { passed = total; failed = 0 } else { passed = 0; failed = 1 }
+        skipped = 0
+    } else if (exit_status != 0 && failed == 0) {
+        # The run failed outside any example, for example in a spec file
+        # error, so the summary still counts a failure.
+        failed = 1
+    }
+    printf "%d %d %d %d\n", total, passed, failed, skipped > counts_file
+}
+"""
+
 def _shellspec_test_impl(ctx):
     attrs = ctx["attr"]
     shellspec = attrs.get("shellspec") or "shellspec"
@@ -1352,43 +1657,59 @@ def _shellspec_test_impl(ctx):
         shellspec_exec = host_which(shellspec)
 
     spec_srcs = [src for src in srcs if src.endswith("_spec.sh")]
-    runner_args = [shellspec_exec] + args + spec_srcs
 
+    report_args = []
+    if not _shellspec_selects_reports(args):
+        report_args = ["--output", "junit", "--reportdir", test_dir + "/junit"]
+    profiled = "1" if _shellspec_profiles(args) else "0"
     script = """set -eu
 mkdir -p "$HOME"
 log={log}
 results={results}
 native_results={native_results}
+junit_dir={junit_dir}
 : > "$native_results"
+rm -rf "$junit_dir"
+report_args={report_args_flag}
+requested_junit={requested_junit}
+profiled={profiled}
+for options in .shellspec .shellspec-local; do
+  [ -f "$options" ] || continue
+  if grep -Eq -- '(^|[[:space:]])(-o|--output|--reportdir)([[:space:]=]|$)' "$options"; then report_args=0; fi
+  if grep -Eq -- '(^|[[:space:]])(-p|--profile|--boost)([[:space:]]|$)' "$options"; then profiled=1; fi
+done
+started_marker="$junit_dir.started"
+if [ -n "$requested_junit" ]; then
+  # A report from an earlier run must not stand in for this one, so only a
+  # report written after this marker is read; mtimes can be whole seconds.
+  : > "$started_marker"
+  sleep 1
+fi
 set +e
-{command} > "$log" 2>&1
+if [ "$report_args" = 1 ]; then
+  {command} {report_args} {specs} > "$log" 2>&1
+else
+  {command} {specs} > "$log" 2>&1
+fi
 status=$?
 set -e
 cp "$log" "$native_results"
-total=0
+junit_file=""
+if [ "$report_args" = 1 ] && [ -f "$junit_dir/results_junit.xml" ]; then junit_file="$junit_dir/results_junit.xml"
+elif [ -n "$requested_junit" ] && [ "$requested_junit" -nt "$started_marker" ]; then junit_file="$requested_junit"; fi
 cases_file="{test_dir}/cases.jsonl"
-: > "$cases_file"
+counts_file="{test_dir}/cases.counts"
+set --
 for spec in {specs}; do
-  [ -f "$spec" ] || continue
-  suite=${{spec#spec/}}
-  suite=${{suite%_spec.sh}}
-  while IFS= read -r line; do
-    case "$line" in
-      *"It '"*)
-        name=${{line#*"It '"}}
-        name=${{name%%"'"*}}
-        total=$((total + 1))
-        case_id="$spec::$name"
-        if [ "$status" -eq 0 ]; then case_status=passed; else case_status=unknown; fi
-        if [ "$total" -gt 1 ]; then printf ',\n' >> "$cases_file"; fi
-        printf '{{"id":"%s","name":"%s","suite":"%s","file":"%s","status":"%s","attempts":[{{"status":"%s"}}],"runner_metadata":{{}}}}' "$case_id" "$name" "$suite" "$spec" "$case_status" "$case_status" >> "$cases_file"
-        ;;
-    esac
-  done < "$spec"
+  [ -f "$spec" ] && set -- "$@" "$spec"
 done
-if [ "$status" -eq 0 ]; then run_status=passed; failed=0; passed=$total; else run_status=failed; failed=1; passed=0; fi
+if [ -n "$junit_file" ]; then set -- "$junit_file" "$@"; fi
+if [ "$#" -eq 0 ]; then set -- /dev/null; fi
+awk -v junit_file="$junit_file" -v exit_status="$status" -v profiled="$profiled" -v counts_file="$counts_file" '{parser}' "$@" > "$cases_file"
+read -r total passed failed skipped < "$counts_file"
+if [ "$status" -eq 0 ]; then run_status=passed; else run_status=failed; fi
 {{
-  printf '{{"schema":"once.test_results.v1","target":"%s","runner":{{"type":"shellspec","metadata":{{}}}},"status":"%s","summary":{{"total":%s,"passed":%s,"failed":%s,"skipped":0,"flaky":0}},"cases":[' "{target}" "$run_status" "$total" "$passed" "$failed"
+  printf '{{"schema":"once.test_results.v1","target":"%s","runner":{{"type":"shellspec","metadata":{{}}}},"status":"%s","summary":{{"total":%s,"passed":%s,"failed":%s,"skipped":%s,"flaky":0}},"cases":[' "{target}" "$run_status" "$total" "$passed" "$failed" "$skipped"
   cat "$cases_file"
   printf '],"artifacts":{{"logs":["%s"],"native_results":["%s"]}}}}\n' "$log" "$native_results"
 }} > "$results"
@@ -1398,9 +1719,15 @@ exit "$status"
         log = _shell_literal(log),
         results = _shell_literal(results),
         native_results = _shell_literal(native_results),
-        command = _shell_words(runner_args),
+        junit_dir = _shell_literal(test_dir + "/junit"),
+        requested_junit = _shell_literal(_shellspec_requested_junit(args)),
+        report_args_flag = "1" if report_args else "0",
+        report_args = _shell_words(report_args),
+        profiled = profiled,
+        command = _shell_words([shellspec_exec] + args),
         specs = _shell_words(spec_srcs),
         target = ctx["label"]["id"],
+        parser = _shellspec_results_awk(),
     )
     prepare_path(test_dir, kind = "directory", identifier = "apple_shellspec_test_dir:" + ctx["label"]["id"])
     run_action(
@@ -1408,7 +1735,7 @@ exit "$status"
         inputs = inputs,
         outputs = [test_dir, results, log, native_results],
         env = action_env,
-        toolchain_identity = "once.shellspec_test.v1\x00" + shellspec,
+        toolchain_identity = "once.shellspec_test.v2\x00" + shellspec,
         identifier = "shellspec_test:" + ctx["label"]["id"],
     )
     return provider
@@ -1519,16 +1846,65 @@ function quoted(value, result, i, char, slash) {
         if (char == slash || char == "\\"") result = result slash char
         else if (char == "\\t") result = result slash "t"
         else if (char == "\\r") result = result slash "r"
+        else if (char == "\\n") result = result slash "n"
+        else if (char in control_code) result = result slash sprintf("u%04x", control_code[char])
         else result = result char
     }
     return result "\\""
 }
-function observe(name, suite, status, duration, key, source_index) {
+function append_issue(kind, key, text, slot) {
+    slot = kind SUBSEP key
+    if (!(slot in issue_text)) issue_text[slot] = text
+    else if (length(issue_text[slot]) < 4000) issue_text[slot] = issue_text[slot] "\\n" text
+}
+function take_issue(kind, key, slot, text) {
+    slot = kind SUBSEP key
+    if (!(slot in issue_text)) return ""
+    text = issue_text[slot]
+    delete issue_text[slot]
+    return text
+}
+function truncated(text, size, at, value, needed) {
+    if (length(text) <= 4000) return text
+    text = substr(text, 1, 4000)
+    size = length(text)
+    at = size
+    while (at > 0 && (value = byte_value[substr(text, at, 1)]) >= 128 && value < 192) at--
+    if (at > 0) {
+        value = byte_value[substr(text, at, 1)]
+        needed = value >= 240 ? 4 : (value >= 224 ? 3 : (value >= 192 ? 2 : 1))
+        if (size - at + 1 < needed) text = substr(text, 1, at - 1)
+    }
+    return text
+}
+function with_failure(record, message, marker, at) {
+    if (message == "") return record
+    marker = "\\"attempts\\":[{"
+    at = index(record, marker)
+    if (!at) return record
+    at += length(marker)
+    return substr(record, 1, at - 1) "\\"failure\\":{\\"message\\":" quoted(truncated(message)) "}," substr(record, at)
+}
+function resolve_suite(name, source_index, candidate, matching_suite) {
+    source_index = source_name[name]
+    if (source_index && name_count[name] == 1) return field(source_record[source_index], "suite")
+    matching_suite = ""
+    for (candidate in active_suite) {
+        if (source_by_key[candidate "/" name]) {
+            if (matching_suite != "") return "Swift Testing"
+            matching_suite = candidate
+        }
+    }
+    return matching_suite != "" ? matching_suite : "Swift Testing"
+}
+function observe(name, suite, status, duration, message, key, source_index) {
+    if (status != "failed") message = ""
     key = suite "/" name
     source_index = source_by_key[key]
     if (source_index) {
         observed_status[source_index] = status
         observed_duration[source_index] = duration
+        observed_message[source_index] = message
         return
     }
     if (!extra_by_key[key]) {
@@ -1538,6 +1914,11 @@ function observe(name, suite, status, duration, key, source_index) {
     }
     extra_status[extra_by_key[key]] = status
     extra_duration[extra_by_key[key]] = duration
+    extra_message[extra_by_key[key]] = message
+}
+BEGIN {
+    for (code = 1; code < 32; code++) control_code[sprintf("%c", code)] = code
+    for (code = 128; code < 256; code++) byte_value[sprintf("%c", code)] = code
 }
 function duration_millis(record, duration) {
     duration = record
@@ -1572,6 +1953,47 @@ FILENAME == source_file {
 }
 {
     line = $0
+    error_at = index(line, ": error: -[")
+    if (error_at) {
+        identity = substr(line, error_at + 11)
+        close_at = index(identity, "] : ")
+        if (close_at) {
+            text = substr(line, 1, error_at - 1) ": " substr(identity, close_at + 4)
+            identity = substr(identity, 1, close_at - 1)
+            split(identity, parts, " ")
+            suite = parts[1]
+            sub(/^.*\\./, "", suite)
+            if (parts[2] != "") append_issue("xctest", suite "/" parts[2], text)
+        }
+        last_issue = ""
+        next
+    }
+    issue_at = index(line, " recorded an issue")
+    test_marker = index(line, " Test ")
+    if (issue_at && test_marker && test_marker < issue_at) {
+        name = substr(line, test_marker + 6, issue_at - test_marker - 6)
+        sub(/\\(\\)$/, "", name)
+        text = substr(line, issue_at + 18)
+        sub(/^ at /, "", text)
+        sub(/^ /, "", text)
+        # The issue line names only the test function. Same-named tests in
+        # suites that run concurrently cannot be told apart, so their issues
+        # stay in the log rather than landing on the wrong case.
+        suite = resolve_suite(name)
+        if (suite == "Swift Testing" && name_count[name] > 1) last_issue = ""
+        else {
+            last_issue = suite "/" name
+            append_issue("swift", last_issue, text)
+        }
+        next
+    }
+    if (last_issue != "" && line ~ /^[[:space:]]*↳ /) {
+        text = line
+        sub(/^[[:space:]]*↳ /, "", text)
+        append_issue("swift", last_issue, text)
+        next
+    }
+    last_issue = ""
     suite_marker = index(line, " Suite ")
     if (suite_marker) {
         suite = substr(line, suite_marker + 7)
@@ -1595,7 +2017,7 @@ FILENAME == source_file {
         name = parts[2]
         if (name == "") next
         status = index(line, " passed (") ? "passed" : (index(line, " failed (") ? "failed" : "skipped")
-        observe(name, suite, status, duration_millis(line))
+        observe(name, suite, status, duration_millis(line), take_issue("xctest", suite "/" name))
         next
     }
     test_marker = index(line, " Test ")
@@ -1607,23 +2029,12 @@ FILENAME == source_file {
     sub(/\\(\\)$/, "", name)
     if (name ~ /^run with /) next
     if (name == "") next
-    source_index = source_name[name]
-    suite = "Swift Testing"
-    if (source_index && name_count[name] == 1) suite = field(source_record[source_index], "suite")
-    else {
-        matching_suite = ""
-        for (candidate in active_suite) {
-            if (source_by_key[candidate "/" name]) {
-                if (matching_suite != "") {
-                    matching_suite = ""
-                    break
-                }
-                matching_suite = candidate
-            }
-        }
-        if (matching_suite != "") suite = matching_suite
-    }
-    observe(name, suite, status, duration_millis(line))
+    issue_name = name
+    sub(/ with [0-9]+ test cases?$/, "", issue_name)
+    suite = resolve_suite(name)
+    message = take_issue("swift", resolve_suite(issue_name) "/" issue_name)
+    if (suite == "Swift Testing" && name_count[name] > 1) message = ""
+    observe(name, suite, status, duration_millis(line), message)
 }
 END {
     for (i = 1; i <= source_count; i++) {
@@ -1633,6 +2044,7 @@ END {
         else {
             gsub(/\\"status\\":\\"unknown\\"/, "\\"status\\":\\"" status "\\"", record)
             sub(/\\"attempts\\":\\[\\{/, "\\"attempts\\":[{\\"duration_ms\\":" observed_duration[i] ",", record)
+            record = with_failure(record, observed_message[i])
         }
         output(record)
         count(status)
@@ -1643,6 +2055,7 @@ END {
         status = extra_status[i]
         duration = extra_duration[i]
         record = "{\\"id\\":" quoted(target "::" suite "/" name) ",\\"name\\":" quoted(name) ",\\"suite\\":" quoted(suite) ",\\"status\\":" quoted(status) ",\\"attempts\\":[{\\"status\\":" quoted(status) ",\\"duration_ms\\":" duration "}],\\"runner_metadata\\":{\\"runner\\":" quoted(runner) "}}"
+        record = with_failure(record, extra_message[i])
         output(record)
         count(status)
     }

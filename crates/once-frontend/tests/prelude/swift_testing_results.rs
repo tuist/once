@@ -102,6 +102,187 @@ fn native_test_output_supplies_case_verdicts_and_durations() {
     assert_eq!(named("generated")["status"], "passed");
 }
 
+/// Failure details come from the issue lines each library prints before a
+/// test's verdict: `XCTest`'s `error: -[Suite test] : message` lines and the
+/// testing library's `recorded an issue` lines with their `↳` details. Each
+/// lands on the case it names, and passing cases carry none.
+#[cfg(unix)]
+#[test]
+fn native_test_output_supplies_failure_messages() {
+    let script = eval_prelude_string_function(
+        "_apple_test_report_script",
+        r#"(["Suite.swift"], "cases.jsonl", "tests/Bundle", "swift_testing")"#,
+    )
+    .unwrap();
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("Suite.swift"),
+        "import XCTest\nclass LegacyTests: XCTestCase {\n  func testFails() {}\n  func testPasses() {}\n}\nstruct MathSuite {\n  @Test func broken() {}\n  @Test func slow() {}\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("run.log"),
+        [
+            "Test Case '-[Bundle.LegacyTests testFails]' started.",
+            "/src/Suite.swift:10: error: -[Bundle.LegacyTests testFails] : XCTAssertEqual failed: (\"2\") is not equal to (\"3\") - legacy & \"broken\" \\ path",
+            "/src/Suite.swift:11: error: -[Bundle.LegacyTests testFails] : second failure",
+            "Test Case '-[Bundle.LegacyTests testFails]' failed (0.104 seconds).",
+            "Test Case '-[Bundle.LegacyTests testPasses]' passed (0.000 seconds).",
+            "↳ Testing Library Version: 6.3.2",
+            "◇ Suite MathSuite started.",
+            "◇ Test broken() started.",
+            "◇ Test slow() started.",
+            "✘ Test broken() recorded an issue at Suite.swift:6:25: Expectation failed: (two() → 2) == 3",
+            "↳ two is not three",
+            "✔ Test slow() passed after 0.080 seconds.",
+            "✘ Test broken() failed after 0.001 seconds with 1 issue.",
+            "✘ Test param(x:) recorded an issue with 1 argument x → 2 at Suite.swift:13:47: Expectation failed: (x → 2) == 1",
+            "✘ Test param(x:) with 2 test cases failed after 0.001 seconds with 1 issue.",
+            "✘ Suite MathSuite failed after 0.081 seconds with 1 issue.",
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "status=1\nlog=run.log\nnative_results=native.txt\nresults=results.json\n{script}"
+        ))
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}\n{script}");
+    let results: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("results.json")).unwrap()).unwrap();
+    let cases = results["cases"].as_array().unwrap();
+    let attempt = |name: &str| {
+        cases
+            .iter()
+            .find(|case| case["name"] == name)
+            .unwrap_or_else(|| panic!("{name} missing from {results}"))["attempts"][0]
+            .clone()
+    };
+    assert_eq!(
+        attempt("testFails"),
+        serde_json::json!({
+            "failure": {"message": "/src/Suite.swift:10: XCTAssertEqual failed: (\"2\") is not equal to (\"3\") - legacy & \"broken\" \\ path\n/src/Suite.swift:11: second failure"},
+            "duration_ms": 104,
+            "status": "failed"
+        }),
+        "{results}"
+    );
+    assert!(attempt("testPasses").get("failure").is_none(), "{results}");
+    assert_eq!(
+        attempt("broken")["failure"]["message"],
+        "Suite.swift:6:25: Expectation failed: (two() → 2) == 3\ntwo is not three",
+        "{results}"
+    );
+    assert_eq!(attempt("broken")["duration_ms"], 1, "{results}");
+    assert!(attempt("slow").get("failure").is_none(), "{results}");
+    assert_eq!(
+        attempt("param(x:) with 2 test cases")["failure"]["message"],
+        "with 1 argument x → 2 at Suite.swift:13:47: Expectation failed: (x → 2) == 1",
+        "{results}"
+    );
+}
+
+/// A failure message longer than the limit keeps its first characters whole,
+/// including text written entirely in a multibyte script, in a byte-oriented
+/// and a character-oriented awk alike.
+#[cfg(unix)]
+#[test]
+fn long_multibyte_failure_messages_are_truncated_on_character_boundaries() {
+    let script = eval_prelude_string_function(
+        "_apple_test_report_script",
+        r#"(["Suite.swift"], "cases.jsonl", "tests/Bundle", "swift_testing")"#,
+    )
+    .unwrap();
+    let message = "失敗".repeat(3000);
+    for locale in ["C", "en_US.UTF-8"] {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("Suite.swift"),
+            "import XCTest\nclass LegacyTests: XCTestCase {\n  func testFails() {}\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("run.log"),
+            format!("/src/Suite.swift:3: error: -[Bundle.LegacyTests testFails] : {message}\nTest Case '-[Bundle.LegacyTests testFails]' failed (0.010 seconds).\n"),
+        )
+        .unwrap();
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "status=1\nlog=run.log\nnative_results=native.txt\nresults=results.json\n{script}"
+            ))
+            .env("LC_ALL", locale)
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let results: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join("results.json")).unwrap())
+                .unwrap();
+        let kept = results["cases"][0]["attempts"][0]["failure"]["message"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            kept.starts_with("/src/Suite.swift:3: 失敗失敗"),
+            "{locale}: {kept}"
+        );
+        assert!(
+            kept.chars().count() > 1000,
+            "{locale}: {}",
+            kept.chars().count()
+        );
+    }
+}
+
+/// The testing library's issue lines name only the test function. When two
+/// running suites hold a test with that name, the issue stays in the log
+/// rather than being attached to either case.
+#[cfg(unix)]
+#[test]
+fn ambiguous_swift_testing_issues_are_not_attributed() {
+    let script = eval_prelude_string_function(
+        "_apple_test_report_script",
+        r#"(["Suite.swift"], "cases.jsonl", "tests/Bundle", "swift_testing")"#,
+    )
+    .unwrap();
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("Suite.swift"),
+        "struct FirstSuite {\n  @Test func computes() {}\n}\nstruct SecondSuite {\n  @Test func computes() {}\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("run.log"),
+        [
+            "◇ Suite FirstSuite started.",
+            "◇ Suite SecondSuite started.",
+            "✘ Test computes() recorded an issue at Suite.swift:2:5: Expectation failed",
+            "✔ Test computes() passed after 0.001 seconds.",
+            "✘ Test computes() failed after 0.002 seconds with 1 issue.",
+            "✔ Suite FirstSuite passed after 0.003 seconds.",
+            "✘ Suite SecondSuite failed after 0.003 seconds with 1 issue.",
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "status=1\nlog=run.log\nnative_results=native.txt\nresults=results.json\n{script}"
+        ))
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}\n{script}");
+    let results = std::fs::read_to_string(dir.path().join("results.json")).unwrap();
+    assert!(!results.contains("\"failure\""), "{results}");
+}
+
 /// Only the `XCTest` host runs `XCTest` cases, so a bundle that has any is left
 /// to it. A bundle without them is free to run through the testing library's own
 /// entry point, which reports every test and what became of it.
@@ -218,7 +399,31 @@ fn normalized_results_follow_the_event_stream() {
             .clone()
     };
     assert_eq!(by_name("passes")["status"], "passed");
+    assert_eq!(
+        by_name("passes")["attempts"],
+        serde_json::json!([{"status": "passed", "duration_ms": 125}]),
+        "{results}"
+    );
     assert_eq!(by_name("failsForReal")["status"], "failed");
+    assert_eq!(
+        by_name("failsForReal")["attempts"],
+        serde_json::json!([{
+            "status": "failed",
+            "duration_ms": 4,
+            "failure": {"message": "Tests/Suite.swift:7: Expectation failed: (two() → 2) == 3\ntwo is not three"}
+        }]),
+        "{results}"
+    );
+    assert_eq!(
+        by_name("hasKnownIssue")["attempts"],
+        serde_json::json!([{"status": "passed", "duration_ms": 0}]),
+        "{results}"
+    );
+    assert_eq!(
+        by_name("neverRuns")["attempts"],
+        serde_json::json!([{"status": "skipped"}]),
+        "{results}"
+    );
     assert_eq!(by_name("hasKnownIssue")["status"], "passed");
     assert_eq!(by_name("neverRuns")["status"], "skipped");
     assert_eq!(by_name("passes")["id"], "tests/Bundle::Suite/passes");
@@ -236,26 +441,29 @@ fn event_stream() -> String {
             r#"{{"kind":"test","payload":{{"kind":"function","id":"M.Suite/{name}()/Tests/Suite.swift:2:3","name":"{name}()","isParameterized":false,"sourceLocation":{{"_filePath":"Tests/Suite.swift","line":2,"column":3}}}},"version":0}}"#
         )
     };
-    let event = |kind: &str, name: &str, extra: &str| {
+    let timed_event = |kind: &str, name: &str, absolute: &str, messages: &str, extra: &str| {
         format!(
-            r#"{{"kind":"event","payload":{{"kind":"{kind}","testID":"M.Suite/{name}()/Tests/Suite.swift:2:3","messages":[]{extra}}},"version":0}}"#
+            r#"{{"kind":"event","payload":{{"kind":"{kind}","instant":{{"absolute":{absolute},"since1970":1791192600.5}},"testID":"M.Suite/{name}()/Tests/Suite.swift:2:3","messages":[{messages}]{extra}}},"version":0}}"#
         )
     };
+    let event = |kind: &str, name: &str, extra: &str| timed_event(kind, name, "100.0", "", extra);
     [
         suite.to_string(),
         test("passes"),
         test("failsForReal"),
         test("hasKnownIssue"),
         test("neverRuns"),
-        event("testStarted", "passes", ""),
-        event("testEnded", "passes", ""),
-        event("testStarted", "failsForReal", ""),
-        event(
+        timed_event("testStarted", "passes", "100.25", "", ""),
+        timed_event("testEnded", "passes", "100.3754", "", ""),
+        timed_event("testStarted", "failsForReal", "101.0", "", ""),
+        timed_event(
             "issueRecorded",
             "failsForReal",
-            r#","issue":{"isKnown":false,"isFailure":true,"severity":"error"}"#,
+            "101.001",
+            r#"{"symbol":"fail","text":"Expectation failed: (two() → 2) == 3"},{"symbol":"details","text":"two is not three"}"#,
+            r#","issue":{"isKnown":false,"isFailure":true,"severity":"error","sourceLocation":{"fileID":"Tests/Suite.swift","line":7,"column":5}}"#,
         ),
-        event("testEnded", "failsForReal", ""),
+        timed_event("testEnded", "failsForReal", "101.004", "", ""),
         event("testStarted", "hasKnownIssue", ""),
         event(
             "issueRecorded",

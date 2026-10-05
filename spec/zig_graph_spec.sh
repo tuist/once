@@ -713,6 +713,9 @@ TOML
     The contents of file "$WORKSPACE/.once/out/tests_fail/test/test_results.json" should include '"status":"failed"'
     The contents of file "$WORKSPACE/.once/out/tests_fail/test/zig-test.log" should include 'zig test mock:fail-test'
     The contents of file "$WORKSPACE/.once/out/tests_fail/test/native_results.txt" should include 'exit: 1'
+    The contents of file "$WORKSPACE/.once/out/tests_fail/test/test_results.json" should include '"id":"tests_fail::suite"'
+    The contents of file "$WORKSPACE/.once/out/tests_fail/test/test_results.json" should include '"duration_ms":'
+    The contents of file "$WORKSPACE/.once/out/tests_fail/test/test_results.json" should include '"failure":{"message":"zig test mock:fail-test'
   End
 
   It 'discovers dependency-rooted Zig tests through once query tests'

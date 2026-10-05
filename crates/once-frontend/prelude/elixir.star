@@ -79,9 +79,6 @@ def _elixir_tool_inputs(ctx):
 def _elixir_sources(ctx):
     return glob(_elixir_source_patterns(ctx))
 
-def _elixir_shell_words(values):
-    return " ".join([_shell_quote(value) for value in values])
-
 def _elixir_lines(values):
     return "\n".join(values) + ("\n" if values else "")
 
@@ -1093,16 +1090,6 @@ def _elixir_test_paths(ctx, srcs):
             paths.append(src)
     return paths
 
-def _elixir_code_path_flags(apps):
-    seen = {}
-    flags = []
-    for app in apps:
-        ebin = app.get("ebin_dir", "")
-        if ebin and ebin not in seen:
-            seen[ebin] = True
-            flags.append("-pa \"$WORKSPACE_ROOT\"/" + _shell_quote(ebin))
-    return " ".join(flags)
-
 def _elixir_code_path_args(ctx, apps):
     args = []
     for app in apps:
@@ -1128,10 +1115,240 @@ def _elixir_test_runner_argv(ctx, toolchain, apps, srcs, mix_config):
         _elixir_code_path_args(ctx, apps) + _elixir_interpreter_opts(ctx) + start_args + require_args + _elixir_test_args(ctx),
     )
 
+def _elixir_exunit_formatter_source():
+    return r"""defmodule Once.ExUnitFormatter do
+  @moduledoc false
+  use GenServer
+
+  @limit 4000
+
+  # Runs at VM boot through `-s`. It keeps the report path for this VM and
+  # removes the formatter's variables from the environment, so processes the
+  # tests start never inherit them.
+  def preload do
+    path = :os.getenv(String.to_charlist("ONCE_EXUNIT_CASES"))
+    if path, do: :persistent_term.put({__MODULE__, :cases}, List.to_string(path))
+    :os.unsetenv(String.to_charlist("ONCE_EXUNIT_CASES"))
+
+    case :os.getenv(String.to_charlist("ONCE_EXUNIT_ERL_AFLAGS")) do
+      false -> :os.unsetenv(String.to_charlist("ERL_AFLAGS"))
+      original -> :os.putenv(String.to_charlist("ERL_AFLAGS"), original)
+    end
+
+    :os.unsetenv(String.to_charlist("ONCE_EXUNIT_ERL_AFLAGS"))
+    :ok
+  end
+
+  # Each finished test is reduced to a small record right away, so the
+  # formatter never holds test structs or failure terms for the whole run.
+  @impl true
+  def init(_opts), do: {:ok, %{records: [], module_failures: %{}}}
+
+  @impl true
+  def handle_cast({:test_finished, %ExUnit.Test{} = test}, state) do
+    case record(test) do
+      nil -> {:noreply, state}
+      record -> {:noreply, %{state | records: [record | state.records]}}
+    end
+  end
+
+  def handle_cast({:module_finished, %ExUnit.TestModule{state: {:failed, failures}} = module}, state) do
+    message = bounded(ExUnit.Formatter.format_test_all_failure(module, failures, 1, 80, &plain/2))
+    {:noreply, %{state | module_failures: Map.put(state.module_failures, module.name, message)}}
+  end
+
+  def handle_cast({:suite_finished, _times}, state) do
+    case :persistent_term.get({__MODULE__, :cases}, nil) do
+      nil -> :ok
+      path -> File.write!(path, :erlang.term_to_binary(resolve(state)))
+    end
+
+    {:noreply, state}
+  end
+
+  def handle_cast(_event, state), do: {:noreply, state}
+
+  defp plain(_key, value), do: value
+
+  defp bounded(message), do: message |> String.trim() |> String.slice(0, @limit)
+
+  defp resolve(state) do
+    state.records
+    |> Enum.reverse()
+    |> Enum.map(fn
+      %{invalid_module: module} = record ->
+        record |> Map.delete(:invalid_module) |> Map.put(:message, Map.get(state.module_failures, module))
+
+      record ->
+        record
+    end)
+  end
+
+  defp record(%ExUnit.Test{state: {:excluded, _}}), do: nil
+
+  defp record(%ExUnit.Test{} = test) do
+    base = %{
+      module: inspect(test.module),
+      name: to_string(test.name),
+      file: test.tags[:file] && Path.relative_to_cwd(test.tags[:file]),
+      line: test.tags[:line],
+      time_us: nil,
+      message: nil
+    }
+
+    measured = if is_integer(test.time), do: test.time
+
+    case test.state do
+      nil ->
+        %{base | time_us: measured} |> Map.put(:status, "passed")
+
+      {:failed, failures} ->
+        message = bounded(ExUnit.Formatter.format_test_failure(test, failures, 1, 80, &plain/2))
+        %{base | time_us: measured, message: message} |> Map.put(:status, "failed")
+
+      {:skipped, _} ->
+        Map.put(base, :status, "skipped")
+
+      {:invalid, module} ->
+        base |> Map.put(:status, "failed") |> Map.put(:invalid_module, module_name(module))
+
+      _ ->
+        Map.put(base, :status, "unknown")
+    end
+  end
+
+  defp module_name(%{name: name}), do: name
+  defp module_name(name), do: name
+end
+"""
+
 def _elixir_test_runner_source(setup_tasks):
     return """
-[runner, args_file, results, log, native_results, target, runner_type] = System.argv()
+[runner, args_file, results, log, native_results, target, runner_type, formatter_source] = System.argv()
 args = args_file |> File.read!() |> String.split("\\n", trim: true)
+
+# Per-case records come from a formatter loaded into the test VM. Anything
+# that keeps it from loading leaves the command untouched and the totals are
+# scraped from the console output instead.
+defmodule Once.ExUnitInjection do
+  def prepare(runner, runner_type, args, formatter_source) do
+    home = Path.expand(System.get_env("HOME") || System.tmp_dir!())
+
+    # ERL_AFLAGS splits on whitespace, so the code path must not contain any.
+    dir =
+      if String.contains?(home, [" ", "\\t", "\\n"]) do
+        Path.join(System.tmp_dir!(), "once-exunit-formatter-" <> Integer.to_string(System.unique_integer([:positive])) <> "-" <> System.pid())
+      else
+        Path.join(home, ".once-exunit-formatter")
+      end
+
+    cases_file = Path.join(dir, "cases.bin")
+
+    with {:ok, test_args} <- formatter_args(runner_type, args),
+         :ok <- compile(formatter_source, dir, cases_file),
+         env = env(dir, cases_file),
+         :ok <- probe(runner, runner_type, env) do
+      {test_args, env, cases_file}
+    else
+      _ -> {args, [], nil}
+    end
+  end
+
+  defp compile(source, dir, cases_file) do
+    File.rm_rf!(dir)
+    File.mkdir_p!(dir)
+
+    for {module, binary} <- Code.compile_file(source) do
+      File.write!(Path.join(dir, Atom.to_string(module) <> ".beam"), binary)
+    end
+
+    if File.exists?(cases_file), do: :error, else: :ok
+  rescue
+    _ -> :error
+  end
+
+  defp env(dir, cases_file) do
+    original = System.get_env("ERL_AFLAGS")
+    aflags = String.trim((original || "") <> " -pa " <> dir <> " -s Elixir.Once.ExUnitFormatter preload")
+    restore = if original, do: [{"ONCE_EXUNIT_ERL_AFLAGS", original}], else: []
+    [{"ERL_AFLAGS", aflags}, {"ONCE_EXUNIT_CASES", cases_file}] ++ restore
+  end
+
+  defp probe(runner, runner_type, env) do
+    elixir =
+      if runner_type == "mix_test" do
+        sibling = Path.join(Path.dirname(runner), "elixir")
+        if File.exists?(sibling), do: sibling, else: System.find_executable("elixir")
+      else
+        runner
+      end
+
+    case elixir && System.cmd(elixir, ["-e", "Code.ensure_loaded?(Once.ExUnitFormatter) || System.halt(3)"], env: env, stderr_to_stdout: true) do
+      {_, 0} -> :ok
+      _ -> :error
+    end
+  rescue
+    _ -> :error
+  end
+
+  defp formatter_args("mix_test", ["test" | rest]) do
+    explicit = Enum.any?(rest, &(&1 == "--formatter" or String.starts_with?(&1, "--formatter=")))
+
+    cond do
+      explicit -> {:ok, ["test", "--formatter", "Once.ExUnitFormatter" | rest]}
+      configured_formatters?() -> :error
+      true -> {:ok, ["test", "--formatter", "ExUnit.CLIFormatter", "--formatter", "Once.ExUnitFormatter" | rest]}
+    end
+  end
+
+  defp formatter_args("elixir_exunit", args) do
+    case args |> Enum.with_index() |> Enum.filter(fn {arg, _} -> arg == "-r" end) |> List.last() do
+      {_, index} when index + 1 < length(args) ->
+        snippet = "if Code.ensure_loaded?(Once.ExUnitFormatter), do: ExUnit.configure(formatters: Keyword.get(ExUnit.configuration(), :formatters, [ExUnit.CLIFormatter]) ++ [Once.ExUnitFormatter])"
+        {before, rest} = Enum.split(args, index + 2)
+        {:ok, before ++ ["-e", snippet] ++ rest}
+
+      _ ->
+        :error
+    end
+  end
+
+  defp formatter_args(_runner_type, _args), do: :error
+
+  # `mix test --formatter` replaces formatters configured by the project, so
+  # a project that configures its own keeps its exact setup.
+  defp configured_formatters? do
+    Enum.any?(["test/test_helper.exs", "config/config.exs", "config/test.exs"], fn path ->
+      case File.read(path) do
+        {:ok, contents} -> String.contains?(contents, "formatters")
+        _ -> false
+      end
+    end)
+  end
+
+  def read_cases(nil), do: nil
+
+  def read_cases(cases_file) do
+    result = decode_cases(cases_file)
+    File.rm_rf(Path.dirname(cases_file))
+    result
+  end
+
+  defp decode_cases(cases_file) do
+    case File.read(cases_file) do
+      {:ok, binary} ->
+        case :erlang.binary_to_term(binary, [:safe]) do
+          records when is_list(records) -> records
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  rescue
+    _ -> nil
+  end
+end
 setup_tasks = """ + _elixir_command_plan(setup_tasks) + """
 
 {setup_output, setup_status} =
@@ -1143,56 +1360,147 @@ setup_tasks = """ + _elixir_command_plan(setup_tasks) + """
     if status == 0, do: {:cont, {combined, status}}, else: {:halt, {combined, status}}
   end)
 
-{test_output, test_status} =
+{test_args, test_env, cases_file} =
   if setup_status == 0 do
-    System.cmd(runner, args, stderr_to_stdout: true)
+    Once.ExUnitInjection.prepare(runner, runner_type, args, formatter_source)
   else
-    {"", setup_status}
+    {args, [], nil}
   end
 
-output = setup_output <> test_output
+# The test output streams straight into the log so a chatty suite is never
+# held in memory; the totals are scanned from the log one line at a time.
+File.write!(log, setup_output)
+
+test_status =
+  if setup_status == 0 do
+    {_, code} = System.cmd(runner, test_args, stderr_to_stdout: true, env: test_env, into: File.stream!(log, [:append]))
+    code
+  else
+    setup_status
+  end
+
 status = if setup_status == 0, do: test_status, else: setup_status
-File.write!(log, output)
-File.write!(native_results, output)
+File.cp!(log, native_results)
+
+summary_patterns = [
+  tests: ~r/(\\d+) tests?, (\\d+) failures/,
+  ratio: ~r/Result: (\\d+)\\/(\\d+) passed/,
+  passed: ~r/Result: (\\d+) passed/,
+  counted: ~r/Result: (\\d+) tests/
+]
+
+summaries =
+  log
+  |> File.stream!()
+  |> Enum.reduce(%{}, fn line, found ->
+    Enum.reduce(summary_patterns, found, fn {key, pattern}, found ->
+      case Regex.run(pattern, line) do
+        nil -> found
+        match -> Map.put(found, key, match)
+      end
+    end)
+  end)
 
 {total, failed} =
-  case Regex.scan(~r/(\\d+) tests?, (\\d+) failures/, output) |> List.last() do
-    [_, total, failed] -> {String.to_integer(total), String.to_integer(failed)}
-    _ ->
-      case Regex.scan(~r/Result: (\\d+)\\/(\\d+) passed/, output) |> List.last() do
-        [_, passed, total] ->
-          total = String.to_integer(total)
-          {total, total - String.to_integer(passed)}
+  cond do
+    match = summaries[:tests] ->
+      [_, total, failed] = match
+      {String.to_integer(total), String.to_integer(failed)}
 
-        _ ->
-          case Regex.scan(~r/Result: (\\d+) passed/, output) |> List.last() do
-            [_, passed] ->
-              passed = String.to_integer(passed)
-              {passed, 0}
+    match = summaries[:ratio] ->
+      [_, passed, total] = match
+      total = String.to_integer(total)
+      {total, total - String.to_integer(passed)}
 
-            _ ->
-              case Regex.scan(~r/Result: (\\d+) tests/, output) |> List.last() do
-                [_, total] -> {String.to_integer(total), 0}
-                _ -> {0, if(status == 0, do: 0, else: 1)}
-              end
-          end
-      end
+    match = summaries[:passed] ->
+      [_, passed] = match
+      {String.to_integer(passed), 0}
+
+    match = summaries[:counted] ->
+      [_, total] = match
+      {String.to_integer(total), 0}
+
+    true ->
+      {0, if(status == 0, do: 0, else: 1)}
   end
 
-passed = max(total - failed, 0)
 run_status = if status == 0, do: "passed", else: "failed"
+
+case_records =
+  for record <- Once.ExUnitInjection.read_cases(cases_file) || [] do
+    attempt = %{status: record.status}
+    attempt = if is_integer(record.time_us), do: Map.put(attempt, :duration_ms, div(record.time_us + 500, 1000)), else: attempt
+    attempt = if record.status == "failed" and is_binary(record.message) and record.message != "", do: Map.put(attempt, :failure, %{message: record.message}), else: attempt
+
+    base = %{
+      id: target <> "::" <> record.module <> "/" <> record.name,
+      name: record.name,
+      suite: record.module,
+      status: record.status,
+      attempts: [attempt],
+      runner_metadata: if(is_integer(record.line), do: %{line: record.line}, else: %{})
+    }
+
+    if is_binary(record.file), do: Map.put(base, :file, record.file), else: base
+  end
+
+{total, failed, skipped} =
+  if case_records == [] do
+    {total, failed, 0}
+  else
+    {length(case_records), Enum.count(case_records, &(&1.status == "failed")), Enum.count(case_records, &(&1.status == "skipped"))}
+  end
+
+passed = if case_records == [], do: max(total - failed, 0), else: Enum.count(case_records, &(&1.status == "passed"))
 
 payload = %{
   schema: "once.test_results.v1",
   target: target,
   runner: %{type: runner_type, metadata: %{}},
   status: run_status,
-  summary: %{total: total, passed: passed, failed: failed, skipped: 0, flaky: 0},
-  cases: [],
+  summary: %{total: total, passed: passed, failed: failed, skipped: skipped, flaky: 0},
+  cases: case_records,
   artifacts: %{logs: [log], native_results: [native_results]}
 }
 
-File.write!(results, :json.encode(payload))
+defmodule Once.ResultsJSON do
+  # `:json` arrives with Erlang 27; older releases get this small encoder for
+  # the plain maps, lists, strings, and numbers the report holds.
+  def encode(value) do
+    if Code.ensure_loaded?(:json), do: :json.encode(value), else: fallback(value)
+  end
+
+  defp fallback(value) when is_map(value) do
+    entries = Enum.map(value, fn {key, item} -> [fallback(to_string(key)), ":", fallback(item)] end)
+    ["{", Enum.intersperse(entries, ","), "}"]
+  end
+
+  defp fallback(value) when is_list(value), do: ["[", Enum.intersperse(Enum.map(value, &fallback/1), ","), "]"]
+  defp fallback(value) when is_boolean(value), do: to_string(value)
+  defp fallback(nil), do: "null"
+  defp fallback(value) when is_integer(value), do: Integer.to_string(value)
+  defp fallback(value) when is_float(value), do: Float.to_string(value)
+  defp fallback(value) when is_atom(value), do: fallback(Atom.to_string(value))
+
+  defp fallback(value) when is_binary(value) do
+    escaped =
+      for <<char::utf8 <- value>>, into: "" do
+        case char do
+          ?" -> <<92, ?">>
+          92 -> <<92, 92>>
+          10 -> <<92, ?n>>
+          13 -> <<92, ?r>>
+          9 -> <<92, ?t>>
+          c when c < 32 -> <<92, ?u>> <> String.pad_leading(Integer.to_string(c, 16), 4, "0")
+          c -> <<c::utf8>>
+        end
+      end
+
+    [<<?">>, escaped, <<?">>]
+  end
+end
+
+File.write!(results, Once.ResultsJSON.encode(payload))
 System.halt(status)
 """
 
@@ -1236,22 +1544,6 @@ def _elixir_stage_consumer(ctx, root_app, apps, build_root, mix_env, identifier)
                 inputs = [app_dir],
                 identifier = identifier + ":" + app_name,
             )
-
-def _elixir_test_runner_command(ctx, toolchain, apps, srcs, mix_config):
-    test_paths = _elixir_test_paths(ctx, srcs)
-    _elixir_validate_test_mode(ctx, mix_config)
-    opts = _elixir_test_args(ctx)
-    if mix_config:
-        no_start = ["--no-start"] if _elixir_attr(ctx, "no_start", False) else []
-        return _shell_quote(toolchain["mix"]) + " test --no-compile --no-deps-check " + _elixir_shell_words(no_start + test_paths + opts)
-
-    start_args = []
-    if "test/test_helper.exs" not in test_paths:
-        start_args = ["-e", "ExUnit.start()"]
-    require_args = []
-    for path in test_paths:
-        require_args.extend(["-r", path])
-    return _shell_quote(toolchain["elixir"]) + " " + _elixir_code_path_flags(apps) + " " + _elixir_shell_words(_elixir_interpreter_opts(ctx) + start_args + require_args + opts)
 
 def _elixir_test_info(ctx, runner_type, runner_display_name, runner, args, results, log, native_results):
     labels = _elixir_attr(ctx, "labels", [])
@@ -1312,14 +1604,24 @@ def _elixir_test_info_for(ctx, runner, mix_config, apps, srcs, results, log, nat
         require_args.extend(["-r", path])
     return _elixir_test_info(ctx, "elixir_exunit", "Elixir ExUnit", runner, _elixir_code_path_args(ctx, apps) + _elixir_interpreter_opts(ctx) + start_args + require_args + _elixir_test_args(ctx), results, log, native_results)
 
-def _elixir_test_script(ctx, toolchain, lib, apps, srcs, config, data, mix_config, results, log, native_results):
+def _elixir_test_script(ctx, toolchain, lib, apps, srcs, config, data, mix_config, results, log, native_results, runner_files):
     app_name = lib["app_name"]
     build_root = ctx["scratch_dir"] + "/test_build"
     home = ctx["scratch_dir"] + "/test_home"
     deps_root = ctx["scratch_dir"] + "/test_deps"
     user_env = _elixir_user_env(ctx)
     setup = _elixir_attr(ctx, "setup", "")
-    runner = _elixir_test_runner_command(ctx, toolchain, apps, srcs, mix_config)
+    runner_script, args_file, formatter_source = runner_files
+    runner = " ".join([_shell_quote(arg) for arg in [
+        toolchain["elixir"],
+        _elixir_from_package(ctx, runner_script),
+        toolchain["mix"] if mix_config else toolchain["elixir"],
+        _elixir_from_package(ctx, args_file),
+    ]] + ['"$WORKSPACE_ROOT/$RESULTS"', '"$WORKSPACE_ROOT/$LOG"', '"$WORKSPACE_ROOT/$NATIVE_RESULTS"'] + [_shell_quote(arg) for arg in [
+        ctx["label"]["id"],
+        "mix_test" if mix_config else "elixir_exunit",
+        _elixir_from_package(ctx, formatter_source),
+    ]])
     return """set -eu
 WORKSPACE_ROOT="$PWD"
 BUILD_ROOT={build_root}
@@ -1345,38 +1647,9 @@ export HEX_OFFLINE=true
 export ERL_LIBS="$WORKSPACE_ROOT/$DEPS_ROOT"
 {setup}
 set +e
-{runner} > "$WORKSPACE_ROOT/$LOG" 2>&1
+{runner}
 status=$?
 set -e
-cp "$WORKSPACE_ROOT/$LOG" "$WORKSPACE_ROOT/$NATIVE_RESULTS"
-summary_line=$(grep -E '[0-9]+ tests?, [0-9]+ failures' "$WORKSPACE_ROOT/$LOG" | tail -n 1 || true)
-if [ -n "$summary_line" ]; then
-  total=$(printf '%s\\n' "$summary_line" | sed -E 's/.*([0-9]+) tests?, ([0-9]+) failures.*/\\1/')
-  failed=$(printf '%s\\n' "$summary_line" | sed -E 's/.*([0-9]+) tests?, ([0-9]+) failures.*/\\2/')
-  passed=$((total - failed))
-else
-  result_line=$(grep -E '^Result: ' "$WORKSPACE_ROOT/$LOG" | tail -n 1 || true)
-  if printf '%s\\n' "$result_line" | grep -Eq '^Result: [0-9]+/[0-9]+ passed'; then
-    passed=$(printf '%s\\n' "$result_line" | sed -E 's/^Result: ([0-9]+)\\/([0-9]+) passed.*/\\1/')
-    total=$(printf '%s\\n' "$result_line" | sed -E 's/^Result: ([0-9]+)\\/([0-9]+) passed.*/\\2/')
-    failed=$((total - passed))
-  elif printf '%s\\n' "$result_line" | grep -Eq '^Result: [0-9]+ passed'; then
-    passed=$(printf '%s\\n' "$result_line" | sed -E 's/^Result: ([0-9]+) passed.*/\\1/')
-    total=$passed
-    failed=0
-  elif printf '%s\\n' "$result_line" | grep -Eq '^Result: [0-9]+ tests'; then
-    total=$(printf '%s\\n' "$result_line" | sed -E 's/^Result: ([0-9]+) tests.*/\\1/')
-    passed=0
-    failed=0
-  else
-    total=0
-    passed=0
-    failed=$([ "$status" -eq 0 ] && printf 0 || printf 1)
-  fi
-fi
-if [ "$passed" -lt 0 ]; then passed=0; fi
-if [ "$status" -eq 0 ]; then run_status=passed; else run_status=failed; fi
-printf '{{"schema":"once.test_results.v1","target":"%s","runner":{{"type":"%s","metadata":{{}}}},"status":"%s","summary":{{"total":%s,"passed":%s,"failed":%s,"skipped":0,"flaky":0}},"cases":[],"artifacts":{{"logs":["%s"],"native_results":["%s"]}}}}\\n' {target} {runner_type} "$run_status" "$total" "$passed" "$failed" "$LOG" "$NATIVE_RESULTS" > "$WORKSPACE_ROOT/$RESULTS"
 exit "$status"
 """.format(
         build_root = _shell_quote(build_root),
@@ -1393,8 +1666,6 @@ exit "$status"
         user_env = _elixir_export_env(user_env),
         setup = setup,
         runner = runner,
-        target = _shell_quote(ctx["label"]["id"]),
-        runner_type = _shell_quote("mix_test" if mix_config else "elixir_exunit"),
     )
 
 def _elixir_test_env(ctx, toolchain, home_dir, build_root):
@@ -1449,28 +1720,30 @@ def _elixir_test_impl(ctx):
     apps = _elixir_collect_apps([lib])
     provider["affected_inputs"] = _unique(_elixir_optional_inputs(input_srcs + config + data + tools + [mix_config]) + _elixir_app_inputs(apps))
     provider["test_info"] = _elixir_test_info_for(ctx, toolchain["mix"] if mix_config else toolchain["elixir"], mix_config, apps, srcs, results, log, native_results)
-    if _elixir_attr(ctx, "setup", ""):
-        run_action(
-            argv = [_elixir_host_shell(ctx), "-c", _elixir_test_script(ctx, toolchain, lib, apps, srcs, config, data, mix_config, results, log, native_results)],
-            inputs = provider["affected_inputs"],
-            outputs = [test_dir, results, log, native_results],
-            env = _elixir_action_env(toolchain),
-            cacheable = _elixir_attr(ctx, "cacheable", True),
-            toolchain_identity = toolchain["identity"] + ("\x00mix_test.v2" if mix_config else "\x00elixir_exunit.v2"),
-            identifier = ctx["label"]["id"] + (":mix-test" if mix_config else ":elixir-test"),
-        )
-        return provider
-    build_root = ctx["scratch_dir"] + "/test_build"
-    home_dir = ctx["scratch_dir"] + "/test_home"
     runner_dir = ctx["scratch_dir"] + "/test_runner"
     runner_script = runner_dir + "/runner.exs"
     args_file = runner_dir + "/args.list"
+    formatter_source = runner_dir + "/once_exunit_formatter.ex"
     runner, args = _elixir_test_runner_argv(ctx, toolchain, apps, srcs, mix_config)
     setup_tasks = _elixir_attr(ctx, "setup_tasks", [])
     if setup_tasks and not mix_config:
         fail(ctx["label"]["id"] + ": setup_tasks requires Mix mode through an elixir_app provider with mix_config")
     write_path(runner_script, _elixir_test_runner_source(setup_tasks))
     write_path(args_file, _elixir_lines(args))
+    write_path(formatter_source, _elixir_exunit_formatter_source())
+    if _elixir_attr(ctx, "setup", ""):
+        run_action(
+            argv = [_elixir_host_shell(ctx), "-c", _elixir_test_script(ctx, toolchain, lib, apps, srcs, config, data, mix_config, results, log, native_results, (runner_script, args_file, formatter_source))],
+            inputs = _unique(provider["affected_inputs"] + [runner_script, args_file, formatter_source]),
+            outputs = [test_dir, results, log, native_results],
+            env = _elixir_action_env(toolchain),
+            cacheable = _elixir_attr(ctx, "cacheable", True),
+            toolchain_identity = toolchain["identity"] + ("\x00mix_test.v3" if mix_config else "\x00elixir_exunit.v3"),
+            identifier = ctx["label"]["id"] + (":mix-test" if mix_config else ":elixir-test"),
+        )
+        return provider
+    build_root = ctx["scratch_dir"] + "/test_build"
+    home_dir = ctx["scratch_dir"] + "/test_home"
     project_inputs = []
     if mix_config:
         lockfile = _package_relative(ctx, _elixir_attr(ctx, "lockfile", "mix.lock"))
@@ -1497,15 +1770,16 @@ def _elixir_test_impl(ctx):
             _elixir_from_package(ctx, native_results),
             ctx["label"]["id"],
             "mix_test" if mix_config else "elixir_exunit",
+            _elixir_from_package(ctx, formatter_source),
         ],
-        inputs = _unique(provider["affected_inputs"] + project_inputs + [runner_script, args_file]),
+        inputs = _unique(provider["affected_inputs"] + project_inputs + [runner_script, args_file, formatter_source]),
         outputs = [results, log, native_results],
         clean_paths = [home_dir, results, log, native_results],
         create_dirs = [home_dir, test_dir],
         cwd = _elixir_package_cwd(ctx),
         env = _elixir_action_env_with(ctx, toolchain, _elixir_test_env(ctx, toolchain, home_dir, build_root)),
         cacheable = _elixir_attr(ctx, "cacheable", True),
-        toolchain_identity = toolchain["identity"] + ("\x00mix_test.v2" if mix_config else "\x00elixir_exunit.v2"),
+        toolchain_identity = toolchain["identity"] + ("\x00mix_test.v3" if mix_config else "\x00elixir_exunit.v3"),
         identifier = ctx["label"]["id"] + (":mix-test" if mix_config else ":elixir-test"),
     )
     return provider

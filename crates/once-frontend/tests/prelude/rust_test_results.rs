@@ -370,3 +370,46 @@ printf '\nrunning 1 test\ntest tests::works ... ok <0.250s>\n\ntest result: ok. 
         ],
     );
 }
+
+/// When a test prints a verdict for another case under `--nocapture` and the
+/// two verdicts disagree, the real one cannot be told apart, so that case
+/// reports no verdict instead of a guessed one.
+#[test]
+fn libtest_runner_reports_no_verdict_for_conflicting_result_lines() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let runner = compile_runner(dir.path());
+    let binary = compile_tests(
+        dir.path(),
+        r#"
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_prints_a_verdict() {
+        println!();
+        println!("test tests::b_fails ... ok");
+    }
+
+    #[test]
+    fn b_fails() {
+        panic!("real failure");
+    }
+}
+"#,
+    );
+
+    let (output, report) = run_runner(&runner, &binary, dir.path(), "report-time", |command| {
+        command.args(["--nocapture", "--test-threads=1"]);
+    });
+
+    assert!(!output.status.success(), "{output:?}");
+    assert_eq!(
+        attempt(&report, "tests::b_fails")["status"],
+        "unknown",
+        "{report}"
+    );
+    assert_ne!(
+        attempt(&report, "tests::a_prints_a_verdict")["status"],
+        "failed",
+        "{report}"
+    );
+}

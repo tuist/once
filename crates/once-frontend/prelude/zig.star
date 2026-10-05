@@ -938,6 +938,192 @@ def _zig_test_info(ctx, test_binary, results, log, native_results, test_dir):
 def _zig_powershell_argv(script):
     return [host_which("powershell"), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]
 
+# Zig's default test runner prints `K/N name...` before each test and `OK`,
+# `SKIP`, or `FAIL (error)` after it when stderr is not a terminal, followed
+# by a summary line. The report program turns that into one case per test,
+# keeping each failing test's output as its failure message. It only does so
+# when every test is accounted for, the counts match the summary, and the
+# exit code agrees; otherwise, for example with a custom test runner, a
+# crash, or leak and log errors, it falls back to one case for the whole
+# binary that carries the measured run time and the failure output. The
+# runner prints no per-test timing, so per-test cases carry no duration.
+_ZIG_TEST_REPORT_AWK = """
+function init_bytes(   i) {
+  for (i = 1; i < 256; i++) byte_value[sprintf("%c", i)] = i
+}
+function utf8_clean(s, limit,   out, i, n, v, len, j, ok, w, chars) {
+  out = ""
+  n = length(s)
+  i = 1
+  chars = 0
+  while (i <= n && (limit == 0 || chars < limit)) {
+    v = byte_value[substr(s, i, 1)]
+    if (v < 128) {
+      out = out substr(s, i, 1)
+      i++
+      chars++
+      continue
+    }
+    if (v >= 194 && v <= 223) len = 2
+    else if (v >= 224 && v <= 239) len = 3
+    else if (v >= 240 && v <= 244) len = 4
+    else len = 0
+    ok = len > 0 && i + len - 1 <= n
+    for (j = 1; ok && j < len; j++) {
+      w = byte_value[substr(s, i + j, 1)]
+      if (w < 128 || w > 191) ok = 0
+      if (j == 1 && ((v == 224 && w < 160) || (v == 237 && w > 159) || (v == 240 && w < 144) || (v == 244 && w > 143))) ok = 0
+    }
+    if (ok) {
+      out = out substr(s, i, len)
+      i += len
+    } else {
+      out = out "?"
+      i++
+    }
+    chars++
+  }
+  return out
+}
+function json_string(s,   out, i, n, c, v) {
+  s = utf8_clean(s, 0)
+  out = ""
+  n = length(s)
+  for (i = 1; i <= n; i++) {
+    c = substr(s, i, 1)
+    v = byte_value[c]
+    if (c == "\\\\") out = out "\\\\\\\\"
+    else if (c == "\\"") out = out "\\\\\\""
+    else if (c == "\\n") out = out "\\\\n"
+    else if (c == "\\r") out = out "\\\\r"
+    else if (c == "\\t") out = out "\\\\t"
+    else if (v < 32 || v == 127) out = out sprintf("\\\\u%04x", v)
+    else out = out c
+  }
+  return "\\"" out "\\""
+}
+function trim(s) {
+  sub(/^[ \\t\\r\\n]+/, "", s)
+  sub(/[ \\t\\r\\n]+$/, "", s)
+  return s
+}
+function message(s) {
+  return utf8_clean(trim(s), 4000)
+}
+function attempt(status, duration, failure,   out) {
+  out = "{\\"status\\":" json_string(status)
+  if (duration != "" && status != "skipped") out = out ",\\"duration_ms\\":" duration
+  if (status == "failed" && failure != "") out = out ",\\"failure\\":{\\"message\\":" json_string(failure) "}"
+  return out "}"
+}
+function test_case(id, name, status, duration, failure) {
+  return "{\\"id\\":" json_string(id) ",\\"name\\":" json_string(name) ",\\"suite\\":" json_string(target) ",\\"status\\":" json_string(status) ",\\"attempts\\":[" attempt(status, duration, failure) "],\\"runner_metadata\\":{}}"
+}
+BEGIN { init_bytes(); n = 0; stored = 0; overflow = 0 }
+# The log is kept for parsing only up to a fixed budget. A longer log is
+# reported as one case whose failure text comes from the kept prefix.
+{
+  if (overflow) next
+  stored += length($0) + 1
+  if (stored > 16777216) { overflow = 1; next }
+  lines[++n] = $0
+}
+END {
+  target = ENVIRON["ONCE_ZIG_TARGET"]
+  code = ENVIRON["ONCE_ZIG_CODE"] + 0
+  duration = ENVIRON["ONCE_ZIG_DURATION_MS"]
+  if (duration !~ /^[0-9]+$/) duration = ""
+  summary_index = 0
+  for (i = n; i >= 1; i--) {
+    if (lines[i] ~ /^All [0-9]+ tests passed\\.$/ || lines[i] ~ /^[0-9]+ passed; [0-9]+ skipped; [0-9]+ failed\\.$/) {
+      summary_index = i
+      break
+    }
+  }
+  count = 0
+  total = -1
+  for (i = 1; i < summary_index; i++) {
+    line = lines[i]
+    if (match(line, /^[0-9]+\\/[0-9]+ /)) {
+      split(substr(line, 1, RLENGTH - 1), parts, "/")
+      rest = substr(line, RLENGTH + 1)
+      p = index(rest, "...")
+      if (parts[1] + 0 == count + 1 && (total < 0 || parts[2] + 0 == total) && p > 1) {
+        name = substr(rest, 1, p - 1)
+        after = substr(rest, p + 3)
+        if (after !~ /^(OK|SKIP|FAIL \\(.*\\))$/) {
+          q = p
+          while ((r = index(substr(rest, q + 3), "...")) > 0) {
+            q = q + 2 + r
+            candidate = substr(rest, q + 3)
+            if (candidate ~ /^(OK|SKIP|FAIL \\(.*\\))$/ && substr(rest, 1, q - 1) !~ /\\.\\.\\.[0-9]+\\/[0-9]+ /) {
+              name = substr(rest, 1, q - 1)
+              after = candidate
+              break
+            }
+          }
+        }
+        count++
+        total = parts[2] + 0
+        names[count] = name
+        segments[count] = after
+        continue
+      }
+      # A runner line reusing an index already taken means a test printed a
+      # line shaped like a runner line, so the per-test split is not
+      # trusted and the run is reported as one case instead.
+      if (total >= 0 && parts[2] + 0 == total && parts[1] + 0 >= 1 && parts[1] + 0 <= count && p > 1) forged = 1
+    }
+    if (count > 0) segments[count] = segments[count] "\\n" line
+  }
+  per_test = summary_index > 0 && count > 0 && count == total && !forged && !overflow
+  passed = 0
+  failed = 0
+  skipped = 0
+  for (j = 1; per_test && j <= count; j++) {
+    segment = segments[j]
+    sub(/[ \\t\\r\\n]+$/, "", segment)
+    if (segment ~ /OK$/) statuses[j] = "passed"
+    else if (segment ~ /SKIP$/) statuses[j] = "skipped"
+    else if (index(segment, "FAIL (") > 0) statuses[j] = "failed"
+    else per_test = 0
+    if (statuses[j] == "passed") passed++
+    else if (statuses[j] == "skipped") skipped++
+    else if (statuses[j] == "failed") failed++
+  }
+  if (per_test) {
+    summary = lines[summary_index]
+    if (summary ~ /^All /) {
+      split(summary, words, " ")
+      if (words[2] + 0 != count || passed != count) per_test = 0
+    } else {
+      split(summary, words, " ")
+      if (words[1] + 0 != passed || words[3] + 0 != skipped || words[5] + 0 != failed) per_test = 0
+    }
+    if ((code == 0 && failed > 0) || (code != 0 && failed == 0)) per_test = 0
+  }
+  run_status = code == 0 ? "passed" : "failed"
+  cases = ""
+  if (per_test) {
+    for (j = 1; j <= count; j++) {
+      failure = statuses[j] == "failed" ? message(segments[j]) : ""
+      cases = cases (j > 1 ? "," : "") test_case(target "::" names[j], names[j], statuses[j], "", failure)
+    }
+    total_cases = count
+  } else {
+    log_text = ""
+    for (i = 1; run_status == "failed" && i <= n && length(log_text) < 16384; i++) log_text = log_text (i > 1 ? "\\n" : "") lines[i]
+    cases = test_case(target "::suite", ENVIRON["ONCE_ZIG_NAME"], run_status, duration, run_status == "failed" ? message(log_text) : "")
+    total_cases = 1
+    passed = code == 0 ? 1 : 0
+    failed = code == 0 ? 0 : 1
+    skipped = 0
+  }
+  metadata = duration == "" ? "{}" : "{\\"duration_ms\\":" duration "}"
+  printf "%s", "{\\"schema\\":\\"once.test_results.v1\\",\\"target\\":" json_string(target) ",\\"runner\\":{\\"type\\":\\"zig_test\\",\\"metadata\\":" metadata "},\\"status\\":" json_string(run_status) ",\\"summary\\":{\\"total\\":" total_cases ",\\"passed\\":" passed ",\\"failed\\":" failed ",\\"skipped\\":" skipped ",\\"flaky\\":0},\\"cases\\":[" cases "],\\"artifacts\\":{\\"logs\\":[" json_string(ENVIRON["ONCE_ZIG_LOG"]) "],\\"native_results\\":[" json_string(ENVIRON["ONCE_ZIG_NATIVE"]) "]}}\\n"
+}
+"""
+
 def _zig_test_script(ctx, test_binary, results, log, native_results):
     args = [_shell_quote(arg) for arg in _zig_attr(ctx, "args", [])]
     target = _json_string(ctx["label"]["id"])
@@ -947,8 +1133,25 @@ def _zig_test_script(ctx, test_binary, results, log, native_results):
     log_json = _json_string(log)
     native_json = _json_string(native_results)
     return """set +e
+once_now_ms() {{
+  value=$(date +%s%N 2>/dev/null)
+  case "$value" in
+    ''|*[!0-9]*) value=$(perl -MTime::HiRes=time -e 'printf("%d", time() * 1000)' 2>/dev/null) ;;
+    *) value=$((value / 1000000)) ;;
+  esac
+  case "$value" in
+    ''|*[!0-9]*) value='' ;;
+  esac
+  printf '%s' "$value"
+}}
+started=$(once_now_ms)
 {binary} {args} > {log} 2>&1
 code=$?
+finished=$(once_now_ms)
+duration=''
+if [ -n "$started" ] && [ -n "$finished" ] && [ "$finished" -ge "$started" ]; then
+  duration=$((finished - started))
+fi
 printf '$ %s\\nlog: %s\\nexit: %s\\n' {binary} {log} "$code" > {native_results}
 if [ "$code" -eq 0 ]; then
   status=passed
@@ -959,7 +1162,12 @@ else
   passed=0
   failed=1
 fi
-printf '{{"schema":"once.test_results.v1","target":{target},"runner":{{"type":"zig_test","metadata":{{}}}},"status":"%s","summary":{{"total":1,"passed":%s,"failed":%s,"skipped":0,"flaky":0}},"cases":[{{"id":{case_id},"name":{case_name},"suite":{suite},"status":"%s","attempts":[{{"status":"%s"}}],"runner_metadata":{{}}}}],"artifacts":{{"logs":[{log_json}],"native_results":[{native_json}]}}}}\\n' "$status" "$passed" "$failed" "$status" "$status" > {results}
+if head -c 16777217 {log} | LC_ALL=C ONCE_ZIG_CODE="$code" ONCE_ZIG_DURATION_MS="$duration" ONCE_ZIG_TARGET={target_raw} ONCE_ZIG_NAME={name_raw} ONCE_ZIG_LOG={log_raw} ONCE_ZIG_NATIVE={native_raw} awk '{awk}' > {results}.report 2>/dev/null && [ -s {results}.report ]; then
+  mv {results}.report {results}
+else
+  rm -f {results}.report
+  printf '{{"schema":"once.test_results.v1","target":{target},"runner":{{"type":"zig_test","metadata":{{}}}},"status":"%s","summary":{{"total":1,"passed":%s,"failed":%s,"skipped":0,"flaky":0}},"cases":[{{"id":{case_id},"name":{case_name},"suite":{suite},"status":"%s","attempts":[{{"status":"%s"}}],"runner_metadata":{{}}}}],"artifacts":{{"logs":[{log_json}],"native_results":[{native_json}]}}}}\\n' "$status" "$passed" "$failed" "$status" "$status" > {results}
+fi
 exit "$code"
 """.format(
         binary = _shell_quote("./" + test_binary),
@@ -973,14 +1181,21 @@ exit "$code"
         log_json = log_json,
         native_json = native_json,
         results = _shell_quote(results),
+        target_raw = _shell_quote(ctx["label"]["id"]),
+        name_raw = _shell_quote(ctx["label"]["name"]),
+        log_raw = _shell_quote(log),
+        native_raw = _shell_quote(native_results),
+        awk = _ZIG_TEST_REPORT_AWK,
     )
 
 def _zig_test_windows_script(ctx, test_binary, results, log, native_results):
     args = [_powershell_quote(arg) for arg in _zig_attr(ctx, "args", [])]
     return """$ErrorActionPreference = 'Continue'
 $encoding = New-Object System.Text.UTF8Encoding -ArgumentList $false
+$stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 & {binary} {args} > {log} 2>&1
 $code = $global:LASTEXITCODE
+$stopwatch.Stop()
 if ($null -eq $code) {{
   if ($?) {{
     $code = 0
@@ -996,6 +1211,36 @@ if ($code -eq 0) {{
   $status = 'failed'
   $passed = 0
   $failed = 1
+}}
+$attempt = [ordered]@{{
+  status = $status
+  duration_ms = [int64]$stopwatch.ElapsedMilliseconds
+}}
+if ($code -ne 0) {{
+  $output = ''
+  try {{
+    $reader = [System.IO.StreamReader]::new((Resolve-Path -LiteralPath {log}).Path)
+    try {{
+      $buffer = [char[]]::new(16384)
+      $count = $reader.ReadBlock($buffer, 0, $buffer.Length)
+      $output = [string]::new($buffer, 0, $count).Trim()
+    }} finally {{
+      $reader.Dispose()
+    }}
+  }} catch {{
+    $output = ''
+  }}
+  if ($output.Length -gt 4000) {{
+    $output = $output.Substring(0, 4000)
+    if ([char]::IsHighSurrogate($output[$output.Length - 1])) {{
+      $output = $output.Substring(0, $output.Length - 1)
+    }}
+  }}
+  if ($output.Length -gt 0) {{
+    $attempt['failure'] = [ordered]@{{
+      message = $output
+    }}
+  }}
 }}
 $native = '$ ' + {binary_display} + [System.Environment]::NewLine + 'log: ' + {log_display} + [System.Environment]::NewLine + 'exit: ' + [string]$code + [System.Environment]::NewLine
 [System.IO.File]::WriteAllText({native_results}, $native, $encoding)
@@ -1019,9 +1264,7 @@ $result = [ordered]@{{
     name = {case_name}
     suite = {suite}
     status = $status
-    attempts = @([ordered]@{{
-      status = $status
-    }})
+    attempts = @($attempt)
     runner_metadata = [ordered]@{{}}
   }})
   artifacts = [ordered]@{{
