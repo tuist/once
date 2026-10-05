@@ -16,6 +16,7 @@ mod reference;
 mod render;
 mod reporter;
 mod sound;
+mod termination;
 
 use std::ffi::OsStr;
 use std::fmt::Write as _;

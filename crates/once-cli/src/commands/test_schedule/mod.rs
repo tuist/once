@@ -1,3 +1,4 @@
+mod cancellation;
 mod executor;
 mod process;
 mod results;
@@ -56,7 +57,7 @@ pub(crate) async fn execute(
     let workspace_path = workspace.to_path_buf();
     let scheduler_workspace = workspace_path.clone();
     let blocking_plan = plan.clone();
-    let completed = tokio::task::spawn_blocking(move || {
+    let schedule = tokio::task::spawn_blocking(move || {
         executor::execute(
             &executable,
             &scheduler_workspace,
@@ -66,9 +67,10 @@ pub(crate) async fn execute(
             sandbox,
             &resource_limits,
         )
-    })
-    .await
-    .context("joining test scheduler")??;
+    });
+    let completed = cancellation::supervise(schedule)
+        .await
+        .context("joining test scheduler")??;
     results::persist(&workspace_path, &plan, &completed.runs)?;
     store.append(&completed.schedule.attempts).await?;
     let next_plan = if plan
