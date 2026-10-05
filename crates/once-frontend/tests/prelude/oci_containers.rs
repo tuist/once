@@ -20,8 +20,8 @@ fn base_layout(
     seed: &str,
 ) -> String {
     let manifest = seed.repeat(64);
-    let config = format!("c{}", &seed.repeat(63));
-    let layer = format!("d{}", &seed.repeat(63));
+    let config = format!("c{}", seed.repeat(63));
+    let layer = format!("d{}", seed.repeat(63));
     write(
         workspace,
         &format!("{directory}/index.json"),
