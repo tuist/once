@@ -56,7 +56,7 @@ defmodule OnceSite.MixProject do
       {:flop, "~> 0.29.0"},
       {:lumis, "~> 0.6"},
       {:floki, ">= 0.30.0"},
-      {:noora, "~> 0.84"},
+      {:noora, "~> 0.86"},
       {:carta, "~> 0.2"},
       {:browse_chrome, "~> 0.4"},
       {:briefly, "~> 0.5"},
