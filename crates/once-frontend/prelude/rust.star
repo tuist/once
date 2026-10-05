@@ -2017,16 +2017,31 @@ def _rust_test_filter_args(ctx):
     return [_test_unit_suffix(ctx, filters[0]), "--exact"]
 
 def _rust_test_runner_source():
-    return """use std::collections::BTreeMap;
+    return """use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::Path;
 use std::process::{self, Command, Output};
 
+// libtest only measures per-test time behind `-Z unstable-options --report-time`,
+// which a stable test binary accepts when RUSTC_BOOTSTRAP is set in its
+// environment. The runner probes the flags with `--list` and keeps the plain
+// invocation whenever the binary rejects them or lists different cases.
+const REPORT_TIME_ARGS: [&str; 3] = ["-Z", "unstable-options", "--report-time"];
+const FAILURE_MESSAGE_LIMIT: usize = 4000;
+const TEST_MODES: [&str; 3] = [" - should panic", " - compile fail", " - compile"];
+
+#[derive(Debug, Clone, PartialEq)]
+struct CaseOutcome {
+    status: String,
+    duration_ms: Option<u64>,
+    failure: Option<String>,
+}
+
 fn main() {
     let args = env::args().collect::<Vec<_>>();
-    if args.len() < 7 {
-        eprintln!("usage: once-rust-test-runner <binary> <results> <log> <native-results> <target> <cwd> [args...]");
+    if args.len() < 8 {
+        eprintln!("usage: once-rust-test-runner <binary> <results> <log> <native-results> <target> <cwd> <report-time|no-report-time> [args...]");
         process::exit(2);
     }
     let binary = &args[1];
@@ -2035,20 +2050,24 @@ fn main() {
     let native_results = &args[4];
     let target = &args[5];
     let cwd = &args[6];
-    let runner_args = &args[7..];
+    let report_time_requested = args[7] == "report-time";
+    let runner_args = &args[8..];
 
     create_parent(results);
     create_parent(log);
     create_parent(native_results);
 
-    let list_output = test_command(binary, cwd, runner_args).arg("--list").output();
-    let list_text = match &list_output {
-        Ok(output) => output_text(output),
-        Err(error) => format!("failed to list tests: {error}\\n"),
+    let list_output = test_command(binary, cwd, false, &["--list"], runner_args).output();
+    let (list_text, list_succeeded) = match &list_output {
+        Ok(output) => (output_text(output), output.status.success()),
+        Err(error) => (format!("failed to list tests: {error}\\n"), false),
     };
     let cases = parse_list(&list_text);
+    let report_time = report_time_requested
+        && list_succeeded
+        && report_time_supported(binary, cwd, runner_args, &cases);
 
-    let run_output = test_command(binary, cwd, runner_args).output();
+    let run_output = test_command(binary, cwd, report_time, &[], runner_args).output();
     let (run_text, exit_code, passed) = match run_output {
         Ok(output) => {
             let code = output.status.code().unwrap_or(1);
@@ -2057,10 +2076,15 @@ fn main() {
         Err(error) => (format!("failed to run tests: {error}\\n"), 1, false),
     };
 
-    let statuses = parse_statuses(&run_text);
-    let report = report_json(target, &cases, &statuses, passed, log, native_results);
+    let outcomes = parse_outcomes(&run_text, &cases, passed);
+    let report = report_json(target, &cases, &outcomes, passed, log, native_results);
+    let run_flags = if report_time {
+        format!(" {}", REPORT_TIME_ARGS.join(" "))
+    } else {
+        String::new()
+    };
     fs::write(log, &run_text).expect("write log");
-    fs::write(native_results, format!("$ {binary} --list\\n{list_text}\\n$ {binary}\\n{run_text}")).expect("write native results");
+    fs::write(native_results, format!("$ {binary} --list\\n{list_text}\\n$ {binary}{run_flags}\\n{run_text}")).expect("write native results");
     fs::write(results, report).expect("write results");
     if !passed {
         eprint!("{run_text}");
@@ -2068,11 +2092,25 @@ fn main() {
     process::exit(exit_code);
 }
 
-fn test_command(binary: &str, cwd: &str, runner_args: &[String]) -> Command {
+fn test_command(binary: &str, cwd: &str, report_time: bool, leading_args: &[&str], runner_args: &[String]) -> Command {
     let mut command = Command::new(binary);
+    if report_time {
+        command.args(REPORT_TIME_ARGS);
+        if env::var_os("RUSTC_BOOTSTRAP").is_none() {
+            command.env("RUSTC_BOOTSTRAP", "1");
+        }
+    }
+    command.args(leading_args);
     command.args(runner_args);
     command.current_dir(cwd);
     command
+}
+
+fn report_time_supported(binary: &str, cwd: &str, runner_args: &[String], cases: &[String]) -> bool {
+    match test_command(binary, cwd, true, &["--list"], runner_args).output() {
+        Ok(output) => output.status.success() && parse_list(&output_text(&output)) == cases,
+        Err(_) => false,
+    }
 }
 
 fn create_parent(path: &str) {
@@ -2100,24 +2138,187 @@ fn parse_list(text: &str) -> Vec<String> {
     out
 }
 
-fn parse_statuses(text: &str) -> BTreeMap<String, String> {
+fn parse_outcomes(text: &str, cases: &[String], passed_run: bool) -> BTreeMap<String, CaseOutcome> {
+    let known = cases.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    let lines = text.lines().collect::<Vec<_>>();
     let mut out = BTreeMap::new();
-    for line in text.lines() {
-        if !line.starts_with("test ") {
+    let mut failure_order = Vec::new();
+    // libtest prints captured output only in the `successes:` and `failures:`
+    // sections after every result line, so result lines are read only before
+    // the first section header that follows each case's first result line. A
+    // test that prints a result-shaped line or a bare header under
+    // `--nocapture` cannot change another case's verdict.
+    let parsed = lines
+        .iter()
+        .map(|line| parse_result_line(line, &known))
+        .collect::<Vec<_>>();
+    let mut first_results = BTreeMap::new();
+    for (index, result) in parsed.iter().enumerate() {
+        if let Some((name, _)) = result {
+            if known.is_empty() || known.contains(name.as_str()) {
+                first_results.entry(name.clone()).or_insert(index);
+            }
+        }
+    }
+    let last_first_result = first_results.values().max().copied();
+    let sections = lines
+        .iter()
+        .enumerate()
+        .position(|(index, line)| {
+            (*line == "failures:" || *line == "successes:")
+                && (index == 0 || lines[index - 1].is_empty())
+                && last_first_result.map_or(true, |last| index > last)
+        })
+        .unwrap_or(lines.len());
+    for (name, outcome) in parsed.into_iter().take(sections).flatten() {
+        // libtest exits successfully only when no test failed, so a failed
+        // verdict in a passing run was printed by a test under `--nocapture`.
+        if passed_run && outcome.status == "failed" {
             continue;
         }
-        let rest = &line[5..];
-        if let Some(name) = rest.strip_suffix(" ... ok") {
-            out.insert(name.to_string(), "passed".to_string());
-        } else if let Some(name) = rest.strip_suffix(" ... FAILED") {
-            out.insert(name.to_string(), "failed".to_string());
-        } else if let Some((name, detail)) = rest.split_once(" ... ignored") {
-            if detail.is_empty() || detail.starts_with(", ") {
-                out.insert(name.to_string(), "skipped".to_string());
+        if outcome.status == "failed" && !failure_order.contains(&name) {
+            failure_order.push(name.clone());
+        }
+        out.insert(name, outcome);
+    }
+    for (name, message) in parse_failure_messages(&lines[sections..], &failure_order) {
+        if let Some(outcome) = out.get_mut(&name) {
+            if outcome.status == "failed" {
+                outcome.failure = Some(message);
             }
         }
     }
     out
+}
+
+fn parse_result_line(line: &str, known: &BTreeSet<&str>) -> Option<(String, CaseOutcome)> {
+    let rest = line.strip_prefix("test ")?;
+    let mut fallback = None;
+    for (index, _) in rest.match_indices(" ... ") {
+        let Some(outcome) = parse_outcome(&rest[index + 5..]) else {
+            continue;
+        };
+        let name = case_name(rest[..index].trim_end(), known);
+        if known.contains(name) {
+            return Some((name.to_string(), outcome));
+        }
+        if fallback.is_none() {
+            fallback = Some((name.to_string(), outcome));
+        }
+    }
+    fallback
+}
+
+fn case_name<'a>(name: &'a str, known: &BTreeSet<&str>) -> &'a str {
+    if known.contains(name) {
+        return name;
+    }
+    for mode in TEST_MODES {
+        if let Some(stripped) = name.strip_suffix(mode) {
+            return stripped;
+        }
+    }
+    name
+}
+
+fn parse_outcome(result: &str) -> Option<CaseOutcome> {
+    let (verdict, duration_ms) = split_report_time(result);
+    let status = if verdict == "ok" {
+        "passed"
+    } else if verdict == "FAILED" || verdict.starts_with("FAILED (") {
+        "failed"
+    } else if result == "ignored" || result.starts_with("ignored, ") {
+        return Some(CaseOutcome { status: "skipped".to_string(), duration_ms: None, failure: None });
+    } else {
+        return None;
+    };
+    Some(CaseOutcome { status: status.to_string(), duration_ms, failure: None })
+}
+
+fn split_report_time(result: &str) -> (&str, Option<u64>) {
+    let Some(start) = result.rfind(" <") else {
+        return (result, None);
+    };
+    let Some(seconds) = result[start + 2..].strip_suffix("s>") else {
+        return (result, None);
+    };
+    if seconds.is_empty() || !seconds.chars().all(|ch| ch.is_ascii_digit() || ch == '.') {
+        return (result, None);
+    }
+    match seconds.parse::<f64>() {
+        Ok(value) if value.is_finite() && value >= 0.0 => (&result[..start], Some((value * 1000.0).round() as u64)),
+        _ => (result, None),
+    }
+}
+
+fn failure_header(line: &str) -> Option<&str> {
+    line.strip_prefix("---- ")?.strip_suffix(" stdout ----")
+}
+
+fn parse_failure_messages(lines: &[&str], failure_order: &[String]) -> BTreeMap<String, String> {
+    let end = failure_list_start(lines).unwrap_or(lines.len());
+    let mut out = BTreeMap::new();
+    // A test can print another failed test's header. Every failed test has a
+    // captured block, so a repeated header means the split is ambiguous; the
+    // output then stays in the log rather than being attributed to a case.
+    let mut header_counts = BTreeMap::new();
+    for name in lines[..end].iter().filter_map(|line| failure_header(line)) {
+        if failure_order.iter().any(|failed| failed == name) {
+            *header_counts.entry(name).or_insert(0usize) += 1;
+        }
+    }
+    if header_counts.values().any(|count| *count > 1) {
+        return out;
+    }
+    let mut current: Option<(usize, Vec<&str>)> = None;
+    for line in &lines[..end] {
+        let header = failure_header(line)
+            .and_then(|name| failure_order.iter().position(|failed| failed == name))
+            .filter(|position| current.as_ref().map_or(true, |(index, _)| position > index));
+        if let Some(position) = header {
+            if let Some((index, body)) = current.take() {
+                insert_failure_message(&mut out, &failure_order[index], &body);
+            }
+            current = Some((position, Vec::new()));
+        } else if let Some((_, body)) = current.as_mut() {
+            body.push(line);
+        }
+    }
+    if let Some((index, body)) = current {
+        insert_failure_message(&mut out, &failure_order[index], &body);
+    }
+    out
+}
+
+fn failure_list_start(lines: &[&str]) -> Option<usize> {
+    let mut index = lines.iter().rposition(|line| line.starts_with("test result: "))?;
+    while index > 0 && lines[index - 1].trim().is_empty() {
+        index -= 1;
+    }
+    while index > 0 && lines[index - 1].starts_with("    ") {
+        index -= 1;
+    }
+    if index > 0 && lines[index - 1] == "failures:" {
+        Some(index - 1)
+    } else {
+        None
+    }
+}
+
+fn insert_failure_message(out: &mut BTreeMap<String, String>, name: &str, body: &[&str]) {
+    let message = body.join("\\n");
+    let message = message.trim_end().trim_start_matches(|ch| ch == '\\n' || ch == '\\r');
+    if message.is_empty() {
+        return;
+    }
+    out.insert(name.to_string(), truncate_chars(message, FAILURE_MESSAGE_LIMIT));
+}
+
+fn truncate_chars(value: &str, limit: usize) -> String {
+    match value.char_indices().nth(limit) {
+        Some((index, _)) => value[..index].to_string(),
+        None => value.to_string(),
+    }
 }
 
 fn json_string(value: &str) -> String {
@@ -2137,10 +2338,22 @@ fn json_string(value: &str) -> String {
     out
 }
 
+fn attempt_json(outcome: &CaseOutcome) -> String {
+    let mut attempt = format!("{{\\"status\\":{}", json_string(&outcome.status));
+    if let Some(duration_ms) = outcome.duration_ms.filter(|_| outcome.status != "skipped") {
+        attempt.push_str(&format!(",\\"duration_ms\\":{duration_ms}"));
+    }
+    if let Some(message) = outcome.failure.as_deref().filter(|_| outcome.status == "failed") {
+        attempt.push_str(&format!(",\\"failure\\":{{\\"message\\":{}}}", json_string(message)));
+    }
+    attempt.push('}');
+    attempt
+}
+
 fn report_json(
     target: &str,
     cases: &[String],
-    statuses: &BTreeMap<String, String>,
+    outcomes: &BTreeMap<String, CaseOutcome>,
     passed_run: bool,
     log: &str,
     native_results: &str,
@@ -2150,23 +2363,24 @@ fn report_json(
     let mut failed = 0usize;
     let mut skipped = 0usize;
     for case in cases {
-        let status = statuses
-            .get(case)
-            .cloned()
-            .unwrap_or_else(|| if passed_run { "passed".to_string() } else { "unknown".to_string() });
-        match status.as_str() {
+        let outcome = outcomes.get(case).cloned().unwrap_or_else(|| CaseOutcome {
+            status: if passed_run { "passed" } else { "unknown" }.to_string(),
+            duration_ms: None,
+            failure: None,
+        });
+        match outcome.status.as_str() {
             "passed" => passed += 1,
             "failed" => failed += 1,
             "skipped" => skipped += 1,
             _ => {}
         }
         case_records.push(format!(
-            "{{\\"id\\":{},\\"name\\":{},\\"suite\\":{},\\"status\\":{},\\"attempts\\":[{{\\"status\\":{}}}],\\"runner_metadata\\":{{}}}}",
+            "{{\\"id\\":{},\\"name\\":{},\\"suite\\":{},\\"status\\":{},\\"attempts\\":[{}],\\"runner_metadata\\":{{}}}}",
             json_string(&format!("{target}::{case}")),
             json_string(case),
             json_string(target),
-            json_string(&status),
-            json_string(&status),
+            json_string(&outcome.status),
+            attempt_json(&outcome),
         ));
     }
     let mut total = cases.len();
@@ -2261,6 +2475,7 @@ def _rust_test_impl(ctx):
             execution_path(native_results),
             ctx["label"]["id"],
             ".",
+            "report-time" if _rust_attr(ctx, "report_time", True) else "no-report-time",
         ] + _rust_attr(ctx, "args", []) + _rust_test_filter_args(ctx),
         inputs = _unique(
             [runner, staged_test_binary] +
@@ -3810,6 +4025,7 @@ rust_test = target_kind(
         attr("env_inherit", "list<string>", default = "[]", docs = "Host environment variable names inherited by the test runner before `test_env` overrides.", configurable = False),
         attr("crate", "target", docs = "Reserved Bazel-compatible reference to an already-built crate under test.", configurable = False),
         attr("use_libtest_harness", "bool", default = "true", docs = "Whether to use the Rust libtest harness. Only `true` is currently supported.", configurable = False),
+        attr("report_time", "bool", default = "true", docs = "Whether to record per-test durations. The runner asks libtest for `-Z unstable-options --report-time` and sets `RUSTC_BOOTSTRAP=1` for the test process when the environment does not already set it, which test processes and anything they spawn inherit. Binaries that reject the flags run without them and report no durations. Set it to `false` for tests whose behavior depends on `RUSTC_BOOTSTRAP`.", configurable = False),
         attr("labels", "list<string>", default = "[]", docs = "Labels exposed through once_test_info for test discovery.", configurable = True),
         attr("timeout_ms", "int", docs = "Optional test timeout in milliseconds.", configurable = False),
         attr("cacheable", "bool", default = "true", docs = "Whether successful test results may be restored from the action cache. Disable this for tests whose outcome depends on host tools or configuration that are not declared inputs, such as tests that inherit `PATH` or `HOME` through `env_inherit`. Compilation stays cacheable.", configurable = False),

@@ -24,6 +24,7 @@ public final class OnceJvmTestRunner {
     String suite;
     String status;
     String failure;
+    long durationMs;
 
     TestCase(String id, String name, String suite) {
       this.id = id;
@@ -31,6 +32,7 @@ public final class OnceJvmTestRunner {
       this.suite = suite;
       this.status = "unknown";
       this.failure = "";
+      this.durationMs = -1;
     }
   }
 
@@ -105,11 +107,14 @@ public final class OnceJvmTestRunner {
           continue;
         }
         TestCase testCase = new TestCase(target + "::" + className + "." + method.getName(), method.getName(), className);
+        long started = System.nanoTime();
         try {
           invoke(type, method);
+          testCase.durationMs = (System.nanoTime() - started) / 1_000_000L;
           testCase.status = "passed";
           logText.append("passed ").append(className).append(".").append(method.getName()).append(System.lineSeparator());
         } catch (Throwable error) {
+          testCase.durationMs = (System.nanoTime() - started) / 1_000_000L;
           testCase.status = "failed";
           testCase.failure = stackTrace(error);
           logText.append("failed ").append(className).append(".").append(method.getName()).append(System.lineSeparator());
@@ -297,7 +302,21 @@ public final class OnceJvmTestRunner {
       field(out, "attempts");
       out.append("[{");
       field(out, "status");
-      out.append(jsonString(testCase.status)).append("}],");
+      out.append(jsonString(testCase.status));
+      if (testCase.durationMs >= 0) {
+        out.append(',');
+        field(out, "duration_ms");
+        out.append(testCase.durationMs);
+      }
+      if ("failed".equals(testCase.status) && !testCase.failure.isEmpty()) {
+        String message = testCase.failure.length() > 4000 ? testCase.failure.substring(0, 4000) : testCase.failure;
+        out.append(',');
+        field(out, "failure");
+        out.append('{');
+        field(out, "message");
+        out.append(jsonString(message)).append('}');
+      }
+      out.append("}],");
       field(out, "runner_metadata");
       out.append("{}");
       out.append('}');

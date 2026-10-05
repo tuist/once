@@ -29,6 +29,12 @@ mod swift_testing_library;
 #[path = "prelude/swift_testing_results.rs"]
 mod swift_testing_results;
 
+#[path = "prelude/rust_test_results.rs"]
+mod rust_test_results;
+
+#[path = "prelude/test_result_adapters.rs"]
+mod test_result_adapters;
+
 #[path = "prelude/apple_modules.rs"]
 mod apple_modules;
 
@@ -7055,6 +7061,7 @@ result = repr(provider["test_info"])
         .argv
         .iter()
         .any(|arg| arg.ends_with("test/test_results.json")));
+    assert!(run.argv.iter().any(|arg| arg == "report-time"));
     // `rust_test` now declares the enclosing `test/` directory as the sole
     // output of the runner action; individual artifacts (`rust-libtest.log`,
     // `test_results.json`, `native_results.txt`) land under it and are

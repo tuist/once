@@ -13,6 +13,25 @@ The runner uses the Rust test harness list output to populate
 `once.test_results.v1`, stores the native test output, and returns the test
 binary exit status to Once.
 
+## Test results
+
+Each case reports its status. A failed case carries the output the test
+harness captured for it, truncated to 4000 characters, as its failure message.
+
+The stable Rust test harness does not print per-test durations. When
+`report_time` is `true`, the runner asks the harness for its timing report
+with `-Z unstable-options --report-time` and sets `RUSTC_BOOTSTRAP=1` for the
+test process, unless the test environment already sets that variable. The
+runner first lists the tests with those flags, and only uses them for the run
+when the binary accepts them and lists the same tests; otherwise the run uses
+the plain invocation and cases report no duration. Ignored cases never report
+a duration.
+
+The test process, and any compiler or Cargo invocation it spawns, inherits
+`RUSTC_BOOTSTRAP=1`, which lets those tools accept unstable features. Set
+`report_time = false` for tests whose behavior depends on that variable, such
+as tests that build crates whose build scripts probe for nightly features.
+
 ## Attributes
 
 | Attribute | Type | Required | Default | Description |
@@ -49,6 +68,7 @@ binary exit status to Once.
 | `env_inherit` | list&lt;string&gt; | no | `[]` | Host environment variable names inherited by the test runner before `test_env` overrides |
 | `crate` | target | no | empty | Reserved Bazel-compatible reference to an already-built crate under test |
 | `use_libtest_harness` | bool | no | `true` | Whether to use the Rust libtest harness. Only `true` is supported |
+| `report_time` | bool | no | `true` | Whether to record per-test durations through the test harness timing report. See [Test results](#test-results) |
 | `labels` | list&lt;string&gt; | no | `[]` | Labels exposed through `once_test_info` for test discovery |
 | `timeout_ms` | int | no |  | Optional test timeout in milliseconds |
 | `cacheable` | bool | no | `true` | Whether successful test results may be restored from the action cache. Disable it for tests whose outcome depends on host tools or configuration that are not declared inputs, such as tests that inherit `PATH` or `HOME` through `env_inherit`. Compilation stays cacheable |

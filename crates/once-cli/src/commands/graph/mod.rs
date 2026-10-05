@@ -865,6 +865,67 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn case_events_carry_runner_durations_and_failure_messages() {
+        let bus = once_core::RunEventBus::new(16);
+        let mut receiver = bus.subscribe();
+        let results = serde_json::json!({
+            "cases": [
+                {
+                    "id": "tests::slow",
+                    "name": "slow",
+                    "suite": "tests",
+                    "attempts": [{"status": "passed", "duration_ms": 125}]
+                },
+                {
+                    "id": "tests::broken",
+                    "name": "broken",
+                    "suite": "tests",
+                    "attempts": [{"status": "failed", "duration_ms": 0, "failure": {"message": "greeting changed"}}]
+                },
+                {
+                    "id": "tests::ignored",
+                    "name": "ignored",
+                    "suite": "tests",
+                    "attempts": [{"status": "skipped"}]
+                }
+            ]
+        });
+        publish_test_results_events(&bus, "tests", &results);
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            once_core::RunEvent::TestSuiteStarted { .. }
+        ));
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            once_core::RunEvent::TestCaseCompleted {
+                duration_ms: 125,
+                duration_known: true,
+                failure_message: None,
+                ..
+            }
+        ));
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            once_core::RunEvent::TestCaseCompleted {
+                result: once_core::TestCaseResult::Failed,
+                duration_ms: 0,
+                duration_known: true,
+                failure_message: Some(message),
+                ..
+            } if message == "greeting changed"
+        ));
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            once_core::RunEvent::TestCaseCompleted {
+                result: once_core::TestCaseResult::Skipped,
+                duration_known: false,
+                failure_message: None,
+                ..
+            }
+        ));
+    }
+
     fn action_result() -> ActionResult {
         ActionResult {
             exit_code: 0,
