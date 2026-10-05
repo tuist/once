@@ -46,6 +46,12 @@ impl ContentAddressableStorage for UploadServer {
     type GetTreeStream = Pin<
         Box<dyn futures::Stream<Item = std::result::Result<reapi::GetTreeResponse, Status>> + Send>,
     >;
+    type GetChunkMappingStream = Pin<
+        Box<
+            dyn futures::Stream<Item = std::result::Result<reapi::GetChunkMappingResponse, Status>>
+                + Send,
+        >,
+    >;
 
     async fn find_missing_blobs(
         &self,
@@ -105,6 +111,18 @@ impl ContentAddressableStorage for UploadServer {
         &self,
         _: Request<reapi::SpliceBlobRequest>,
     ) -> RpcResult<reapi::SpliceBlobResponse> {
+        Err(Status::unimplemented("upload-only server"))
+    }
+    async fn get_chunk_mapping(
+        &self,
+        _: Request<reapi::GetChunkMappingRequest>,
+    ) -> RpcResult<Self::GetChunkMappingStream> {
+        Err(Status::unimplemented("upload-only server"))
+    }
+    async fn register_chunk_mapping(
+        &self,
+        _: Request<tonic::Streaming<reapi::RegisterChunkMappingRequest>>,
+    ) -> RpcResult<reapi::RegisterChunkMappingResponse> {
         Err(Status::unimplemented("upload-only server"))
     }
 }
