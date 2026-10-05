@@ -5,14 +5,22 @@
 //! a dedicated runtime keeps synchronous graph preparation from blocking
 //! network progress. Finishing the reporter drains queued action completions
 //! and the terminal run event before the process exits.
+//!
+//! While a run streams, SIGINT and SIGTERM complete it as cancelled: the
+//! first signal stops the event stream, publishes a cancelled `RunCompleted`,
+//! drains for a short bounded time, and then ends the process as the signal
+//! would have. A second signal ends it immediately. Runs that never reach the
+//! event service keep the default signal behavior.
 
+use std::io::Write as _;
 use std::path::Path;
 use std::time::Duration;
 
 use once_cas::{TuistAuth, TuistCacheConfig, TUIST_OAUTH_CLIENT_ID_ENV};
 use once_core::{RunEventBus, Xdg};
 use once_events_client::{
-    CredentialsError, EventClient, ReconnectPolicy, SessionLimits, TransportConfig, TransportError,
+    CredentialsError, EventClient, ReconnectPolicy, RunCancellation, SessionLimits,
+    TransportConfig, TransportError,
 };
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -21,6 +29,15 @@ use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use crate::argv_normalize::SafeContext;
 use crate::cache_provider::{credentials_root, resolve_config, ResolvedCacheProviderConfig};
 use crate::discovery;
+use crate::termination::{self, SignalWatcher};
+
+/// How long a cancelled run may spend delivering its terminal event. Well
+/// inside the grace period CI runners give between the first signal and a kill.
+const CANCEL_DRAIN: Duration = Duration::from_secs(2);
+
+/// Hard ceiling on the signal path, covering transport work outside the
+/// cancel drain such as a reconnect in progress.
+const CANCEL_DEADLINE: Duration = Duration::from_secs(3);
 
 /// Handle to a spawned live reporter. Await [`Self::finish`] before the
 /// process exits so the terminal `RunCompleted` batch has time to drain.
@@ -110,6 +127,7 @@ pub async fn spawn(
             let config = TransportConfig {
                 run_id: run_id.clone(),
                 batch_flush: Duration::from_millis(150),
+                cancel_drain: CANCEL_DRAIN,
                 limits: SessionLimits::default(),
                 ..TransportConfig::default()
             };
@@ -184,11 +202,14 @@ pub async fn spawn(
                 ..Default::default()
             };
 
+            let signals = SignalWatcher::install();
+            let cancellation = RunCancellation::new();
             let _ = ready_tx.send(());
             let renewal_workspace = workspace.clone();
             let renewal_xdg = xdg.clone();
-            client
+            let transport = client
                 .with_metadata(metadata)
+                .with_cancellation(cancellation.clone())
                 .with_token_provider(move || {
                     let workspace = renewal_workspace.clone();
                     let xdg = renewal_xdg.clone();
@@ -200,8 +221,11 @@ pub async fn spawn(
                     }
                 })
                 .with_dashboard_link(|link| eprintln!("\n  ↗ Once live: {link}\n"))
-                .run_with_reconnect(bus_rx, shutdown_rx, ReconnectPolicy::default())
-                .await
+                .run_with_reconnect(bus_rx, shutdown_rx, ReconnectPolicy::default());
+            match signals {
+                Some(signals) => stream_until_signal(transport, signals, &cancellation).await,
+                None => transport.await,
+            }
         })
     });
 
@@ -211,6 +235,50 @@ pub async fn spawn(
         shutdown: Some(shutdown_tx),
         system_sampler: Some(system_sampler),
     }
+}
+
+/// Drive the transport while watching for termination signals. On the first
+/// signal the run is cancelled and given [`CANCEL_DEADLINE`] to deliver its
+/// terminal event before the process ends by that signal. A second signal
+/// ends the process from the signal handler without waiting. When the
+/// transport finishes first, signals go back to their default behavior.
+async fn stream_until_signal(
+    transport: impl std::future::Future<Output = Result<u64, TransportError>>,
+    mut signals: SignalWatcher,
+    cancellation: &RunCancellation,
+) -> Result<u64, TransportError> {
+    tokio::pin!(transport);
+    let signal = tokio::select! {
+        result = &mut transport => {
+            if let Some(signal) = signals.restore() {
+                termination::terminate(signal);
+            }
+            return result;
+        }
+        signal = signals.recv() => signal,
+    };
+    cancellation.cancel(signal.name());
+    let name = signal.name();
+    off_the_signal_path(move || {
+        tracing::info!(
+            signal = name,
+            "run cancelled by signal; reporting it before exiting"
+        );
+        let _ = writeln!(
+            std::io::stderr(),
+            "\nOnce received {name}; reporting the cancelled run before exiting."
+        );
+    });
+    // The transport logs its own delivery outcome; the process ends either way.
+    let _ = tokio::time::timeout(CANCEL_DEADLINE, &mut transport).await;
+    termination::terminate(signal)
+}
+
+/// Run `report` on its own thread. Logging and the user notice write to
+/// stderr synchronously, and a blocked stderr must not hold up the drain or
+/// the exit.
+fn off_the_signal_path(report: impl FnOnce() + Send + 'static) {
+    std::thread::spawn(report);
 }
 
 /// The project id this provider's server expects. It is the only place the

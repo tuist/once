@@ -40,6 +40,16 @@ pub struct CapturedOutput {
 }
 
 pub fn capture_command_output(command: &mut Command) -> Result<CapturedOutput> {
+    capture_command_output_observed(command, |_| ())
+}
+
+/// Like [`capture_command_output`], and calls `on_spawn` with the child's
+/// process id while it runs. Whatever `on_spawn` returns is dropped once the
+/// child exits.
+pub fn capture_command_output_observed<T>(
+    command: &mut Command,
+    on_spawn: impl FnOnce(u32) -> T,
+) -> Result<CapturedOutput> {
     let stdout = tempfile::tempfile().context("creating child stdout staging file")?;
     let stderr = tempfile::tempfile().context("creating child stderr staging file")?;
     command.stdout(Stdio::from(
@@ -52,7 +62,10 @@ pub fn capture_command_output(command: &mut Command) -> Result<CapturedOutput> {
             .try_clone()
             .context("cloning child stderr staging file")?,
     ));
-    let status = command.status().context("running child process")?;
+    let mut child = command.spawn().context("running child process")?;
+    let observed = on_spawn(child.id());
+    let status = child.wait().context("running child process")?;
+    drop(observed);
     let (stdout, stdout_truncated) = read_staged_output(stdout, false)?;
     let (stderr, stderr_truncated) = read_staged_output(stderr, true)?;
     Ok(CapturedOutput {

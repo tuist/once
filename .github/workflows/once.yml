@@ -149,8 +149,20 @@ jobs:
       # one run and leaves the website tests to the web workflow.
       - name: Test with Once
         id: graph-tests
+        # Cancelling a job signals only this shell, so forward it to Once,
+        # which then reports the run as cancelled before the runner kills it.
+        # SIGTERM because background jobs start with SIGINT ignored.
         run: |
-          if ! "${{ steps.bootstrap.outputs.bin }}" test --changed-path crates --format json > once-tests.json; then
+          "${{ steps.bootstrap.outputs.bin }}" test --changed-path crates --format json > once-tests.json &
+          once_pid=$!
+          trap 'kill -s TERM "$once_pid" 2>/dev/null || true' INT TERM
+          status=0
+          wait "$once_pid" || status=$?
+          while kill -0 "$once_pid" 2>/dev/null; do
+            status=0
+            wait "$once_pid" || status=$?
+          done
+          if [ "$status" -ne 0 ]; then
             jq '.runs[] | select(.success != true)' once-tests.json || cat once-tests.json
             exit 1
           fi

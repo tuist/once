@@ -1058,3 +1058,272 @@ async fn renewal_is_not_attempted_before_the_first_connection() {
 
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
+
+fn terminal_events(recorded: &RecordedRun) -> Vec<once_events_client::proto::RunCompleted> {
+    use once_events_client::proto::run_event::Payload;
+    recorded
+        .batches
+        .iter()
+        .flat_map(|batch| &batch.events)
+        .filter_map(|event| match &event.payload {
+            Some(Payload::RunCompleted(completed)) => Some(completed.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn epoch_ms() -> i64 {
+    i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn cancellation_completes_the_run_as_cancelled_with_its_reason() {
+    use once_events_client::proto::RunResult;
+    let (channel, recorded) = start_server().await;
+    let cancellation = once_events_client::RunCancellation::new();
+    let client = EventClient::new(
+        channel,
+        TransportConfig {
+            run_id: "cancelled".into(),
+            ..Default::default()
+        },
+    )
+    .with_cancellation(cancellation.clone());
+    let bus = RunEventBus::new(16);
+    let rx = bus.subscribe();
+    bus.publish(RunEvent::RunStarted {
+        at_epoch_ms: epoch_ms() - 1_500,
+    });
+    let (_tx, shutdown) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        client
+            .run_with_reconnect(rx, shutdown, once_events_client::ReconnectPolicy::default())
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while recorded.lock().await.expected_next_seq < 2 {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    cancellation.cancel("SIGTERM");
+    tokio::time::timeout(std::time::Duration::from_secs(3), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    // The producer is still alive; its late completion must not add a second terminal.
+    bus.publish(RunEvent::RunCompleted {
+        at_epoch_ms: epoch_ms(),
+        exit_status: 0,
+    });
+
+    let terminals = terminal_events(&*recorded.lock().await);
+    assert_eq!(terminals.len(), 1, "{terminals:?}");
+    assert_eq!(terminals[0].result, RunResult::Cancelled as i32);
+    assert_eq!(terminals[0].cancellation_reason, "SIGTERM");
+    assert!(terminals[0].wall_ms >= 1_500, "{}", terminals[0].wall_ms);
+}
+
+#[tokio::test]
+async fn cancellation_keeps_a_completion_that_was_already_published() {
+    use once_events_client::proto::RunResult;
+    let (channel, recorded) = start_server().await;
+    let cancellation = once_events_client::RunCancellation::new();
+    let client = EventClient::new(
+        channel,
+        TransportConfig {
+            run_id: "completed-then-cancelled".into(),
+            ..Default::default()
+        },
+    )
+    .with_cancellation(cancellation.clone());
+    let bus = RunEventBus::new(16);
+    let rx = bus.subscribe();
+    bus.publish(RunEvent::RunStarted { at_epoch_ms: 1 });
+    bus.publish(RunEvent::RunCompleted {
+        at_epoch_ms: 2,
+        exit_status: 0,
+    });
+    cancellation.cancel("SIGINT");
+    let (_tx, shutdown) = tokio::sync::oneshot::channel();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        client.run_with_reconnect(rx, shutdown, once_events_client::ReconnectPolicy::default()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    let terminals = terminal_events(&*recorded.lock().await);
+    assert_eq!(terminals.len(), 1, "{terminals:?}");
+    assert_eq!(terminals[0].result, RunResult::Succeeded as i32);
+    assert!(terminals[0].cancellation_reason.is_empty());
+}
+
+#[tokio::test]
+async fn cancellation_shortens_a_shutdown_drain_already_in_progress() {
+    let (channel, recorded) = start_server().await;
+    let cancellation = once_events_client::RunCancellation::new();
+    let client = EventClient::new(
+        channel,
+        TransportConfig {
+            run_id: "stalled-shutdown".into(),
+            final_drain: std::time::Duration::from_secs(30),
+            cancel_drain: std::time::Duration::from_millis(100),
+            ..Default::default()
+        },
+    )
+    .with_cancellation(cancellation.clone());
+    recorded.lock().await.stall = true;
+    let bus = RunEventBus::new(16);
+    let rx = bus.subscribe();
+    bus.publish(RunEvent::RunStarted { at_epoch_ms: 1 });
+    bus.publish(RunEvent::RunCompleted {
+        at_epoch_ms: 2,
+        exit_status: 0,
+    });
+    let (tx, shutdown) = tokio::sync::oneshot::channel();
+    tx.send(()).unwrap();
+    let task = tokio::spawn(async move {
+        client
+            .run_with_reconnect(rx, shutdown, once_events_client::ReconnectPolicy::default())
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let cancelled_at = std::time::Instant::now();
+    cancellation.cancel("SIGTERM");
+    let result = tokio::time::timeout(std::time::Duration::from_secs(2), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        result,
+        Err(once_events_client::TransportError::DrainTimeout)
+    ));
+    assert!(cancelled_at.elapsed() < std::time::Duration::from_secs(1));
+}
+
+#[tokio::test]
+async fn cancellation_before_the_run_started_sends_no_completion() {
+    let (channel, recorded) = start_server().await;
+    let cancellation = once_events_client::RunCancellation::new();
+    let client = EventClient::new(
+        channel,
+        TransportConfig {
+            run_id: "never-started".into(),
+            ..Default::default()
+        },
+    )
+    .with_cancellation(cancellation.clone());
+    let bus = RunEventBus::new(16);
+    let rx = bus.subscribe();
+    cancellation.cancel("SIGINT");
+    let (_tx, shutdown) = tokio::sync::oneshot::channel();
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        client.run_with_reconnect(rx, shutdown, once_events_client::ReconnectPolicy::default()),
+    )
+    .await
+    .unwrap();
+    drop(bus);
+
+    assert!(recorded.lock().await.batches.is_empty());
+}
+
+#[tokio::test]
+async fn a_completion_published_after_cancellation_reports_the_cancellation() {
+    use once_events_client::proto::RunResult;
+    let (channel, recorded) = start_server().await;
+    let cancellation = once_events_client::RunCancellation::new();
+    let client = EventClient::new(
+        channel,
+        TransportConfig {
+            run_id: "cancelled-then-completed".into(),
+            ..Default::default()
+        },
+    )
+    .with_cancellation(cancellation.clone());
+    let bus = RunEventBus::new(16);
+    let rx = bus.subscribe();
+    bus.publish(RunEvent::RunStarted { at_epoch_ms: 1 });
+    // The producer finishes after the signal, for example because the child
+    // process died of the same signal; that outcome is still the cancellation.
+    cancellation.cancel("SIGINT");
+    bus.publish(RunEvent::RunCompleted {
+        at_epoch_ms: epoch_ms(),
+        exit_status: 1,
+    });
+    let (_tx, shutdown) = tokio::sync::oneshot::channel();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        client.run_with_reconnect(rx, shutdown, once_events_client::ReconnectPolicy::default()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    let terminals = terminal_events(&*recorded.lock().await);
+    assert_eq!(terminals.len(), 1, "{terminals:?}");
+    assert_eq!(terminals[0].result, RunResult::Cancelled as i32);
+    assert_eq!(terminals[0].cancellation_reason, "SIGINT");
+}
+
+#[tokio::test]
+async fn cancellation_cuts_a_reconnect_backoff_short() {
+    use once_events_client::proto::RunResult;
+    let (channel, recorded) = start_server().await;
+    recorded.lock().await.stream_failure = StreamFailure::AfterAck;
+    let cancellation = once_events_client::RunCancellation::new();
+    let client = EventClient::new(
+        channel,
+        TransportConfig {
+            run_id: "cancelled-in-backoff".into(),
+            cancel_drain: std::time::Duration::from_secs(1),
+            ..Default::default()
+        },
+    )
+    .with_cancellation(cancellation.clone());
+    let bus = RunEventBus::new(16);
+    let rx = bus.subscribe();
+    bus.publish(RunEvent::RunStarted { at_epoch_ms: 1 });
+    let (_tx, shutdown) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        client
+            .run_with_reconnect(
+                rx,
+                shutdown,
+                once_events_client::ReconnectPolicy {
+                    initial_backoff: std::time::Duration::from_secs(30),
+                    ..Default::default()
+                },
+            )
+            .await
+    });
+    // Wait for the stream to fail after its first acknowledgement.
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while recorded.lock().await.expected_next_seq < 2 {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    cancellation.cancel("SIGTERM");
+    tokio::time::timeout(std::time::Duration::from_secs(2), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+
+    let terminals = terminal_events(&*recorded.lock().await);
+    assert_eq!(terminals.len(), 1, "{terminals:?}");
+    assert_eq!(terminals[0].result, RunResult::Cancelled as i32);
+}
