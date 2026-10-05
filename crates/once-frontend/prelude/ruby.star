@@ -71,13 +71,17 @@ cases = native.fetch("examples", []).map do |example|
   native_status = example["status"] || "failed"
   status = native_status == "pending" ? "skipped" : native_status
   file = example["file_path"].to_s.sub(%r{\A\./}, "")
+  attempt = {"status" => status}
+  attempt["duration_ms"] = (example["run_time"] * 1000).round if status != "skipped" && example["run_time"].is_a?(Numeric)
+  message = [example.dig("exception", "class"), example.dig("exception", "message")].compact.join(": ")
+  attempt["failure"] = {"message" => message[0, 4000]} if status == "failed" && !message.empty?
   {
     "id" => options[:target] + "::" + id,
     "name" => example["full_description"] || example["description"] || id,
     "suite" => file,
     "file" => file,
     "status" => status,
-    "attempts" => [{"status" => status}],
+    "attempts" => [attempt],
     "runner_metadata" => {
       "example_id" => id,
       "line" => example["line_number"],
@@ -134,17 +138,21 @@ sources = selected.empty? ? options[:sources] : selected
 cases = []
 native_chunks = []
 sources.sort.each do |source|
+  started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
   stdout, stderr, status = Open3.capture3(RbConfig.ruby, source, *runner_args)
+  duration_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started) * 1000).round
   output = stdout + stderr
   native_chunks << "$ #{RbConfig.ruby} #{source}\n#{output}"
   case_status = status.success? ? "passed" : "failed"
+  attempt = {"status" => case_status, "duration_ms" => duration_ms}
+  attempt["failure"] = {"message" => output.strip[0, 4000]} if case_status == "failed" && !output.strip.empty?
   cases << {
     "id" => options[:target] + "::" + source,
     "name" => source,
     "suite" => source,
     "file" => source,
     "status" => case_status,
-    "attempts" => [{"status" => case_status}],
+    "attempts" => [attempt],
     "runner_metadata" => {},
   }
 end

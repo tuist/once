@@ -97,14 +97,24 @@ class OncePlugin:
         if report.when not in ("setup", "call", "teardown"):
             return
         status = "passed" if report.passed else "skipped" if report.skipped else "failed"
-        self.attempts.setdefault(report.nodeid, []).append({
-            "status": status,
-            "phase": report.when,
-            "duration_ms": int(report.duration * 1000),
-        })
+        attempt = self.attempts.setdefault(report.nodeid, {"duration_ms": 0})
+        attempt["duration_ms"] += int(round(report.duration * 1000))
+        if status == "failed" and "failure" not in attempt and report.longreprtext:
+            attempt["failure"] = {"message": report.longreprtext[:4000]}
         current = self.statuses.get(report.nodeid)
         if status == "failed" or current is None or (status == "skipped" and current == "passed"):
             self.statuses[report.nodeid] = status
+
+    def attempt(self, nodeid, status):
+        attempt = {"status": status}
+        recorded = self.attempts.get(nodeid)
+        if recorded is None:
+            return attempt
+        if status != "skipped":
+            attempt["duration_ms"] = recorded["duration_ms"]
+        if status == "failed" and "failure" in recorded:
+            attempt["failure"] = recorded["failure"]
+        return attempt
 
     def normalized(self, exit_code):
         cases = []
@@ -114,7 +124,7 @@ class OncePlugin:
             cases.append({
                 **item,
                 "status": status,
-                "attempts": self.attempts.get(nodeid, [{"status": status}]),
+                "attempts": [self.attempt(nodeid, status)],
                 "runner_metadata": {"nodeid": nodeid},
             })
         counts = {"passed": 0, "failed": 0, "skipped": 0}

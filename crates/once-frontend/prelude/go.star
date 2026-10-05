@@ -613,18 +613,34 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"math"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
+
+const failureMessageLimit = 4000
 
 type event struct {
 	Action string `json:"Action"`
 	Test string `json:"Test"`
 	Output string `json:"Output"`
+	Elapsed *float64 `json:"Elapsed"`
+}
+
+type failure struct {
+	Message string `json:"message"`
 }
 
 type attempt struct {
 	Status string `json:"status"`
+	DurationMs *int64 `json:"duration_ms,omitempty"`
+	Failure *failure `json:"failure,omitempty"`
+}
+
+type caseDetails struct {
+	durations map[string]int64
+	outputs map[string]*strings.Builder
 }
 
 type testCase struct {
@@ -701,7 +717,7 @@ func main() {
 		command.Dir = runDir
 	}
 	native, runErr := command.CombinedOutput()
-	statuses, humanLog, packageFailed := parseEvents(native)
+	statuses, details, humanLog, packageFailed := parseEvents(native)
 	if len(filters) == 0 {
 		for _, name := range listed {
 			if _, ok := statuses[name]; !ok && runErr == nil && !packageFailed {
@@ -730,7 +746,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
-	record := buildReport(target, packagePath, statuses, runErr == nil && !packageFailed, logPath, nativePath, coverage)
+	record := buildReport(target, packagePath, statuses, details, runErr == nil && !packageFailed, logPath, nativePath, coverage)
 	encoded, _ := json.Marshal(record)
 	encoded = append(encoded, '\n')
 	if err := os.WriteFile(results, encoded, 0o644); err != nil {
@@ -803,8 +819,9 @@ func exactPattern(names []string) string {
 	return strings.Join(patterns, "|")
 }
 
-func parseEvents(native []byte) (map[string]string, string, bool) {
+func parseEvents(native []byte) (map[string]string, caseDetails, string, bool) {
 	statuses := map[string]string{}
+	details := caseDetails{durations: map[string]int64{}, outputs: map[string]*strings.Builder{}}
 	log := strings.Builder{}
 	packageFailed := false
 	scanner := bufio.NewScanner(strings.NewReader(string(native)))
@@ -818,21 +835,71 @@ func parseEvents(native []byte) (map[string]string, string, bool) {
 		log.WriteString(value.Output)
 		if value.Test != "" {
 			switch value.Action {
+			case "output":
+				details.appendOutput(value.Test, value.Output)
 			case "pass":
 				statuses[value.Test] = "passed"
+				details.recordElapsed(value.Test, value.Elapsed)
+				delete(details.outputs, value.Test)
 			case "fail":
 				statuses[value.Test] = "failed"
+				details.recordElapsed(value.Test, value.Elapsed)
 			case "skip":
 				statuses[value.Test] = "skipped"
+				delete(details.outputs, value.Test)
 			}
 		} else if value.Action == "fail" {
 			packageFailed = true
 		}
 	}
-	return statuses, log.String(), packageFailed
+	return statuses, details, log.String(), packageFailed
 }
 
-func buildReport(target, packagePath string, statuses map[string]string, passedRun bool, logPath, nativePath, coveragePath string) report {
+func (details caseDetails) recordElapsed(name string, elapsed *float64) {
+	if elapsed == nil || math.IsNaN(*elapsed) || math.IsInf(*elapsed, 0) || *elapsed < 0 {
+		return
+	}
+	details.durations[name] = int64(math.Round(*elapsed * 1000))
+}
+
+func (details caseDetails) appendOutput(name, output string) {
+	for _, frame := range []string{"=== RUN ", "=== PAUSE ", "=== CONT ", "=== NAME "} {
+		if strings.HasPrefix(output, frame) {
+			return
+		}
+	}
+	builder, ok := details.outputs[name]
+	if !ok {
+		builder = &strings.Builder{}
+		details.outputs[name] = builder
+	}
+	if builder.Len() < 4*failureMessageLimit {
+		builder.WriteString(output)
+	}
+}
+
+func (details caseDetails) attempt(name, status string) attempt {
+	value := attempt{Status: status}
+	if status == "passed" || status == "failed" {
+		if duration, ok := details.durations[name]; ok {
+			value.DurationMs = &duration
+		}
+	}
+	if status == "failed" {
+		if builder, ok := details.outputs[name]; ok {
+			message := strings.TrimRight(builder.String(), " \t\r\n")
+			if utf8.RuneCountInString(message) > failureMessageLimit {
+				message = string([]rune(message)[:failureMessageLimit])
+			}
+			if message != "" {
+				value.Failure = &failure{Message: message}
+			}
+		}
+	}
+	return value
+}
+
+func buildReport(target, packagePath string, statuses map[string]string, details caseDetails, passedRun bool, logPath, nativePath, coveragePath string) report {
 	names := make([]string, 0, len(statuses))
 	for name := range statuses {
 		names = append(names, name)
@@ -855,7 +922,7 @@ func buildReport(target, packagePath string, statuses map[string]string, passedR
 			Name: name,
 			Suite: packagePath,
 			Status: status,
-			Attempts: []attempt{{Status: status}},
+			Attempts: []attempt{details.attempt(name, status)},
 			RunnerMetadata: map[string]string{"package": packagePath},
 		})
 	}

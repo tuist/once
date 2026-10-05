@@ -117,6 +117,21 @@ function normalizedStatus(status) {
   return "failed"
 }
 
+const ANSI_ESCAPE = new RegExp(String.fromCharCode(27) + "[[][0-9;]*m", "g")
+
+function attemptFor(status, assertion) {
+  const attempt = { status }
+  if (status !== "skipped" && Number.isFinite(assertion.duration) && assertion.duration >= 0) {
+    attempt.duration_ms = Math.round(assertion.duration)
+  }
+  const messages = (assertion.failureMessages || []).filter(message => typeof message === "string" && message.length)
+  if (status === "failed" && messages.length) {
+    const message = messages.join(String.fromCharCode(10)).replace(ANSI_ESCAPE, "")
+    attempt.failure = { message: Array.from(message).slice(0, 4000).join("") }
+  }
+  return attempt
+}
+
 function relativeFile(value) {
   const relative = path.isAbsolute(value) ? path.relative(process.cwd(), value) : value
   return relative.split(path.sep).join("/")
@@ -168,7 +183,7 @@ function main() {
         suite: (assertion.ancestorTitles || []).join(" > ") || file,
         file,
         status,
-        attempts: [{ status }],
+        attempts: [attemptFor(status, assertion)],
         runner_metadata: { full_name: fullName, duration_ms: assertion.duration ?? null },
       })
     }
