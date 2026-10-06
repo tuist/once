@@ -110,6 +110,7 @@ def _oci_layer_impl(ctx):
             layer,
             inputs = [source],
             identifier = ctx["label"]["id"] + ":oci-prebuilt-layer",
+            source_files = _action_source_files([source]),
         )
         write_path(digest, host_file_sha256(workspace_root() + "/" + source) + "\n")
         return {
@@ -633,7 +634,7 @@ def oci_image_plan(ctx):
     written = []
     for digest in sorted(blobs.keys()):
         destination = layout + "/blobs/sha256/" + digest
-        copy_path(blobs[digest], destination, inputs = [blobs[digest]], identifier = label + ":oci-blob:" + digest[:12])
+        copy_path(blobs[digest], destination, inputs = [blobs[digest]], identifier = label + ":oci-blob:" + digest[:12], source_files = _action_source_files([blobs[digest]]))
         written.append(destination)
     for digest, text in [(config_digest, config_text), (manifest_digest, manifest_text)]:
         destination = layout + "/blobs/sha256/" + digest
@@ -767,7 +768,7 @@ def oci_index_plan(ctx):
     written = []
     for digest in sorted(blobs.keys()):
         destination = layout + "/blobs/sha256/" + digest
-        copy_path(blobs[digest], destination, inputs = [blobs[digest]], identifier = label + ":oci-index-blob:" + digest[:12])
+        copy_path(blobs[digest], destination, inputs = [blobs[digest]], identifier = label + ":oci-index-blob:" + digest[:12], source_files = _action_source_files([blobs[digest]]))
         written.append(destination)
     for path, text in [
         (layout + "/blobs/sha256/" + index_digest, index_text),

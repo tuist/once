@@ -161,6 +161,8 @@ def _c_library_impl(ctx):
             obj = _c_object_output(src)
             compiler = cxx if _c_source_uses_cxx(src) else cc
             run_action(
+                display_name = "Compile " + src,
+                source_files = _action_source_files([src]),
                 argv = [compiler] + _c_compile_args(src, obj, attrs, compile_context),
                 inputs = _unique([src] + compile_context["headers"]),
                 outputs = [obj],
@@ -172,6 +174,8 @@ def _c_library_impl(ctx):
 
         archive = declare_output(_c_library_name(ctx))
         run_action(
+            display_name = "Archive C library · " + ctx["label"]["name"],
+            source_files = _action_source_files(objects),
             argv = [ar, "crs", archive] + objects,
             inputs = objects,
             outputs = [archive],

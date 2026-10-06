@@ -314,6 +314,8 @@ def _swift_android_library_impl(ctx):
             inputs.append(path)
 
     run_action(
+        display_name = "Compile Swift for Android · " + ctx["label"]["name"],
+        source_files = _action_source_files(inputs),
         argv = argv,
         inputs = inputs,
         outputs = [library, swiftmodule, swiftdoc] + ([swiftinterface] if swiftinterface else []),

@@ -354,6 +354,8 @@ def _nx_task_impl(ctx):
     node_version = host_command([node, "--version"]).strip()
 
     run_action(
+        display_name = "Run Nx task · " + ctx["label"]["name"],
+        source_files = _action_source_files(inputs),
         argv = _nx_shell_argv(commands),
         inputs = inputs,
         outputs = outputs,

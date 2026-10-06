@@ -969,12 +969,14 @@ def _apple_stage_framework_headers(headers, framework_root, compile_framework_ro
             framework_header,
             inputs = [header],
             identifier = "stage_framework_header_" + module_name + "_" + header_name,
+            source_files = _action_source_files([header]),
         )
         copy_path(
             header,
             compile_framework_header,
             inputs = [header],
             identifier = "stage_unextended_framework_header_" + module_name + "_" + header_name,
+            source_files = _action_source_files([header]),
         )
         staged_headers.append(framework_header)
         staged_headers.append(compile_framework_header)
@@ -1404,6 +1406,8 @@ exit "$status"
     )
     prepare_path(test_dir, kind = "directory", identifier = "apple_shellspec_test_dir:" + ctx["label"]["id"])
     run_action(
+        display_name = "Run ShellSpec tests · " + ctx["label"]["name"],
+        source_files = _action_source_files(inputs),
         argv = [host_which("sh"), "-c", script],
         inputs = inputs,
         outputs = [test_dir, results, log, native_results],
@@ -1931,6 +1935,7 @@ def _apple_library_impl(ctx):
                 compile_modulemap_path,
                 inputs = [authored_modulemap],
                 identifier = "stage_unextended_framework_modulemap_" + module_name,
+                source_files = _action_source_files([authored_modulemap]),
             )
             consumer_modulemap_contents = authored_modulemap_contents
             if len(swift_srcs) > 0 and not is_universal:
@@ -2339,6 +2344,8 @@ def _apple_library_impl(ctx):
                     sandbox = "off",
                     toolchain_identity = swiftc["identity"],
                     identifier = "swift_module_compile_" + module_name + arch_suffix,
+                    display_name = "Compile Swift module · " + module_name + arch_suffix,
+                    source_files = _action_source_files(swift_srcs),
                 )
             else:
                 _apple_swift_action(ctx, attrs, swiftc, ctx["deps"],
@@ -2350,10 +2357,14 @@ def _apple_library_impl(ctx):
                     env = swiftc["env"],
                     toolchain_identity = swiftc["identity"],
                     identifier = "swift_module_compile_" + module_name + arch_suffix,
+                    display_name = "Compile Swift module · " + module_name + arch_suffix,
+                    source_files = _action_source_files(swift_srcs),
                 )
 
             swift_libtool = _resolve_libtool(platform, sdk_variant, xcode_developer_dir)
             run_action(
+                display_name = "Archive Swift library · " + ctx["label"]["name"],
+                source_files = _action_source_files(list(swift_objects)),
                 argv = list(swift_libtool["argv"]) + ["-static", "-o", swift_archive] + swift_objects,
                 inputs = list(swift_objects),
                 outputs = [swift_archive],
@@ -2473,6 +2484,8 @@ def _apple_library_impl(ctx):
                         inputs.append(overlay)
                 if authored_modulemap:
                     run_action(
+                        display_name = "Compile " + src + arch_suffix,
+                        source_files = _action_source_files([src]),
                         argv = argv,
                         inputs = inputs,
                         outputs = [obj],
@@ -2483,6 +2496,8 @@ def _apple_library_impl(ctx):
                     )
                 else:
                     run_action(
+                        display_name = "Compile " + src + arch_suffix,
+                        source_files = _action_source_files([src]),
                         argv = argv,
                         inputs = inputs,
                         outputs = [obj],
@@ -2516,6 +2531,8 @@ def _apple_library_impl(ctx):
             libtool_inputs = [swift_archive]
             libtool_inputs.extend(arch_clang_objects)
             run_action(
+                display_name = "Merge static libraries · " + ctx["label"]["name"],
+                source_files = _action_source_files(libtool_inputs),
                 argv = libtool_argv,
                 inputs = libtool_inputs,
                 outputs = [per_arch_archive],
@@ -2528,6 +2545,8 @@ def _apple_library_impl(ctx):
             libtool_argv = list(libtool["argv"]) + ["-static", "-o", per_arch_archive]
             libtool_argv.extend(arch_clang_objects)
             run_action(
+                display_name = "Archive static library · " + ctx["label"]["name"],
+                source_files = _action_source_files(list(arch_clang_objects)),
                 argv = libtool_argv,
                 inputs = list(arch_clang_objects),
                 outputs = [per_arch_archive],
@@ -2556,6 +2575,8 @@ def _apple_library_impl(ctx):
         lipo_argv = list(lipo["argv"]) + ["-create", "-output", archive]
         lipo_argv.extend(per_arch_archives)
         run_action(
+            display_name = "Combine architecture slices · " + ctx["label"]["name"],
+            source_files = _action_source_files(list(per_arch_archives)),
             argv = lipo_argv,
             inputs = list(per_arch_archives),
             outputs = [archive],
@@ -2992,6 +3013,8 @@ def _swift_macro_impl(ctx):
         env = swiftc["env"],
         toolchain_identity = swiftc["identity"],
         identifier = "swift_macro_compile_" + module_name,
+        display_name = "Compile Swift macro · " + module_name,
+        source_files = _action_source_files(swift_inputs),
     )
 
     # A macro is a tool for the targets that expand it, so its code stays out
@@ -3016,6 +3039,8 @@ def _swift_macro_impl(ctx):
         env = swiftc["env"],
         toolchain_identity = swiftc["identity"],
         identifier = "swift_macro_archive_" + module_name,
+        display_name = "Archive Swift macro · " + module_name,
+        source_files = _action_source_files(swift_inputs),
     )
 
     return {
@@ -3186,7 +3211,7 @@ def _apple_materialize_resources(ctx, raw_resources, destination, platform, mini
     for resource in resources:
         if resource in generated_trees:
             output = declare_resource_output(_basename(resource), resource)
-            copy_path(resource, output, kind = "tree", inputs = [resource], identifier = identifier_prefix + "_generated_tree_" + _basename(resource))
+            copy_path(resource, output, kind = "tree", inputs = [resource], identifier = identifier_prefix + "_generated_tree_" + _basename(resource), source_files = _action_source_files([resource]))
             continue
         source_files = _apple_resource_tree_files(resource) if _apple_is_directory(resource) else [resource]
         for source in source_files:
@@ -3224,6 +3249,8 @@ def _apple_materialize_resources(ctx, raw_resources, destination, platform, mini
                     source,
                 ])
                 run_action(
+                    display_name = "Compile " + _basename(source),
+                    source_files = _action_source_files([source]),
                     argv = argv,
                     inputs = [source],
                     outputs = [output],
@@ -3239,6 +3266,7 @@ def _apple_materialize_resources(ctx, raw_resources, destination, platform, mini
                 output,
                 inputs = [source],
                 identifier = identifier_prefix + "_copy_" + relative.replace("/", "_"),
+                source_files = _action_source_files([source]),
             )
 
     if models:
@@ -3250,6 +3278,8 @@ def _apple_materialize_resources(ctx, raw_resources, destination, platform, mini
             output = declare_resource_output(model_name + ".momd", model)
             model_inputs = _apple_resource_tree_files(model)
             run_action(
+                display_name = "Compile Core Data model · " + model_name,
+                source_files = _action_source_files(model_inputs),
                 argv = [
                     momc["path"],
                     "--sdkroot",
@@ -3751,6 +3781,8 @@ def _apple_mixed_framework_impl(ctx):
         if path not in link_inputs:
             link_inputs.append(path)
     run_action(
+        display_name = "Link framework · " + ctx["label"]["name"],
+        source_files = _action_source_files(link_inputs),
         argv = link_argv,
         inputs = link_inputs,
         outputs = [dylib],
@@ -3763,7 +3795,7 @@ def _apple_mixed_framework_impl(ctx):
     if modulemap_source:
         modulemap = declare_output(framework_dir + "/Modules/module.modulemap")
         if modulemap_source != modulemap:
-            copy_path(modulemap_source, modulemap, inputs = [modulemap_source], identifier = "apple_framework_modulemap_" + module_name)
+            copy_path(modulemap_source, modulemap, inputs = [modulemap_source], identifier = "apple_framework_modulemap_" + module_name, source_files = _action_source_files([modulemap_source]))
         framework_files.append(modulemap)
 
     all_srcs = _unique(glob(ctx["srcs"]) + _apple_declared_source_paths(ctx))
@@ -3781,8 +3813,8 @@ def _apple_mixed_framework_impl(ctx):
             module_dir = framework_dir + "/Modules/" + module_name + ".swiftmodule"
             swiftmodule = declare_output(module_dir + "/" + module_triple + ".swiftmodule")
             swiftdoc = declare_output(module_dir + "/" + module_triple + ".swiftdoc")
-            copy_path(swiftmodule_source, swiftmodule, inputs = [swiftmodule_source], identifier = "apple_framework_swiftmodule_" + module_name + "_" + arch)
-            copy_path(swiftdoc_source, swiftdoc, inputs = [swiftdoc_source], identifier = "apple_framework_swiftdoc_" + module_name + "_" + arch)
+            copy_path(swiftmodule_source, swiftmodule, inputs = [swiftmodule_source], identifier = "apple_framework_swiftmodule_" + module_name + "_" + arch, source_files = _action_source_files([swiftmodule_source]))
+            copy_path(swiftdoc_source, swiftdoc, inputs = [swiftdoc_source], identifier = "apple_framework_swiftdoc_" + module_name + "_" + arch, source_files = _action_source_files([swiftdoc_source]))
             framework_files.extend([swiftmodule, swiftdoc])
             framework_swiftmodules.append(swiftmodule)
 
@@ -3798,7 +3830,7 @@ def _apple_mixed_framework_impl(ctx):
         seen_header_names[header_name] = header
         output = declare_output(framework_dir + "/Headers/" + header_name)
         if header != output:
-            copy_path(header, output, inputs = [header], identifier = "apple_framework_header_" + module_name + "_" + header_name)
+            copy_path(header, output, inputs = [header], identifier = "apple_framework_header_" + module_name + "_" + header_name, source_files = _action_source_files([header]))
         framework_files.append(output)
 
     write_path(info_plist, _render_plist({
@@ -3835,6 +3867,8 @@ def _apple_mixed_framework_impl(ctx):
         asset_car = declare_output(framework_dir + "/Assets.car")
         asset_partial_plist = declare_output(framework_dir + "/assetcatalog-info.plist")
         run_action(
+            display_name = "Compile asset catalog · " + ctx["label"]["name"],
+            source_files = _action_source_files(asset_catalogs),
             argv = [actool["actool_path"]] + asset_catalogs + [
                 "--compile",
                 framework_path,
@@ -3860,13 +3894,15 @@ def _apple_mixed_framework_impl(ctx):
     if privacy_manifest:
         privacy_source = _package_relative(ctx, privacy_manifest)
         privacy_output = declare_output(framework_dir + "/PrivacyInfo.xcprivacy")
-        copy_path(privacy_source, privacy_output, inputs = [privacy_source], identifier = "apple_framework_privacy_" + module_name)
+        copy_path(privacy_source, privacy_output, inputs = [privacy_source], identifier = "apple_framework_privacy_" + module_name, source_files = _action_source_files([privacy_source]))
         framework_files.append(privacy_output)
 
     codesign = _resolve_codesign(xcode_developer_dir)
     cs_stamp = declare_output(framework_dir + "/_CodeSignature/CodeResources")
     framework_files = _unique(framework_files + _apple_run_postbuild_actions(ctx, attrs, framework_files, framework_path))
     run_action(
+        display_name = "Sign framework · " + ctx["label"]["name"],
+        source_files = _action_source_files(framework_files),
         argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", framework_path],
         inputs = framework_files,
         outputs = [dylib, cs_stamp],
@@ -4099,6 +4135,8 @@ def _apple_framework_impl(ctx):
         env = swiftc["env"],
         toolchain_identity = swiftc["identity"],
         identifier = "apple_framework_compile_" + module_name,
+        display_name = "Compile Swift framework · " + module_name,
+        source_files = _action_source_files(swift_inputs),
     )
 
     # No `module * { export * }` line: that requires an umbrella
@@ -4127,6 +4165,8 @@ def _apple_framework_impl(ctx):
     prepackage_outputs = _apple_run_prepackage_actions(ctx, attrs, [dylib, info_plist, modulemap, swiftmodule, swiftdoc] + swift_module_sidecars, ctx["build_dir"] + "/" + framework_dir)
     script_outputs = _unique(prepackage_outputs + _apple_run_postbuild_actions(ctx, attrs, [dylib, info_plist, modulemap, swiftmodule, swiftdoc] + swift_module_sidecars + prepackage_outputs, ctx["build_dir"] + "/" + framework_dir))
     run_action(
+        display_name = "Sign framework · " + ctx["label"]["name"],
+        source_files = _action_source_files(_unique([dylib, info_plist, modulemap, swiftmodule] + swift_module_sidecars + script_outputs)),
         argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", ctx["build_dir"] + "/" + framework_dir],
         inputs = _unique([dylib, info_plist, modulemap, swiftmodule] + swift_module_sidecars + script_outputs),
         outputs = [dylib, cs_stamp],
@@ -4217,8 +4257,11 @@ def _apple_embed_framework_bundles(ctx, deps, bundle_dir, frameworks_dir, codesi
             kind = "tree",
             inputs = source_files,
             identifier = identifier_prefix + "_copy_" + framework_basename,
+            source_files = _action_source_files([framework_path]),
         )
         run_action(
+            display_name = "Sign embedded framework · " + ctx["label"]["name"],
+            source_files = _action_source_files([embedded_framework_path]),
             argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", embedded_framework_path],
             inputs = [embedded_framework_path],
             outputs = embed_outputs,
@@ -4258,8 +4301,11 @@ def _apple_embed_resource_bundles(ctx, deps, bundle_dir, codesign, identifier_pr
             kind = "tree",
             inputs = source_files,
             identifier = identifier_prefix + "_copy_" + bundle_basename,
+            source_files = _action_source_files([bundle_path]),
         )
         run_action(
+            display_name = "Sign resource bundle · " + ctx["label"]["name"],
+            source_files = _action_source_files([embedded_path]),
             argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", embedded_path],
             inputs = [embedded_path],
             outputs = [embedded_path, embedded_stamp],
@@ -4376,7 +4422,7 @@ def _apple_script_dependency_products(ctx):
             if destination in destinations:
                 fail(ctx["label"]["id"] + ": script build-products collision at `" + destination + "`")
             destinations[destination] = source
-            copy_path(source, destination, kind = "tree" if tree else "file", inputs = dep.get(files_key) or [source], identifier = "script_product:" + destination)
+            copy_path(source, destination, kind = "tree" if tree else "file", inputs = dep.get(files_key) or [source], identifier = "script_product:" + destination, source_files = _action_source_files([source]))
 
 def _apple_reconcile_build_action(ctx, action):
     declared_dir = action.get("build_dir")
@@ -4465,6 +4511,8 @@ def _apple_run_build_actions(ctx, actions, identifier_prefix, product_inputs = [
             if _parent_dir(output)
         ])
         run_action(
+            display_name = action.get("display_name") or action.get("name") or ("Run build script · " + (ctx["label"].get("name") or ctx["label"]["id"])),
+            source_files = action.get("source_files") or _action_source_files(inputs),
             argv = argv,
             inputs = inputs,
             outputs = outputs,
@@ -4600,6 +4648,8 @@ def _apple_application_impl(ctx):
             bundle_id,
         ]
         run_action(
+            display_name = "Generate asset symbols · " + ctx["label"]["name"],
+            source_files = _action_source_files(asset_catalogs),
             argv = symbol_argv,
             inputs = asset_catalogs,
             outputs = [asset_symbols],
@@ -4627,6 +4677,8 @@ def _apple_application_impl(ctx):
         if app_icon:
             car_argv.extend(["--app-icon", app_icon])
         run_action(
+            display_name = "Compile asset catalog · " + ctx["label"]["name"],
+            source_files = _action_source_files(asset_catalogs),
             argv = car_argv,
             inputs = asset_catalogs,
             outputs = [asset_car, car_partial_plist],
@@ -4651,6 +4703,7 @@ def _apple_application_impl(ctx):
         run_visible = (ctx.get("run") or {}).get("visible") or False
         prepare_path(run_dir, kind = "directory", identifier = "apple_application_run_dir:" + ctx["label"]["id"])
         run_action(
+            display_name = "Launch application · " + ctx["label"]["name"],
             argv = [host_which("sh"), "-c", _apple_application_run_script(ctx["label"]["id"], platform, sdk_variant, runner_xcrun, app_path, bundle_id, run_dir, run_record, run_log, run_visible)],
             outputs = [run_dir, run_record, run_log],
             env = swiftc["env"],
@@ -4686,11 +4739,13 @@ def _apple_application_impl(ctx):
         if embeds_simulator_entitlements:
             entitlements_content = _apple_entitlements_with_application_identifier(entitlements_content, development_team, bundle_id)
         processed_entitlements = declare_output(ctx["label"]["name"] + "/processed-entitlements.plist")
-        write_path(processed_entitlements, entitlements_content)
+        write_path(processed_entitlements, entitlements_content, display_name = "Prepare signing entitlements · " + product_name, source_files = _action_source_files([entitlements_source]))
         if embeds_simulator_entitlements:
             derq = _resolve_derq(xcode_developer_dir)
             der_entitlements = declare_output(ctx["label"]["name"] + "/processed-entitlements.der")
             run_action(
+                display_name = "Encode signing entitlements · " + ctx["label"]["name"],
+                source_files = _action_source_files([entitlements_source]),
                 argv = [derq["path"], "query", "-f", "xml", "-i", processed_entitlements, "-o", der_entitlements, "--raw"],
                 inputs = [processed_entitlements],
                 outputs = [der_entitlements],
@@ -4949,6 +5004,8 @@ def _apple_application_impl(ctx):
             env = swiftc["env"],
             toolchain_identity = swiftc["identity"],
             identifier = "apple_application_module_" + product_name,
+            display_name = "Compile Swift application · " + product_name,
+            source_files = _action_source_files(module_inputs),
         )
 
     clang_objects = []
@@ -5035,6 +5092,8 @@ def _apple_application_impl(ctx):
                 if overlay not in inputs:
                     inputs.append(overlay)
             run_action(
+                display_name = "Compile " + src,
+                source_files = _action_source_files([src]),
                 argv = argv,
                 inputs = inputs,
                 outputs = [obj],
@@ -5065,6 +5124,8 @@ def _apple_application_impl(ctx):
         env = swiftc["env"],
         toolchain_identity = swiftc["identity"],
         identifier = "apple_application_compile_" + product_name,
+        display_name = "Compile Swift application · " + product_name,
+        source_files = _action_source_files(swift_inputs),
     )
 
     if info_plist_template:
@@ -5152,6 +5213,8 @@ def _apple_application_impl(ctx):
         cs_inputs.append(processed_entitlements)
     codesign_argv.append(ctx["build_dir"] + "/" + app_dir)
     run_action(
+        display_name = "Sign application · " + ctx["label"]["name"],
+        source_files = _action_source_files(cs_inputs),
         argv = codesign_argv,
         inputs = cs_inputs,
         outputs = [executable, app_cs_stamp],
@@ -5398,9 +5461,12 @@ def _apple_thinned_package_impl(ctx):
         inputs = app_files,
         toolchain_identity = "once.apple.thinning.input.v1",
         identifier = "apple_thinned_package_stage:" + ctx["label"]["id"],
+        source_files = _action_source_files([app_path]),
     )
     write_path(adapter, _apple_thinning_adapter())
     run_action(
+        display_name = "Thin application package · " + ctx["label"]["name"],
+        source_files = _action_source_files([adapter, staged_app]),
         argv = [
             tools["ruby"],
             adapter,
@@ -5833,6 +5899,8 @@ def _apple_test_bundle_impl(ctx):
                 if overlay not in inputs:
                     inputs.append(overlay)
             run_action(
+                display_name = "Compile " + src,
+                source_files = _action_source_files([src]),
                 argv = argv,
                 inputs = inputs,
                 outputs = [obj],
@@ -5863,6 +5931,8 @@ def _apple_test_bundle_impl(ctx):
         env = swiftc["env"],
         toolchain_identity = swiftc["identity"],
         identifier = "apple_test_bundle_compile_" + module_name,
+        display_name = "Compile Swift test bundle · " + module_name,
+        source_files = _action_source_files(swift_inputs),
     )
 
     if info_plist_template:
@@ -5908,6 +5978,8 @@ def _apple_test_bundle_impl(ctx):
         asset_car = declare_output(resource_destination + "/Assets.car")
         asset_partial_plist = declare_output("assetcatalog-info.plist")
         run_action(
+            display_name = "Compile test assets · " + ctx["label"]["name"],
+            source_files = _action_source_files(asset_catalogs),
             argv = [actool["actool_path"]] + asset_catalogs + [
                 "--compile",
                 ctx["build_dir"] + "/" + resource_destination,
@@ -5961,6 +6033,8 @@ def _apple_test_bundle_impl(ctx):
     test_codesign_inputs = _unique(test_codesign_inputs + script_outputs)
     resource_files = _unique(resource_files + script_outputs)
     run_action(
+        display_name = "Sign test bundle · " + ctx["label"]["name"],
+        source_files = _action_source_files(test_codesign_inputs),
         argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", test_bundle_path],
         inputs = test_codesign_inputs,
         outputs = [test_binary, test_cs_stamp],
@@ -5982,12 +6056,14 @@ def _apple_test_bundle_impl(ctx):
             runner_executable,
             inputs = [runner_template],
             identifier = "apple_ui_test_runner_executable_" + module_name,
+            source_files = _action_source_files([runner_template + "/XCTRunner"]),
         )
         copy_path(
             runner_template + "/PkgInfo",
             runner_pkg_info,
             inputs = [runner_template],
             identifier = "apple_ui_test_runner_pkg_info_" + module_name,
+            source_files = _action_source_files([runner_template + "/PkgInfo"]),
         )
         runner_info_contents = host_command([host_which("plutil"), "-convert", "xml1", "-o", "-", runner_source + "/Info.plist"])
         runner_info_contents = runner_info_contents.replace("$(WRAPPEDPRODUCTNAME)", runner_name)
@@ -6021,6 +6097,8 @@ def _apple_test_bundle_impl(ctx):
         runner_codesign_inputs.extend(embedded_frameworks["stamps"])
         runner_codesign_inputs.extend(embedded_resource_bundles["stamps"])
         run_action(
+            display_name = "Sign UI test runner · " + ctx["label"]["name"],
+            source_files = _action_source_files(runner_codesign_inputs),
             argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", runner_application_path],
             inputs = runner_codesign_inputs,
             outputs = [runner_executable, runner_cs_stamp],
@@ -6174,6 +6252,8 @@ exit "$status"
                 test_inputs.append(src)
         prepare_path(test_dir, kind = "directory", identifier = "apple_" + runner_type + "_test_dir:" + ctx["label"]["id"])
         run_action(
+            display_name = "Run Apple tests · " + ctx["label"]["name"],
+            source_files = _action_source_files(test_inputs),
             argv = [host_which("sh"), "-c", script],
             inputs = test_inputs,
             outputs = [test_dir],
@@ -6621,6 +6701,7 @@ def _swift_package_dependencies_impl(ctx):
             inputs = all_srcs,
             toolchain_identity = "once.swiftpm.vendor.v1",
             identifier = "swiftpm_vendor_seed:" + ctx["label"]["id"],
+            source_files = _action_source_files(all_srcs),
         )
         build_inputs.append(scratch)
         # A tree copy replaces its destination, so removed vendor checkouts cannot persist.
@@ -6648,6 +6729,8 @@ def _swift_package_dependencies_impl(ctx):
     build_flags = attrs.get("build_flags") or []
     argv.extend(build_flags)
     run_action(
+        display_name = "Build Swift package dependencies · " + ctx["label"]["name"],
+        source_files = _action_source_files(build_inputs),
         argv = argv,
         inputs = build_inputs,
         outputs = archives + [module_dir],
@@ -7104,6 +7187,7 @@ def _apple_executable_impl(ctx):
         script += "printf '{\"exit\":%s}\\n' \"$status\" > " + _shell_quote(run_record) + "\n"
         script += "exit \"$status\"\n"
         run_action(
+            display_name = "Run executable · " + ctx["label"]["name"],
             argv = [host_which("sh"), "-c", script],
             outputs = [run_dir, run_record, run_log],
             env = swiftc["env"],
@@ -7258,6 +7342,8 @@ def _apple_executable_impl(ctx):
         env = swiftc["env"],
         toolchain_identity = swiftc["identity"],
         identifier = "apple_executable_compile_" + product_name,
+        display_name = "Compile Swift executable · " + product_name,
+        source_files = _action_source_files(swift_inputs),
     )
 
     prepackage_outputs = _apple_run_prepackage_actions(ctx, attrs, [executable])
@@ -7291,6 +7377,8 @@ def _apple_executable_impl(ctx):
 
     script_outputs = _unique(prepackage_outputs + _apple_run_postbuild_actions(ctx, attrs, _unique([executable] + embedded_frameworks["files"] + embedded_resource_bundles["files"] + prepackage_outputs)))
     run_action(
+        display_name = "Sign executable · " + ctx["label"]["name"],
+        source_files = _action_source_files(_unique([executable] + script_outputs)),
         argv = codesign_argv,
         inputs = _unique([executable] + script_outputs),
         outputs = [executable],

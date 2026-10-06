@@ -210,7 +210,7 @@ def _dockerfile_named_contexts(ctx):
         if not source:
             _dockerfile_fail("dockerfile_program_without_executable", "programs", name + " does not provide an executable", "Depend on a target that builds an executable")
         staged = declare_output("contexts/" + name + "/" + _basename(source))
-        copy_path(source, staged, inputs = [source], identifier = ctx["label"]["id"] + ":context:" + name)
+        copy_path(source, staged, inputs = [source], identifier = ctx["label"]["id"] + ":context:" + name, source_files = _action_source_files([source]))
         named[name] = {"path": "/".join(staged.split("/")[:-1]), "layout": False, "inputs": [staged]}
     return named
 
@@ -286,6 +286,7 @@ def _dockerfile_instruction_impl(ctx, auto = False):
             stages[name] = entry["path"]
             named_refs[name] = entry.get("ref", "")
     shared = {
+        "dockerfile": _dockerfile_workspace_path(ctx, dockerfile),
         "docker": docker,
         "builder": builder,
         "platform": platform,
@@ -459,6 +460,8 @@ def _dockerfile_declare_step(ctx, shared, entry, number, text, contexts, pull_ba
         "depends_on_prior_actions": False,
         "toolchain_identity": shared["identity"],
         "identifier": identifier,
+        "display_name": "Container " + entry["opcode"] + " · line " + str(entry["line"]),
+        "source_files": _action_source_files([shared["dockerfile"]] + copy_inputs),
     })
     shared["snapshot_depths"][snapshot] = depth
     shared["snapshots"].append({"line": entry["line"], "lines": lines, "instruction": entry["opcode"], "snapshot": snapshot, "identifier": identifier})
@@ -515,6 +518,8 @@ def _dockerfile_export_snapshot(ctx, docker, identity, environment, snapshot, sn
     argv.append(".")
     write_path(plan, _json_encode({"instructions": snapshots, "diagnostics": findings}))
     run_action(
+        display_name = "Export container filesystem · " + ctx["label"]["name"],
+        source_files = _action_source_files([recipe, snapshot]),
         argv = argv,
         inputs = [recipe, snapshot],
         outputs = [archive, metadata, exported],

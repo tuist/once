@@ -82,6 +82,8 @@ def _ruff_lint_impl(ctx):
     provider = _lint_provider(ctx, "ruff", paths, inputs, {"argv": argv, "env": {}, "cwd": "."})
     if ctx["capability"] == "lint":
         run_action(
+            display_name = "Lint Python with Ruff · " + ctx["label"]["name"],
+            source_files = _action_source_files(inputs),
             argv = argv,
             inputs = inputs,
             outputs = [paths["sarif"]],
@@ -103,6 +105,8 @@ def _golangci_lint_impl(ctx):
     provider = _lint_provider(ctx, "golangci-lint", paths, inputs, {"argv": argv, "env": {}, "cwd": cwd}, target_kind = "golangci_lint")
     if ctx["capability"] == "lint":
         run_action(
+            display_name = "Lint Go with golangci-lint · " + ctx["label"]["name"],
+            source_files = _action_source_files(inputs),
             argv = argv,
             inputs = inputs,
             outputs = [paths["sarif"]],
@@ -123,6 +127,8 @@ def _swiftlint_impl(ctx):
     provider = _lint_provider(ctx, "swiftlint", paths, inputs, {"argv": argv, "env": {}, "cwd": "."})
     if ctx["capability"] == "lint":
         run_action(
+            display_name = "Lint Swift with SwiftLint · " + ctx["label"]["name"],
+            source_files = _action_source_files(inputs),
             argv = argv,
             inputs = inputs,
             outputs = [paths["sarif"]],
@@ -144,6 +150,8 @@ def _detekt_impl(ctx):
     provider = _lint_provider(ctx, "detekt", paths, inputs, {"argv": argv, "env": {}, "cwd": "."})
     if ctx["capability"] == "lint":
         run_action(
+            display_name = "Lint Kotlin with Detekt · " + ctx["label"]["name"],
+            source_files = _action_source_files(inputs),
             argv = argv,
             inputs = inputs,
             outputs = [paths["sarif"]],
@@ -165,6 +173,8 @@ def _credo_impl(ctx):
     provider = _lint_provider(ctx, "credo", paths, inputs, {"argv": argv, "env": {}, "cwd": cwd})
     if ctx["capability"] == "lint":
         run_action(
+            display_name = "Lint Elixir with Credo · " + ctx["label"]["name"],
+            source_files = _action_source_files(inputs),
             argv = argv,
             inputs = inputs,
             outputs = [paths["sarif"]],
@@ -219,6 +229,8 @@ def _eslint_impl(ctx):
     if ctx["capability"] == "lint":
         write_path(adapter, _eslint_adapter())
         run_action(
+            display_name = "Lint JavaScript with ESLint · " + ctx["label"]["name"],
+            source_files = _action_source_files(inputs),
             argv = argv,
             inputs = inputs,
             outputs = [paths["native"]],
@@ -229,6 +241,8 @@ def _eslint_impl(ctx):
             identifier = ctx["label"]["id"] + ":eslint",
         )
         run_action(
+            display_name = "Convert ESLint findings to SARIF · " + ctx["label"]["name"],
+            source_files = _action_source_files([adapter, paths["native"]]),
             argv = [node, adapter, paths["native"], paths["sarif"]],
             inputs = [adapter, paths["native"]],
             outputs = [paths["sarif"]],
@@ -282,6 +296,8 @@ def _rubocop_impl(ctx):
     if ctx["capability"] == "lint":
         write_path(adapter, _rubocop_adapter())
         run_action(
+            display_name = "Lint Ruby with RuboCop · " + ctx["label"]["name"],
+            source_files = _action_source_files(inputs),
             argv = argv,
             inputs = inputs,
             outputs = [paths["native"]],
@@ -292,6 +308,8 @@ def _rubocop_impl(ctx):
             identifier = ctx["label"]["id"] + ":rubocop",
         )
         run_action(
+            display_name = "Convert RuboCop findings to SARIF · " + ctx["label"]["name"],
+            source_files = _action_source_files([adapter, paths["native"]]),
             argv = [ruby, adapter, paths["native"], paths["sarif"]],
             inputs = [adapter, paths["native"]],
             outputs = [paths["sarif"]],

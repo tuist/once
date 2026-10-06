@@ -409,7 +409,11 @@ def _bazel_delegate_action(ctx, bazel, capability):
         argv = [bazel, "run", label, "--noshow_progress"] + flags + ["--"]
     else:
         fail(ctx["label"]["id"] + ": bazel target does not support capability `" + capability + "`")
+    build_package = label[2:].split(":")[0] if label.startswith("//") else ""
+    build_prefix = build_package + "/" if build_package else ""
     run_action(
+        display_name = ("Test" if capability == "test" else "Run" if capability == "run" else "Build") + " with Bazel · " + label,
+        source_files = _action_source_files([_package_relative(ctx, path) for path in [build_prefix + "BUILD.bazel", build_prefix + "BUILD", "MODULE.bazel", "WORKSPACE.bazel", "WORKSPACE"]]),
         argv = argv,
         inputs = [],
         outputs = [],
@@ -433,6 +437,8 @@ def _bazel_emit_spawn_action(ctx, action, index, shadow_rel):
         if _parent_dir(output)
     ])
     run_action(
+        display_name = "Bazel " + action["mnemonic"] + " · " + ctx["label"]["name"],
+        source_files = _action_source_files([_package_relative(ctx, path) for path in action["inputs"] if not path.startswith("bazel-out/") and not path.startswith("external/")]),
         argv = action["arguments"],
         inputs = [],
         outputs = [],
@@ -475,6 +481,8 @@ def _bazel_emit_symlink_action(ctx, action, index, shadow_rel):
     parent_dirs = [shadow_rel + "/" + parent] if parent else []
     target = _bazel_relative_target(source, destination)
     run_action(
+        display_name = "Create Bazel symlink · " + _basename(destination),
+        source_files = _action_source_files([_package_relative(ctx, source)]),
         argv = [host_which("sh"), "-c", "ln -sfn " + _shell_quote(target) + " " + _shell_quote(destination)],
         inputs = [],
         outputs = [],
@@ -511,6 +519,7 @@ def _bazel_emit_symlink_tree_action(ctx, action, index, shadow_rel):
         lines.append("ln -sfn " + _shell_quote(target) + " " + _shell_quote(entry))
     write_path(script_workspace_path, "\n".join(lines) + "\n")
     run_action(
+        display_name = "Assemble Bazel symlink tree · " + ctx["label"]["name"],
         argv = [host_which("sh"), script_tail],
         inputs = [],
         outputs = [],

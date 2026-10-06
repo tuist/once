@@ -606,6 +606,8 @@ def _zig_translate_c_action(ctx, cinfo, name_prefix):
         args.extend(_zig_translate_c_compile_args(cinfo))
         args.extend(["-o", output, "--emulate=clang"])
         run_action(
+            display_name = "Translate C headers to Zig · " + ctx["label"]["name"],
+            source_files = _action_source_files(_unique([header] + _zig_c_inputs(cinfo))),
             argv = [translate_c] + args,
             inputs = _unique([header] + _zig_c_inputs(cinfo)),
             outputs = [output],
@@ -621,6 +623,8 @@ def _zig_translate_c_action(ctx, cinfo, name_prefix):
         args.append("-lc")
         args.append(header)
         run_action(
+            display_name = "Translate C headers to Zig · " + ctx["label"]["name"],
+            source_files = _action_source_files(_unique([header] + _zig_c_inputs(cinfo))),
             argv = [zig] + args,
             inputs = _unique([header] + _zig_c_inputs(cinfo)),
             outputs = [output],
@@ -699,6 +703,8 @@ def _zig_docs_action(ctx, command, root, c_module_context, cinfo, inputs, zig, i
         command_prefix = ["-dynamic"]
     argv = [zig] + [docs_command] + command_prefix + _zig_docs_args(ctx, docs_command, root, c_module_context, cinfo, docs_output)
     run_action(
+        display_name = "Generate Zig documentation · " + ctx["label"]["name"],
+        source_files = _action_source_files(_unique(inputs + _zig_extra_docs(ctx))),
         argv = argv,
         inputs = _unique(inputs + _zig_extra_docs(ctx)),
         outputs = [docs_output],
@@ -732,6 +738,8 @@ def _zig_compile(ctx, kind, default_main, command, provider_kind):
     if kind == "shared" and primary_output:
         argv.append("-fsoname=" + _basename(primary_output))
     run_action(
+        display_name = "Compile Zig target · " + ctx["label"]["name"],
+        source_files = _action_source_files(inputs),
         argv = argv,
         inputs = inputs,
         outputs = ([primary_output] if primary_output else []) + aux_outputs,
@@ -855,6 +863,8 @@ def _zig_binary_impl(ctx):
         log = run_dir + "/stdout.log"
         prepare_path(run_dir, kind = "directory", identifier = ctx["label"]["id"] + ":zig-run-prepare")
         run_action(
+            display_name = "Run Zig executable · " + ctx["label"]["name"],
+            source_files = _action_source_files(_unique([binary] + _zig_data_inputs(ctx) + _zig_collect_dep_data(ctx["deps"]))),
             argv = [binary] + _zig_attr(ctx, "args", []),
             inputs = _unique([binary] + _zig_data_inputs(ctx) + _zig_collect_dep_data(ctx["deps"])),
             outputs = [run_dir, log],
@@ -1084,6 +1094,8 @@ def _zig_test_impl(ctx):
         argv = [host_which("sh"), "-c", _zig_test_script(ctx, provider["test_binary"], results, log, native_results)]
     prepare_path(test_dir, kind = "directory", identifier = ctx["label"]["id"] + ":zig-test-prepare")
     run_action(
+        display_name = "Run Zig tests · " + ctx["label"]["name"],
+        source_files = _action_source_files(_unique([provider["test_binary"]] + _zig_data_inputs(ctx) + _zig_collect_dep_data(ctx["deps"]))),
         argv = argv,
         inputs = _unique([provider["test_binary"]] + _zig_data_inputs(ctx) + _zig_collect_dep_data(ctx["deps"])),
         outputs = [test_dir, results, log, native_results],

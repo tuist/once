@@ -223,7 +223,7 @@ def _dockerfile_cached_context_definition(ctx, dockerfile, context):
     recipe = declare_output("build-definition/" + dockerfile.split("/")[-1])
     ignore = recipe + ".dockerignore"
     source = _dockerfile_workspace_path(ctx, dockerfile)
-    copy_path(source, recipe, inputs = [source], identifier = ctx["label"]["id"] + ":build-definition")
+    copy_path(source, recipe, inputs = [source], identifier = ctx["label"]["id"] + ":build-definition", source_files = _action_source_files([source]))
     effective_ignore = _dockerfile_existing_ignore(ctx, dockerfile, context)
     rules = ""
     if effective_ignore:
@@ -424,6 +424,8 @@ def _dockerfile_buildkit_impl(ctx, fallback_reason = None, inherits_onbuild = Fa
     if layer_cache:
         build_outputs.append(layer_cache)
     run_action(
+        display_name = "Build container image · " + ctx["label"]["name"],
+        source_files = _action_source_files(inputs),
         argv = argv,
         inputs = inputs,
         outputs = build_outputs,
@@ -437,6 +439,8 @@ def _dockerfile_buildkit_impl(ctx, fallback_reason = None, inherits_onbuild = Fa
     )
     if output_format == "docker" and not direct_export:
         run_action(
+            display_name = "Export container image · " + ctx["label"]["name"],
+            source_files = _action_source_files([metadata]),
             argv = [
                 docker,
                 "image",
