@@ -389,7 +389,7 @@ Every call carries the bearer token in the `authorization` metadata. Clients als
 
 ## message `ActionCompleted`
 
-Exactly one declared action outcome. Identity within a run is the tuple (target_execution_id, capability, action_index). The index is zero-based declaration order, never completion order; identifier is a display label. A new target attempt must use a new target_execution_id. Cached target reuse emits the retained actions with current-run timing, not old spans.
+Exactly one declared action outcome. Identity within a run is the tuple (target_execution_id, capability, action_index). The index is zero-based declaration order, never completion order; identifier is a diagnostic label. A new target attempt must use a new target_execution_id. Cached target reuse emits the retained actions with current-run timing, not old spans.
 
 | Name | Type | Number | Description |
 | --- | --- | ---: | --- |
@@ -407,6 +407,8 @@ Exactly one declared action outcome. Identity within a run is the tuple (target_
 | `execute_ms` | `int64` | 12 |  |
 | `cache_key` | `string` | 13 | Hex digest the action probed against the content-addressable store, action_digest. Shown as the "Cache key" column on the Cacheable Actions view of the dashboard. |
 | `selected_attempt` | `uint32` | 14 | Zero means no attempt executed in this run, as with retained target reuse. Otherwise this selects one attempt from the matching tuple below. |
+| `display_name` | `optional string` | 15 | Presentation only; does not replace identifier or affect cache identity. |
+| `source_files` | `repeated string` | 16 | Repository-relative file paths using forward slashes, never host paths or generated outputs. Servers may link these at RunStarted.git_rev. |
 
 ## message `ActionAttemptStarted`
 

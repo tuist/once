@@ -263,6 +263,8 @@ run_action(
     outputs = ["AppCore.a"],
     toolchain_identity = "id-1",
     identifier = "compile",
+    display_name = "Compile main.src",
+    source_files = ["pkg/Sources/main.src", "pkg/Sources/other.src", "pkg/Sources/main.src"],
 )
 "#)
         .unwrap();
@@ -271,8 +273,105 @@ run_action(
     assert_eq!(store.actions[0].argv[0], "tool");
     assert_eq!(store.actions[0].outputs, vec!["AppCore.a".to_string()]);
     assert_eq!(store.actions[0].identifier.as_deref(), Some("compile"));
+    assert_eq!(
+        store.actions[0].display_name.as_deref(),
+        Some("Compile main.src")
+    );
+    assert_eq!(
+        store.actions[0].source_files,
+        ["pkg/Sources/main.src", "pkg/Sources/other.src"]
+    );
+    assert_eq!(store.actions[0].inputs, ["pkg/Sources/main.src"]);
     assert!(store.actions[0].cacheable);
     assert_eq!(store.actions[0].success_exit_codes, vec![0]);
+}
+
+#[test]
+fn action_presentation_is_optional_and_legacy_declarations_still_load() {
+    let tmp = TempDir::new().unwrap();
+    let (store, ()) = with_active_store(store_for(tmp.path(), "pkg"), || {
+        run(r#"run_action(argv = ["tool"])
+run_action(argv = ["tool"], source_files = None)
+write_path("generated.txt", "content", display_name = "Generate configuration", source_files = ["config.toml"])
+copy_path("a.txt", "b.txt", display_name = "Stage resource", source_files = ["a.txt"])
+"#).unwrap();
+    });
+    assert_eq!(store.actions[0].display_name, None);
+    assert!(store.actions[0].source_files.is_empty());
+    assert!(store.actions[1].source_files.is_empty());
+    assert_eq!(
+        store.actions[2].display_name.as_deref(),
+        Some("Generate configuration")
+    );
+    assert_eq!(store.actions[2].source_files, ["config.toml"]);
+    assert_eq!(
+        store.actions[3].display_name.as_deref(),
+        Some("Stage resource")
+    );
+    assert_eq!(store.actions[3].source_files, ["a.txt"]);
+    let legacy: super::DeclaredAction =
+        serde_json::from_value(serde_json::json!({"outputs": []})).unwrap();
+    assert_eq!(legacy.display_name, None);
+    assert!(legacy.source_files.is_empty());
+}
+
+#[test]
+fn bundled_source_links_are_repository_relative_and_exclude_generated_files() {
+    for git_marker_is_file in [false, true] {
+        let repo = TempDir::new().unwrap();
+        if git_marker_is_file {
+            std::fs::write(repo.path().join(".git"), "gitdir: unused").unwrap();
+        } else {
+            std::fs::create_dir(repo.path().join(".git")).unwrap();
+        }
+        let workspace = repo.path().join("projects/app");
+        std::fs::create_dir_all(workspace.join("src")).unwrap();
+        std::fs::create_dir_all(workspace.join(".once/out")).unwrap();
+        std::fs::write(workspace.join("src/main.c"), "source").unwrap();
+        std::fs::write(workspace.join(".once/out/main.o"), "generated").unwrap();
+        let source = format!("{}\nrun_action(argv = [\"tool\"], source_files = _action_source_files([\"src/main.c\", \"./src/main.c\", \".once/out/main.o\", \"missing.c\", \"src\", \"../outside.c\", \"/host/file\"]))", include_str!("../../prelude/common.star"));
+        let (store, ()) = with_active_store(store_for(&workspace, ""), || run(&source).unwrap());
+        assert_eq!(store.actions[0].source_files, ["projects/app/src/main.c"]);
+        assert!(store.observations.entries().is_empty());
+        assert!(store.host_cache.observed_paths().is_empty());
+    }
+}
+
+#[test]
+fn bundled_source_descriptors_reject_nested_lists() {
+    let tmp = TempDir::new().unwrap();
+    let source = format!("{}\nrun_action(argv = [\"tool\"], source_files = _action_source_files([[\"src/main.c\"]]))", include_str!("../../prelude/common.star"));
+    let (_, error) = with_active_store(store_for(tmp.path(), ""), || run(&source));
+    assert!(error.unwrap_err().to_string().contains("source_files"));
+}
+
+#[test]
+fn action_source_files_reject_unsafe_and_nonportable_paths() {
+    for path in [
+        "",
+        "/tmp/secret",
+        "../secret",
+        "src/../../secret",
+        "./src/a.c",
+        "src//a.c",
+        "C:/secret",
+        "src\\a.c",
+        "src/a\nc",
+    ] {
+        let source = format!(
+            "run_action(argv = [\"tool\"], source_files = [{}])",
+            serde_json::to_string(path).unwrap()
+        );
+        let error = run(&source).unwrap_err().to_string();
+        assert!(
+            error.contains("repository-relative file paths"),
+            "{path:?}: {error}"
+        );
+    }
+    let error = run("run_action(argv = [\"tool\"], source_files = [42])")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("source_files"));
 }
 
 #[test]

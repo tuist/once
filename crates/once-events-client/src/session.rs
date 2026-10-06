@@ -168,7 +168,7 @@ impl EventSession {
         );
         let seq = self.next_seq;
         self.next_seq += 1;
-        let event = RunEvent {
+        let mut event = RunEvent {
             seq,
             epoch_ms,
             mono_ns,
@@ -178,6 +178,7 @@ impl EventSession {
             self.started = Some(event);
             return seq;
         }
+        crate::presentation::fit_action_presentation(&mut event, self.limits.max_event_bytes);
         if event.encoded_len() > self.limits.max_event_bytes {
             self.loss.record(seq, seq, "oversized_event");
             return seq;

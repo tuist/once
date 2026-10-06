@@ -334,6 +334,8 @@ fn a_reused_outcome_reports_a_hit_however_it_was_produced() {
         .map(|index| super::super::PerActionOutcome {
             action_digest: Digest::of_bytes(format!("action-{index}").as_bytes()),
             identifier: Some(format!("action-{index}")),
+            display_name: Some(format!("Compile source-{index}.c")),
+            source_files: vec![format!("src/source-{index}.c")],
             index,
             cache_state: EvidenceCacheState::Miss,
             duration_ms: 42,
@@ -362,6 +364,11 @@ fn a_reused_outcome_reports_a_hit_however_it_was_produced() {
             action.identifier.as_deref(),
             Some(format!("action-{index}").as_str())
         );
+        assert_eq!(
+            action.display_name.as_deref(),
+            Some(format!("Compile source-{index}.c").as_str())
+        );
+        assert_eq!(action.source_files, [format!("src/source-{index}.c")]);
         assert_eq!(action.index as usize, index);
         assert_eq!(
             action.action_digest,

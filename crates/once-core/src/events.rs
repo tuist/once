@@ -79,6 +79,8 @@ pub enum RunEvent {
         capability: String,
         action_index: u32,
         identifier: Option<String>,
+        display_name: Option<String>,
+        source_files: Vec<String>,
         result: TargetResult,
         was_cached: bool,
         duration_ms: i64,

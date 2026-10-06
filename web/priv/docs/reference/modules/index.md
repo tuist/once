@@ -737,6 +737,50 @@ phases during import; executing such a record fails until those settings resolve
   every consumed generated file must be listed in `inputs`.
 - `toolchain_identity`: optional string folded into the action digest.
 - `identifier`: stable diagnostic label.
+- `display_name`: optional human-readable name, such as `Compile main.c` or
+  `Link application`. This keyword-only presentation field does not replace
+  `identifier` or change the action's cache key. Do not include secrets,
+  command arguments, or absolute host paths in names. Control characters are
+  normalized to spaces to keep names on one line.
+- `source_files`: optional keyword-only list of repository-relative file paths
+  associated with the action. One file uses a one-element list; an action
+  operating on several files can list each one. Omitted or `None` means no
+  source links. Paths use forward slashes and cannot contain absolute paths,
+  drive prefixes, backslashes, empty segments, `.` or `..` segments, or control
+  characters. These are links, not additional inputs or outputs.
+
+All executable action primitives, including portable file actions, accept
+`display_name` and `source_files` as optional keyword arguments. Portable file
+operations supply readable default names when no name is given. Bundled target
+kinds give compilation, linking, testing, packaging, and setup work descriptive
+names. Use `source_files = _action_source_files(paths)` to supply a descriptor
+of workspace source paths. Once resolves this presentation-only descriptor
+while collecting action metadata, memoizing file selection and repository
+mapping without adding execution observations or invalidating cached builds.
+It excludes directories, generated `.once` paths, absolute host files, and
+nonportable repository paths. Entries must be strings. It maps files relative
+to the nearest Git checkout, including worktrees, and honors an explicit
+`GIT_WORK_TREE`. Without a checkout, paths remain workspace-relative.
+
+```python
+run_action(
+    argv = [compiler, "-c", "src/main.c", "-o", object_file],
+    inputs = ["src/main.c", "include/api.h"],
+    outputs = [object_file],
+    identifier = "compile-main",
+    display_name = "Compile main.c",
+    source_files = ["src/main.c"],
+)
+```
+
+Once includes this metadata in per-action completion events and preserves it
+when replaying cached target outcomes. An event server can show the name and
+link each file at the run's Git revision using its own repository integration.
+Older servers ignore the additional optional fields; no protocol upgrade or
+new required feature is necessary. If optional presentation fields exceed the
+server's event-size limit, Once retains the source links that fit and may omit
+an oversized display name. The action's identity, timing, and result are
+preserved.
 
 The declared action is its executable cache contract. Once hashes its operation,
 arguments, argument files, environment, working directory, path setup,

@@ -14,6 +14,7 @@ use starlark::values::none::NoneType;
 use starlark::values::Value;
 use walkdir::WalkDir;
 
+use super::presentation::{record_action, unpack_source_files};
 use super::store::{
     analysis_active, observe, with_store, with_store_mut, AnalysisObservations, CommandPolicy,
     DeclaredAction, DeclaredActionOperation, DeclaredArchiveEntry, DeclaredArchiveEntryKind,
@@ -605,6 +606,8 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
                     depends_on_prior_actions: true,
                     toolchain_identity: None,
                     identifier: Some(format!("expand_actions:{implementation}")),
+                    display_name: None,
+                    source_files: Vec::new(),
                 });
             }
         });
@@ -614,7 +617,12 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     /// Declare a portable action that writes text or bytes at the
     /// workspace-relative `path`. `content` may be a string or a list
     /// of integers in `0..=255`.
-    fn write_path<'v>(path: &str, content: Value<'v>) -> anyhow::Result<NoneType> {
+    fn write_path<'v>(
+        path: &str,
+        content: Value<'v>,
+        #[starlark(require = named)] display_name: Option<String>,
+        #[starlark(require = named)] source_files: Option<Value<'v>>,
+    ) -> anyhow::Result<NoneType> {
         if !analysis_active() {
             return Ok(NoneType);
         }
@@ -642,12 +650,11 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             depends_on_prior_actions: false,
             toolchain_identity: None,
             identifier: Some(format!("write_path:{path}")),
+            display_name: display_name
+                .or_else(|| Some(format!("Write {}", path.rsplit('/').next().unwrap_or(path)))),
+            source_files: unpack_source_files(source_files)?,
         };
-        with_store_mut(|store| {
-            if let Some(store) = store {
-                store.actions.push(action);
-            }
-        });
+        record_action(action);
         Ok(NoneType)
     }
 
@@ -655,6 +662,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     /// materializing a directory symlink at the destination. `kind = "tree"`
     /// copies directory contents and preserves their symlink layout. Tree
     /// copies accept one source string or a list of source directories.
+    #[allow(clippy::too_many_arguments)]
     fn copy_path<'v>(
         source: Value<'v>,
         destination: &str,
@@ -663,6 +671,8 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         toolchain_identity: Option<String>,
         identifier: Option<String>,
         cacheable: Option<bool>,
+        #[starlark(require = named)] display_name: Option<String>,
+        #[starlark(require = named)] source_files: Option<Value<'v>>,
     ) -> anyhow::Result<NoneType> {
         if !analysis_active() {
             return Ok(NoneType);
@@ -700,19 +710,27 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             depends_on_prior_actions: false,
             toolchain_identity,
             identifier: Some(identifier.unwrap_or_else(|| format!("copy_path:{destination}"))),
+            display_name: display_name.or_else(|| {
+                Some(format!(
+                    "Copy {}",
+                    destination.rsplit('/').next().unwrap_or(destination)
+                ))
+            }),
+            source_files: unpack_source_files(source_files)?,
         };
-        with_store_mut(|store| {
-            if let Some(store) = store {
-                store.actions.push(action);
-            }
-        });
+        record_action(action);
         Ok(NoneType)
     }
 
     /// Snapshot an absolute host toolchain file into a workspace-relative
     /// output. The source digest is captured during analysis and verified
     /// again on execution, so cache identity follows file content.
-    fn materialize_host_file(source: &str, destination: &str) -> anyhow::Result<NoneType> {
+    fn materialize_host_file<'v>(
+        source: &str,
+        destination: &str,
+        #[starlark(require = named)] display_name: Option<String>,
+        #[starlark(require = named)] source_files: Option<Value<'v>>,
+    ) -> anyhow::Result<NoneType> {
         if !analysis_active() {
             return Ok(NoneType);
         }
@@ -761,19 +779,27 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             depends_on_prior_actions: false,
             toolchain_identity: None,
             identifier: Some(format!("materialize_host_file:{destination}")),
+            display_name: display_name.or_else(|| {
+                Some(format!(
+                    "Snapshot toolchain file {}",
+                    destination.rsplit('/').next().unwrap_or(destination)
+                ))
+            }),
+            source_files: unpack_source_files(source_files)?,
         };
-        with_store_mut(|store| {
-            if let Some(store) = store {
-                store.actions.push(action);
-            }
-        });
+        record_action(action);
         Ok(NoneType)
     }
 
     /// Snapshot an absolute host directory into a workspace-relative output.
     /// The source tree digest is captured during analysis and verified again
     /// on execution, so cache identity follows files, modes, and symlinks.
-    fn materialize_host_tree(source: &str, destination: &str) -> anyhow::Result<NoneType> {
+    fn materialize_host_tree<'v>(
+        source: &str,
+        destination: &str,
+        #[starlark(require = named)] display_name: Option<String>,
+        #[starlark(require = named)] source_files: Option<Value<'v>>,
+    ) -> anyhow::Result<NoneType> {
         if !analysis_active() {
             return Ok(NoneType);
         }
@@ -831,22 +857,27 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             depends_on_prior_actions: false,
             toolchain_identity: None,
             identifier: Some(format!("materialize_host_tree:{destination}")),
+            display_name: display_name.or_else(|| {
+                Some(format!(
+                    "Snapshot toolchain tree {}",
+                    destination.rsplit('/').next().unwrap_or(destination)
+                ))
+            }),
+            source_files: unpack_source_files(source_files)?,
         };
-        with_store_mut(|store| {
-            if let Some(store) = store {
-                store.actions.push(action);
-            }
-        });
+        record_action(action);
         Ok(NoneType)
     }
 
     /// Link one workspace path to another without copying or caching
     /// the linked contents. Downstream actions still hash the linked
     /// tree when they declare it as an input.
-    fn link_path(
+    fn link_path<'v>(
         source: &str,
         destination: &str,
         identifier: Option<String>,
+        #[starlark(require = named)] display_name: Option<String>,
+        #[starlark(require = named)] source_files: Option<Value<'v>>,
     ) -> anyhow::Result<NoneType> {
         if !analysis_active() {
             return Ok(NoneType);
@@ -879,21 +910,26 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             identifier: Some(
                 identifier.unwrap_or_else(|| format!("link_path:{source}:{destination}")),
             ),
+            display_name: display_name.or_else(|| {
+                Some(format!(
+                    "Link {}",
+                    destination.rsplit('/').next().unwrap_or(destination)
+                ))
+            }),
+            source_files: unpack_source_files(source_files)?,
         };
-        with_store_mut(|store| {
-            if let Some(store) = store {
-                store.actions.push(action);
-            }
-        });
+        record_action(action);
         Ok(NoneType)
     }
 
     /// Declare an uncached portable path preparation action. `kind`
     /// must be `"remove"` or `"directory"`.
-    fn prepare_path(
+    fn prepare_path<'v>(
         path: &str,
         kind: &str,
         identifier: Option<String>,
+        #[starlark(require = named)] display_name: Option<String>,
+        #[starlark(require = named)] source_files: Option<Value<'v>>,
     ) -> anyhow::Result<NoneType> {
         if !analysis_active() {
             return Ok(NoneType);
@@ -926,18 +962,27 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             depends_on_prior_actions: false,
             toolchain_identity: None,
             identifier: Some(identifier.unwrap_or_else(|| format!("prepare_path:{kind}:{path}"))),
+            display_name: display_name.or_else(|| {
+                Some(format!(
+                    "{} {}",
+                    if kind == "remove" {
+                        "Remove"
+                    } else {
+                        "Create directory"
+                    },
+                    path.rsplit('/').next().unwrap_or(path)
+                ))
+            }),
+            source_files: unpack_source_files(source_files)?,
         };
-        with_store_mut(|store| {
-            if let Some(store) = store {
-                store.actions.push(action);
-            }
-        });
+        record_action(action);
         Ok(NoneType)
     }
 
     /// Declare a portable action that writes a deterministic digest
     /// listing for a workspace tree. Missing roots produce an empty
     /// file. `include_suffixes` filters files by path suffix when set.
+    #[allow(clippy::too_many_arguments)]
     fn write_tree_digest<'v>(
         root: &str,
         output: &str,
@@ -945,6 +990,8 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         inputs: Option<Value<'v>>,
         identifier: Option<String>,
         cacheable: Option<bool>,
+        #[starlark(require = named)] display_name: Option<String>,
+        #[starlark(require = named)] source_files: Option<Value<'v>>,
     ) -> anyhow::Result<NoneType> {
         if !analysis_active() {
             return Ok(NoneType);
@@ -984,12 +1031,15 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             depends_on_prior_actions: false,
             toolchain_identity: None,
             identifier: Some(identifier.unwrap_or_else(|| format!("write_tree_digest:{output}"))),
+            display_name: display_name.or_else(|| {
+                Some(format!(
+                    "Fingerprint {}",
+                    root.rsplit('/').next().unwrap_or(root)
+                ))
+            }),
+            source_files: unpack_source_files(source_files)?,
         };
-        with_store_mut(|store| {
-            if let Some(store) = store {
-                store.actions.push(action);
-            }
-        });
+        record_action(action);
         Ok(NoneType)
     }
 
@@ -1007,6 +1057,8 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         identifier: Option<String>,
         cacheable: Option<bool>,
         uncompressed_sha256_output: Option<String>,
+        #[starlark(require = named)] display_name: Option<String>,
+        #[starlark(require = named)] source_files: Option<Value<'v>>,
     ) -> anyhow::Result<NoneType> {
         if !analysis_active() {
             return Ok(NoneType);
@@ -1058,12 +1110,15 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             depends_on_prior_actions: false,
             toolchain_identity: None,
             identifier: Some(identifier.unwrap_or_else(|| format!("write_archive:{output}"))),
+            display_name: display_name.or_else(|| {
+                Some(format!(
+                    "Archive {}",
+                    output.rsplit('/').next().unwrap_or(output)
+                ))
+            }),
+            source_files: unpack_source_files(source_files)?,
         };
-        with_store_mut(|store| {
-            if let Some(store) = store {
-                store.actions.push(action);
-            }
-        });
+        record_action(action);
         Ok(NoneType)
     }
 
@@ -1071,13 +1126,16 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     /// directory output. `authorization_env` is the name of an environment
     /// variable read only when the action executes; its value is never stored
     /// in the action declaration, action digest, or evidence.
-    fn download_and_extract(
+    #[allow(clippy::too_many_arguments)]
+    fn download_and_extract<'v>(
         url: &str,
         sha256: &str,
         destination: &str,
         authorization_env: Option<String>,
         identifier: Option<String>,
         cacheable: Option<bool>,
+        #[starlark(require = named)] display_name: Option<String>,
+        #[starlark(require = named)] source_files: Option<Value<'v>>,
     ) -> anyhow::Result<NoneType> {
         if !analysis_active() {
             return Ok(NoneType);
@@ -1125,12 +1183,15 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             identifier: Some(
                 identifier.unwrap_or_else(|| format!("download_and_extract:{destination}")),
             ),
+            display_name: display_name.or_else(|| {
+                Some(format!(
+                    "Fetch and extract {}",
+                    destination.rsplit('/').next().unwrap_or(destination)
+                ))
+            }),
+            source_files: unpack_source_files(source_files)?,
         };
-        with_store_mut(|store| {
-            if let Some(store) = store {
-                store.actions.push(action);
-            }
-        });
+        record_action(action);
         Ok(NoneType)
     }
 
@@ -1211,6 +1272,8 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         sandbox: Option<String>,
         network: Option<String>,
         success_exit_codes: Option<Value<'v>>,
+        #[starlark(require = named)] display_name: Option<String>,
+        #[starlark(require = named)] source_files: Option<Value<'v>>,
     ) -> anyhow::Result<NoneType> {
         validate_sandbox(sandbox.as_deref())?;
         validate_network(network.as_deref())?;
@@ -1286,12 +1349,10 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             depends_on_prior_actions: depends_on_prior_actions.unwrap_or(true),
             toolchain_identity,
             identifier,
+            display_name,
+            source_files: unpack_source_files(source_files)?,
         };
-        with_store_mut(|store| {
-            if let Some(store) = store {
-                store.actions.push(action);
-            }
-        });
+        record_action(action);
         Ok(NoneType)
     }
 

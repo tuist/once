@@ -270,6 +270,8 @@ async fn exec_body(
         EXEC_CAPABILITY,
         0,
         None,
+        None,
+        &[],
         action_duration_ms,
         outcome.cache == CacheState::Hit,
         outcome.result.exit_code,

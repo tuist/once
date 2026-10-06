@@ -2536,6 +2536,8 @@ mod tests {
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
+            display_name: None,
+            source_files: Vec::new(),
         };
 
         assert_eq!(
@@ -2593,6 +2595,8 @@ mod tests {
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
+            display_name: None,
+            source_files: Vec::new(),
         };
 
         let action = declared_to_action(
@@ -2691,6 +2695,8 @@ mod tests {
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
+            display_name: None,
+            source_files: Vec::new(),
         };
 
         prepare_declared_command_paths(workspace.path(), &declared)
@@ -3202,6 +3208,8 @@ mod tests {
                 depends_on_prior_actions: true,
                 toolchain_identity: None,
                 identifier: Some("one".to_string()),
+                display_name: None,
+                source_files: Vec::new(),
             }],
             provider: serde_json::json!({}),
             declared_outputs: Vec::new(),
@@ -3360,6 +3368,8 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
                 depends_on_prior_actions: true,
                 toolchain_identity: None,
                 identifier: Some("cached".to_string()),
+                display_name: None,
+                source_files: Vec::new(),
             }],
             provider: serde_json::json!({}),
             declared_outputs: Vec::new(),
@@ -3815,6 +3825,8 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: Some(name.to_string()),
+            display_name: None,
+            source_files: Vec::new(),
         };
         let analysis = AnalysisResult {
             actions: vec![action("one"), action("two")],
@@ -3917,6 +3929,8 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
                     depends_on_prior_actions: true,
                     toolchain_identity: None,
                     identifier: Some("first".to_string()),
+                    display_name: None,
+                    source_files: Vec::new(),
                 },
                 DeclaredAction {
                     operation: None,
@@ -3943,6 +3957,8 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
                     depends_on_prior_actions: false,
                     toolchain_identity: None,
                     identifier: Some("second".to_string()),
+                    display_name: None,
+                    source_files: Vec::new(),
                 },
             ],
             provider: serde_json::json!({}),
@@ -4068,6 +4084,8 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             depends_on_prior_actions: true,
             toolchain_identity: Some("id-1".to_string()),
             identifier: None,
+            display_name: None,
+            source_files: Vec::new(),
         };
         let one = compose_input_digest(workspace.path(), &declared, module_digest(), &[]).unwrap();
         let declared2 = DeclaredAction {
@@ -4102,6 +4120,8 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             depends_on_prior_actions: true,
             toolchain_identity: Some("toolchain-secret".to_string()),
             identifier: Some("compile".to_string()),
+            display_name: None,
+            source_files: Vec::new(),
         };
         let dependency = Digest::of_bytes(b"dependency");
         let fingerprint = compose_input_fingerprint_with_available(
@@ -4150,6 +4170,42 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
     }
 
     #[test]
+    fn presentation_metadata_does_not_change_action_cache_identity() {
+        let workspace = tempfile::tempdir().unwrap();
+        let mut declared: DeclaredAction = serde_json::from_value(serde_json::json!({
+            "argv": ["tool"], "outputs": ["output"], "identifier": "compile",
+        }))
+        .unwrap();
+        let original =
+            compose_input_digest(workspace.path(), &declared, module_digest(), &[]).unwrap();
+        declared.display_name = Some("Compile a friendlier name".to_string());
+        declared.source_files = vec!["src/not-an-input.c".to_string()];
+        assert_eq!(
+            original,
+            compose_input_digest(workspace.path(), &declared, module_digest(), &[]).unwrap()
+        );
+        let first = declared_to_action(
+            workspace.path(),
+            &declared,
+            module_digest(),
+            &[],
+            SandboxMode::Off,
+        )
+        .unwrap();
+        declared.display_name = Some("Another display name".to_string());
+        declared.source_files.clear();
+        let second = declared_to_action(
+            workspace.path(),
+            &declared,
+            module_digest(),
+            &[],
+            SandboxMode::Off,
+        )
+        .unwrap();
+        assert_eq!(first.digest(), second.digest());
+    }
+
+    #[test]
     fn input_digest_changes_with_command_setup_paths() {
         let workspace = tempfile::tempdir().unwrap();
         let declared = DeclaredAction {
@@ -4172,6 +4228,8 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
+            display_name: None,
+            source_files: Vec::new(),
         };
         let one = compose_input_digest(workspace.path(), &declared, module_digest(), &[]).unwrap();
         let declared2 = DeclaredAction {
@@ -4213,6 +4271,8 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
+            display_name: None,
+            source_files: Vec::new(),
         };
         let one = compose_input_digest(workspace.path(), &declared, module_digest(), &[]).unwrap();
         let declared2 = DeclaredAction {
@@ -4252,6 +4312,8 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
+            display_name: None,
+            source_files: Vec::new(),
         };
         let one = compose_input_digest(
             workspace.path(),
@@ -4295,6 +4357,8 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
+            display_name: None,
+            source_files: Vec::new(),
         };
         let available = |content| {
             BTreeMap::from([(
@@ -4353,6 +4417,8 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
+            display_name: None,
+            source_files: Vec::new(),
         };
         let available = |_producer: &[u8], content: &[u8]| {
             BTreeMap::from([(
@@ -4422,6 +4488,8 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             depends_on_prior_actions: true,
             toolchain_identity: None,
             identifier: None,
+            display_name: None,
+            source_files: Vec::new(),
         };
         let a = compose_input_digest(
             workspace.path(),
