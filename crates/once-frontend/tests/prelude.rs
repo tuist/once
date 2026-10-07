@@ -319,6 +319,13 @@ fn all_prelude_source() -> String {
     SOURCE.clone()
 }
 
+fn macos_prelude_source() -> String {
+    format!(
+        "{}\ndef host_os():\n    return \"macos\"\n",
+        all_prelude_source()
+    )
+}
+
 #[test]
 fn ruff_lint_declares_a_cacheable_report_for_finding_exit_codes() {
     let workspace = TempDir::new().unwrap();
@@ -7153,7 +7160,7 @@ result = repr(provider["transitive_data"])
     reason = "the inline Starlark fixture keeps this action contract in one test"
 )]
 fn prelude_apple_application_embeds_framework_self_path_output() {
-    let prelude = all_prelude_source();
+    let prelude = macos_prelude_source();
     let workspace = TempDir::new().unwrap();
     let package_dir = workspace.path().join("app/Sources");
     std::fs::create_dir_all(&package_dir).unwrap();
@@ -7534,7 +7541,7 @@ result = repr(provider["transitive_resource_bundles"])
 #[cfg(unix)]
 #[test]
 fn prelude_apple_application_materializes_a_custom_property_list() {
-    let prelude = all_prelude_source();
+    let prelude = macos_prelude_source();
     let workspace = TempDir::new().unwrap();
     let package_dir = workspace.path().join("app/Sources");
     std::fs::create_dir_all(&package_dir).unwrap();
@@ -7664,7 +7671,7 @@ fn assert_apple_thinning_package_action(store: &AnalysisStore) {
 #[cfg(unix)]
 #[test]
 fn prelude_apple_thinned_package_stages_and_packages_one_device_application() {
-    let prelude = all_prelude_source();
+    let prelude = macos_prelude_source();
     let workspace = TempDir::new().unwrap();
     let source = format!(
         r#"{prelude}
@@ -7786,7 +7793,7 @@ fn prelude_apple_thinned_package_rejects_multiple_applications() {
     reason = "the inline Starlark fixture keeps this provider contract in one test"
 )]
 fn prelude_apple_swift_framework_uses_private_header_search_paths() {
-    let prelude = all_prelude_source();
+    let prelude = macos_prelude_source();
     let workspace = TempDir::new().unwrap();
     let sources = workspace.path().join("framework/Sources");
     let headers = workspace.path().join("framework/Vendor/include/yoga");
@@ -7989,7 +7996,7 @@ result = repr(provider["framework_path"])
     reason = "the inline Starlark fixture keeps this provider contract in one test"
 )]
 fn prelude_apple_framework_stops_static_links_and_propagates_runtime_frameworks() {
-    let prelude = all_prelude_source();
+    let prelude = macos_prelude_source();
     let workspace = TempDir::new().unwrap();
     let package_dir = workspace.path().join("framework/Sources");
     std::fs::create_dir_all(&package_dir).unwrap();
@@ -8140,7 +8147,7 @@ result = repr([
 #[test]
 #[allow(clippy::too_many_lines)]
 fn prelude_apple_test_bundle_stages_transitive_framework_runtime_closure() {
-    let prelude = all_prelude_source();
+    let prelude = macos_prelude_source();
     let workspace = TempDir::new().unwrap();
     let package_dir = workspace.path().join("tests/Sources");
     std::fs::create_dir_all(&package_dir).unwrap();
@@ -8441,7 +8448,7 @@ result = repr(provider["test_bundle_path"])
     reason = "the inline Starlark fixture keeps this test runner contract in one test"
 )]
 fn prelude_apple_test_bundle_runs_ios_hosted_tests_with_xctestrun() {
-    let prelude = all_prelude_source();
+    let prelude = macos_prelude_source();
     let workspace = TempDir::new().unwrap();
     let package_dir = workspace.path().join("tests/Sources");
     std::fs::create_dir_all(&package_dir).unwrap();
@@ -8558,7 +8565,7 @@ result = repr(provider["test_info"]["command"]["argv"])
 
 #[test]
 fn prelude_apple_test_bundle_embeds_dependency_resource_bundles() {
-    let prelude = all_prelude_source();
+    let prelude = macos_prelude_source();
     let workspace = TempDir::new().unwrap();
     let package_dir = workspace.path().join("tests/Sources");
     std::fs::create_dir_all(&package_dir).unwrap();
@@ -8675,7 +8682,7 @@ result = _apple_ui_xctestrun(
 }
 
 fn apple_test_bundle_source(capability: &str, test_block: &str) -> String {
-    let prelude = all_prelude_source();
+    let prelude = macos_prelude_source();
     format!(
         r#"{prelude}
 def host_which(name):
@@ -13858,7 +13865,7 @@ result = repr([
 /// fire while the impl runs.
 #[test]
 fn prelude_apple_library_direct_mode_emits_xcrun_free_actions() {
-    let prelude = all_prelude_source();
+    let prelude = macos_prelude_source();
     let workspace = TempDir::new().unwrap();
     let package_dir = workspace.path().join("ios/Lib/Sources");
     std::fs::create_dir_all(&package_dir).unwrap();
@@ -13953,7 +13960,7 @@ result = repr(provider["archive"])
 
 #[test]
 fn prelude_apple_library_fingerprints_imported_swiftmodule_content() {
-    let prelude = all_prelude_source();
+    let prelude = macos_prelude_source();
     let workspace = TempDir::new().unwrap();
     let package_dir = workspace.path().join("ios/Consumer/Sources");
     std::fs::create_dir_all(&package_dir).unwrap();
@@ -14036,7 +14043,7 @@ result = repr(_apple_swiftmodule_inputs_for_arch([
 
 #[test]
 fn prelude_apple_library_preserves_one_canonical_authored_modulemap() {
-    let prelude = all_prelude_source();
+    let prelude = macos_prelude_source();
     let workspace = TempDir::new().unwrap();
     let source_dir = workspace.path().join("ios/CLib/Sources");
     let include_dir = workspace.path().join("ios/CLib/include");
@@ -14145,7 +14152,7 @@ result = repr(provider)
     reason = "the inline Starlark fixture keeps this module map contract in one test"
 )]
 fn prelude_apple_library_stages_authored_framework_modulemap() {
-    let prelude = all_prelude_source();
+    let prelude = macos_prelude_source();
     let workspace = TempDir::new().unwrap();
     let source_dir = workspace.path().join("ios/Logging/Sources");
     let support_dir = workspace.path().join("ios/Logging/Support");
@@ -14296,7 +14303,7 @@ result = repr(provider)
 
 #[test]
 fn prelude_apple_library_lists_public_headers_in_generated_modulemap() {
-    let prelude = all_prelude_source();
+    let prelude = macos_prelude_source();
     let workspace = TempDir::new().unwrap();
     let source_dir = workspace.path().join("ios/CMark/Sources");
     std::fs::create_dir_all(&source_dir).unwrap();
@@ -14366,7 +14373,7 @@ result = repr(provider)
     reason = "the inline Starlark fixture keeps this header distribution contract in one test"
 )]
 fn prelude_apple_library_stages_distributed_umbrella_headers() {
-    let prelude = all_prelude_source();
+    let prelude = macos_prelude_source();
     let workspace = TempDir::new().unwrap();
     let package_dir = workspace.path().join("ios/Lib/Sources");
     std::fs::create_dir_all(&package_dir).unwrap();
@@ -14602,7 +14609,7 @@ fn prelude_apple_framework_compile_files_exclude_bundle_resources() {
 
 #[test]
 fn prelude_apple_prebuild_actions_precede_generated_source_compilation() {
-    let prelude = all_prelude_source();
+    let prelude = macos_prelude_source();
     let workspace = TempDir::new().unwrap();
     let package_dir = workspace.path().join("App/Sources");
     std::fs::create_dir_all(&package_dir).unwrap();
@@ -16566,7 +16573,7 @@ result = repr(_xcode_test_host_ref({{}}, settings, name_map))
     reason = "the inline Starlark fixture keeps this interoperability contract in one test"
 )]
 fn prelude_apple_library_exposes_pure_swift_to_objective_c_consumers() {
-    let prelude = all_prelude_source();
+    let prelude = macos_prelude_source();
     let workspace = TempDir::new().unwrap();
     let package_dir = workspace.path().join("ios/SwiftModel/Sources");
     std::fs::create_dir_all(&package_dir).unwrap();
