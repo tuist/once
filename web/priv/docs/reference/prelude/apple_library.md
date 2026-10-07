@@ -10,6 +10,10 @@ triple, ObjC interop header, and (optionally) a clang modulemap and
 binary header map. Multi-arch targets fan out per-arch compiles and
 merge them with `lipo`.
 
+Linux builds use Swift and xtool's Darwin SDK without `xcrun`. See
+[Build iOS Applications on Linux](/guide/graph/apple/linux) for installation,
+architecture defaults, and resource and compiler-plugin limitations.
+
 ## Attributes
 
 `explicit_modules` is a boolean, defaulting to `false`, that enables
@@ -26,10 +30,10 @@ import inference and should not be authored manually.
 | `minimum_os` | string | no |  | Minimum supported OS version (deployment target) |
 | `target_sdk_version` | string | no | `minimum_os` | Build-time SDK version baked into the triple |
 | `sdk_variant` | string | no | `"simulator"` | `simulator` or `device`. Ignored on macOS (always `macosx`) |
-| `archs` | list&lt;string&gt; | no | `[]` | Target architectures (`arm64`, `x86_64`, `arm64e`, `arm64_32`). Empty defaults to the host arch; multi-arch fans out per-arch compiles and combines them with `lipo` |
+| `archs` | list&lt;string&gt; | no | `[]` | Target architectures (`arm64`, `x86_64`, `arm64e`, `arm64_32`). Empty defaults to ARM64 for iOS device builds on Linux and the host arch otherwise; multi-arch fans out per-arch compiles and combines them with `lipo` |
 | `mac_catalyst` | bool | no | `false` | Build the iOSMac (Mac Catalyst) variant. Requires `platform = macos`; rewrites the triple to `<arch>-apple-ios<minOS>-macabi` |
 | `module_name` | string | no | target name | Compiled module name (not configurable) |
-| `xcode_developer_dir` | string | no |  | Pin a specific Xcode by overriding `DEVELOPER_DIR`. Folded into the action cache key |
+| `xcode_developer_dir` | string | no |  | Pin Xcode's Developer directory on macOS or an xtool Darwin SDK's Developer directory on Linux. Linux defaults to the registered `darwin` Swift SDK; the selection contributes to action cache identity |
 | `headers` | list&lt;string&gt; | no | `[]` | Public or private C-family headers compiled with this target |
 | `exported_headers` | list&lt;string&gt; | no | `[]` | Headers made available to dependent targets |
 | `exported_header_dirs` | list&lt;string&gt; | no | `[]` | Header search directories made available to dependent targets |

@@ -24,9 +24,9 @@ def _apple_module_host_roots(swiftc):
     if not swiftc.get("sdk_path"):
         return []
     platform_developer = _parent_dir(_parent_dir(swiftc["sdk_path"]))
-    return [
+    return ([swiftc["resource_dir"]] if swiftc.get("resource_dir") else []) + [
         swiftc["sdk_path"],
-        _swift_toolchain_dir(swiftc["swiftc_path"]) + "/usr/lib",
+        _parent_dir(_parent_dir(swiftc["swiftc_path"])) + "/lib",
         platform_developer + "/usr/lib/swift/host",
         # Platform-provided frameworks such as XCTest and Testing (including
         # `_Testing_Foundation.framework`) live under the platform's

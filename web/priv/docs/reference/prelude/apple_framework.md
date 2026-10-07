@@ -11,6 +11,10 @@ contain `sdk` configure the
 [Apple software development kit (SDK)](https://developer.apple.com/documentation/xcode)
 used for the build.
 
+Linux builds use Swift, xtool's Darwin SDK, and `rcodesign` for ad-hoc signing.
+See [Build iOS Applications on Linux](/guide/graph/apple/linux) for toolchain
+setup and supported workflows.
+
 ## Attributes
 
 `explicit_modules` is a boolean, defaulting to `false`, that enables
@@ -27,7 +31,7 @@ import inference and should not be authored manually.
 | `minimum_os` | string | no | `13.0` | Minimum supported operating system version |
 | `target_sdk_version` | string | no | `minimum_os` | Software development kit version used in the target triple |
 | `sdk_variant` | string | no | `simulator` | `simulator` or `device`; ignored on macOS (not configurable) |
-| `xcode_developer_dir` | string | no | active Xcode | Xcode developer directory used to resolve build tools |
+| `xcode_developer_dir` | string | no | active Xcode on macOS; registered `darwin` SDK on Linux | Xcode Developer directory on macOS or xtool Darwin SDK Developer directory on Linux |
 | `bundle_id` | string | no | `dev.once.<product_name>` | Framework bundle identifier |
 | `product_name` | string | no | target name | Framework product name (not configurable) |
 | `module_name` | string | no | `product_name` | Swift module name |

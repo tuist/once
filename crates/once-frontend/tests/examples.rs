@@ -118,6 +118,29 @@ fn every_schema_example_loads_without_diagnostics() {
 }
 
 #[test]
+fn linux_apple_starter_loads_native_device_targets_without_diagnostics() {
+    let schema = once_frontend::built_in_target_kind_schema("apple_application").unwrap();
+    let bundle = load_target_kind_example(&schema, "apple-application-linux").unwrap();
+    let workspace = TempDir::new().unwrap();
+    materialize(workspace.path(), &bundle);
+    let graph = once_frontend::load_graph_workspace(workspace.path()).unwrap();
+    assert_eq!(graph.len(), 2);
+    assert!(graph.iter().all(|target| target.diagnostics.is_empty()));
+    let diagnostics = validate_workspace(workspace.path()).unwrap();
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    for target in graph {
+        assert_eq!(
+            target.attrs.get("platform"),
+            Some(&once_frontend::AttrValue::String("ios".into()))
+        );
+        assert_eq!(
+            target.attrs.get("sdk_variant"),
+            Some(&once_frontend::AttrValue::String("device".into()))
+        );
+    }
+}
+
+#[test]
 fn every_schema_example_carries_meta() {
     let schemas = built_in_target_kind_schemas_result().expect("built-in target kind schemas load");
     for schema in &schemas {

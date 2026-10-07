@@ -16,6 +16,12 @@ application imports directly. Once links the direct dynamic boundary, embeds
 its complete framework closure, removes duplicate paths, signs every embedded
 framework, and then signs the application.
 
+Linux builds use Swift, xtool's Darwin SDK, and `rcodesign`. iOS device builds
+use ARM64 even on x86_64 Linux hosts. The output remains ad-hoc signed and must
+be provisioned and re-signed before installation on a physical device. The
+`run` capability requires macOS. See [Build iOS Applications on
+Linux](/guide/graph/apple/linux) for setup and a runnable starter.
+
 ## Attributes
 
 `explicit_modules` is a boolean, defaulting to `false`, that enables
@@ -33,7 +39,7 @@ import inference and should not be authored manually.
 | `minimum_os` | string | no | `13.0` | Minimum supported operating system version |
 | `target_sdk_version` | string | no | `minimum_os` | Software development kit version used in the target triple |
 | `sdk_variant` | string | no | `simulator` | `simulator` or `device`; ignored on macOS (not configurable) |
-| `xcode_developer_dir` | string | no | active Xcode | Xcode developer directory used to resolve build tools |
+| `xcode_developer_dir` | string | no | active Xcode on macOS; registered `darwin` SDK on Linux | Xcode Developer directory on macOS or xtool Darwin SDK Developer directory on Linux |
 | `families` | list&lt;string&gt; | no | `[]` | Supported device families (`iphone`, `ipad`); an empty list uses `iphone` |
 | `product_name` | string | no | target name | Application product name (not configurable) |
 | `module_name` | string | no | product name | Swift module name (not configurable) |

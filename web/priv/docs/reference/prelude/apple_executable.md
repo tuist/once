@@ -4,6 +4,12 @@ Builds an Apple command-line executable without an application bundle. Use it
 for a Swift tool, or for a native Xcode target whose product type is a tool.
 The binary is ad-hoc codesigned in place.
 
+Linux builds use Swift, xtool's Darwin SDK, and `rcodesign`. The existing
+`xcode_developer_dir` attribute selects the SDK bundle's `Developer` directory
+on Linux, defaulting to the registered `darwin` Swift SDK. See
+[Build iOS Applications on Linux](/guide/graph/apple/linux) for setup.
+The `run` capability requires macOS; Apple binaries do not execute on Linux.
+
 ## Sources and dependencies
 
 Set the required `platform` and declare Swift sources with `srcs`. Deployment
