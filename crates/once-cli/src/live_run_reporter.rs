@@ -12,6 +12,8 @@
 //! would have. A second signal ends it immediately. Runs that never reach the
 //! event service keep the default signal behavior.
 
+mod readiness;
+
 use std::io::Write as _;
 use std::path::Path;
 use std::time::Duration;
@@ -228,14 +230,13 @@ pub async fn spawn(
         })
     });
 
-    let connected = matches!(
-        tokio::time::timeout(Duration::from_secs(12), ready_rx).await,
-        Ok(Ok(()))
+    let sample_host = readiness::should_sample_host(
+        &tokio::time::timeout(Duration::from_secs(12), ready_rx).await,
     );
     LiveRunReporter {
         handle,
         shutdown: Some(shutdown_tx),
-        system_sampler: connected.then(|| crate::bus_events::spawn_system_sampler(bus)),
+        system_sampler: sample_host.then(|| crate::bus_events::spawn_system_sampler(bus)),
     }
 }
 
