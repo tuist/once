@@ -73,6 +73,7 @@ def _oci_pull_impl(ctx):
         argv.append("--insecure")
     argv.extend([reference, layout])
     run_action(
+        display_name = "Pull container image · " + ctx["label"]["name"],
         argv = argv,
         outputs = [layout],
         clean_paths = [layout],
@@ -125,6 +126,8 @@ def _oci_import_impl(ctx):
     version = host_command([tar, "--version"], check = False).split("\n")[0].strip()
     staging = ctx["scratch_dir"] + "/import"
     run_action(
+        display_name = "Import container image · " + ctx["label"]["name"],
+        source_files = _action_source_files([path]),
         argv = [tar, "-xf", path, "-C", staging],
         inputs = [path],
         outputs = [staging],
@@ -136,7 +139,7 @@ def _oci_import_impl(ctx):
         toolchain_identity = "once.oci.tar.v1\x00" + tar + "\x00" + version,
         identifier = ctx["label"]["id"] + ":oci-import",
     )
-    copy_path(staging, layout, kind = "tree", inputs = [staging], identifier = ctx["label"]["id"] + ":oci-import-layout")
+    copy_path(staging, layout, kind = "tree", inputs = [staging], identifier = ctx["label"]["id"] + ":oci-import-layout", source_files = _action_source_files([staging]))
     write_archive(
         [{"kind": "tree", "source": layout, "path": "", "mode": 420, "directory_mode": 493, "owner_id": 0, "group_id": 0, "mtime": 0}],
         archive,
@@ -181,6 +184,8 @@ def _oci_load_impl(ctx):
         _diagnostic_fail("required_tool_not_found", None, ctx["label"]["id"] + ": " + daemon + " was not found", "Install " + daemon + " or set daemon to an installed container engine")
     for index, archive in enumerate(archives):
         run_action(
+            display_name = "Load container image · " + ctx["label"]["name"],
+            source_files = _action_source_files([archive]),
             argv = [executable, "load", "--input", archive],
             inputs = [archive],
             sandbox = "off",
@@ -282,6 +287,8 @@ def oci_push_plan(ctx):
     first_reference = spec["repository"] + ":" + spec["tags"][0]
     pinned = spec["repository"] + "@" + first["digest"]
     run_action(
+        display_name = "Push container image · " + label,
+        source_files = _action_source_files([spec["layout"], view + "/index.json", view + "/oci-layout", view + "/blobs"]),
         argv = [spec["crane"], "push"] + insecure + [view, first_reference],
         inputs = [spec["layout"], view + "/index.json", view + "/oci-layout", view + "/blobs"],
         outputs = [spec["digest_file"]],
@@ -296,6 +303,7 @@ def oci_push_plan(ctx):
     )
     for tag in spec["tags"][1:]:
         run_action(
+            display_name = "Tag container image · " + tag,
             argv = [spec["crane"], "tag"] + insecure + [pinned, tag],
             env = spec["env"],
             sandbox = "off",
@@ -313,6 +321,7 @@ def oci_push_plan(ctx):
         argv.extend(spec["cosign_args"])
         argv.append(pinned)
         run_action(
+            display_name = "Sign container image · " + label,
             argv = argv,
             outputs = [spec["signature"]],
             clean_paths = [spec["signature"]],

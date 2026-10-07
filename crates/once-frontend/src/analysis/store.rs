@@ -163,6 +163,10 @@ pub struct DeclaredAction {
     pub toolchain_identity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identifier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -595,6 +599,7 @@ impl HostToolFailure {
 }
 
 pub(super) struct HostCache {
+    pub(super) source_files: Arc<super::presentation::SourceFileCache>,
     which: Arc<SingleFlight<String, Option<String>>>,
     /// The most recent command that exited non-zero. Read only on the error
     /// path, to describe a failure the traceback would otherwise obscure.
@@ -618,6 +623,7 @@ impl std::fmt::Debug for HostCache {
 impl Clone for HostCache {
     fn clone(&self) -> Self {
         Self {
+            source_files: Arc::clone(&self.source_files),
             which: Arc::clone(&self.which),
             last_tool_failure: Arc::clone(&self.last_tool_failure),
             commands: Arc::clone(&self.commands),
@@ -641,6 +647,7 @@ impl Default for HostCache {
 impl HostCache {
     fn with_env_lookup(host_env: impl Fn(&str) -> Option<String> + Send + Sync + 'static) -> Self {
         Self {
+            source_files: Arc::new(super::presentation::SourceFileCache::default()),
             which: Arc::new(SingleFlight::new()),
             last_tool_failure: Arc::new(Mutex::new(None)),
             commands: Arc::new(SingleFlight::new()),

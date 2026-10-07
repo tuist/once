@@ -905,6 +905,8 @@ def _elixir_stale_fingerprint_action(ctx, toolchain, metadata_path, config, ebin
         "ONCE_CONFIGS_FILE": configs_list,
     })
     run_action(
+        display_name = "Check Elixir compilation fingerprint · " + ctx["label"]["name"],
+        source_files = _action_source_files([]),
         argv = [toolchain["elixir"], _elixir_from_package(ctx, probe_exs)],
         inputs = [],
         outputs = [fingerprint],
@@ -956,6 +958,8 @@ def _elixir_compile_action(ctx, toolchain, apps, srcs, static_inputs, config, co
         "ONCE_DEP_CODE_PATHS_FILE": dep_code_paths_list,
     })
     run_action(
+        display_name = "Compile Elixir modules · " + ctx["label"]["name"],
+        source_files = _action_source_files(srcs),
         argv = [toolchain["elixir"], _elixir_from_package(ctx, compile_exs)],
         inputs = _unique(compile_inputs + _elixir_app_inputs(apps)),
         outputs = [module_dir, metadata_path, warnings_path, consolidated_dir],
@@ -1009,11 +1013,13 @@ def _elixir_library_impl(ctx):
         kind = "tree",
         toolchain_identity = toolchain["identity"] + "\x00elixir-stage-modules.v2",
         identifier = ctx["label"]["id"] + ":elixir-stage-modules",
+        source_files = _action_source_files(module_dirs),
     )
     app_writer = ctx["scratch_dir"] + "/app_writer.exs"
     app_file = ebin_dir + "/" + app_name + ".app"
     write_path(app_writer, _elixir_app_writer_source())
     run_action(
+        display_name = "Write Elixir application manifest · " + ctx["label"]["name"],
         argv = [toolchain["elixir"], app_writer],
         outputs = [app_file, priv_dir, include_dir],
         clean_paths = [priv_dir, include_dir],
@@ -1038,6 +1044,7 @@ def _elixir_library_impl(ctx):
             inputs = [src],
             toolchain_identity = toolchain["identity"] + "\x00elixir-stage-priv.v2",
             identifier = ctx["label"]["id"] + ":elixir-stage-priv:" + src,
+            source_files = _action_source_files([src]),
         )
     for src in include:
         copy_path(
@@ -1046,6 +1053,7 @@ def _elixir_library_impl(ctx):
             inputs = [src],
             toolchain_identity = toolchain["identity"] + "\x00elixir-stage-include.v1",
             identifier = ctx["label"]["id"] + ":elixir-stage-include:" + src,
+            source_files = _action_source_files([src]),
         )
     app = {
         "elixir_app": True,
@@ -1208,6 +1216,7 @@ def _elixir_stage_apps(ctx, apps, build_root, mix_env, identifier):
                 kind = "tree",
                 inputs = [app_dir],
                 identifier = identifier + ":" + app_name,
+                source_files = _action_source_files([app_dir]),
             )
 
 def _elixir_stage_consumer(ctx, root_app, apps, build_root, mix_env, identifier):
@@ -1222,6 +1231,7 @@ def _elixir_stage_consumer(ctx, root_app, apps, build_root, mix_env, identifier)
         kind = "tree",
         inputs = [root_build_env],
         identifier = identifier + ":root-build-environment",
+        source_files = _action_source_files([root_build_env]),
     )
     for app in apps:
         app_name = app.get("app_name", "")
@@ -1235,6 +1245,7 @@ def _elixir_stage_consumer(ctx, root_app, apps, build_root, mix_env, identifier)
                 kind = "tree",
                 inputs = [app_dir],
                 identifier = identifier + ":" + app_name,
+                source_files = _action_source_files([app_dir]),
             )
 
 def _elixir_test_runner_command(ctx, toolchain, apps, srcs, mix_config):
@@ -1451,6 +1462,8 @@ def _elixir_test_impl(ctx):
     provider["test_info"] = _elixir_test_info_for(ctx, toolchain["mix"] if mix_config else toolchain["elixir"], mix_config, apps, srcs, results, log, native_results)
     if _elixir_attr(ctx, "setup", ""):
         run_action(
+            display_name = "Run Elixir tests · " + ctx["label"]["name"],
+            source_files = _action_source_files(provider["affected_inputs"]),
             argv = [_elixir_host_shell(ctx), "-c", _elixir_test_script(ctx, toolchain, lib, apps, srcs, config, data, mix_config, results, log, native_results)],
             inputs = provider["affected_inputs"],
             outputs = [test_dir, results, log, native_results],
@@ -1487,6 +1500,8 @@ def _elixir_test_impl(ctx):
         )
     _elixir_stage_consumer(ctx, lib, apps, build_root, "test", ctx["label"]["id"] + ":test-apps")
     run_action(
+        display_name = "Run Elixir tests · " + ctx["label"]["name"],
+        source_files = _action_source_files(_unique(provider["affected_inputs"] + project_inputs + [runner_script, args_file])),
         argv = [
             toolchain["elixir"],
             _elixir_from_package(ctx, runner_script),
@@ -2171,6 +2186,7 @@ def _mix_stage_package_tree(ctx, source_root, source_name, destination, identifi
             kind = "tree",
             inputs = inputs,
             identifier = identifier,
+            source_files = _action_source_files(inputs),
         )
 
 def _mix_rebar_package_action(ctx, source_root, app_name, mix_env, apps, app_dir, ebin_dir, compile_log, compile_warnings, identity):
@@ -2188,6 +2204,8 @@ def _mix_rebar_package_action(ctx, source_root, app_name, mix_env, apps, app_dir
     validation_marker = ctx["build_dir"] + "/rebar-app.valid"
     write_path(config_script, _mix_rebar_config_source())
     run_action(
+        display_name = "Configure Rebar dependency · " + ctx["label"]["name"],
+        source_files = _action_source_files(_unique(glob([source_root + "/rebar.config", source_root + "/rebar.config.script"]) + [config_script])),
         argv = [
             toolchain["elixir"],
             _elixir_from_package(ctx, config_script),
@@ -2213,6 +2231,7 @@ def _mix_rebar_package_action(ctx, source_root, app_name, mix_env, apps, app_dir
         kind = "tree",
         inputs = glob(ctx["srcs"]),
         identifier = ctx["label"]["id"] + ":rebar-source",
+        source_files = _action_source_files(glob(ctx["srcs"])),
     )
     package_include = glob([source_root + "/include/**/*"])
     package_priv = glob([source_root + "/priv/**/*"])
@@ -2260,6 +2279,8 @@ def _mix_rebar_package_action(ctx, source_root, app_name, mix_env, apps, app_dir
     if package_priv:
         resource_inputs.append(compiled_app_dir + "/priv")
     run_action(
+        display_name = "Compile Rebar dependency · " + ctx["label"]["name"],
+        source_files = _action_source_files(_unique(_elixir_app_inputs(apps) + [config_file, source_stage] + resource_inputs)),
         argv = argv,
         inputs = _unique(_elixir_app_inputs(apps) + [config_file, source_stage] + resource_inputs),
         outputs = [compiled_ebin_dir, compile_log, compile_warnings],
@@ -2294,8 +2315,11 @@ def _mix_rebar_package_action(ctx, source_root, app_name, mix_env, apps, app_dir
         kind = "tree",
         inputs = _unique(app_inputs),
         identifier = ctx["label"]["id"] + ":rebar-app",
+        source_files = _action_source_files(app_sources),
     )
     run_action(
+        display_name = "Validate Erlang application · " + ctx["label"]["name"],
+        source_files = _action_source_files([ebin_dir]),
         argv = [
             toolchain["elixir"],
             "-e",
@@ -2357,6 +2381,8 @@ def _mix_package_impl(ctx):
         write_path(dependency_apps_file, _elixir_lines([app.get("app_name", "") for app in apps if app.get("app_name", "")]))
         write_path(compile_script, _mix_compile_source())
         run_action(
+            display_name = "Compile Mix dependency · " + ctx["label"]["name"],
+            source_files = _action_source_files(inputs),
             argv = [
                 toolchain["elixir"],
                 _elixir_from_package(ctx, compile_script),
@@ -2694,6 +2720,8 @@ def _mix_project_impl(ctx):
             run_inputs = [run_script, run_paths, run_apps]
             run_identity = "tasks"
         run_action(
+            display_name = "Run Mix tasks · " + ctx["label"]["name"],
+            source_files = _action_source_files(_unique(sources + _elixir_app_inputs(apps + [provider]) + config + data + priv + tools + [mix_config] + run_inputs)),
             argv = run_argv,
             inputs = _unique(sources + _elixir_app_inputs(apps + [provider]) + config + data + priv + tools + [mix_config] + run_inputs),
             clean_paths = [runtime_home],
@@ -2724,6 +2752,8 @@ def _mix_project_impl(ctx):
         [compile_script, dependency_paths_file, dependency_apps_file, compile_args_file]
     )
     run_action(
+        display_name = "Compile Mix project · " + ctx["label"]["name"],
+        source_files = _action_source_files(inputs),
         argv = [
             toolchain["elixir"],
             _elixir_from_package(ctx, compile_script),
@@ -2760,6 +2790,7 @@ def _mix_project_impl(ctx):
             inputs = [source],
             toolchain_identity = toolchain["identity"] + "\x00mix-project-priv.v1",
             identifier = ctx["label"]["id"] + ":mix-project-priv:" + source,
+            source_files = _action_source_files([source]),
         )
     for source in include:
         copy_path(
@@ -2768,6 +2799,7 @@ def _mix_project_impl(ctx):
             inputs = [source],
             toolchain_identity = toolchain["identity"] + "\x00mix-project-include.v1",
             identifier = ctx["label"]["id"] + ":mix-project-include:" + source,
+            source_files = _action_source_files([source]),
         )
     return provider
 
@@ -2856,6 +2888,13 @@ def _mix_release_impl(ctx):
     )
     write_path(release_args_file, _elixir_lines(_elixir_attr(ctx, "release_args", [])))
     run_action(
+        display_name = "Assemble Mix release · " + ctx["label"]["name"],
+        source_files = _action_source_files(_unique(
+            project_files +
+            _elixir_app_inputs(apps) +
+            _elixir_app_source_inputs(apps) +
+            [runner_script, dependency_paths_file, dependency_apps_file, release_args_file]
+        )),
         argv = [
             toolchain["elixir"],
             _elixir_from_package(ctx, runner_script),

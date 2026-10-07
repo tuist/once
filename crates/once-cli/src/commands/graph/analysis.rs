@@ -154,6 +154,10 @@ pub(super) struct BuildOutcome {
 pub(super) struct PerActionOutcome {
     pub action_digest: Digest,
     pub identifier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_files: Vec<String>,
     pub index: u32,
     pub cache_state: EvidenceCacheState,
     pub duration_ms: i64,
@@ -1378,6 +1382,8 @@ async fn build_one(
                         "build",
                         action.index,
                         action.identifier.as_deref(),
+                        action.display_name.as_deref(),
+                        &action.source_files,
                         0,
                         true,
                         action.exit_code,

@@ -184,6 +184,9 @@ def _unique(values):
             out.append(value)
     return out
 
+def _action_source_files(paths):
+    return {"_once_workspace_source_files": paths}
+
 def _collect_transitive(deps, key, own_values):
     out = []
     for value in own_values:

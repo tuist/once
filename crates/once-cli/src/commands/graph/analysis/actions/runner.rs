@@ -146,6 +146,8 @@ pub(in crate::commands::graph::analysis) fn run_declared_actions<'a>(
                             let start_at = crate::bus_events::now_ms();
                             let started = std::time::Instant::now();
                             let identifier = declared.identifier.clone();
+                            let display_name = declared.display_name.clone();
+                            let source_files = declared.source_files.clone();
                             let action_index = u32::try_from(index + offset).unwrap_or(u32::MAX);
                             if let Some(bus) = event_bus {
                                 crate::bus_events::action_attempt_started(
@@ -213,6 +215,8 @@ pub(in crate::commands::graph::analysis) fn run_declared_actions<'a>(
                                     capability,
                                     action_index,
                                     identifier.as_deref(),
+                                    display_name.as_deref(),
+                                    &source_files,
                                     duration_ms,
                                     was_cached,
                                     exit_code,
@@ -228,6 +232,8 @@ pub(in crate::commands::graph::analysis) fn run_declared_actions<'a>(
                                 let retained = super::PerActionOutcome {
                                     action_digest: outcome.digest,
                                     identifier,
+                                    display_name,
+                                    source_files,
                                     index: action_index,
                                     cache_state: outcome.cache_state,
                                     duration_ms: i64::try_from(duration_ms).unwrap_or(i64::MAX),

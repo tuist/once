@@ -517,7 +517,7 @@ async fn authenticated_shutdown_drains_individual_actions_and_metadata() {
     let bus = RunEventBus::new(16);
     let rx = bus.subscribe();
     bus.publish(RunEvent::RunStarted { at_epoch_ms: 100 });
-    for index in 0..2 {
+    for index in 0..3 {
         bus.publish(RunEvent::ActionAttemptStarted {
             at_epoch_ms: 180 + i64::from(index),
             target_id: "target".into(),
@@ -543,6 +543,14 @@ async fn authenticated_shutdown_drains_individual_actions_and_metadata() {
             capability: "build".into(),
             action_index: index,
             identifier: Some(format!("action-{index}")),
+            display_name: Some(format!("Compile source-{index}.c")),
+            source_files: if index == 2 {
+                (0..3_000)
+                    .map(|file| format!("source-files/file-{file}.c"))
+                    .collect()
+            } else {
+                vec![format!("src/source-{index}.c")]
+            },
             result: once_core::TargetResult::Succeeded,
             was_cached: index == 0,
             duration_ms: 15,
@@ -606,22 +614,36 @@ async fn authenticated_shutdown_drains_individual_actions_and_metadata() {
             _ => None,
         })
         .collect();
-    assert_eq!(actions.len(), 2);
+    assert_eq!(actions.len(), 3);
     assert_eq!(
         events
             .iter()
             .filter(|event| matches!(event, Payload::ActionAttemptStarted(_)))
             .count(),
-        2
+        3
     );
     assert_eq!(
         events
             .iter()
             .filter(|event| matches!(event, Payload::ActionAttemptCompleted(_)))
             .count(),
-        2
+        3
     );
     assert!(actions.iter().all(|action| action.selected_attempt == 1));
+    for action in &actions {
+        let index = action.action_index;
+        assert_eq!(
+            action.display_name.as_deref(),
+            Some(format!("Compile source-{index}.c").as_str())
+        );
+        if index == 2 {
+            assert!(!action.source_files.is_empty());
+            assert!(action.source_files.len() < 3_000);
+            assert_eq!(action.source_files[0], "source-files/file-0.c");
+        } else {
+            assert_eq!(action.source_files, [format!("src/source-{index}.c")]);
+        }
+    }
     assert!(events.iter().any(|event| matches!(event,
         Payload::TestCaseCompleted(case) if case.case_id == "parser::case"
             && case.name == "case" && case.suite_id == "parser"
@@ -696,6 +718,8 @@ async fn shutdown_drains_cached_action_burst_beyond_two_seconds() {
             capability: "build".into(),
             action_index: index,
             identifier: Some(format!("action-{index}")),
+            display_name: None,
+            source_files: Vec::new(),
             result: once_core::TargetResult::Succeeded,
             was_cached: true,
             duration_ms: 0,

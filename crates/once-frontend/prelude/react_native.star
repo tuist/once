@@ -341,8 +341,8 @@ def _react_native_dependencies_impl(ctx):
     installed_lockfile = install_root + "/" + _basename(lockfile)
     prepare_path(install_root, kind = "remove", identifier = ctx["label"]["id"] + ":javascript-clean")
     prepare_path(install_root, kind = "directory", identifier = ctx["label"]["id"] + ":javascript-prepare")
-    copy_path(package_json, installed_package_json, inputs = [package_json], identifier = ctx["label"]["id"] + ":package-json")
-    copy_path(lockfile, installed_lockfile, inputs = [lockfile], identifier = ctx["label"]["id"] + ":package-lock")
+    copy_path(package_json, installed_package_json, inputs = [package_json], identifier = ctx["label"]["id"] + ":package-json", source_files = _action_source_files([package_json]))
+    copy_path(lockfile, installed_lockfile, inputs = [lockfile], identifier = ctx["label"]["id"] + ":package-lock", source_files = _action_source_files([lockfile]))
     install_inputs = [installed_package_json, installed_lockfile]
     configuration_sources = []
     for configured in _react_native_attr(ctx, "package_manager_files", []) + ([npmrc_attr] if npmrc_attr else []):
@@ -357,6 +357,7 @@ def _react_native_dependencies_impl(ctx):
             installed_configuration,
             inputs = [source],
             identifier = ctx["label"]["id"] + ":package-manager-config:" + relative,
+            source_files = _action_source_files([source]),
         )
         install_inputs.append(installed_configuration)
     for source in glob(ctx["srcs"]):
@@ -369,6 +370,7 @@ def _react_native_dependencies_impl(ctx):
             installed_source,
             inputs = [source],
             identifier = ctx["label"]["id"] + ":local-package:" + relative,
+            source_files = _action_source_files([source]),
         )
         install_inputs.append(installed_source)
     action_home = ctx["scratch_dir"] + "/home"
@@ -383,6 +385,8 @@ def _react_native_dependencies_impl(ctx):
     }
     env.update(install["env"])
     run_action(
+        display_name = "Install JavaScript dependencies · " + ctx["label"]["name"],
+        source_files = _action_source_files([package_json, lockfile] + configuration_sources),
         argv = argv,
         inputs = install_inputs,
         outputs = [node_modules],
@@ -453,6 +457,7 @@ def _react_native_stage_files(ctx, stage, files):
             stage + "/" + relative,
             inputs = [source],
             identifier = ctx["label"]["id"] + ":stage:" + relative,
+            source_files = _action_source_files([source]),
         )
 
 def _react_native_source_files(ctx, default_excludes = []):
@@ -551,6 +556,8 @@ def _react_native_bundle_impl(ctx):
     else:
         metro_outputs.extend([final_bundle, source_map])
     run_action(
+        display_name = "Bundle " + _basename(entry) + " with Metro · " + platform,
+        source_files = _action_source_files(files),
         argv = argv,
         inputs = _unique([stage, dependency["node_modules"], metro_wrapper]),
         outputs = metro_outputs,
@@ -572,6 +579,8 @@ def _react_native_bundle_impl(ctx):
         write_path(hermes_runner, _react_native_hermes_runner_source())
         compiler_map = final_bundle + ".compiler.map"
         run_action(
+            display_name = "Compile Hermes bytecode · " + bundle_name,
+            source_files = _action_source_files([entry]),
             argv = [
                 tools["node"],
                 execution_path(hermes_runner),
@@ -599,9 +608,12 @@ def _react_native_bundle_impl(ctx):
             compiler_map,
             inputs = [final_bundle + ".map"],
             identifier = ctx["label"]["id"] + ":hermes-map",
+            source_files = _action_source_files([final_bundle + ".map"]),
         )
         compose = stage + "/node_modules/react-native/scripts/compose-source-maps.js"
         run_action(
+            display_name = "Compose JavaScript source maps · " + ctx["label"]["name"],
+            source_files = _action_source_files([compose, packager_map, compiler_map, dependency["node_modules"]]),
             argv = [
                 tools["node"],
                 execution_path(compose),
@@ -637,6 +649,8 @@ def _react_native_codegen_impl(ctx):
     script = stage + "/node_modules/react-native/scripts/generate-codegen-artifacts.js"
     prepare_path(output, kind = "remove", identifier = ctx["label"]["id"] + ":codegen-clean")
     run_action(
+        display_name = "Generate React Native bindings · " + ctx["label"]["name"],
+        source_files = _action_source_files(files),
         argv = [
             tools["node"],
             execution_path(script),
@@ -741,6 +755,8 @@ def _react_native_autolinking_impl(ctx):
     write_path(normalizer, _react_native_config_normalizer())
     cli = stage + "/node_modules/react-native/cli.js"
     run_action(
+        display_name = "Discover React Native native modules · " + ctx["label"]["name"],
+        source_files = _action_source_files(files),
         argv = [
             tools["node"],
             execution_path(normalizer),
@@ -817,6 +833,8 @@ def _react_native_apple_application_impl(ctx):
         xcrun = host_which("xcrun")
         destination = _react_native_attr(ctx, "simulator", "booted")
         run_action(
+            display_name = "Install app on simulator · " + ctx["label"]["name"],
+            source_files = _action_source_files([app]),
             argv = [xcrun, "simctl", "install", destination, execution_path(app)],
             inputs = [app],
             outputs = [],
@@ -825,6 +843,8 @@ def _react_native_apple_application_impl(ctx):
             identifier = ctx["label"]["id"] + ":simulator-install",
         )
         run_action(
+            display_name = "Launch app on simulator · " + ctx["label"]["name"],
+            source_files = _action_source_files([app]),
             argv = [xcrun, "simctl", "launch", destination, bundle_id],
             inputs = [app],
             outputs = [],
@@ -862,6 +882,8 @@ def _react_native_apple_application_impl(ctx):
     if not _react_native_attr(ctx, "allow_network", False):
         bundle_argv.append("--local")
     run_action(
+        display_name = "Install Ruby dependencies · " + ctx["label"]["name"],
+        source_files = _action_source_files([_package_relative(ctx, "Gemfile"), _package_relative(ctx, "Gemfile.lock")]),
         argv = bundle_argv,
         inputs = [stage + "/Gemfile", stage + "/Gemfile.lock"],
         outputs = [vendor_bundle],
@@ -890,6 +912,8 @@ def _react_native_apple_application_impl(ctx):
         staged_native_root + "/build/generated",
     ]
     run_action(
+        display_name = "Install CocoaPods dependencies · " + ctx["label"]["name"],
+        source_files = _action_source_files([_package_relative(ctx, native_root + "/Podfile"), _package_relative(ctx, native_root + "/Podfile.lock")]),
         argv = pod_argv,
         inputs = [stage, vendor_bundle, dependency["node_modules"]],
         outputs = pod_outputs,
@@ -926,6 +950,8 @@ def _react_native_apple_application_impl(ctx):
         xcode_argv.append("CODE_SIGNING_ALLOWED=NO")
     xcode_argv.append("build")
     run_action(
+        display_name = "Build React Native Apple app · " + ctx["label"]["name"],
+        source_files = _action_source_files(files),
         argv = xcode_argv,
         inputs = native_inputs,
         outputs = [built_app, log],
@@ -949,6 +975,7 @@ def _react_native_apple_application_impl(ctx):
         kind = "tree",
         inputs = [built_app],
         identifier = ctx["label"]["id"] + ":application-product",
+        source_files = _action_source_files([built_app]),
     )
     return {
         "label_id": ctx["label"]["id"],
@@ -982,6 +1009,7 @@ def _react_native_android_application_impl(ctx):
         installed = declare_output("run/installed")
         reversed_port = declare_output("run/metro-reversed")
         run_action(
+            display_name = "Wait for Android device · " + ctx["label"]["name"],
             argv = adb_argv + ["wait-for-device"],
             outputs = [],
             cacheable = False,
@@ -989,6 +1017,7 @@ def _react_native_android_application_impl(ctx):
             identifier = ctx["label"]["id"] + ":android-wait",
         )
         run_action(
+            display_name = "Wait for Android boot · " + ctx["label"]["name"],
             argv = adb_argv + ["shell", _android_device_ready_script()],
             outputs = [],
             cacheable = False,
@@ -997,6 +1026,8 @@ def _react_native_android_application_impl(ctx):
         )
         write_path(device_ready, "")
         run_action(
+            display_name = "Install Android app · " + ctx["label"]["name"],
+            source_files = _action_source_files([apk, device_ready]),
             argv = adb_argv + ["install", "-r", "-d", execution_path(apk)],
             inputs = [apk, device_ready],
             outputs = [],
@@ -1007,6 +1038,8 @@ def _react_native_android_application_impl(ctx):
         write_path(installed, "")
         metro_port = str(_react_native_attr(ctx, "metro_port", 8081))
         run_action(
+            display_name = "Connect device to Metro · " + ctx["label"]["name"],
+            source_files = _action_source_files([installed]),
             argv = adb_argv + ["reverse", "tcp:" + metro_port, "tcp:" + metro_port],
             inputs = [installed],
             outputs = [],
@@ -1019,6 +1052,8 @@ def _react_native_android_application_impl(ctx):
         component = _android_launch_component(application_id, activity)
         launch = adb_argv + ["shell", "am", "start", "-n", component] if component else adb_argv + ["shell", _android_launcher_script(application_id)]
         run_action(
+            display_name = "Launch Android app · " + ctx["label"]["name"],
+            source_files = _action_source_files([reversed_port]),
             argv = launch,
             inputs = [reversed_port],
             outputs = [],
@@ -1069,6 +1104,8 @@ def _react_native_android_application_impl(ctx):
     argv.extend(_react_native_attr(ctx, "gradle_args", []))
     native_inputs = _unique([stage, dependency["node_modules"]] + [item["generated_sources"] for item in deps["codegen"]] + [item["modules_snapshot"] for item in deps["autolinking"]])
     run_action(
+        display_name = "Build React Native Android app · " + ctx["label"]["name"],
+        source_files = _action_source_files(files),
         argv = argv,
         inputs = native_inputs,
         outputs = [built_apk, log],
@@ -1092,6 +1129,7 @@ def _react_native_android_application_impl(ctx):
         apk,
         inputs = [built_apk],
         identifier = ctx["label"]["id"] + ":application-package",
+        source_files = _action_source_files([built_apk]),
     )
     return {
         "label_id": ctx["label"]["id"],
@@ -1151,6 +1189,7 @@ def _react_native_metro_impl(ctx):
         kind = "tree",
         inputs = [dependency["javascript_root"]],
         identifier = ctx["label"]["id"] + ":snapshot-dependencies",
+        source_files = _action_source_files([dependency["javascript_root"]]),
     )
     link_path(
         stable_node_modules,
@@ -1172,6 +1211,8 @@ def _react_native_metro_impl(ctx):
     if _react_native_attr(ctx, "reset_cache", False):
         argv.append("--reset-cache")
     run_action(
+        display_name = "Start Metro development server · " + ctx["label"]["name"],
+        source_files = _action_source_files(_unique(glob(ctx["srcs"]) + [config, stage] + ([metro_config] if metro_config else []))),
         argv = argv,
         inputs = _unique(glob(ctx["srcs"]) + [config, stage] + ([metro_config] if metro_config else [])),
         outputs = [],

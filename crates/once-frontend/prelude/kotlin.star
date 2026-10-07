@@ -110,6 +110,8 @@ def _kotlin_apple_framework_impl(ctx):
     prepare_path(framework_path, kind = "remove", identifier = "kotlin_apple_framework_clean:" + ctx["label"]["id"])
 
     run_action(
+        display_name = "Compile Kotlin native framework · " + ctx["label"]["name"],
+        source_files = _action_source_files(sources),
         argv = argv,
         inputs = sources,
         outputs = framework_files,
@@ -313,6 +315,8 @@ def _kotlin_jvm_compile(ctx, target_kind):
     output = declare_output(_kotlin_jvm_output_name(ctx))
     module_name = _kotlin_jvm_attr(ctx, "module_name", "") or ctx["label"]["name"]
     run_action(
+        display_name = "Compile Kotlin JVM classes · " + ctx["label"]["name"],
+        source_files = _action_source_files(_unique(sources + _kotlin_jvm_workspace_inputs(compile_jars + plugin_jars))),
         argv = _kotlin_jvm_compile_argv(ctx, tools, sources, compile_jars, output),
         inputs = _unique(sources + _kotlin_jvm_workspace_inputs(compile_jars + plugin_jars)),
         outputs = [output],
@@ -355,6 +359,8 @@ def _kotlin_jvm_binary_impl(ctx):
         env[name] = value
     prepare_path(run_dir, kind = "directory", identifier = "kotlin_jvm_run_prepare:" + ctx["label"]["id"])
     run_action(
+        display_name = "Run Kotlin executable · " + ctx["label"]["name"],
+        source_files = _action_source_files(_unique(_kotlin_jvm_workspace_inputs(runtime_jars) + data)),
         argv = [tools["java"]] + _kotlin_jvm_attr(ctx, "jvm_flags", []) + [
             "-cp", _kotlin_jvm_classpath_separator().join(runtime_jars),
             _kotlin_jvm_attr(ctx, "main_class", ""),
@@ -386,6 +392,8 @@ def _kotlin_jvm_compile_test_runner(ctx, tools):
     prepare_path(classes, kind = "directory", identifier = "kotlin_jvm_test_runner_prepare:" + ctx["label"]["id"])
     write_path(source, _jvm_test_runner_source())
     run_action(
+        display_name = "Compile JVM test runner · " + ctx["label"]["name"],
+        source_files = _action_source_files([source]),
         argv = [tools["javac"], "-encoding", "UTF-8", "-d", classes, source],
         inputs = [source],
         outputs = [classes],
@@ -465,6 +473,8 @@ def _kotlin_jvm_test_impl(ctx):
     prepare_path(classes, kind = "remove", identifier = "kotlin_jvm_test_classes_clean:" + ctx["label"]["id"])
     prepare_path(classes, kind = "directory", identifier = "kotlin_jvm_test_classes_prepare:" + ctx["label"]["id"])
     run_action(
+        display_name = "Compile Kotlin tests · " + ctx["label"]["name"],
+        source_files = _action_source_files(_unique(sources + _kotlin_jvm_workspace_inputs(compile_jars + plugin_jars))),
         argv = _kotlin_jvm_compile_argv(ctx, tools, sources, compile_jars, classes),
         inputs = _unique(sources + _kotlin_jvm_workspace_inputs(compile_jars + plugin_jars)),
         outputs = [classes],
@@ -509,6 +519,8 @@ def _kotlin_jvm_test_impl(ctx):
         if entry != runner_classes and entry != classes:
             runtime_file_inputs.append(entry)
     run_action(
+        display_name = "Run Kotlin tests · " + ctx["label"]["name"],
+        source_files = _action_source_files(_unique([classes_hash, runner_hash] + _kotlin_jvm_workspace_inputs(runtime_file_inputs) + _kotlin_jvm_data(ctx))),
         argv = command_argv,
         inputs = _unique([classes_hash, runner_hash] + _kotlin_jvm_workspace_inputs(runtime_file_inputs) + _kotlin_jvm_data(ctx)),
         outputs = [test_dir, results, log, native_results],

@@ -251,6 +251,8 @@ pub fn translate(event: CoreEvent, mono_ns: i64) -> Translated {
             capability,
             action_index,
             identifier,
+            display_name,
+            source_files,
             result,
             was_cached,
             duration_ms,
@@ -276,6 +278,8 @@ pub fn translate(event: CoreEvent, mono_ns: i64) -> Translated {
                     capability,
                     action_index,
                     identifier: identifier.unwrap_or_default(),
+                    display_name,
+                    source_files,
                     result: wire_target_result(result) as i32,
                     was_cached,
                     duration_ms,
@@ -466,6 +470,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn action_presentation_is_wire_compatible_with_legacy_messages() {
+        use prost::Message;
+
+        #[derive(Clone, PartialEq, Message)]
+        struct LegacyActionCompleted {
+            #[prost(string, tag = "1")]
+            target_execution_id: String,
+            #[prost(string, tag = "4")]
+            identifier: String,
+            #[prost(uint32, tag = "14")]
+            selected_attempt: u32,
+        }
+        let current = ActionCompleted {
+            target_execution_id: "target".into(),
+            identifier: "compile".into(),
+            selected_attempt: 1,
+            display_name: Some("Compile main.c".into()),
+            source_files: vec!["src/main.c".into(), "include/api.h".into()],
+            ..Default::default()
+        };
+        let legacy = LegacyActionCompleted::decode(current.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(legacy.target_execution_id, "target");
+        assert_eq!(legacy.identifier, "compile");
+        assert_eq!(legacy.selected_attempt, 1);
+        let decoded = ActionCompleted::decode(legacy.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(decoded.display_name, None);
+        assert!(decoded.source_files.is_empty());
+        assert_eq!(decoded.identifier, current.identifier);
+        assert_eq!(decoded.selected_attempt, current.selected_attempt);
+    }
+
+    #[test]
     fn content_digest_uses_raw_bytes() {
         assert_eq!(decode_digest(&"ab".repeat(32)).unwrap(), vec![0xab; 32]);
         assert!(decode_digest("ab").is_none());
@@ -481,6 +517,8 @@ mod tests {
                 capability: "_phase".into(),
                 action_index: 0,
                 identifier: Some("analysis".into()),
+                display_name: None,
+                source_files: Vec::new(),
                 result: CoreResult::Succeeded,
                 was_cached: false,
                 duration_ms: 5,

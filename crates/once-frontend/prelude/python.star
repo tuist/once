@@ -219,6 +219,8 @@ def _python_pytest_impl(ctx):
     version = host_command([python, "--version"], merge_stderr = True).strip()
     pytest_version = host_command([python, "-c", "import pytest; print(pytest.__version__)"]).strip()
     run_action(
+        display_name = "Run Python tests · " + ctx["label"]["name"],
+        source_files = _action_source_files(_unique(inputs + [adapter])),
         argv = argv,
         inputs = _unique(inputs + [adapter]),
         outputs = [test_dir, results, log, native_results],

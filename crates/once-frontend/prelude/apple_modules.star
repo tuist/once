@@ -69,6 +69,8 @@ def _apple_swift_action(ctx, attrs, swiftc, deps, **action):
     scan_cache = scan + ".cache"
     scan_argv = _apple_module_scan_argv(action["argv"], scan_cache) + ["-o", scan]
     run_action(
+        display_name = "Scan Swift module dependencies · " + (ctx["label"].get("name") or ctx["label"]["id"]),
+        source_files = _action_source_files(action["inputs"]),
         argv = scan_argv,
         inputs = action["inputs"],
         outputs = [scan],
@@ -275,6 +277,8 @@ def apple_explicit_module_plan(ctx):
                 command = [arg.replace("{module_output}", output) for arg in normalized]
                 path = output
                 run_action(
+                    display_name = "Compile " + ("Clang" if kind == "clang" else "Swift") + " module · " + name,
+                    source_files = _action_source_files(_unique(inputs)),
                     argv = [args["compiler"]] + command,
                     inputs = _unique(inputs),
                     outputs = [path],

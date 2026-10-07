@@ -941,6 +941,7 @@ def _rust_stage_rlibs_for_search(ctx, deps, tag):
             output,
             inputs = [artifact],
             identifier = _rust_action_identifier(ctx, tag + "-rlib-search:" + name),
+            source_files = _action_source_files([artifact]),
         )
         staged.append(output)
     return (["-L", "dependency=" + search_dir], staged)
@@ -997,6 +998,7 @@ def _rust_stage_proc_macro_for_search(ctx, output):
         staged,
         inputs = [output],
         identifier = _rust_action_identifier(ctx, "proc-macro-search:" + _basename(output)),
+        source_files = _action_source_files([output]),
     )
     return staged
 
@@ -1224,6 +1226,8 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
     _rust_add_windows_rustc_runtime_path(build_script_compile_env, rustc, host_triple)
     _rust_add_windows_proc_macro_path(build_script_compile_env, deps)
     run_action(
+        display_name = "Compile Rust build script · " + ctx["label"]["name"],
+        source_files = _action_source_files([script_path]),
         argv = compile_argv,
         inputs = _unique([script_path] + source_inputs + build_script_inputs + dep_inputs + dependency_build_outputs + dependency_build_inputs + wrapped[1] + _rust_extra_inputs(ctx)),
         outputs = [runner],
@@ -1246,6 +1250,8 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
     # recorded per configuration alongside the identity of the run that
     # produced them, the whole package stays the dependency.
     run_action(
+        display_name = "Run Rust build script · " + ctx["label"]["name"],
+        source_files = _action_source_files(_unique([runner] + metadata_inputs + source_inputs + build_script_inputs + _rust_extra_inputs(ctx))),
         argv = [host_which("sh"), "-c", run_script],
         inputs = _unique([runner] + metadata_inputs + source_inputs + build_script_inputs + _rust_extra_inputs(ctx)),
         outputs = [out_dir, stdout, status],
@@ -1671,6 +1677,8 @@ def _rust_compile(ctx, crate_type, default_root, output_name, test = False, prov
         crate_manifest_dir = _rust_env(ctx).get("CARGO_MANIFEST_DIR") or _parent_dir(crate_root)
         compile_cwd = _rust_manifest_dir(ctx, crate_manifest_dir)
     run_action(
+        display_name = "Compile Rust crate · " + ctx["label"]["name"],
+        source_files = _action_source_files(srcs),
         argv = argv,
         inputs = _unique(srcs + dep_inputs + dep_search_inputs + build_inputs + dependency_build_outputs + dependency_build_inputs + linker_script_inputs + (_rust_native_dep_link_inputs(deps) if crate_type != "rlib" else []) + _rust_extra_inputs(ctx)),
         outputs = [output],
@@ -1899,6 +1907,8 @@ def _rust_binary_impl(ctx):
         log = run_dir + "/stdout.log"
         prepare_path(run_dir, kind = "directory", identifier = _rust_action_identifier(ctx, "run-prepare"))
         run_action(
+            display_name = "Run Rust executable · " + ctx["label"]["name"],
+            source_files = _action_source_files(_unique([binary] + runtime_data)),
             argv = [binary] + _rust_attr(ctx, "args", []) + _rust_run_args(ctx),
             inputs = _unique([binary] + runtime_data),
             outputs = [run_dir, log],
@@ -2436,6 +2446,7 @@ def _rust_test_impl(ctx):
         staged_test_binary,
         inputs = [provider["test_binary"]],
         identifier = _rust_action_identifier(ctx, "test-stage"),
+        source_files = _action_source_files([provider["test_binary"]]),
     )
     staged_bin_exe_paths = []
     for dep in _rust_bin_exe_deps(ctx):
@@ -2449,6 +2460,7 @@ def _rust_test_impl(ctx):
             staged,
             inputs = [binary],
             identifier = _rust_action_identifier(ctx, "test-bin-stage:" + name),
+            source_files = _action_source_files([binary]),
         )
         staged_bin_exe_paths.append(staged)
 
@@ -2459,6 +2471,8 @@ def _rust_test_impl(ctx):
     runner_env = _rust_compile_action_env(ctx, runner_host_triple, runner_host_triple)
     _rust_add_windows_rustc_runtime_path(runner_env, runner_rustc, runner_host_triple)
     run_action(
+        display_name = "Compile Rust test runner · " + ctx["label"]["name"],
+        source_files = _action_source_files([runner_source]),
         argv = [runner_rustc, "--edition", "2021", runner_source, "-o", runner],
         inputs = [runner_source],
         outputs = [runner],
@@ -2467,6 +2481,14 @@ def _rust_test_impl(ctx):
         identifier = _rust_action_identifier(ctx, "test-runner-rustc"),
     )
     run_action(
+        display_name = "Run Rust tests · " + ctx["label"]["name"],
+        source_files = _action_source_files(_unique(
+            [runner, staged_test_binary] +
+            staged_bin_exe_paths +
+            _rust_bin_exe_inputs(ctx) +
+            _rust_test_package_inputs(ctx) +
+            (provider.get("transitive_data") or [])
+        )),
         argv = [
             execution_path(runner),
             execution_path(staged_test_binary),

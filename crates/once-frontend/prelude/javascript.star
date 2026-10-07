@@ -269,6 +269,8 @@ def _javascript_test_impl(ctx, runner_type, display_name, default_runner):
     runner_version_argv = ([node, runner] if runner_via_node else [runner]) + ["--version"]
     runner_version = host_command(runner_version_argv, cwd = workspace_root()).strip() if runner_is_workspace_input else host_command(runner_version_argv).strip()
     run_action(
+        display_name = "Run " + runner_type + " tests · " + ctx["label"]["name"],
+        source_files = _action_source_files(_unique(inputs + [adapter])),
         argv = argv,
         inputs = _unique(inputs + [adapter]),
         outputs = [test_dir, results, log, native_results],

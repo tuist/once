@@ -155,6 +155,8 @@ def _cmake_project_impl(ctx):
         action_env["PATH"] = host_env("PATH")
     write_path(driver, _CMAKE_BUILD_DRIVER)
     run_action(
+        display_name = "Configure and build CMake project · " + ctx["label"]["name"],
+        source_files = _action_source_files(_unique(inputs + [driver])),
         argv = [
             cmake,
             "-DONCE_SOURCE_DIR:PATH=" + execution_path(source_dir),
@@ -183,6 +185,7 @@ def _cmake_project_impl(ctx):
             inputs = [raw_products[index]],
             toolchain_identity = "once.cmake.product.v1",
             identifier = ctx["label"]["id"] + ":cmake-product:" + products[index],
+            source_files = _action_source_files([raw_products[index]]),
         )
         staged_products.append(staged)
 

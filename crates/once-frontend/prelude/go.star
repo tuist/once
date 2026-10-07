@@ -458,6 +458,8 @@ def _go_declared_build(ctx, mode, explicit_mode = True):
         header = _go_replace_extension(output, ".h")
         outputs.append(header)
     run_action(
+        display_name = "Compile Go package · " + ctx["label"]["name"],
+        source_files = _action_source_files(_go_source_inputs(ctx)),
         argv = args,
         inputs = _unique(inputs),
         outputs = outputs,
@@ -589,6 +591,8 @@ def _go_binary_impl(ctx):
     marker = run_dir + "/run.json"
     prepare_path(run_dir, kind = "directory", identifier = _go_action_identifier(ctx, "run-prepare"))
     run_action(
+        display_name = "Run Go executable · " + ctx["label"]["name"],
+        source_files = _action_source_files(_unique([output] + _go_runtime_data(ctx) + native["dynamic_libraries"])),
         argv = [output] + _go_attr(ctx, "args", []),
         inputs = _unique([output] + _go_runtime_data(ctx) + native["dynamic_libraries"]),
         outputs = [run_dir, log],
@@ -1038,6 +1042,8 @@ def _go_test_impl(ctx):
     native_info = _go_native_info(ctx)
     inputs.extend(native_info["headers"] + native_info["static_libraries"] + native_info["dynamic_libraries"])
     run_action(
+        display_name = "Compile Go tests · " + ctx["label"]["name"],
+        source_files = _action_source_files(_unique(inputs)),
         argv = args,
         inputs = _unique(inputs),
         outputs = [binary],
@@ -1068,6 +1074,8 @@ def _go_test_impl(ctx):
     outputs = [test_dir, results, log, native] + ([coverage] if coverage else [])
     command = provider["test_info"]["command"]
     run_action(
+        display_name = "Run Go tests · " + ctx["label"]["name"],
+        source_files = _action_source_files(_unique([runner, binary] + _go_runtime_data(ctx) + native_info["dynamic_libraries"])),
         argv = command["argv"],
         inputs = _unique([runner, binary] + _go_runtime_data(ctx) + native_info["dynamic_libraries"]),
         outputs = outputs,
