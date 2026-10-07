@@ -21,14 +21,6 @@ local action cache, and measures 40 fresh command invocations after five warmup
 runs. It starts the local benchmark server only when needed to populate an empty
 client cache.
 
-Use `./.auto/paired-runtime.sh control-first <control-commit>` for fresh
-paired comparisons, or `treatment-first` to reverse the order. Both
-executables use the original fixture, runner, five warmups, and 40 measured
-invocations. The primary remains `local_hit_ms`; `control_local_hit_ms`
-records the matched control. Prefer these paired controls over historical
-minimums when host load changes. Process-only timings help detect host drift,
-not claim a performance gain.
-
 ## Files in Scope
 
 - `crates/once-cli/src/main.rs`: process runtime and command dispatch
@@ -110,52 +102,6 @@ not claim a performance gain.
 - Reducing the workspace database synchronization level regressed the local
   median to 19.65 milliseconds. The immediate reverted control returned to
   18.98 milliseconds, so full synchronization remains.
-- The resumed current-worktree baseline was 273.59 milliseconds. The host
-  sampler did not check shutdown during its initial CPU sampling wait.
-  Making that wait cancellable reduced the median to 29.62 milliseconds;
-  a fully validated repeat measured 30.06 milliseconds. Full workspace
-  tests, strict workspace Clippy, and ShellSpec passed. The initial select
-  uses a unit pattern for its sleep branch to satisfy strict linting.
-- Connected-only sampling failed to improve timing in two trials. Sharing
-  one reporting configuration snapshot, lightweight digest-position
-  deserialization, and overlapping receipt or tracker work with reporting
-  preflight also failed to beat the retained median.
-- Whole-program release LTO improved version-only startup to 4.60
-  milliseconds but not local-hit latency, so thin LTO remains. Simple
-  default tracing target filters likewise did not improve local hits.
-- Counterbalanced diagnostic runs measured roughly 7.32 milliseconds of
-  benchmark-wrapper overhead, 4.20 milliseconds of event preflight, and
-  7.75 milliseconds of receipt/tracker work. The wrapper is not an
-  optimization target. Temporary startup instrumentation measured only
-  0.037 milliseconds of argument parsing and 0.286 milliseconds of
-  logging initialization, so neither explains the remaining startup gap.
-- HTTP discovery still needs HTTPS-proxy trust. Do not disable TLS roots
-  merely because the discovery endpoint is HTTP. The pinned reqwest 0.13
-  API differs from the older TLS-root builder API.
-- Resumed logs, ideas, diagnostics, and stricter correctness checks now
-  live under `.auto/`. Its checks wrapper retains the original focused
-  checks and adds sampler and reporter regressions plus strict CLI Clippy.
-- Deferring the dedicated event runtime initially appeared to reduce the
-  median to 26.27 and 24.24 milliseconds. Fresh paired controls in both
-  measurement orders disproved that attribution: original ordering measured
-  28.75 and 28.72 milliseconds versus 28.85 and 29.13 milliseconds with
-  deferral. The apparent historical gain was host drift. Removing the
-  unproven deferral then measured 28.99 milliseconds against a fresh
-  29.25-millisecond deferral control. Retain the simpler original ordering
-  and the independently validated sampler cancellation fix.
-- Discovery profiling measured 2.379 milliseconds of client construction
-  and 0.890 milliseconds for the request. Platform TLS verifier construction
-  is trivial on this host; transitive dependencies enable system proxy
-  support. Do not disable TLS or proxy semantics to chase this cost.
-- Disabling discovery idle pooling did not improve the median. Lowering
-  release optimization to level 2 also failed. Async future diagnostics
-  measured only 704 bytes for dispatch and 13,376 bytes for the command
-  future, so speculative boxing or routing redesign is not justified.
-- Historical minima around 24 milliseconds and later controls around
-  29 milliseconds are not directly comparable. A runtime deferral candidate
-  was initially kept but removed after paired validation failed. Confidence
-  against the original 250-millisecond sampler stall must not be attributed
-  to these much smaller candidates.
 
 ## Primary Research
 
