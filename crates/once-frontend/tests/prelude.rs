@@ -38,6 +38,9 @@ mod test_result_adapters;
 #[path = "prelude/apple_modules.rs"]
 mod apple_modules;
 
+#[path = "prelude/apple_linux.rs"]
+mod apple_linux;
+
 #[path = "prelude/native_graphs.rs"]
 mod native_graphs;
 
@@ -133,9 +136,10 @@ fn fake_android_ndk_for_mobile_test(workspace: &Path) -> std::path::PathBuf {
 
 fn apple_prelude_source() -> String {
     format!(
-        "{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\ndef host_os():\n    return \"macos\"\n",
         include_str!("../prelude/common.star"),
         include_str!("../prelude/apple_modules.star"),
+        include_str!("../prelude/apple_linux.star"),
         include_str!("../prelude/apple.star")
     )
 }
@@ -177,10 +181,8 @@ fn go_prelude_source() -> String {
 
 fn xcode_prelude_source() -> String {
     format!(
-        "{}\n{}\n{}\n{}",
-        include_str!("../prelude/common.star"),
-        include_str!("../prelude/apple_modules.star"),
-        include_str!("../prelude/apple.star"),
+        "{}\n{}",
+        apple_prelude_source(),
         include_str!("../prelude/xcode.star")
     )
 }

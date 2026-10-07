@@ -172,6 +172,8 @@ def _xctoolchain_bin(xcode_developer_dir, name):
 # `xcrun --find` / `--show-sdk-path` for discovery but the cached
 # action argv contains only the resolved tool path.
 def _resolve_swiftc(platform, sdk_variant, xcode_developer_dir):
+    if host_os() == "linux":
+        return _apple_linux_swiftc(platform, sdk_variant, xcode_developer_dir)
     sdk = _apple_sdk_name(platform, sdk_variant)
     env = _developer_env(xcode_developer_dir)
     if xcode_developer_dir:
@@ -214,6 +216,8 @@ def _filter_assembly_sources(paths):
     return _filter_by_extensions(paths, [".s", ".S"])
 
 def _resolve_clang(platform, sdk_variant, xcode_developer_dir):
+    if host_os() == "linux":
+        return _apple_linux_clang(platform, sdk_variant, xcode_developer_dir)
     sdk = _apple_sdk_name(platform, sdk_variant)
     env = _developer_env(xcode_developer_dir)
     if xcode_developer_dir:
@@ -238,6 +242,8 @@ def _resolve_clang(platform, sdk_variant, xcode_developer_dir):
     }
 
 def _resolve_libtool(platform, sdk_variant, xcode_developer_dir):
+    if host_os() == "linux":
+        return _apple_linux_tool("libtool", platform, sdk_variant, xcode_developer_dir)
     sdk = _apple_sdk_name(platform, sdk_variant)
     env = _developer_env(xcode_developer_dir)
     if xcode_developer_dir:
@@ -254,6 +260,8 @@ def _resolve_libtool(platform, sdk_variant, xcode_developer_dir):
     }
 
 def _resolve_lipo(platform, sdk_variant, xcode_developer_dir):
+    if host_os() == "linux":
+        return _apple_linux_tool("lipo", platform, sdk_variant, xcode_developer_dir)
     sdk = _apple_sdk_name(platform, sdk_variant)
     env = _developer_env(xcode_developer_dir)
     if xcode_developer_dir:
@@ -270,6 +278,14 @@ def _resolve_lipo(platform, sdk_variant, xcode_developer_dir):
     }
 
 def _resolve_codesign(xcode_developer_dir):
+    if host_os() == "linux":
+        path = host_which("rcodesign")
+        return {
+            "codesign_path": path,
+            "backend": "rcodesign",
+            "identity": "once.apple.rcodesign.v1\x00" + path + "\x00" + host_file_sha256(path),
+            "env": {"PATH": "/usr/bin:/bin"},
+        }
     env = _developer_env(xcode_developer_dir)
     # codesign is a system tool, not a toolchain binary under
     # DEVELOPER_DIR. Resolve it through xcrun so signing does not
@@ -294,6 +310,8 @@ def _resolve_derq(xcode_developer_dir):
     }
 
 def _resolve_actool(xcode_developer_dir):
+    if host_os() == "linux":
+        return _apple_linux_resource_tool("actool", xcode_developer_dir)
     env = _developer_env(xcode_developer_dir)
     xcrun = host_which("xcrun")
     actool_path = host_command([xcrun, "--find", "actool"], env = env).strip()
@@ -305,12 +323,16 @@ def _resolve_actool(xcode_developer_dir):
     }
 
 def _resolve_momc(xcode_developer_dir):
+    if host_os() == "linux":
+        return _apple_linux_resource_tool("momc", xcode_developer_dir)
     env = _developer_env(xcode_developer_dir)
     xcrun = host_which("xcrun")
     path = host_command([xcrun, "--find", "momc"], env = env).strip()
     return {"path": path, "env": env, "identity": "once.apple.momc.v1\x00" + path + "\x00" + (xcode_developer_dir or "")}
 
 def _resolve_ibtool(xcode_developer_dir):
+    if host_os() == "linux":
+        return _apple_linux_resource_tool("ibtool", xcode_developer_dir)
     env = _developer_env(xcode_developer_dir)
     if xcode_developer_dir:
         path = xcode_developer_dir + "/usr/bin/ibtool"
@@ -320,6 +342,8 @@ def _resolve_ibtool(xcode_developer_dir):
     return {"path": path, "env": env, "identity": "once.apple.ibtool.v1\x00" + path + "\x00" + version + "\x00" + (xcode_developer_dir or "")}
 
 def _resolve_intentbuilderc(xcode_developer_dir):
+    if host_os() == "linux":
+        fail("Intent definition code generation requires macOS; provide generated sources when building on Linux")
     env = _developer_env(xcode_developer_dir)
     xcrun = host_which("xcrun")
     path = host_command([xcrun, "--find", "intentbuilderc"], env = env).strip()
@@ -338,6 +362,8 @@ def _apple_actool_platform(platform, sdk_variant):
     return "iphoneos" if device else "iphonesimulator"
 
 def _resolve_apple_thinning_tools(xcode_developer_dir):
+    if host_os() == "linux":
+        fail("Apple app thinning requires Xcode on macOS; build the application bundle on Linux without apple_thinned_package")
     env = _developer_env(xcode_developer_dir)
     xcrun = host_which("xcrun")
     if xcode_developer_dir:
@@ -1143,7 +1169,7 @@ def _apple_config_tokens(ctx, attrs, label_id):
         tokens.append(sdk_variant)
     archs = attrs.get("archs")
     if archs == None or (type(archs) == "list" and len(archs) == 0):
-        archs = [host_arch()]
+        archs = [_apple_default_arch(platform, sdk_variant or "simulator")]
     if type(archs) == "list":
         for arch in archs:
             if type(arch) == "string" and arch not in tokens:
@@ -1197,6 +1223,11 @@ def _resolve_attrs(ctx, attrs, label_id, non_configurable):
         if key in non_configurable and _is_select_shape(value):
             fail(label_id + ": attribute `" + key + "` is not configurable but uses select()")
         out[key] = _resolve_select(value, tokens, label_id, key)
+    if host_os() == "linux":
+        if out.get("mac_catalyst"):
+            fail(label_id + ": Mac Catalyst is not supported by the Linux Darwin SDK; set mac_catalyst = false")
+        if out.get("swift_testing") or out.get("xctest_support"):
+            fail(label_id + ": Apple testing frameworks require macOS; set swift_testing = false and xctest_support = false for Linux builds")
     return out
 
 def _attr_has_value(value):
@@ -1777,7 +1808,7 @@ def _apple_library_impl(ctx):
         fail("apple_library " + ctx["label"]["id"] + " has no compilable sources (.swift/.m/.mm/.c/.cc/.cpp/.cxx/.s/.S)")
 
     archs_attr = attrs.get("archs") or []
-    archs = archs_attr if len(archs_attr) > 0 else [host_arch()]
+    archs = archs_attr if len(archs_attr) > 0 else [_apple_default_arch(platform, sdk_variant)]
     _reject_multi_arch_selects(ctx["attr"], ctx["label"]["id"], archs)
     mac_catalyst = attrs.get("mac_catalyst") or False
     if mac_catalyst and platform != "macos" and platform != "macosx":
@@ -2736,6 +2767,10 @@ def _apple_clang_profile_runtime(platform, sdk_variant, xcode_developer_dir):
         return ""
     device_suffix, simulator_suffix = suffixes
     suffix = simulator_suffix if sdk_variant == "simulator" and platform != "macos" else device_suffix
+    if host_os() == "linux":
+        sdk = _apple_linux_sdk(platform, sdk_variant, xcode_developer_dir)
+        path = sdk["resource_dir"] + "/clang/lib/darwin/libclang_rt.profile_" + suffix + ".a"
+        return path if host_file_exists(path) else ""
     env = {"DEVELOPER_DIR": xcode_developer_dir} if xcode_developer_dir else {}
     # Resolved fail-soft: a hermetic or mocked toolchain without these lookup
     # commands simply links without the runtime, as before.
@@ -2888,6 +2923,8 @@ def _apple_xcframework_import_impl(ctx):
     }
 
 def _swift_macro_impl(ctx):
+    if host_os() == "linux":
+        fail(ctx["label"]["id"] + ": swift_macro currently requires macOS; provide a Linux compiler plugin through binary_swift_plugins instead")
     attrs = _resolve_attrs(ctx, ctx["attr"], ctx["label"]["id"], ["module_name"])
     minimum_os = attrs.get("minimum_os") or "13.0"
     xcode_developer_dir = attrs.get("xcode_developer_dir") or ""
@@ -3724,7 +3761,7 @@ def _apple_mixed_framework_impl(ctx):
     framework_swiftmodules = []
 
     swiftc = _resolve_swiftc(platform, sdk_variant, xcode_developer_dir)
-    triple = _apple_triple(platform, target_sdk_version, sdk_variant, host_arch(), attrs.get("mac_catalyst") or False)
+    triple = _apple_triple(platform, target_sdk_version, sdk_variant, _apple_default_arch(platform, sdk_variant), attrs.get("mac_catalyst") or False)
     link_argv = list(swiftc["argv"]) + [
         "-emit-library",
         "-module-name",
@@ -3800,7 +3837,7 @@ def _apple_mixed_framework_impl(ctx):
 
     all_srcs = _unique(glob(ctx["srcs"]) + _apple_declared_source_paths(ctx))
     if _filter_swift_sources(all_srcs):
-        archs = attrs.get("archs") or [host_arch()]
+        archs = attrs.get("archs") or [_apple_default_arch(platform, sdk_variant)]
         is_universal = len(archs) > 1
         for arch in archs:
             if is_universal:
@@ -3903,7 +3940,7 @@ def _apple_mixed_framework_impl(ctx):
     run_action(
         display_name = "Sign framework · " + ctx["label"]["name"],
         source_files = _action_source_files(framework_files),
-        argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", framework_path],
+        argv = _apple_codesign_argv(codesign, framework_path),
         inputs = framework_files,
         outputs = [dylib, cs_stamp],
         env = codesign["env"],
@@ -3980,10 +4017,7 @@ def _apple_framework_impl(ctx):
     if len(swift_srcs) == 0:
         fail("apple_framework " + ctx["label"]["id"] + " has no Swift sources (.swift)")
 
-    # MVP: single host architecture. Multi-arch fan-out for frameworks
-    # lands in a follow-up; today the same machinery as `apple_library`
-    # can be wired in but the demo path doesn't need it.
-    arch = host_arch()
+    arch = _apple_default_arch(platform, sdk_variant)
     swiftc = _resolve_swiftc(platform, sdk_variant, xcode_developer_dir)
     triple = _apple_triple(platform, target_sdk_version, sdk_variant, arch, False)
 
@@ -4167,7 +4201,7 @@ def _apple_framework_impl(ctx):
     run_action(
         display_name = "Sign framework · " + ctx["label"]["name"],
         source_files = _action_source_files(_unique([dylib, info_plist, modulemap, swiftmodule] + swift_module_sidecars + script_outputs)),
-        argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", ctx["build_dir"] + "/" + framework_dir],
+        argv = _apple_codesign_argv(codesign, ctx["build_dir"] + "/" + framework_dir),
         inputs = _unique([dylib, info_plist, modulemap, swiftmodule] + swift_module_sidecars + script_outputs),
         outputs = [dylib, cs_stamp],
         env = codesign["env"],
@@ -4262,7 +4296,7 @@ def _apple_embed_framework_bundles(ctx, deps, bundle_dir, frameworks_dir, codesi
         run_action(
             display_name = "Sign embedded framework · " + ctx["label"]["name"],
             source_files = _action_source_files([embedded_framework_path]),
-            argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", embedded_framework_path],
+            argv = _apple_codesign_argv(codesign, embedded_framework_path),
             inputs = [embedded_framework_path],
             outputs = embed_outputs,
             env = codesign["env"],
@@ -4306,7 +4340,7 @@ def _apple_embed_resource_bundles(ctx, deps, bundle_dir, codesign, identifier_pr
         run_action(
             display_name = "Sign resource bundle · " + ctx["label"]["name"],
             source_files = _action_source_files([embedded_path]),
-            argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", embedded_path],
+            argv = _apple_codesign_argv(codesign, embedded_path),
             inputs = [embedded_path],
             outputs = [embedded_path, embedded_stamp],
             env = codesign["env"],
@@ -4687,13 +4721,15 @@ def _apple_application_impl(ctx):
             identifier = "apple_application_assets_" + product_name,
         )
 
-    arch = host_arch()
+    arch = _apple_default_arch(platform, sdk_variant)
     swiftc = _resolve_swiftc(platform, sdk_variant, xcode_developer_dir)
     triple = _apple_triple(platform, target_sdk_version, sdk_variant, arch, False)
 
     app_dir = product_name + ".app"
     app_path = ctx["build_dir"] + "/" + app_dir
     if ctx["capability"] == "run":
+        if host_os() == "linux":
+            fail(ctx["label"]["id"] + ": Linux builds produce an ad-hoc signed application; provision, re-sign, install and launch it with xtool or omarchy-apple-dev's device-run.sh. Simulator execution requires macOS")
         run_dir = ctx["build_dir"] + "/run"
         run_record = run_dir + "/run.json"
         run_log = run_dir + "/run.log"
@@ -5207,11 +5243,10 @@ def _apple_application_impl(ctx):
     script_outputs = _apple_run_postbuild_actions(ctx, attrs, _unique(cs_inputs + embedded_frameworks["files"] + embedded_resource_bundles["files"]), app_path)
     cs_inputs = _unique(cs_inputs + script_outputs)
     resource_files = _unique(resource_files + script_outputs)
-    codesign_argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none"]
-    if processed_entitlements and not embeds_simulator_entitlements:
-        codesign_argv.extend(["--entitlements", processed_entitlements])
-        cs_inputs.append(processed_entitlements)
-    codesign_argv.append(ctx["build_dir"] + "/" + app_dir)
+    signing_entitlements = processed_entitlements if processed_entitlements and not embeds_simulator_entitlements else ""
+    codesign_argv = _apple_codesign_argv(codesign, ctx["build_dir"] + "/" + app_dir, signing_entitlements)
+    if signing_entitlements:
+        cs_inputs.append(signing_entitlements)
     run_action(
         display_name = "Sign application · " + ctx["label"]["name"],
         source_files = _action_source_files(cs_inputs),
@@ -5501,6 +5536,8 @@ def _apple_thinned_package_impl(ctx):
     }
 
 def _apple_test_bundle_impl(ctx):
+    if host_os() == "linux":
+        fail(ctx["label"]["id"] + ": apple_test_bundle requires macOS test runtimes; Linux supports cross-compiling applications and libraries only")
     attrs = _resolve_attrs(ctx, ctx["attr"], ctx["label"]["id"], ["product_name"])
     _reject_unsupported_attrs(attrs, ctx["label"]["id"], ["test_host", "entitlements", "destination", "test_plan"])
     platform = attrs["platform"]
@@ -6657,6 +6694,8 @@ def _swift_package_pin_impl(ctx):
     }
 
 def _swift_package_dependencies_impl(ctx):
+    if host_os() == "linux":
+        fail(ctx["label"]["id"] + ": Swift package delegation is not supported by the Linux Apple toolchain; declare native apple_library dependencies instead")
     attrs = ctx["attr"]
     platform = attrs.get("platform") or "macos"
     minimum_os = attrs.get("minimum_os") or "13.0"
@@ -6966,9 +7005,9 @@ apple_library = target_kind(
         attr("library_evolution", "bool", default = "false", docs = "Emit stable Swift module interfaces for binary compatibility"),
         attr("emit_dsym", "bool", default = "false", docs = "Emit DWARF debug info so downstream target kinds can extract a `.dSYM` bundle"),
         attr("sdk_variant", "string", default = "\"simulator\"", docs = "`simulator` or `device` SDK selection. Ignored on macOS (always uses macosx)", configurable = False),
-        attr("archs", "list<string>", default = "[]", docs = "Target architectures (`arm64`, `x86_64`, `arm64e`, `arm64_32`). Empty defaults to the host arch; multi-arch fans out per-arch compiles and combines them with `lipo`", configurable = False),
+        attr("archs", "list<string>", default = "[]", docs = "Target architectures (`arm64`, `x86_64`, `arm64e`, `arm64_32`). Empty defaults to arm64 for iOS device builds on Linux and the host arch otherwise; multi-arch fans out per-arch compiles and combines them with `lipo`", configurable = False),
         attr("mac_catalyst", "bool", default = "false", docs = "Build the iOSMac (Mac Catalyst) variant. Requires `platform = macos`; rewrites the triple to `<arch>-apple-ios<minOS>-macabi`", configurable = False),
-        attr("xcode_developer_dir", "string", docs = "Pin a specific Xcode by overriding `DEVELOPER_DIR`. Folded into the action cache key"),
+        attr("xcode_developer_dir", "string", docs = "Pin Xcode's Developer directory on macOS or an xtool Darwin SDK's Developer directory on Linux. Linux defaults to the registered darwin Swift SDK; the selection contributes to action cache identity."),
         attr("alwayslink", "bool", default = "false", docs = "Hint to downstream linker target kinds to force-load this archive (`-Wl,-force_load`)"),
         attr("exported_deps", "list<string>", default = "[]", docs = "Target IDs from `deps` whose module interface flows through to consumers' compile path"),
         attr("bridging_header", "string", docs = "ObjC bridging header that lets Swift sources see ObjC symbols (`-import-objc-header`)"),
@@ -7054,7 +7093,7 @@ apple_framework = target_kind(
         attr("minimum_os", "string", docs = "Minimum supported OS version"),
         attr("target_sdk_version", "string", docs = "Build-time SDK version baked into the triple. Defaults to `minimum_os`"),
         attr("sdk_variant", "string", default = "\"simulator\"", docs = "`simulator` or `device` SDK selection. Ignored on macOS", configurable = False),
-        attr("xcode_developer_dir", "string", docs = "Pin a specific Xcode by overriding `DEVELOPER_DIR`. Folded into the action cache key"),
+        attr("xcode_developer_dir", "string", docs = "Pin Xcode's Developer directory on macOS or an xtool Darwin SDK's Developer directory on Linux. Linux defaults to the registered darwin Swift SDK; the selection contributes to action cache identity."),
         attr("bundle_id", "string", docs = "Framework bundle identifier"),
         attr("product_name", "string", docs = "Framework product name. Defaults to the target name", configurable = False),
         attr("module_name", "string", docs = "Swift module name. Defaults to `product_name`"),
@@ -7167,13 +7206,15 @@ def _apple_executable_impl(ctx):
     if len(non_swift_srcs) > 0:
         fail("apple_executable " + ctx["label"]["id"] + " has non-Swift sources; the current draft supports Swift-only tool targets. Move Objective-C/C/C++ sources into an apple_library dependency, or file a follow-up to extend apple_executable.")
 
-    arch = host_arch()
+    arch = _apple_default_arch(platform, sdk_variant)
     swiftc = _resolve_swiftc(platform, sdk_variant, xcode_developer_dir)
     triple = _apple_triple(platform, target_sdk_version, sdk_variant, arch, False)
     executable = declare_output(product_name)
     compile_module_cache = ctx["build_dir"] + "/ModuleCache/Compile"
 
     if ctx["capability"] == "run":
+        if host_os() == "linux":
+            fail(ctx["label"]["id"] + ": Apple executables cannot run on Linux; build the target and run it on its destination platform")
         run_dir = ctx["build_dir"] + "/run"
         run_record = run_dir + "/run.json"
         run_log = run_dir + "/run.log"
@@ -7349,7 +7390,7 @@ def _apple_executable_impl(ctx):
     prepackage_outputs = _apple_run_prepackage_actions(ctx, attrs, [executable])
 
     codesign = _resolve_codesign(xcode_developer_dir)
-    codesign_argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none", executable]
+    codesign_argv = _apple_codesign_argv(codesign, executable)
 
     # Deploy dependency frameworks and resource bundles into the same
     # directory as the executable. Framework install names use
@@ -7419,7 +7460,7 @@ apple_executable = target_kind(
         attr("minimum_os", "string", docs = "Minimum supported OS version"),
         attr("target_sdk_version", "string", docs = "Build-time SDK version baked into the triple. Defaults to `minimum_os`"),
         attr("sdk_variant", "string", default = "\"simulator\"", docs = "`simulator` or `device` SDK selection. Ignored on macOS", configurable = False),
-        attr("xcode_developer_dir", "string", docs = "Pin a specific Xcode by overriding `DEVELOPER_DIR`. Folded into the action cache key"),
+        attr("xcode_developer_dir", "string", docs = "Pin Xcode's Developer directory on macOS or an xtool Darwin SDK's Developer directory on Linux. Linux defaults to the registered darwin Swift SDK; the selection contributes to action cache identity."),
         attr("product_name", "string", docs = "Executable product name. Defaults to the target name", configurable = False),
         attr("module_name", "string", docs = "Swift module name. Defaults to the product name", configurable = False),
         attr("sdk_frameworks", "list<string>", default = "[]", docs = "Apple SDK frameworks linked by name"),
@@ -7472,7 +7513,7 @@ apple_application = target_kind(
         attr("minimum_os", "string", docs = "Minimum supported OS version"),
         attr("target_sdk_version", "string", docs = "Build-time SDK version baked into the triple. Defaults to `minimum_os`"),
         attr("sdk_variant", "string", default = "\"simulator\"", docs = "`simulator` or `device` SDK selection. Ignored on macOS", configurable = False),
-        attr("xcode_developer_dir", "string", docs = "Pin a specific Xcode by overriding `DEVELOPER_DIR`. Folded into the action cache key"),
+        attr("xcode_developer_dir", "string", docs = "Pin Xcode's Developer directory on macOS or an xtool Darwin SDK's Developer directory on Linux. Linux defaults to the registered darwin Swift SDK; the selection contributes to action cache identity."),
         attr("families", "list<string>", default = "[]", docs = "Supported device families, such as iphone or ipad"),
         attr("product_name", "string", docs = "Application product name. Defaults to the target name", configurable = False),
         attr("module_name", "string", docs = "Swift module name. Defaults to the product name", configurable = False),
@@ -7525,6 +7566,12 @@ apple_application = target_kind(
             "apple-application-minimal",
             name = "Minimal iOS application",
             use_when = "You want the smallest viable iOS app target wired into a Once workspace.",
+        ),
+        example(
+            "apple-application-linux",
+            name = "iOS application cross-compiled on Linux",
+            use_when = "You have Swift, an xtool Darwin SDK and rcodesign on Linux and want an iOS device application linked with a reusable Swift library.",
+            platforms = ["linux"],
         ),
         example(
             "native-mobile-shared-code-e2e",

@@ -16,8 +16,8 @@ derived for you.
 
 ## Prerequisites
 
-Apple targets require a macOS host with the Apple developer tools used by
-`xcrun`, `swiftc`, and `clang`. Verify that the Swift compiler is available:
+On macOS, Apple targets use the developer tools selected by `xcrun`, `swiftc`,
+and `clang`. Verify that the Swift compiler is available:
 
 ```sh
 xcrun --find swiftc
@@ -25,6 +25,11 @@ xcrun --find swiftc
 
 Running this guide's iOS application also requires an installed Simulator
 runtime. Building a library does not require a running simulator.
+
+Linux can cross-compile native Apple targets using Swift, xtool's Darwin SDK,
+and Linux resource and signing tools. See [Build iOS Applications on
+Linux](/guide/graph/apple/linux) for installation, a runnable starter, and the
+boundaries between building, provisioning, and device deployment.
 
 ## Explicit Modules and Dependency Checks
 
@@ -69,7 +74,8 @@ interface invalidates the corresponding module action. Existing projects keep
 implicit modules by default.
 
 This is not a downloadable hermetic Apple toolchain. Builds still require the
-selected Xcode installation, and cached scanner commands retain its host paths.
+selected Xcode installation on macOS or the installed Darwin SDK on Linux,
+and cached scanner commands retain their host paths.
 Module inputs outside the workspace and the identified development-kit and
 toolchain directories are rejected instead of being silently omitted from
 cache identity. Move such dependencies into the workspace or use implicit

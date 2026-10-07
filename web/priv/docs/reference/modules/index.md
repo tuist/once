@@ -13,6 +13,19 @@ available across families; toolchain-specific helpers do not need to be loaded
 for unrelated targets. This keeps analysis work proportional to the graph
 without changing the schemas available through discovery.
 
+Built-in Apple target kinds use Xcode tool discovery on macOS and the registered
+xtool Darwin Swift SDK on Linux. The existing `xcode_developer_dir` attribute
+pins Xcode's `Developer` directory on macOS or a Darwin SDK bundle's `Developer`
+directory on Linux. Linux iOS device targets default to ARM64, independently of
+host architecture; `archs` still overrides library architectures. Compiler,
+SDK, resource-tool, and environment identities partition Linux action caches.
+Signing actions invoke `rcodesign` with ad-hoc signing and no timestamp service.
+Providers, action declarations, and resource budgeting are unchanged. The
+Linux starter is discoverable through `once query example apple_application
+apple-application-linux`, and the same example is available through MCP.
+See [Build iOS Applications on Linux](/guide/graph/apple/linux) for setup and
+unsupported macOS runtime and resolver workflows.
+
 ## Loading Project Modules
 
 Project modules are listed from the root manifest:

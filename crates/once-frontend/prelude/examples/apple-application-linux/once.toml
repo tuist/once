@@ -1,0 +1,21 @@
+[[target]]
+name = "Core"
+kind = "apple_library"
+srcs = ["Sources/Core/*.swift"]
+
+[target.attrs]
+platform = "ios"
+sdk_variant = "device"
+minimum_os = "17.0"
+
+[[target]]
+name = "Hello"
+kind = "apple_application"
+srcs = ["Sources/Hello/*.swift"]
+deps = ["Core"]
+
+[target.attrs]
+platform = "ios"
+sdk_variant = "device"
+minimum_os = "17.0"
+bundle_id = "dev.once.hello"

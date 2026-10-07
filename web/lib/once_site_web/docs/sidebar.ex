@@ -113,6 +113,7 @@ defmodule OnceSiteWeb.Docs.Sidebar do
             icon: "apple",
             items: [
               %Item{label: "Xcode Projects", slug: "/docs/guide/graph/apple/xcode"},
+              %Item{label: "Build on Linux", slug: "/docs/guide/graph/apple/linux"},
               %Item{label: "Swift Packages", slug: "/docs/guide/graph/swift-packages"}
             ]
           },
