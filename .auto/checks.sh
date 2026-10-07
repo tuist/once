@@ -3,4 +3,5 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ./autoresearch.checks.sh
 mise exec -- cargo test --quiet -p once-cli bus_events::tests --bin once
+mise exec -- cargo test --quiet -p once-cli live_run_reporter::tests --bin once
 mise exec -- cargo clippy --quiet -p once-cli --all-targets -- -D warnings

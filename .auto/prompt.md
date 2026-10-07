@@ -21,6 +21,14 @@ local action cache, and measures 40 fresh command invocations after five warmup
 runs. It starts the local benchmark server only when needed to populate an empty
 client cache.
 
+Use `./.auto/paired-runtime.sh control-first <control-commit>` for fresh
+paired comparisons, or `treatment-first` to reverse the order. Both
+executables use the original fixture, runner, five warmups, and 40 measured
+invocations. The primary remains `local_hit_ms`; `control_local_hit_ms`
+records the matched control. Prefer these paired controls over historical
+minimums when host load changes. Process-only timings help detect host drift,
+not claim a performance gain.
+
 ## Files in Scope
 
 - `crates/once-cli/src/main.rs`: process runtime and command dispatch
@@ -126,7 +134,28 @@ client cache.
   API differs from the older TLS-root builder API.
 - Resumed logs, ideas, diagnostics, and stricter correctness checks now
   live under `.auto/`. Its checks wrapper retains the original focused
-  checks and adds sampler regressions plus strict CLI Clippy.
+  checks and adds sampler and reporter regressions plus strict CLI Clippy.
+- Deferring the dedicated event runtime initially appeared to reduce the
+  median to 26.27 and 24.24 milliseconds. Fresh paired controls in both
+  measurement orders disproved that attribution: original ordering measured
+  28.75 and 28.72 milliseconds versus 28.85 and 29.13 milliseconds with
+  deferral. The apparent historical gain was host drift. Removing the
+  unproven deferral then measured 28.99 milliseconds against a fresh
+  29.25-millisecond deferral control. Retain the simpler original ordering
+  and the independently validated sampler cancellation fix.
+- Discovery profiling measured 2.379 milliseconds of client construction
+  and 0.890 milliseconds for the request. Platform TLS verifier construction
+  is trivial on this host; transitive dependencies enable system proxy
+  support. Do not disable TLS or proxy semantics to chase this cost.
+- Disabling discovery idle pooling did not improve the median. Lowering
+  release optimization to level 2 also failed. Async future diagnostics
+  measured only 704 bytes for dispatch and 13,376 bytes for the command
+  future, so speculative boxing or routing redesign is not justified.
+- Historical minima around 24 milliseconds and later controls around
+  29 milliseconds are not directly comparable. A runtime deferral candidate
+  was initially kept but removed after paired validation failed. Confidence
+  against the original 250-millisecond sampler stall must not be attributed
+  to these much smaller candidates.
 
 ## Primary Research
 

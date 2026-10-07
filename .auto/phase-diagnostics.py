@@ -36,7 +36,7 @@ if os.uname().sysname == "Darwin":
     logs = Path.home() / "Library/Logs/Once"
 else:
     logs = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "once/logs"
-phases = {"session_ms": [], "preflight_ms": [], "receipt_ms": [], "parse_ms": [], "logging_ms": []}
+phases = {"session_ms": [], "preflight_ms": [], "receipt_ms": [], "parse_ms": [], "logging_ms": [], "discovery_client_ms": [], "discovery_request_ms": []}
 for path in heapq.nlargest(80, logs.glob("*.log")):
     if path.stat().st_mtime < started:
         continue
@@ -54,6 +54,10 @@ for path in heapq.nlargest(80, logs.glob("*.log")):
         for source, target in [("parse_us", "parse_ms"), ("logging_us", "logging_ms")]:
             if source in startup:
                 phases[target].append(float(startup[source]) / 1000)
+    if "discovery request completed" in messages:
+        discovery = messages["discovery request completed"]["fields"]
+        phases["discovery_client_ms"].append(float(discovery["client_init_us"]) / 1000)
+        phases["discovery_request_ms"].append(float(discovery["request_us"]) / 1000)
     if "Once live reporter: no events endpoint configured" in messages:
         preflight = stamp("Once live reporter: no events endpoint configured")
         phases["preflight_ms"].append((preflight - stamp("session started")) * 1000)
