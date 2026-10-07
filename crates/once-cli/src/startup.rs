@@ -27,8 +27,9 @@ pub(crate) async fn run() -> ExitCode {
     let logging = logging::init(cli.verbose);
     let session_id = logging.session_id();
     let log_path = log_path(&logging);
-    let session = tracing::info_span!("once_session", session_id = %session_id);
+    let session = tracing::info_span!(target: "once", "once_session", session_id = %session_id);
     tracing::info!(
+        target: "once",
         session_id = %session_id,
         command = if command.is_empty() {
             "help"
@@ -45,11 +46,11 @@ pub(crate) async fn run() -> ExitCode {
     once_frontend::flush_host_tree_digest_caches();
     let code = match outcome {
         Ok(code) => {
-            tracing::info!(session_id = %session_id, exit_code = ?code, "session finished");
+            tracing::info!(target: "once", session_id = %session_id, exit_code = ?code, "session finished");
             code
         }
         Err(e) => {
-            tracing::error!(session_id = %session_id, error = %e, "session failed");
+            tracing::error!(target: "once", session_id = %session_id, error = %e, "session failed");
             sound::emit(sound::Event::Failed);
             errors::write_dispatch_error(format, verbose, &e);
             ExitCode::from(2)
@@ -93,6 +94,7 @@ fn handle_parse_error(argv: &[&OsStr], error: &Error<'static, '_>) -> ExitCode {
         }
     };
     tracing::info!(
+        target: "once",
         session_id = %logging.session_id(),
         log_path,
         exit_code = ?code,
@@ -118,6 +120,7 @@ fn handle_incomplete_command(path: &[&str]) -> ExitCode {
         }
     }
     tracing::info!(
+        target: "once",
         session_id = %logging.session_id(),
         log_path,
         exit_code = ?code,

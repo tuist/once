@@ -7,7 +7,7 @@ pub(crate) fn write_dispatch_error(format: cli::Format, verbose: u8, error: &any
     if format == cli::Format::Human {
         let body = format_human_error(verbose, error);
         if let Err(write_error) = std::io::stderr().write_all(body.as_bytes()) {
-            tracing::error!(error = %write_error, "failed to write human error");
+            tracing::error!(target: "once", error = %write_error, "failed to write human error");
         }
         return;
     }
@@ -15,7 +15,7 @@ pub(crate) fn write_dispatch_error(format: cli::Format, verbose: u8, error: &any
     // command's structured result and stays safe to pipe into a JSON consumer.
     let body = structured_dispatch_error(format, error);
     if let Err(write_error) = std::io::stderr().write_all(body.as_bytes()) {
-        tracing::error!(error = %write_error, "failed to write structured error");
+        tracing::error!(target: "once", error = %write_error, "failed to write structured error");
     }
 }
 
