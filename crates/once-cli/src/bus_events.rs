@@ -39,10 +39,12 @@ pub fn spawn_system_sampler(bus: &once_core::RunEventBus) -> SystemSamplerHandle
 
         // sysinfo's CPU usage needs two refreshes to compute a delta.
         system.refresh_cpu_usage();
-        tokio::time::sleep(
-            sysinfo::MINIMUM_CPU_UPDATE_INTERVAL + std::time::Duration::from_millis(50),
-        )
-        .await;
+        tokio::select! {
+            _ = tokio::time::sleep(
+                sysinfo::MINIMUM_CPU_UPDATE_INTERVAL + std::time::Duration::from_millis(50),
+            ) => {}
+            _ = &mut shutdown_rx => return,
+        }
 
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -543,6 +545,33 @@ pub fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn system_sampler_stops_during_initial_cpu_wait() {
+        let bus = RunEventBus::new(4);
+        let mut rx = bus.subscribe();
+        let sampler = spawn_system_sampler(&bus);
+        tokio::task::yield_now().await;
+
+        tokio::time::timeout(std::time::Duration::from_millis(100), sampler.stop())
+            .await
+            .expect("shutdown must interrupt the initial CPU sampling wait");
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn system_sampler_publishes_for_longer_runs() {
+        let bus = RunEventBus::new(4);
+        let mut rx = bus.subscribe();
+        let sampler = spawn_system_sampler(&bus);
+
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("sampler must publish after its initial CPU sampling wait")
+            .unwrap();
+        assert!(matches!(event, RunEvent::SystemSampled { .. }));
+        sampler.stop().await;
+    }
 
     #[tokio::test]
     async fn helpers_fire_expected_events() {
