@@ -25,7 +25,6 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
-        .event_interval(1)
         .build()
         .expect("initialize Once runtime")
         .block_on(startup::run())
