@@ -12,8 +12,6 @@
 //! would have. A second signal ends it immediately. Runs that never reach the
 //! event service keep the default signal behavior.
 
-mod readiness;
-
 use std::io::Write as _;
 use std::path::Path;
 use std::time::Duration;
@@ -90,6 +88,7 @@ pub async fn spawn(
     let bus_rx = bus.subscribe();
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let (ready_tx, ready_rx) = oneshot::channel();
+    let system_sampler = crate::bus_events::spawn_system_sampler(bus);
 
     let handle = tokio::task::spawn_blocking(move || {
         let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
@@ -230,13 +229,11 @@ pub async fn spawn(
         })
     });
 
-    let sample_host = readiness::should_sample_host(
-        &tokio::time::timeout(Duration::from_secs(12), ready_rx).await,
-    );
+    let _ = tokio::time::timeout(Duration::from_secs(12), ready_rx).await;
     LiveRunReporter {
         handle,
         shutdown: Some(shutdown_tx),
-        system_sampler: sample_host.then(|| crate::bus_events::spawn_system_sampler(bus)),
+        system_sampler: Some(system_sampler),
     }
 }
 
@@ -424,28 +421,6 @@ mod tests {
     use tokio::io::AsyncReadExt;
 
     use super::{build_channel, error_chain, tuist_project_id, workspace_disclosure_enabled};
-
-    #[tokio::test]
-    async fn missing_event_service_does_not_start_host_sampling() {
-        let workspace = tempfile::tempdir().unwrap();
-        std::fs::write(
-            workspace.path().join("once.toml"),
-            "[infrastructure.cache]\nprovider = 'local'\n",
-        )
-        .unwrap();
-        let root = workspace.path();
-        let xdg = once_core::Xdg {
-            cache_home: root.join("cache"),
-            state_home: root.join("state"),
-            data_home: root.join("data"),
-            config_home: root.join("config"),
-            runtime_dir: root.join("runtime"),
-        };
-        let bus = once_core::RunEventBus::new(4);
-        let reporter = super::spawn(&bus, root, xdg, None, None).await;
-        assert!(reporter.system_sampler.is_none());
-        reporter.finish().await;
-    }
 
     #[test]
     fn the_project_id_needs_both_halves() {

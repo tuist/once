@@ -22,10 +22,7 @@ mod termination;
 
 use std::process::ExitCode;
 
-fn main() -> ExitCode {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("initialize Once runtime")
-        .block_on(startup::run())
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> ExitCode {
+    startup::run().await
 }

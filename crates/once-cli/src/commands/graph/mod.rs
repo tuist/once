@@ -124,6 +124,20 @@ pub async fn build(
     let bus = RunEventBus::new(EVENT_BUS_CAPACITY);
     let command_label = format!("build {target_id}");
     let reporter = spawn_reporter(&bus, output, &command_label);
+    let live_reporter = crate::live_run_reporter::spawn(
+        &bus,
+        workspace,
+        once_core::Xdg::from_env(),
+        crate::cache_provider::account(workspace),
+        crate::cache_provider::project(workspace),
+    )
+    .await;
+    bus_events::run_started(&bus, target_id, bus_events::now_ms());
+    bus_events::target_cache_checking(&bus, target_id);
+    // Publish captured child output as `LogChunk` events so the terminal
+    // reporter and the server-side live reporter can render it.
+    let bus_observer: std::sync::Arc<dyn once_core::ActionOutputObserver> =
+        BusOutputObserver::new(bus.clone(), target_id.to_string());
     let xdg = once_core::Xdg::from_env();
     let stored_receipt =
         build_receipt::read(workspace, target_id, sandbox, &resolved.path_suffix).await;
@@ -134,22 +148,8 @@ pub async fn build(
     // them. A window wider than either needs is only ever conservative.
     let digest_position = analysis::recorded_digest_position(workspace);
     let prior_position = earliest_position(receipt_position, digest_position.as_ref());
-    let (initial_snapshot, live_reporter) = tokio::join!(
-        crate::commands::change_tracker::snapshot(workspace, &xdg, &[], prior_position),
-        crate::live_run_reporter::spawn(
-            &bus,
-            workspace,
-            xdg.clone(),
-            crate::cache_provider::account(workspace),
-            crate::cache_provider::project(workspace),
-        ),
-    );
-    bus_events::run_started(&bus, target_id, bus_events::now_ms());
-    bus_events::target_cache_checking(&bus, target_id);
-    // Publish captured child output as `LogChunk` events so the terminal
-    // reporter and the server-side live reporter can render it.
-    let bus_observer: std::sync::Arc<dyn once_core::ActionOutputObserver> =
-        BusOutputObserver::new(bus.clone(), target_id.to_string());
+    let initial_snapshot =
+        crate::commands::change_tracker::snapshot(workspace, &xdg, &[], prior_position).await;
     if let Some(record) = build_receipt::load(
         workspace,
         target_id,
