@@ -89,6 +89,19 @@ pub async fn spawn(
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let (ready_tx, ready_rx) = oneshot::channel();
     let system_sampler = crate::bus_events::spawn_system_sampler(bus);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(12);
+    let Some(endpoint_url) = tokio::time::timeout_at(deadline, resolve_events(&workspace, &xdg))
+        .await
+        .ok()
+        .flatten()
+    else {
+        tracing::debug!("Once live reporter: no events endpoint configured");
+        return LiveRunReporter {
+            handle: tokio::spawn(async { Ok(0) }),
+            shutdown: Some(shutdown_tx),
+            system_sampler: Some(system_sampler),
+        };
+    };
 
     let handle = tokio::task::spawn_blocking(move || {
         let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
@@ -102,11 +115,6 @@ pub async fn spawn(
             let run_id = new_run_id();
             let account = account.unwrap_or_default();
             let project = project.unwrap_or_default();
-
-            let Some(endpoint_url) = resolve_events(&workspace, &xdg).await else {
-                tracing::debug!("Once live reporter: no events endpoint configured");
-                return Ok(0);
-            };
 
             let Some(token) = auth_token(&workspace, &xdg) else {
                 tracing::debug!("Once live reporter: no credentials configured");
@@ -229,7 +237,7 @@ pub async fn spawn(
         })
     });
 
-    let _ = tokio::time::timeout(Duration::from_secs(12), ready_rx).await;
+    let _ = tokio::time::timeout_at(deadline, ready_rx).await;
     LiveRunReporter {
         handle,
         shutdown: Some(shutdown_tx),
@@ -421,6 +429,47 @@ mod tests {
     use tokio::io::AsyncReadExt;
 
     use super::{build_channel, error_chain, tuist_project_id, workspace_disclosure_enabled};
+
+    #[test]
+    fn missing_event_service_does_not_need_a_blocking_worker() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        let (release, blocked) = std::sync::mpsc::channel();
+        let worker = runtime.spawn_blocking(move || blocked.recv());
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::write(
+            workspace.path().join("once.toml"),
+            "[infrastructure.cache]\nprovider = 'local'\n",
+        )
+        .unwrap();
+        let root = workspace.path();
+        let xdg = once_core::Xdg {
+            cache_home: root.join("cache"),
+            state_home: root.join("state"),
+            data_home: root.join("data"),
+            config_home: root.join("config"),
+            runtime_dir: root.join("runtime"),
+        };
+        runtime.block_on(async {
+            let bus = once_core::RunEventBus::new(4);
+            let result = tokio::time::timeout(Duration::from_millis(250), async {
+                super::spawn(&bus, root, xdg, None, None)
+                    .await
+                    .finish()
+                    .await;
+            })
+            .await;
+            release.send(()).unwrap();
+            worker.await.unwrap().unwrap();
+            assert!(
+                result.is_ok(),
+                "no event service should require a blocking worker"
+            );
+        });
+    }
 
     #[test]
     fn the_project_id_needs_both_halves() {
