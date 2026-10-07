@@ -40,7 +40,7 @@ pub fn spawn_system_sampler(bus: &once_core::RunEventBus) -> SystemSamplerHandle
         // sysinfo's CPU usage needs two refreshes to compute a delta.
         system.refresh_cpu_usage();
         tokio::select! {
-            _ = tokio::time::sleep(
+            () = tokio::time::sleep(
                 sysinfo::MINIMUM_CPU_UPDATE_INTERVAL + std::time::Duration::from_millis(50),
             ) => {}
             _ = &mut shutdown_rx => return,
