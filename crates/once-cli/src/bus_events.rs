@@ -14,18 +14,25 @@ use once_core::{
     ActionOutputObserver, ActionOutputStream, LogStream, Phase, RunEvent, RunEventBus, TargetResult,
 };
 
-/// Publish `RunStarted` and `TargetQueued`. Idempotent from the caller's
-/// perspective; the bus itself is a broadcast channel that silently
-/// succeeds when nothing is subscribed.
 /// Spawn a background task that samples host CPU, memory, and network
 /// once per second and publishes each sample on the run event bus.
-/// Returns a handle whose drop stops the sampler and joins the task.
+/// Calling `stop` waits for completion; dropping the handle aborts the task.
 ///
 /// Sampling uses `sysinfo` at whole-host granularity. CPU is averaged
 /// across cores (so full load on a 4-core machine reads as 100%),
 /// memory is `used_memory`, and network is the total bytes-per-second
 /// delta since the previous sample summed across all interfaces.
 pub fn spawn_system_sampler(bus: &once_core::RunEventBus) -> SystemSamplerHandle {
+    spawn_system_sampler_with_initial_wait(
+        bus,
+        sysinfo::MINIMUM_CPU_UPDATE_INTERVAL + std::time::Duration::from_millis(50),
+    )
+}
+
+fn spawn_system_sampler_with_initial_wait(
+    bus: &RunEventBus,
+    initial_wait: std::time::Duration,
+) -> SystemSamplerHandle {
     let bus = bus.clone();
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
 
@@ -39,10 +46,10 @@ pub fn spawn_system_sampler(bus: &once_core::RunEventBus) -> SystemSamplerHandle
 
         // sysinfo's CPU usage needs two refreshes to compute a delta.
         system.refresh_cpu_usage();
-        tokio::time::sleep(
-            sysinfo::MINIMUM_CPU_UPDATE_INTERVAL + std::time::Duration::from_millis(50),
-        )
-        .await;
+        tokio::select! {
+            () = tokio::time::sleep(initial_wait) => {}
+            _ = &mut shutdown_rx => return,
+        }
 
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -86,8 +93,8 @@ pub fn spawn_system_sampler(bus: &once_core::RunEventBus) -> SystemSamplerHandle
     }
 }
 
-/// Handle to a spawned system sampler task. Dropping it (or calling
-/// `stop`) signals the sampler to exit and joins the task.
+/// Handle to a spawned system sampler task. Calling `stop` signals it
+/// to exit and waits for completion; dropping the handle aborts it.
 pub struct SystemSamplerHandle {
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     handle: Option<tokio::task::JoinHandle<()>>,
@@ -549,6 +556,76 @@ pub fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn system_sampler_stops_during_initial_cpu_wait() {
+        let bus = RunEventBus::new(4);
+        let mut rx = bus.subscribe();
+        let sampler =
+            spawn_system_sampler_with_initial_wait(&bus, std::time::Duration::from_hours(1));
+        tokio::task::yield_now().await;
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), sampler.stop())
+            .await
+            .expect("shutdown must interrupt the initial CPU sampling wait");
+        assert!(matches!(
+            rx.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
+    async fn system_sampler_stops_before_its_first_poll() {
+        let bus = RunEventBus::new(4);
+        let mut rx = bus.subscribe();
+        let sampler =
+            spawn_system_sampler_with_initial_wait(&bus, std::time::Duration::from_hours(1));
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), sampler.stop())
+            .await
+            .expect("shutdown must be honored before the sampler's first poll");
+        assert!(matches!(
+            rx.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
+    async fn dropping_system_sampler_finishes_its_task() {
+        let bus = RunEventBus::new(4);
+        let mut rx = bus.subscribe();
+        let sampler =
+            spawn_system_sampler_with_initial_wait(&bus, std::time::Duration::from_hours(1));
+        let task = sampler.handle.as_ref().unwrap().abort_handle();
+        tokio::task::yield_now().await;
+
+        drop(sampler);
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !task.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("dropping the sampler must finish its task");
+        assert!(matches!(
+            rx.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
+    async fn system_sampler_publishes_after_initial_cpu_wait() {
+        let bus = RunEventBus::new(4);
+        let mut rx = bus.subscribe();
+        let sampler = spawn_system_sampler(&bus);
+
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("sampler must publish after its initial CPU sampling wait")
+            .unwrap();
+        assert!(matches!(event, RunEvent::SystemSampled { .. }));
+        sampler.stop().await;
+    }
 
     #[tokio::test]
     async fn helpers_fire_expected_events() {
