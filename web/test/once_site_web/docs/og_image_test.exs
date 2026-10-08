@@ -3,9 +3,9 @@ defmodule OnceSiteWeb.Docs.OgImageTest do
 
   alias OnceSiteWeb.Docs.OgImage
 
-  test "uses a 2:1 social card ratio" do
+  test "uses Tuist's 16:9 social card ratio" do
     assert OgImage.width() == 1920
-    assert OgImage.height() == 960
+    assert OgImage.height() == 1080
   end
 
   test "slug_to_filename joins segments and appends .jpg" do
@@ -31,7 +31,7 @@ defmodule OnceSiteWeb.Docs.OgImageTest do
     assert html =~ "data:font/woff2;base64,"
     assert html =~ "data:image/png;base64,"
     assert html =~ "width: 1920px"
-    assert html =~ "height: 960px"
+    assert html =~ "height: 1080px"
   end
 
   test "render_html truncates overly long titles" do
