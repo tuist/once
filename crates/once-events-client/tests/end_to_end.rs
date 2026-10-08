@@ -510,10 +510,19 @@ async fn authenticated_shutdown_drains_individual_actions_and_metadata() {
             .key_id,
         "test-key"
     );
-    let client = client.with_metadata(RunStarted {
-        once_version: "test-version".into(),
-        ..Default::default()
-    });
+    let committed = std::iter::once("src/source-0.c".to_string())
+        .chain(
+            (0..3_000)
+                .filter(|file| file % 2 == 0)
+                .map(|file| format!("source-files/file-{file}.c")),
+        )
+        .collect();
+    let client = client
+        .with_metadata(RunStarted {
+            once_version: "test-version".into(),
+            ..Default::default()
+        })
+        .with_source_files(once_events_client::SourceFileSnapshot::from_committed_paths(committed));
     let bus = RunEventBus::new(16);
     let rx = bus.subscribe();
     bus.publish(RunEvent::RunStarted { at_epoch_ms: 100 });
@@ -636,6 +645,16 @@ async fn authenticated_shutdown_drains_individual_actions_and_metadata() {
             action.display_name.as_deref(),
             Some(format!("Compile source-{index}.c").as_str())
         );
+        assert_eq!(action.source_files.len(), action.source_file_statuses.len());
+        for (path, status) in action.source_files.iter().zip(&action.source_file_statuses) {
+            let committed = path == "src/source-0.c"
+                || path
+                    .strip_prefix("source-files/file-")
+                    .and_then(|path| path.strip_suffix(".c"))
+                    .and_then(|index| index.parse::<usize>().ok())
+                    .is_some_and(|index| index.is_multiple_of(2));
+            assert_eq!(*status, if committed { 1 } else { 2 });
+        }
         if index == 2 {
             assert!(!action.source_files.is_empty());
             assert!(action.source_files.len() < 3_000);

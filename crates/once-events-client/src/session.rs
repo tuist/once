@@ -61,6 +61,7 @@ pub struct EventSession {
     producer_loss_dirty: bool,
     last_sent_producer_loss: u64,
     log_offsets: HashMap<(String, i32), i64>,
+    source_files: crate::SourceFileSnapshot,
 }
 
 /// What the transport should do after handling an ack.
@@ -103,7 +104,15 @@ impl EventSession {
             producer_loss_dirty: false,
             last_sent_producer_loss: 0,
             log_offsets: HashMap::new(),
+            source_files: crate::SourceFileSnapshot::default(),
         }
+    }
+
+    /// Use the same immutable snapshot for fresh and retained action events.
+    #[must_use]
+    pub fn with_source_files(mut self, snapshot: crate::SourceFileSnapshot) -> Self {
+        self.source_files = snapshot;
+        self
     }
 
     pub fn run_id(&self) -> &str {
@@ -177,6 +186,9 @@ impl EventSession {
         if seq == 1 && matches!(event.payload, Some(Payload::RunStarted(_))) {
             self.started = Some(event);
             return seq;
+        }
+        if let Some(Payload::ActionCompleted(action)) = &mut event.payload {
+            self.source_files.classify(action);
         }
         crate::presentation::fit_action_presentation(&mut event, self.limits.max_event_bytes);
         if event.encoded_len() > self.limits.max_event_bytes {
