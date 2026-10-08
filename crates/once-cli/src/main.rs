@@ -18,6 +18,7 @@ mod render;
 mod reporter;
 mod sound;
 mod startup;
+mod terminal;
 mod termination;
 
 use std::process::ExitCode;

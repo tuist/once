@@ -34,6 +34,8 @@ use once_core::{LogStream, Phase, RunEvent, RunEventBus, TargetResult};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 
+use crate::terminal::{output, PanelGuard, Policy, SyncFrames};
+
 /// How color should be applied to the reporter's output.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum ColorMode {
@@ -70,14 +72,16 @@ pub struct ReporterOptions {
     /// When true, do not draw the sticky bottom panel; only render
     /// per-completion lines and the final summary. Set by `--quiet`.
     pub suppress_panel: bool,
+    pub terminal: Policy,
 }
 
 /// A running terminal reporter subscribed to a [`RunEventBus`].
 ///
 /// Drop or [`finish`](Self::finish) to tear down cleanly.
 pub struct TerminalReporter {
-    handle: JoinHandle<()>,
+    handle: Option<JoinHandle<()>>,
     multi: Arc<MultiProgress>,
+    panel: Option<PanelGuard>,
 }
 
 impl TerminalReporter {
@@ -87,12 +91,16 @@ impl TerminalReporter {
     pub fn spawn(bus: &RunEventBus, options: ReporterOptions) -> Self {
         apply_color_mode(options.color);
 
-        let draw_target = if options.suppress_panel {
+        let panel_enabled = options.terminal.panel && !options.suppress_panel;
+        let draw_target = if !panel_enabled {
             ProgressDrawTarget::hidden()
+        } else if options.terminal.controls {
+            ProgressDrawTarget::term_like_with_hz(Box::new(SyncFrames::stderr()), 20)
         } else {
             ProgressDrawTarget::stderr()
         };
         let multi = Arc::new(MultiProgress::with_draw_target(draw_target));
+        let panel = panel_enabled.then(|| output().register(multi.clone()));
 
         let mut receiver = bus.subscribe();
         let render_multi = Arc::clone(&multi);
@@ -115,16 +123,32 @@ impl TerminalReporter {
             state.finalize();
         });
 
-        Self { handle, multi }
+        Self {
+            handle: Some(handle),
+            multi,
+            panel,
+        }
     }
 
     /// Wait for the reporter to finish rendering. This does not on its
     /// own tell the reporter to stop; it returns when the bus closes
     /// (all `RunEventBus` clones dropped) or a `RunCompleted` event has
     /// been consumed.
-    pub async fn finish(self) {
-        let _ = self.handle.await;
-        let _ = self.multi.clear();
+    pub async fn finish(mut self) {
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.await;
+        }
+    }
+}
+
+impl Drop for TerminalReporter {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
+        if self.panel.take().is_none() {
+            let _ = self.multi.clear();
+        }
     }
 }
 
@@ -144,6 +168,7 @@ fn apply_color_mode(mode: ColorMode) {
 
 struct RenderState {
     multi: Arc<MultiProgress>,
+    console: &'static crate::terminal::ConsoleOut,
     options: ReporterOptions,
     started_at: Instant,
     summary: Option<ProgressBar>,
@@ -186,6 +211,7 @@ impl RenderState {
         let status = options.initial_status.clone();
         Self {
             multi,
+            console: output(),
             options,
             started_at: Instant::now(),
             summary: None,
@@ -216,15 +242,7 @@ impl RenderState {
     /// above the bars. Otherwise write straight to stderr so lines
     /// still appear when indicatif's draw target is hidden.
     fn emit(&self, text: impl AsRef<str>) {
-        use std::io::Write as _;
-        if console::user_attended_stderr() {
-            let _ = self.multi.println(text.as_ref());
-            return;
-        }
-        let stderr = std::io::stderr();
-        let mut handle = stderr.lock();
-        let _ = handle.write_all(text.as_ref().as_bytes());
-        let _ = handle.write_all(b"\n");
+        self.console.line(&format!("{}\n", text.as_ref()));
     }
 
     /// Returns `true` when the run is complete and the reporter can stop.
@@ -311,10 +329,10 @@ impl RenderState {
         if matches!(self.options.verbosity, Verbosity::ExtraVerbose) {
             for line in split_lines(bytes) {
                 let prefix = style(format!("{target_id}: ")).dim();
-                let text = String::from_utf8_lossy(line);
+                let text = crate::terminal::captured_text(line);
                 let styled = match stream {
-                    LogStream::Stdout => style(text.to_string()),
-                    LogStream::Stderr => style(text.to_string()).yellow(),
+                    LogStream::Stdout => style(text),
+                    LogStream::Stderr => style(text).yellow(),
                 };
                 self.emit(format!("  {prefix}{styled}"));
             }
@@ -385,7 +403,7 @@ impl RenderState {
         };
         self.emit("");
         for line in lines {
-            let text = String::from_utf8_lossy(&line);
+            let text = crate::terminal::captured_text(&line);
             let prefix = bar_style("│".to_string());
             self.emit(format!("    {prefix} {text}"));
         }
@@ -404,7 +422,7 @@ impl RenderState {
         }
         let start = all.len().saturating_sub(TAIL_LINES);
         for line in all.drain(start..) {
-            let text = String::from_utf8_lossy(&line);
+            let text = crate::terminal::captured_text(&line);
             let prefix = style("│".to_string()).dim();
             self.emit(format!("    {prefix} {text}"));
         }
@@ -634,6 +652,7 @@ mod tests {
                 color: ColorMode::Never,
                 verbosity: Verbosity::Normal,
                 suppress_panel: true,
+                terminal: Policy::default(),
             },
         );
         bus.publish(RunEvent::RunStarted { at_epoch_ms: 0 });
@@ -657,6 +676,7 @@ mod tests {
                 color: ColorMode::Never,
                 verbosity: Verbosity::Normal,
                 suppress_panel: false,
+                terminal: Policy::default(),
             },
         );
 

@@ -32,6 +32,7 @@ pub async fn run(
         &cache,
         Output::new(output.format, output.quiet || invocation.quiet)
             .with_color(output.color)
+            .with_terminal_controls(output.terminal_controls)
             .with_verbose(output.verbose),
         &target,
         SandboxMode::Off,

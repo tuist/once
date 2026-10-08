@@ -3711,7 +3711,9 @@ dependencies = [
 name = "once-cli"
 version = "0.0.0"
 dependencies = [
+ "anstyle-query",
  "anyhow",
+ "base64 0.23.1",
  "blake3",
  "console",
  "fd-lock",
@@ -3720,6 +3722,7 @@ dependencies = [
  "hex",
  "indicatif",
  "libc",
+ "nix 0.30.1",
  "notify",
  "once-cas",
  "once-core",
@@ -3727,6 +3730,7 @@ dependencies = [
  "once-frontend",
  "reqwest 0.13.5",
  "rodio",
+ "rustix 1.1.4",
  "serde",
  "serde_json",
  "signal-hook",

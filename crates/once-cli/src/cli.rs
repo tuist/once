@@ -51,6 +51,14 @@ pub enum ColorChoice {
     Never,
 }
 
+/// Whether to emit terminal status, hyperlinks, and synchronized redraws.
+#[derive(Copy, Clone, Debug, usage::ValueEnum, Default, PartialEq, Eq)]
+pub enum TerminalControls {
+    #[default]
+    Auto,
+    Never,
+}
+
 /// Output policy passed to command handlers. Bundles the chosen
 /// [`Format`] with the global `--quiet`, `--color`, and `--verbose`
 /// flags so commands have one argument to consult instead of four.
@@ -64,6 +72,7 @@ pub struct Output {
     pub quiet: bool,
     /// When and how to emit ANSI color escapes.
     pub color: ColorChoice,
+    pub terminal_controls: TerminalControls,
     /// Repeat count of the `-v/--verbose` flag. In human mode the
     /// terminal reporter treats `>=1` as "surface a short tail of
     /// captured output on every target" and `>=2` as "stream all
@@ -79,6 +88,7 @@ impl Output {
             format,
             quiet,
             color: ColorChoice::default(),
+            terminal_controls: TerminalControls::default(),
             verbose: 0,
         }
     }
@@ -86,6 +96,12 @@ impl Output {
     #[must_use]
     pub fn with_color(mut self, color: ColorChoice) -> Self {
         self.color = color;
+        self
+    }
+
+    #[must_use]
+    pub fn with_terminal_controls(mut self, controls: TerminalControls) -> Self {
+        self.terminal_controls = controls;
         self
     }
 
@@ -202,6 +218,12 @@ pub struct Cli {
     /// and `TERM=dumb`.
     #[usage(long, global = true, value_enum, default = "auto")]
     pub color: ColorChoice,
+
+    /// Terminal status, clickable links, and synchronized redraws. Auto enables
+    /// them on interactive human-output terminals, excluding CI and TERM=dumb.
+    /// Never disables these controls without disabling ANSI color.
+    #[usage(long, global = true, value_enum, default = "auto")]
+    pub terminal_controls: TerminalControls,
 
     /// Play soft procedural pad tones at meaningful moments in a command's
     /// lifecycle: a note when work starts, a note per action as it completes,

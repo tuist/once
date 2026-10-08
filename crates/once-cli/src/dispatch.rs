@@ -12,6 +12,7 @@ use crate::commands;
 pub(crate) async fn dispatch(cli: Cli) -> Result<ExitCode> {
     let output = Output::new(cli.format, cli.quiet)
         .with_color(cli.color)
+        .with_terminal_controls(cli.terminal_controls)
         .with_verbose(cli.verbose);
     if cli.list {
         return commands::surface::print(&cli.surface_path(), output)

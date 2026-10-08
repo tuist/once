@@ -12,7 +12,6 @@
 //! would have. A second signal ends it immediately. Runs that never reach the
 //! event service keep the default signal behavior.
 
-use std::io::Write as _;
 use std::path::Path;
 use std::time::Duration;
 
@@ -63,11 +62,13 @@ impl LiveRunReporter {
             }
             Ok(Err(error)) => {
                 tracing::warn!(%error, "live run reporter finished with error");
-                eprintln!("Once insights could not be fully delivered: {error}");
+                crate::terminal::output().line(&format!(
+                    "Once insights could not be fully delivered: {error}\n"
+                ));
             }
             Err(error) => {
                 tracing::warn!(%error, "live run reporter task ended abnormally");
-                eprintln!("Once insights reporter stopped unexpectedly");
+                crate::terminal::output().line("Once insights reporter stopped unexpectedly\n");
             }
         }
     }
@@ -83,7 +84,9 @@ pub async fn spawn(
     xdg: Xdg,
     account: Option<String>,
     project: Option<String>,
+    output: crate::cli::Output,
 ) -> LiveRunReporter {
+    let terminal = crate::terminal::Policy::new(output);
     let workspace = workspace.to_path_buf();
     let bus_rx = bus.subscribe();
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -220,7 +223,12 @@ pub async fn spawn(
                             .flatten()
                     }
                 })
-                .with_dashboard_link(|link| eprintln!("\n  ↗ Once live: {link}\n"))
+                .with_dashboard_link(move |link| {
+                    if !output.quiet {
+                        let link = terminal.dashboard(link);
+                        crate::terminal::output().line(&format!("\n  ↗ Once live: {link}\n\n"));
+                    }
+                })
                 .run_with_reconnect(bus_rx, shutdown_rx, ReconnectPolicy::default());
             match signals {
                 Some(signals) => stream_until_signal(transport, signals, &cancellation).await,
@@ -251,6 +259,7 @@ async fn stream_until_signal(
     let signal = tokio::select! {
         result = &mut transport => {
             if let Some(signal) = signals.restore() {
+                crate::terminal::report_cancellation(|| {}).await;
                 termination::terminate(signal);
             }
             return result;
@@ -259,26 +268,21 @@ async fn stream_until_signal(
     };
     cancellation.cancel(signal.name());
     let name = signal.name();
-    off_the_signal_path(move || {
+    let notice = crate::terminal::report_cancellation(move || {
         tracing::info!(
             signal = name,
             "run cancelled by signal; reporting it before exiting"
         );
-        let _ = writeln!(
-            std::io::stderr(),
-            "\nOnce received {name}; reporting the cancelled run before exiting."
-        );
+        crate::terminal::output().line(&format!(
+            "\nOnce received {name}; reporting the cancelled run before exiting.\n"
+        ));
     });
     // The transport logs its own delivery outcome; the process ends either way.
-    let _ = tokio::time::timeout(CANCEL_DEADLINE, &mut transport).await;
+    let _ = tokio::join!(
+        tokio::time::timeout(CANCEL_DEADLINE, &mut transport),
+        notice,
+    );
     termination::terminate(signal)
-}
-
-/// Run `report` on its own thread. Logging and the user notice write to
-/// stderr synchronously, and a blocked stderr must not hold up the drain or
-/// the exit.
-fn off_the_signal_path(report: impl FnOnce() + Send + 'static) {
-    std::thread::spawn(report);
 }
 
 /// The project id this provider's server expects. It is the only place the

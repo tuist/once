@@ -24,11 +24,17 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tonic::{Request, Response, Status, Streaming};
 
+#[path = "support/reporting.rs"]
+mod reporting;
+#[path = "support/terminal.rs"]
+mod terminal;
+
 #[derive(Default)]
 struct Recorded {
     payloads: Vec<Payload>,
     /// Stop acknowledging batches once the run has started.
     stall_after_start: bool,
+    dashboard_url: String,
 }
 
 #[derive(Clone, Default)]
@@ -105,7 +111,7 @@ impl RunEventService for Collector {
         let (mut tx, rx) = futures::channel::mpsc::channel(32);
         tokio::spawn(async move {
             while let Ok(Some(batch)) = inbound.message().await {
-                let stall = {
+                let (stall, dashboard_url) = {
                     let mut state = recorded.lock().unwrap();
                     let stall = state.stall_after_start && !state.payloads.is_empty();
                     state.payloads.extend(
@@ -114,7 +120,7 @@ impl RunEventService for Collector {
                             .iter()
                             .filter_map(|event| event.payload.clone()),
                     );
-                    stall
+                    (stall, state.dashboard_url.clone())
                 };
                 if stall {
                     continue;
@@ -133,7 +139,7 @@ impl RunEventService for Collector {
                     retry_after_ms: 0,
                     max_in_flight_batches: 0,
                     finalization: RunFinalization::Active as i32,
-                    dashboard_url: String::new(),
+                    dashboard_url,
                 };
                 if tx.send(Ok(ack)).await.is_err() {
                     return;

@@ -159,6 +159,7 @@ pub async fn exec(
         once_core::Xdg::from_env(),
         crate::cache_provider::account(&workspace),
         crate::cache_provider::project(&workspace),
+        output,
     )
     .await;
     let run_started_epoch_ms = crate::bus_events::now_ms();

@@ -29,6 +29,7 @@ pub async fn run(
     let cache = crate::cache_provider::resolve(workspace, xdg)?;
     let output = Output::new(output.format, output.quiet)
         .with_color(output.color)
+        .with_terminal_controls(output.terminal_controls)
         .with_verbose(output.verbose);
     match invocation.command {
         invocation::Command::Build => {

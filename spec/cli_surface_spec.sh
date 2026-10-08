@@ -16,6 +16,7 @@ Describe 'once --help'
     The stdout should include 'query'
     The stdout should include 'runtime'
     The stdout should include '--directory'
+    The stdout should include '--terminal-controls'
     The stdout should include '--list'
     The stdout should include 'toon'
   End
@@ -72,6 +73,19 @@ Describe 'once --version'
     When call "$ONCE_BIN" --version
     The status should be success
     The stdout should include 'once'
+  End
+End
+
+Describe 'terminal control policy'
+  BeforeEach 'setup_workspace'
+  AfterEach 'cleanup_workspace'
+
+  It 'accepts the terminal control escape hatch and leaves redirected errors plain'
+    When call once --terminal-controls never build missing
+    The status should not equal 0
+    The stderr should not include '7501;'
+    The stderr should not include ']8;;'
+    The stderr should not include '?2026'
   End
 End
 
