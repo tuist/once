@@ -2,7 +2,7 @@
 # Shared shellspec helpers.
 
 REPO_ROOT="$(cd "$SHELLSPEC_PROJECT_ROOT" && pwd)"
-ONCE_BIN="${REPO_ROOT}/target/release/once"
+ONCE_BIN="${ONCE_BIN:-${REPO_ROOT}/target/release/once}"
 # Resolve before HOME isolation makes mise shims lose their configuration.
 SPEC_PYTHON3="${SPEC_PYTHON3:-$(python3 -c 'import sys; print(sys.executable)')}"
 export REPO_ROOT ONCE_BIN SPEC_PYTHON3

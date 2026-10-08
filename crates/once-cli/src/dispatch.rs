@@ -19,11 +19,15 @@ pub(crate) async fn dispatch(cli: Cli) -> Result<ExitCode> {
             .map(|()| ExitCode::SUCCESS);
     }
 
-    let Some(command) = cli.command else {
+    let Some(mut command) = cli.command else {
         return Ok(ExitCode::SUCCESS);
     };
 
-    let workspace = resolve_workspace(cli.directory)?;
+    let directory = resolve_workspace(cli.directory)?;
+    let native = crate::native_invocation::prepare(&directory, &mut command)?;
+    let workspace = native
+        .as_ref()
+        .map_or(&directory, |invocation| &invocation.workspace);
     let xdg = Xdg::from_env();
     let resource_limits = cli
         .memory_limit
@@ -37,11 +41,12 @@ pub(crate) async fn dispatch(cli: Cli) -> Result<ExitCode> {
         "resolved local resource limits"
     );
     Box::pin(run_command(
-        &workspace,
+        workspace,
         &xdg,
         output,
         &resource_limits,
         command,
+        native.as_ref(),
     ))
     .await
 }
@@ -95,7 +100,15 @@ async fn run_command(
     output: Output,
     resource_limits: &ResourceLimits,
     command: Cmd,
+    native: Option<&once_frontend::NativeInvocation>,
 ) -> Result<ExitCode> {
+    let resolve_configuration =
+        |config: &[String]| -> Result<commands::graph::ResolvedConfiguration> {
+            let mut resolved =
+                commands::graph::resolve_invocation_configuration(workspace, config)?;
+            resolved.native_targets = native.map(|invocation| invocation.targets.clone());
+            Ok(resolved)
+        };
     if command_makes_sound(&command) {
         crate::sound::seed(commands::sound_seed::for_command(&command));
         crate::sound::emit(crate::sound::Event::Started);
@@ -138,7 +151,7 @@ async fn run_command(
             config,
             all,
         } => {
-            let resolved = commands::graph::resolve_invocation_configuration(workspace, &config)?;
+            let resolved = resolve_configuration(&config)?;
             dispatch_build(
                 workspace,
                 xdg,
@@ -158,7 +171,7 @@ async fn run_command(
             fail_on,
             all,
         } => {
-            let resolved = commands::graph::resolve_invocation_configuration(workspace, &config)?;
+            let resolved = resolve_configuration(&config)?;
             dispatch_lint(
                 workspace,
                 xdg,
@@ -183,7 +196,7 @@ async fn run_command(
             compute,
             arguments,
         } => {
-            let resolved = commands::graph::resolve_invocation_configuration(workspace, &config)?;
+            let resolved = resolve_configuration(&config)?;
             Box::pin(dispatch_run(
                 workspace,
                 xdg,
@@ -250,7 +263,7 @@ async fn run_command(
             batch_test_units,
             test_batch_id,
         } => {
-            let resolved = commands::graph::resolve_invocation_configuration(workspace, &config)?;
+            let resolved = resolve_configuration(&config)?;
             Box::pin(dispatch_test(
                 workspace,
                 xdg,
@@ -438,7 +451,10 @@ async fn dispatch_test(workspace: &Path, xdg: &Xdg, args: TestDispatchArgs) -> R
         ))
         .await;
     }
-    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    let graph = args
+        .resolved
+        .load_graph(workspace)
+        .context("loading graph")?;
     let plan = match args.target {
         Some(target) => {
             let target = resolve_target_arg(workspace, &target)?;

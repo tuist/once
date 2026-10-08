@@ -30,6 +30,11 @@ pub enum Error {
     Parse { path: String, message: String },
     #[error("evaluation error in {path}:\n{message}")]
     Eval { path: String, message: String },
+    #[error("{source}")]
+    Analysis {
+        #[source]
+        source: Box<crate::analysis::AnalysisFailure>,
+    },
     #[error("{path}: {kind}")]
     ScriptHeader {
         path: String,

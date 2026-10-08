@@ -88,7 +88,7 @@ struct ModuleDiagnostic {
 }
 
 pub async fn targets(workspace: &Path, output: Output, kind: Option<&str>) -> Result<()> {
-    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    let (_, graph) = crate::native_invocation::query_graph(workspace).context("loading graph")?;
     let records = target_records(graph, kind);
     write_body(output, || render_targets_human(&records), &records).await
 }
@@ -103,10 +103,14 @@ pub(crate) fn workspace_value(workspace: &Path) -> Result<serde_json::Value> {
 }
 
 fn workspace_summary(workspace: &Path) -> WorkspaceSummary {
+    let loaded = crate::native_invocation::query_graph(workspace);
+    let workspace = loaded
+        .as_ref()
+        .map_or(workspace, |(root, _)| root.as_path());
     let root_manifest_path = workspace.join(once_frontend::TOML_BUILD_FILE_NAME);
     let configuration = once_frontend::load_workspace_configuration(workspace).unwrap_or_default();
-    match once_frontend::load_graph_workspace(workspace) {
-        Ok(graph) => {
+    match &loaded {
+        Ok((_, graph)) => {
             let packages = graph
                 .iter()
                 .map(|target| target.label.package.clone())

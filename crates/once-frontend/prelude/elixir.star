@@ -334,20 +334,24 @@ def _elixir_action_env_with(ctx, toolchain, extra):
         env[key] = value
     return env
 
+def _elixir_inherit_runtime_env(env, toolchain):
+    host_path = host_env("PATH")
+    if host_path:
+        separator = ";" if host_os() == "windows" else ":"
+        env["PATH"] = toolchain["path"] + separator + host_path
+    host_home = host_env("HOME")
+    if not host_home and host_os() == "windows":
+        host_home = host_env("USERPROFILE")
+    if host_home:
+        env["HOME"] = host_home
+    return env
+
 def _elixir_run_action_env_with(ctx, toolchain, extra):
     env = _elixir_action_env(toolchain)
     for key, value in extra.items():
         env[key] = value
     if not _elixir_attr(ctx, "run_cacheable", False):
-        host_path = host_env("PATH")
-        if host_path:
-            separator = ";" if host_os() == "windows" else ":"
-            env["PATH"] = toolchain["path"] + separator + host_path
-        host_home = host_env("HOME")
-        if not host_home and host_os() == "windows":
-            host_home = host_env("USERPROFILE")
-        if host_home:
-            env["HOME"] = host_home
+        env = _elixir_inherit_runtime_env(env, toolchain)
     for key, value in _elixir_user_env(ctx).items():
         env[key] = value
     return env
@@ -1120,11 +1124,11 @@ def _elixir_code_path_args(ctx, apps):
     return args
 
 def _elixir_test_runner_argv(ctx, toolchain, apps, srcs, mix_config):
-    test_paths = _elixir_test_paths(ctx, srcs)
+    test_paths = [] if _elixir_attr(ctx, "_mix_test_defaults", False) else _elixir_test_paths(ctx, srcs)
     _elixir_validate_test_mode(ctx, mix_config)
     if mix_config:
         no_start = ["--no-start"] if _elixir_attr(ctx, "no_start", False) else []
-        return (toolchain["mix"], ["test", "--no-compile", "--no-deps-check"] + no_start + test_paths + _elixir_test_args(ctx))
+        return (toolchain["elixir"], ["-e", _mix_test_command_source(), "--", "--no-compile", "--no-deps-check"] + no_start + test_paths + _elixir_test_args(ctx))
     start_args = []
     if "test/test_helper.exs" not in test_paths:
         start_args = ["-e", "ExUnit.start()"]
@@ -1136,58 +1140,111 @@ def _elixir_test_runner_argv(ctx, toolchain, apps, srcs, mix_config):
         _elixir_code_path_args(ctx, apps) + _elixir_interpreter_opts(ctx) + start_args + require_args + _elixir_test_args(ctx),
     )
 
-def _elixir_test_runner_source(setup_tasks):
+def _elixir_test_formatter_source():
     return """
-[runner, args_file, results, log, native_results, target, runner_type] = System.argv()
-args = args_file |> File.read!() |> String.split("\\n", trim: true)
+defmodule Once.TestFormatter do
+  use GenServer
+  def init(_opts), do: {:ok, %{total: 0, passed: 0, failed: 0, skipped: 0, flaky: 0}}
+  def handle_cast({:test_finished, %{state: state}}, counts) do
+    field = case state do
+      nil -> :passed
+      {:skipped, _} -> :skipped
+      {:excluded, _} -> nil
+      _ -> :failed
+    end
+    counts = if field, do: counts |> Map.update!(:total, &(&1 + 1)) |> Map.update!(field, &(&1 + 1)), else: counts
+    {:noreply, counts}
+  end
+  def handle_cast({:suite_finished, _}, counts) do
+    File.write!(System.fetch_env!("ONCE_EXUNIT_SUMMARY"), :json.encode(counts))
+    {:noreply, counts}
+  end
+  def handle_cast(_, counts), do: {:noreply, counts}
+end
+"""
+
+def _mix_test_command_source():
+    return """
+Mix.start()
+""" + _mix_locked_scm_source() + _elixir_test_formatter_source() + """
+Mix.Project.in_project(:once_test_runner, ".", [compilers: []], fn _project ->
+  Mix.Task.run("loadconfig")
+  Mix.Task.run("loadpaths", ["--no-deps-check"])
+  Mix.Task.run("compile", ["--no-deps-check"])
+  app = Mix.Project.config()[:app]
+  for module <- Application.spec(app, :modules) || [] do
+    path = Path.join(Mix.Project.compile_path(), Atom.to_string(module) <> ".beam")
+    case :beam_lib.chunks(String.to_charlist(path), [:exports]) do
+      {:ok, {_, [exports: exports]}} ->
+        if Keyword.has_key?(exports, :__mix_recompile__?), do: Code.ensure_loaded!(module)
+      _ -> :ok
+    end
+  end
+  Mix.Task.run("test", System.argv() ++ ["--formatter", "ExUnit.CLIFormatter", "--formatter", "Once.TestFormatter"])
+end)
+"""
+
+def _elixir_test_runner_source(setup_tasks, setup_runner):
+    return """
+[runner, args_file, results, log, native_results, target, runner_type, log_artifact, native_artifact] = System.argv()
+args = args_file |> File.read!() |> :json.decode()
 setup_tasks = """ + _elixir_command_plan(setup_tasks) + """
+setup_runner = """ + _json_string(setup_runner) + """
+File.write!(log, "")
+summary_file = results <> ".counts"
+File.rm(summary_file)
+System.put_env("ONCE_EXUNIT_SUMMARY", summary_file)
 
-{setup_output, setup_status} =
-  Enum.reduce_while(setup_tasks, {"", 0}, fn [task | task_args], {output, _status} ->
-    {task_output, status} =
-      System.cmd(runner, [task | task_args], stderr_to_stdout: true)
+run = fn executable, command_args ->
+  {_, status} = System.cmd(executable, command_args, into: File.stream!(log, [:append]), stderr_to_stdout: true)
+  status
+end
+setup_status = Enum.reduce_while(setup_tasks, 0, fn [task | task_args], _ ->
+  status = run.(setup_runner, [task | task_args])
+  if status == 0, do: {:cont, 0}, else: {:halt, status}
+end)
+status = if setup_status == 0, do: run.(runner, args), else: setup_status
+File.cp!(log, native_results)
 
-    combined = output <> task_output
-    if status == 0, do: {:cont, {combined, status}}, else: {:halt, {combined, status}}
-  end)
-
-{test_output, test_status} =
-  if setup_status == 0 do
-    System.cmd(runner, args, stderr_to_stdout: true)
-  else
-    {"", setup_status}
-  end
-
-output = setup_output <> test_output
-status = if setup_status == 0, do: test_status, else: setup_status
-File.write!(log, output)
-File.write!(native_results, output)
-
-{total, failed} =
-  case Regex.scan(~r/(\\d+) tests?, (\\d+) failures/, output) |> List.last() do
-    [_, total, failed] -> {String.to_integer(total), String.to_integer(failed)}
-    _ ->
-      case Regex.scan(~r/Result: (\\d+)\\/(\\d+) passed/, output) |> List.last() do
-        [_, passed, total] ->
-          total = String.to_integer(total)
-          {total, total - String.to_integer(passed)}
-
-        _ ->
-          case Regex.scan(~r/Result: (\\d+) passed/, output) |> List.last() do
-            [_, passed] ->
-              passed = String.to_integer(passed)
-              {passed, 0}
-
-            _ ->
-              case Regex.scan(~r/Result: (\\d+) tests/, output) |> List.last() do
-                [_, total] -> {String.to_integer(total), 0}
-                _ -> {0, if(status == 0, do: 0, else: 1)}
-              end
-          end
+parse = fn output, previous ->
+  cond do
+    match = Regex.scan(~r/^Result: (\\d+)\\/(\\d+) passed/m, output) |> List.last() ->
+      [_, passed, total] = match
+      {String.to_integer(total), String.to_integer(total) - String.to_integer(passed)}
+    match = Regex.scan(~r/^Result: (\\d+) (?:passed|tests)/m, output) |> List.last() ->
+      [_, total] = match
+      {String.to_integer(total), 0}
+    match = Regex.scan(~r/^(?:(\\d+) doctests?, )?(\\d+) tests?, (\\d+) failures?[^\\r\\n]*/m, output) |> List.last() ->
+      [line, doctests, tests, failed] = match
+      number = fn tag ->
+        case Regex.run(Regex.compile!("(\\\\d+) " <> tag), line) do
+          [_, count] -> String.to_integer(count)
+          _ -> 0
+        end
       end
+      excluded = if String.contains?(line, "("), do: 0, else: number.("excluded")
+      total = String.to_integer(tests) + String.to_integer(if(doctests == "", do: "0", else: doctests))
+      {total - number.("skipped") - excluded, String.to_integer(failed) + number.("invalid")}
+    true -> previous
   end
-
-passed = max(total - failed, 0)
+end
+{_, {executed, failed}, skipped} =
+  Enum.reduce(File.stream!(log, 65536), {"", {if(status == 0, do: 0, else: 1), if(status == 0, do: 0, else: 1)}, 0}, fn chunk, {tail, counts, skipped} ->
+    text = tail <> chunk
+    summary = Regex.scan(~r/^(?:Result: |(?:\\d+ doctests?, )?\\d+ tests?, \\d+ failures?)[^\\r\\n]*/m, text) |> List.last()
+    skipped = if summary do
+      case Regex.run(~r/(\\d+) skipped/, hd(summary)) do
+        [_, value] -> String.to_integer(value)
+        _ -> 0
+      end
+    else
+      skipped
+    end
+    tail = binary_part(text, max(byte_size(text) - 512, 0), min(byte_size(text), 512))
+    {tail, parse.(text, counts), skipped}
+  end)
+total = executed + skipped
+passed = max(executed - failed, 0)
 run_status = if status == 0, do: "passed", else: "failed"
 
 payload = %{
@@ -1195,58 +1252,54 @@ payload = %{
   target: target,
   runner: %{type: runner_type, metadata: %{}},
   status: run_status,
-  summary: %{total: total, passed: passed, failed: failed, skipped: 0, flaky: 0},
+  summary: case File.read(summary_file) do
+    {:ok, contents} -> :json.decode(contents)
+    _ -> %{total: total, passed: passed, failed: failed, skipped: skipped, flaky: 0}
+  end,
   cases: [],
-  artifacts: %{logs: [log], native_results: [native_results]}
+  artifacts: %{logs: [log_artifact], native_results: [native_artifact]}
 }
 
 File.write!(results, :json.encode(payload))
+File.rm(summary_file)
 System.halt(status)
 """
 
 def _elixir_stage_apps(ctx, apps, build_root, mix_env, identifier):
+    staged = []
     for app in apps:
         app_name = app.get("app_name", "")
         ebin = app.get("ebin_dir", "")
         if app_name and ebin:
             app_dir = _parent_dir(ebin)
+            destination = build_root + "/" + mix_env + "/lib/" + app_name
+            staged.append(destination)
             copy_path(
                 app_dir,
-                build_root + "/" + mix_env + "/lib/" + app_name,
+                destination,
                 kind = "tree",
                 inputs = [app_dir],
                 identifier = identifier + ":" + app_name,
                 source_files = _action_source_files([app_dir]),
             )
+    return staged
 
 def _elixir_stage_consumer(ctx, root_app, apps, build_root, mix_env, identifier):
+    staged = _elixir_stage_apps(ctx, apps, build_root, mix_env, identifier)
     root_build_env = root_app.get("build_env_dir", "")
-    if not root_build_env:
-        _elixir_stage_apps(ctx, apps, build_root, mix_env, identifier)
-        return
-
-    copy_path(
-        root_build_env,
-        build_root + "/" + mix_env,
-        kind = "tree",
-        inputs = [root_build_env],
-        identifier = identifier + ":root-build-environment",
-        source_files = _action_source_files([root_build_env]),
-    )
-    for app in apps:
-        app_name = app.get("app_name", "")
-        ebin = app.get("ebin_dir", "")
-        is_root = app_name == root_app.get("app_name", "") and ebin == root_app.get("ebin_dir", "")
-        if app_name and ebin and not is_root:
-            app_dir = _parent_dir(ebin)
-            copy_path(
-                app_dir,
-                build_root + "/" + mix_env + "/lib/" + app_name,
-                kind = "tree",
-                inputs = [app_dir],
-                identifier = identifier + ":" + app_name,
-                source_files = _action_source_files([app_dir]),
-            )
+    if root_build_env:
+        source = root_build_env + "/consolidated"
+        destination = build_root + "/" + mix_env + "/consolidated"
+        copy_path(
+            source,
+            destination,
+            kind = "tree",
+            inputs = [source],
+            identifier = identifier + ":consolidated",
+            source_files = _action_source_files([source]),
+        )
+        staged.append(destination)
+    return staged
 
 def _elixir_test_runner_command(ctx, toolchain, apps, srcs, mix_config):
     test_paths = _elixir_test_paths(ctx, srcs)
@@ -1310,7 +1363,7 @@ def _elixir_test_info(ctx, runner_type, runner_display_name, runner, args, resul
     }
 
 def _elixir_test_info_for(ctx, runner, mix_config, apps, srcs, results, log, native_results):
-    test_paths = _elixir_test_paths(ctx, srcs)
+    test_paths = [] if _elixir_attr(ctx, "_mix_test_defaults", False) else _elixir_test_paths(ctx, srcs)
     _elixir_validate_test_mode(ctx, mix_config)
     if mix_config:
         no_start = ["--no-start"] if _elixir_attr(ctx, "no_start", False) else []
@@ -1426,6 +1479,8 @@ def _elixir_test_env(ctx, toolchain, home_dir, build_root):
         # pointing at a Mix home without Hex makes Mix prompt to install it,
         # which blocks forever because the runner has no interactive stdin.
         env["MIX_ARCHIVES"] = mix_home + "/archives"
+    if not _elixir_attr(ctx, "cacheable", True):
+        env = _elixir_inherit_runtime_env(env, toolchain)
     return env
 
 def _elixir_test_impl(ctx):
@@ -1477,13 +1532,13 @@ def _elixir_test_impl(ctx):
     home_dir = ctx["scratch_dir"] + "/test_home"
     runner_dir = ctx["scratch_dir"] + "/test_runner"
     runner_script = runner_dir + "/runner.exs"
-    args_file = runner_dir + "/args.list"
+    args_file = runner_dir + "/args.json"
     runner, args = _elixir_test_runner_argv(ctx, toolchain, apps, srcs, mix_config)
     setup_tasks = _elixir_attr(ctx, "setup_tasks", [])
     if setup_tasks and not mix_config:
         fail(ctx["label"]["id"] + ": setup_tasks requires Mix mode through an elixir_app provider with mix_config")
-    write_path(runner_script, _elixir_test_runner_source(setup_tasks))
-    write_path(args_file, _elixir_lines(args))
+    write_path(runner_script, _elixir_test_runner_source(setup_tasks, toolchain["mix"] if mix_config else runner))
+    write_path(args_file, _json_encode(args))
     project_inputs = []
     if mix_config:
         lockfile = _package_relative(ctx, _elixir_attr(ctx, "lockfile", "mix.lock"))
@@ -1498,10 +1553,10 @@ def _elixir_test_impl(ctx):
             [mix_config] +
             lockfile_input
         )
-    _elixir_stage_consumer(ctx, lib, apps, build_root, "test", ctx["label"]["id"] + ":test-apps")
+    staged_inputs = _elixir_stage_consumer(ctx, lib, apps, build_root, "test", ctx["label"]["id"] + ":test-apps")
     run_action(
         display_name = "Run Elixir tests · " + ctx["label"]["name"],
-        source_files = _action_source_files(_unique(provider["affected_inputs"] + project_inputs + [runner_script, args_file])),
+        source_files = _action_source_files(_unique(provider["affected_inputs"] + project_inputs + staged_inputs + [runner_script, args_file])),
         argv = [
             toolchain["elixir"],
             _elixir_from_package(ctx, runner_script),
@@ -1512,15 +1567,18 @@ def _elixir_test_impl(ctx):
             _elixir_from_package(ctx, native_results),
             ctx["label"]["id"],
             "mix_test" if mix_config else "elixir_exunit",
+            log,
+            native_results,
         ],
-        inputs = _unique(provider["affected_inputs"] + project_inputs + [runner_script, args_file]),
+        inputs = _unique(provider["affected_inputs"] + project_inputs + staged_inputs + [runner_script, args_file]),
         outputs = [results, log, native_results],
         clean_paths = [home_dir, results, log, native_results],
         create_dirs = [home_dir, test_dir],
         cwd = _elixir_package_cwd(ctx),
         env = _elixir_action_env_with(ctx, toolchain, _elixir_test_env(ctx, toolchain, home_dir, build_root)),
         cacheable = _elixir_attr(ctx, "cacheable", True),
-        toolchain_identity = toolchain["identity"] + ("\x00mix_test.v2" if mix_config else "\x00elixir_exunit.v2"),
+        inherit_parent_env = not _elixir_attr(ctx, "cacheable", True),
+        toolchain_identity = toolchain["identity"] + ("\x00mix_test.v3" if mix_config else "\x00elixir_exunit.v2"),
         identifier = ctx["label"]["id"] + (":mix-test" if mix_config else ":elixir-test"),
     )
     return provider
@@ -1644,7 +1702,7 @@ payload =
 
     %{
       "manifest" => File.read!(project_file),
-      "lockfile" => File.read!(lockfile),
+      "lockfile" => if(File.regular?(lockfile), do: File.read!(lockfile), else: ""),
       "mix_env" => mix_env,
       "lock" => normalize.(lock, normalize),
       "dependencies" => dependencies
@@ -1660,7 +1718,7 @@ def _mix_read_locked_graph(ctx):
     mix_env = ctx["attrs"].get("mix_env") or "prod"
     if ctx["files"].get(manifest) == None:
         fail(ctx["label"]["id"] + ": `" + manifest + "` must be declared in resolver_inputs, or srcs when resolver_inputs is omitted, so Mix project resolution is content-addressed")
-    if ctx["files"].get(lockfile) == None:
+    if ctx["files"].get(lockfile) == None and not ctx["attrs"].get("_mix_path_only", False):
         fail(ctx["label"]["id"] + ": `" + lockfile + "` must be declared in resolver_inputs, or srcs when resolver_inputs is omitted; mix.lock is required and authoritative")
     if _basename(manifest) != "mix.exs":
         fail(ctx["label"]["id"] + ": Mix project manifests must be named mix.exs")
@@ -1703,6 +1761,10 @@ def _mix_read_locked_graph(ctx):
         _mix_workspace_path(ctx, "."),
     ], env = env, cwd = _mix_workspace_path(ctx, "."))
     graph = json_decode(content)
+    if ctx["files"].get(lockfile) == None:
+        for dependency in graph.get("dependencies") or []:
+            if not dependency.get("path_dependency"):
+                fail(ctx["label"]["id"] + ": external Mix dependency `" + dependency["app"] + "` requires mix.lock; run `mix deps.get --check-locked` before loading the Once graph")
     graph["once_inputs"] = _resolver_snapshot_inputs(ctx["files"])
     return graph
 
@@ -1890,6 +1952,8 @@ def _mix_dependencies_resolver(ctx):
             if target_ref == None:
                 fail(ctx["label"]["id"] + ": Mix dependency `" + app + "` references `" + child + "`, but the active graph contains no target for it")
             dependency_targets.append(target_ref)
+        if not host_path_exists(_mix_workspace_path(ctx, source_root)):
+            _diagnostic_fail("mix_dependency_sources_missing", "vendor_dir", ctx["label"]["id"] + ": locked dependency `" + app + "` is not materialized at `" + source_root + "`", "Run `mix deps.get --check-locked` in the project directory, then retry")
         targets.append({
             "name": target_name,
             "kind": "mix_package",
@@ -2396,7 +2460,7 @@ def _mix_package_impl(ctx):
                 root_config_target,
             ],
             inputs = inputs,
-            outputs = [ebin_dir, priv_dir, include_dir, compile_log, compile_warnings],
+            outputs = [app_dir, compile_log, compile_warnings],
             clean_paths = [build_root, home_dir, compile_log, compile_warnings],
             create_dirs = [priv_dir, include_dir, home_dir],
             cwd = _elixir_package_cwd(ctx),
@@ -2411,7 +2475,7 @@ def _mix_package_impl(ctx):
             }),
             stdout = compile_log,
             stderr = compile_warnings,
-            toolchain_identity = toolchain["identity"] + "\x00mix-package-compile.v4\x00" + mix_env + "\x00" + identity,
+            toolchain_identity = toolchain["identity"] + "\x00mix-package-compile.v5\x00" + mix_env + "\x00" + identity + "\x00" + _elixir_abs_workspace_path(workspace_source_root),
             identifier = ctx["label"]["id"] + ":mix-compile",
         )
     else:
@@ -2525,7 +2589,11 @@ result =
     project_app = Mix.Project.config()[:app]
     if project_app != String.to_atom(app_name), do: raise("Mix project application is #{project_app}, expected #{app_name}")
     Mix.Task.run("loadconfig")
-    Mix.Task.run("compile.all", ["--force", "--no-deps-check", "--no-prune-code-paths", "--return-errors"] ++ args)
+    result = Mix.Task.run("compile.all", ["--force", "--no-deps-check", "--no-prune-code-paths", "--return-errors"] ++ args)
+    consolidation_dir = Path.join(Mix.Project.build_path(), "consolidated")
+    File.mkdir_p!(consolidation_dir)
+    if File.ls!(consolidation_dir) == [], do: File.write!(Path.join(consolidation_dir, ".keep"), "")
+    result
   end)
 
 case result do
@@ -2681,7 +2749,7 @@ def _mix_project_impl(ctx):
         run_cacheable = _elixir_attr(ctx, "run_cacheable", False)
         runtime_root = ctx["scratch_dir"] + "/run_build"
         runtime_home = ctx["scratch_dir"] + "/run_home"
-        _elixir_stage_consumer(ctx, provider, apps + [provider], runtime_root, paths["mix_env"], ctx["label"]["id"] + ":run-apps")
+        staged_inputs = _elixir_stage_consumer(ctx, provider, apps + [provider], runtime_root, paths["mix_env"], ctx["label"]["id"] + ":run-apps")
         run_flags = []
         if _elixir_attr(ctx, "run_no_compile", True):
             run_flags.append("--no-compile")
@@ -2721,9 +2789,9 @@ def _mix_project_impl(ctx):
             run_identity = "tasks"
         run_action(
             display_name = "Run Mix tasks · " + ctx["label"]["name"],
-            source_files = _action_source_files(_unique(sources + _elixir_app_inputs(apps + [provider]) + config + data + priv + tools + [mix_config] + run_inputs)),
+            source_files = _action_source_files(_unique(sources + _elixir_app_inputs(apps + [provider]) + config + data + priv + tools + [mix_config] + run_inputs + staged_inputs)),
             argv = run_argv,
-            inputs = _unique(sources + _elixir_app_inputs(apps + [provider]) + config + data + priv + tools + [mix_config] + run_inputs),
+            inputs = _unique(sources + _elixir_app_inputs(apps + [provider]) + config + data + priv + tools + [mix_config] + run_inputs + staged_inputs),
             clean_paths = [runtime_home],
             create_dirs = [runtime_home],
             cwd = _elixir_package_cwd(ctx),
@@ -2780,7 +2848,7 @@ def _mix_project_impl(ctx):
         }),
         stdout = paths["compile_log"],
         stderr = paths["compile_warnings"],
-        toolchain_identity = toolchain["identity"] + "\x00mix-project-compile.v2\x00" + paths["mix_env"],
+        toolchain_identity = toolchain["identity"] + "\x00mix-project-compile.v3\x00" + paths["mix_env"] + "\x00" + _mix_workspace_path(ctx, "."),
         identifier = ctx["label"]["id"] + ":mix-compile",
     )
     for source in priv:
@@ -2874,7 +2942,7 @@ def _mix_release_impl(ctx):
     release_log = declare_output("mix-release.log")
     release_warnings = declare_output("mix-release-warnings.log")
 
-    _elixir_stage_consumer(ctx, app, apps, build_root, mix_env, ctx["label"]["id"] + ":release-apps")
+    staged_inputs = _elixir_stage_consumer(ctx, app, apps, build_root, mix_env, ctx["label"]["id"] + ":release-apps")
 
     pre_tasks = _elixir_attr(ctx, "pre_tasks", [])
     write_path(runner_script, _mix_release_runner_source(pre_tasks))
@@ -2893,6 +2961,7 @@ def _mix_release_impl(ctx):
             project_files +
             _elixir_app_inputs(apps) +
             _elixir_app_source_inputs(apps) +
+            staged_inputs +
             [runner_script, dependency_paths_file, dependency_apps_file, release_args_file]
         )),
         argv = [
@@ -2911,6 +2980,7 @@ def _mix_release_impl(ctx):
             project_files +
             _elixir_app_inputs(apps) +
             _elixir_app_source_inputs(apps) +
+            staged_inputs +
             [runner_script, dependency_paths_file, dependency_apps_file, release_args_file]
         ),
         outputs = [release_dir, release_log, release_warnings],
@@ -2955,7 +3025,7 @@ def _mix_release_impl(ctx):
 def _mix_workspace_metadata_source():
     return """
 Mix.start()
-[project_dir] = System.argv()
+[project_dir, selected_environment] = System.argv()
 
 unless Code.ensure_loaded?(:json) and function_exported?(:json, :encode, 1) do
   raise "Mix project adaptation requires Erlang 27 or newer for :json.encode/1"
@@ -2986,8 +3056,10 @@ dependency = fn dep, env ->
 end
 
 environments =
-  [:dev, :test, :prod]
+  ([:dev, :test, :prod] ++ [String.to_atom(selected_environment)])
+  |> Enum.uniq()
   |> Map.new(fn env ->
+    Mix.env(env)
     value =
       Mix.Project.in_project(:once_native_project, project_dir, [env: env], fn _project ->
         config = Mix.Project.config()
@@ -3006,11 +3078,14 @@ environments =
 environments |> :json.encode() |> IO.binwrite()
 """
 
+def _mix_workspace_environment(ctx):
+    return _elixir_attr(ctx, "mix_env", "") or host_env("MIX_ENV") or "dev"
+
 def _mix_workspace_metadata(ctx):
     toolchain = _elixir_compiler_toolchain()
     project_dir = _mix_workspace_path(ctx, ".")
     content = host_command(
-        [toolchain["elixir"], "-e", _mix_workspace_metadata_source(), "--", project_dir],
+        [toolchain["elixir"], "-e", _mix_workspace_metadata_source(), "--", project_dir, _mix_workspace_environment(ctx)],
         env = _elixir_action_env(toolchain),
         cwd = project_dir,
     )
@@ -3037,6 +3112,12 @@ def _mix_workspace_relative_paths(ctx, paths):
         path[len(prefix):] if prefix and path.startswith(prefix) else path
         for path in paths
     ]
+
+def _mix_workspace_project_inputs(ctx):
+    generated = _native_project_generated_dirs() + ["node_modules", ".git", ".once", ".build", "cover"]
+    excludes = [prefix + name + "/**/*" for name in generated for prefix in ["", "**/"]]
+    files = glob(["**/*", ".formatter.exs"], exclude = excludes)
+    return _mix_workspace_relative_paths(ctx, files)
 
 def _mix_workspace_children(ctx, apps_path):
     normalized = (apps_path or "").replace("\\", "/")
@@ -3071,8 +3152,9 @@ def _mix_workspace_resolver(ctx):
     targets = []
     applications = {}
     dependency_targets = {}
+    project_inputs = _mix_workspace_project_inputs(ctx)
 
-    for environment in ["dev", "test", "prod"]:
+    for environment in sorted(metadata.keys()):
         environment_metadata = metadata[environment]
         active_dependencies = [dependency for dependency in environment_metadata["deps"] if dependency.get("active")]
         external_dependencies = [dependency for dependency in active_dependencies if dependency.get("path") == None]
@@ -3082,7 +3164,7 @@ def _mix_workspace_resolver(ctx):
 
         dependency_target = ""
         application_deps = []
-        if has_lock:
+        if has_lock or path_dependencies:
             dependency_target = "mix_dependencies_" + environment
             dependency_attrs = {
                 "manifest": manifest,
@@ -3101,6 +3183,7 @@ def _mix_workspace_resolver(ctx):
                 "config": config,
                 "config_entry": config_entry,
                 "target_prefix": "mix-" + environment,
+                "_mix_path_only": not has_lock,
             }
             targets.append({
                 "name": dependency_target,
@@ -3129,7 +3212,7 @@ def _mix_workspace_resolver(ctx):
                 "manifest": manifest,
                 "lockfile": lockfile,
                 "config": config,
-                "data": [".formatter.exs"],
+                "data": project_inputs,
                 "priv": ["priv/**/*"],
             },
         })
@@ -3158,7 +3241,7 @@ def _mix_workspace_resolver(ctx):
             "manifest": manifest,
             "lockfile": lockfile,
             "config": config,
-            "data": [".formatter.exs"],
+            "data": project_inputs,
             "priv": ["priv/**/*"],
             "run_tasks": lint_tasks,
             "run_cacheable": True,
@@ -3174,6 +3257,8 @@ def _mix_workspace_resolver(ctx):
                 "lockfile": lockfile,
                 "config": config,
                 "data": ["test/**/*"],
+                "_mix_test_defaults": True,
+                "cacheable": False,
             },
         })
     targets.append({
@@ -3190,7 +3275,7 @@ def _mix_workspace_resolver(ctx):
     })
     return {
         "targets": targets,
-        "roots": ["./" + applications["dev"]],
+        "roots": ["./" + applications[_mix_workspace_environment(ctx)]],
     }
 
 def _mix_workspace_impl(ctx):
@@ -3239,6 +3324,7 @@ _ELIXIR_LIBRARY_ATTRS = [
 ]
 
 _ELIXIR_TEST_ATTRS = [
+    attr("_mix_test_defaults", "bool", default = "false", docs = "Resolver-owned marker selecting the native Mix project's test paths and patterns instead of passing every input file to the runner.", configurable = False),
     attr("mix_config", "string", default = "", docs = "Optional package-relative Mix project file. When omitted, tests run through direct ExUnit without requiring a Mix project.", configurable = False),
     attr("lockfile", "string", default = "mix.lock", docs = "Package-relative Mix lockfile staged when present so tests evaluate the compiled dependency identities.", configurable = False),
     attr("config", "list<string>", default = "[\"config/**/*.exs\"]", docs = "Package-relative config file globs included in the test action key.", configurable = False),
@@ -3300,12 +3386,14 @@ _MIX_RELEASE_ATTRS = [
 ]
 
 _MIX_WORKSPACE_ATTRS = [
+    attr("mix_env", "string", default = "", docs = "Default build environment. When omitted, follows MIX_ENV or uses dev. Test targets remain in the test environment.", configurable = False),
     attr("manifest", "string", default = "mix.exs", docs = "Package-relative Mix project file adapted into Once targets.", configurable = False),
     attr("lockfile", "string", default = "mix.lock", docs = "Package-relative Mix lockfile used when the project declares external dependencies.", configurable = False),
     attr("resolver_inputs", "list<string>", default = "[]", docs = "Project files supplied to native integration resolution. Defaults to srcs when empty.", configurable = False),
 ]
 
 _MIX_DEPENDENCIES_ATTRS = [
+    attr("_mix_path_only", "bool", default = "false", docs = "Resolver-owned marker allowing an absent lockfile only when every active dependency is workspace-local.", configurable = False),
     attr("manifest", "string", default = "mix.exs", docs = "Package-relative Mix project manifest used to select the active dependency graph.", configurable = False),
     attr("lockfile", "string", default = "mix.lock", docs = "Package-relative Mix lockfile. Resolution fails when the file is absent, and never updates it.", configurable = False),
     attr("resolver_inputs", "list<string>", default = "[]", docs = "Package-relative text globs supplied to the resolver. Defaults to srcs when empty or omitted; set this when build sources include binary or large files.", configurable = False),
@@ -3367,6 +3455,7 @@ mix = native_project(
     target_name = "mix",
     docs = "Recognizes a native Mix project from mix.exs.",
     markers = ["mix.exs"],
+    workspace_markers = [".git"],
     inputs = ["mix.lock", ".formatter.exs", "config/**/*.exs"],
     exclude = _native_project_generated_dirs(),
     requires_tools = ["elixir"],

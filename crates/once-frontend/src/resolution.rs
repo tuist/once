@@ -205,7 +205,7 @@ where
                             .filter(|failure| failure.diagnostic.code == "required_tool_not_found")
                     });
                     let Some(failure) = unavailable_tool else {
-                        return Err(resolution_error(&target.id(), source.to_string()));
+                        return Err(resolver_failure(&target.id(), &source));
                     };
                     diagnostics
                         .entry(graph_target.label.id)
@@ -574,6 +574,21 @@ fn display_path(path: &Path) -> String {
         .replace(std::path::MAIN_SEPARATOR, "/")
 }
 
+fn resolver_failure(target: &str, source: &anyhow::Error) -> Error {
+    if let Some(failure) = source
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<crate::analysis::AnalysisFailure>())
+    {
+        Error::Analysis {
+            source: Box::new(crate::analysis::AnalysisFailure {
+                diagnostic: failure.diagnostic.clone(),
+            }),
+        }
+    } else {
+        resolution_error(target, source.to_string())
+    }
+}
+
 fn resolution_error(target: &str, message: impl Into<String>) -> Error {
     Error::Eval {
         path: target.to_string(),
@@ -778,6 +793,41 @@ resolved_set = target_kind(resolver = _resolve)
 
         assert!(error.contains("specific resolver failure"), "{error}");
         assert!(!error.contains("declared actions or outputs"), "{error}");
+    }
+
+    #[test]
+    fn structured_resolver_failures_preserve_repairs() {
+        let temp = tempfile::tempdir().unwrap();
+        write(
+            temp.path().join("once.toml"),
+            r#"[modules]
+paths = ["deps.star"]
+
+[[target]]
+name = "packages"
+kind = "resolved_set"
+"#,
+        );
+        write(
+            temp.path().join("deps.star"),
+            r#"def _resolve(ctx):
+    _diagnostic_fail("missing_sources", "vendor_dir", "Sources are absent", "Fetch the locked sources, then retry")
+
+resolved_set = target_kind(resolver = _resolve)
+"#,
+        );
+        let Error::Analysis { source } =
+            crate::graph::load_graph_workspace(temp.path()).unwrap_err()
+        else {
+            panic!("expected a structured resolver diagnostic");
+        };
+        assert_eq!(source.diagnostic.code, "missing_sources");
+        assert_eq!(source.diagnostic.target.as_deref(), Some("packages"));
+        assert_eq!(source.diagnostic.attribute.as_deref(), Some("vendor_dir"));
+        assert_eq!(
+            source.diagnostic.repairs,
+            ["Fetch the locked sources, then retry"]
+        );
     }
 
     #[test]

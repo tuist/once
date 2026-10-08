@@ -234,9 +234,9 @@ impl BuildSession {
         resolved: &ResolvedConfiguration,
         changes: &KnownChanges,
     ) -> Result<Self> {
-        let workspace_targets =
-            once_frontend::load_workspace_with_configuration(workspace, &resolved.configuration)
-                .context("loading workspace")?;
+        let workspace_targets = resolved
+            .workspace_targets(workspace)
+            .context("loading workspace")?;
         let target_kinds = workspace_targets
             .iter()
             .map(|target| target.kind.clone())
@@ -456,7 +456,13 @@ impl BuildSession {
             .targets
             .get(target_id)
             .map(Arc::as_ref)
-            .with_context(|| format!("no target matches `{target_id}`"))?;
+            .with_context(|| {
+                let package = target_id.rsplit_once('/').map(|(package, _)| package);
+                let mut candidates = self.targets.keys().collect::<Vec<_>>();
+                candidates.sort_by_key(|id| (package.is_some_and(|package| !id.starts_with(&format!("{package}/"))), *id));
+                let nearby = candidates.into_iter().take(5).map(|id| format!("`{id}`")).collect::<Vec<_>>().join(", ");
+                format!("no target matches `{target_id}`; use one of these valid target selectors: {nearby}. Run `once query targets` to list the available targets")
+            })?;
         ensure_graph_target_valid(target)?;
         Ok(target)
     }

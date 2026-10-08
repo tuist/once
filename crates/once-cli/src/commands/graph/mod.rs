@@ -352,9 +352,7 @@ pub async fn lint_returning_fails(
     resource_limits: ResourceLimits,
     resolved: &configuration::ResolvedConfiguration,
 ) -> Result<bool> {
-    let graph =
-        once_frontend::load_graph_workspace_with_configuration(workspace, &resolved.configuration)
-            .context("loading graph")?;
+    let graph = resolved.load_graph(workspace).context("loading graph")?;
     let session = analysis::BuildSession::new_with_options_with_configuration(
         workspace,
         cache,
@@ -467,10 +465,7 @@ pub async fn test_with_filters(
     bus_events::target_cache_checking(&bus, target_id);
     let bus_observer: std::sync::Arc<dyn once_core::ActionOutputObserver> =
         BusOutputObserver::new(bus.clone(), target_id.to_string());
-    let graph = match once_frontend::load_graph_workspace_with_configuration(
-        workspace,
-        &resolved.configuration,
-    ) {
+    let graph = match resolved.load_graph(workspace) {
         Ok(graph) => graph,
         Err(error) => {
             let duration_ms: u64 = started_at

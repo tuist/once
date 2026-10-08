@@ -1,6 +1,7 @@
 mod cancellation;
 mod executor;
 mod process;
+mod report;
 mod results;
 mod worker;
 
@@ -164,31 +165,11 @@ fn validate_plan_targets(
 
 async fn write_report(output: Output, report: &TestExecutionReport) -> Result<()> {
     let body = match output.format {
-        Format::Human => render_human(report),
+        Format::Human => report::render_human(report),
         Format::Json | Format::Toon => render::structured(output.format, report)?,
     };
     let mut stdout = tokio::io::stdout();
     stdout.write_all(body.as_bytes()).await?;
     stdout.flush().await?;
     Ok(())
-}
-
-fn render_human(report: &TestExecutionReport) -> String {
-    let passed = report
-        .runs
-        .iter()
-        .filter(|run| run.get("success").and_then(Value::as_bool) == Some(true))
-        .count();
-    format!(
-        "once: ran {} test batches across {} local workers, {} passed, {} failed, {} ms\nplan: {}\nnext plan: {} ({} batches)\nschedule: {}\n",
-        report.runs.len(),
-        report.schedule.workers,
-        passed,
-        report.runs.len().saturating_sub(passed),
-        report.schedule.duration_ms,
-        report.plan.id,
-        report.next_plan.id,
-        report.next_plan.batches.len(),
-        report.schedule.id,
-    )
 }
