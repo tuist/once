@@ -795,6 +795,11 @@ server's event-size limit, Once retains the source links that fit and may omit
 an oversized display name. The action's identity, timing, and result are
 preserved.
 
+Optional toolchain and action identities are encoded separately in the input
+hash, including presence and embedded separators. Equal concatenated text in
+different fields cannot share a cache key. This identity encoding invalidates
+older declared-action cache entries once without changing artifact formats.
+
 The declared action is its executable cache contract. Once hashes its operation,
 arguments, argument files, environment, working directory, path setup,
 toolchain identity, declared input contents, and dependency action digests.
