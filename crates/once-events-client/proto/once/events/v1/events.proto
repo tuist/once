@@ -367,8 +367,9 @@ message ActionCompleted {
   uint32 selected_attempt = 14;
   // Presentation only; does not replace identifier or affect cache identity.
   optional string display_name = 15;
-  // Repository-relative file paths using forward slashes, never host paths
-  // or generated outputs. Servers may link these at RunStarted.git_rev.
+  // Repository-relative presentation paths using forward slashes, never
+  // host paths. Includes untracked or downloaded sources; consumers must
+  // consult source_file_statuses before linking at RunStarted.git_rev.
   repeated string source_files = 16;
   // Entry i describes source_files[i] at RunStarted.git_rev. Classifying
   // clients send one status per path, including UNKNOWN on lookup failure.
