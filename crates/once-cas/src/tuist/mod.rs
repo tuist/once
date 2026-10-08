@@ -2,6 +2,7 @@ mod auth;
 mod cache;
 mod projects;
 mod retry;
+mod stall;
 #[cfg(test)]
 pub(crate) mod test_env;
 

@@ -25,8 +25,8 @@ use tonic::{Code, Request, Status};
 use uuid::Uuid;
 
 use super::{
-    env_token, join_url, remote_status_message, retry, TuistAuth, TuistCacheConfig, ENDPOINTS_PATH,
-    PROVIDER_NAME,
+    env_token, join_url, remote_status_message, retry, stall, TuistAuth, TuistCacheConfig,
+    ENDPOINTS_PATH, PROVIDER_NAME,
 };
 use crate::{ActionResult, Cas, Digest, Error, Result};
 
@@ -45,6 +45,11 @@ const ENDPOINT_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// that discovery returns can be unreachable from inside the runner network.
 const TUIST_CACHE_ENDPOINT_ENV: &str = "TUIST_CACHE_ENDPOINT";
 const GRPC_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a `ByteStream` write may go without the remote accepting more of
+/// it. Writes cannot use `GRPC_REQUEST_TIMEOUT`: their response only arrives
+/// once the whole blob is sent, so a fixed deadline caps the blob size a link
+/// can upload.
+const UPLOAD_STALL_TIMEOUT: Duration = Duration::from_secs(30);
 const BATCH_BLOB_LIMIT: usize = 2 * 1024 * 1024;
 const BATCH_BLOB_LIMIT_I64: i64 = 2 * 1024 * 1024;
 const BYTE_STREAM_CHUNK_SIZE: usize = 2 * 1024 * 1024;
@@ -65,13 +70,23 @@ pub struct TuistCache {
     local: Cas,
     client: Arc<OnceCell<std::result::Result<reqwest::Client, CachedRemoteError>>>,
     config: TuistCacheConfig,
-    grpc_channel_cache: Arc<OnceCell<std::result::Result<Channel, CachedRemoteError>>>,
+    grpc_channel_cache: Arc<OnceCell<std::result::Result<GrpcChannels, CachedRemoteError>>>,
+    upload_stall_timeout: Duration,
     capabilities_cache: Arc<Mutex<Option<RemoteCapabilities>>>,
     known_remote_blobs: Arc<Mutex<HashMap<Digest, reapi::Digest>>>,
     transfer_limit: Arc<Semaphore>,
     auth: TuistAuth,
     auth_token_cache: Arc<OnceCell<std::result::Result<String, CachedRemoteError>>>,
     endpoint_override: Option<String>,
+}
+
+/// Both channels reach the same endpoint. `ByteStream` writes get their own
+/// because tonic's request timeout lasts until response headers arrive, which
+/// for a write is after its last byte.
+#[derive(Debug, Clone)]
+struct GrpcChannels {
+    requests: Channel,
+    uploads: Channel,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -134,6 +149,7 @@ impl TuistCache {
             client: Arc::new(OnceCell::new()),
             config,
             grpc_channel_cache: Arc::new(OnceCell::new()),
+            upload_stall_timeout: UPLOAD_STALL_TIMEOUT,
             capabilities_cache: Arc::new(Mutex::new(None)),
             known_remote_blobs: Arc::new(Mutex::new(HashMap::new())),
             transfer_limit: Arc::new(Semaphore::new(MAX_PARALLEL_TRANSFERS)),
@@ -825,7 +841,7 @@ impl TuistCache {
     ) -> std::result::Result<(), retry::Failure> {
         let capabilities = self.remote_capabilities().await;
         let (body, compressor) = encode_reapi_blob(bytes, capabilities.zstd_streams, operation)?;
-        let channel = self.grpc_channel().await?;
+        let channel = self.grpc_upload_channel().await?;
         let mut client = ByteStreamClient::new(channel);
         let resource_name =
             byte_stream_write_resource(&self.instance_name(), digest, Uuid::now_v7(), compressor);
@@ -852,10 +868,14 @@ impl TuistCache {
                 Some((request, (body, resource_name, end)))
             },
         );
-        let response = client
-            .write(self.authorized_grpc_request(requests, operation).await?)
-            .await?
-            .into_inner();
+        let progress = stall::Progress::new();
+        let request = self
+            .authorized_grpc_request(stall::tracked(requests, Arc::clone(&progress)), operation)
+            .await?;
+        let response =
+            stall::unless_stalled(&progress, self.upload_stall_timeout, client.write(request))
+                .await?
+                .into_inner();
         if ![
             -1,
             digest.size_bytes,
@@ -900,7 +920,7 @@ impl TuistCache {
                 path: path.to_path_buf(),
                 source,
             })?;
-        let channel = self.grpc_channel().await?;
+        let channel = self.grpc_upload_channel().await?;
         let mut client = ByteStreamClient::new(channel);
         let resource_name = byte_stream_write_resource(
             &self.instance_name(),
@@ -955,9 +975,13 @@ impl TuistCache {
                 ))
             },
         );
-        let response = client
-            .write(self.authorized_grpc_request(requests, operation).await?)
-            .await;
+        let progress = stall::Progress::new();
+        let request = self
+            .authorized_grpc_request(stall::tracked(requests, Arc::clone(&progress)), operation)
+            .await?;
+        let response =
+            stall::unless_stalled(&progress, self.upload_stall_timeout, client.write(request))
+                .await;
         if let Some(message) = read_error.lock().await.take() {
             return Err(Error::Io {
                 path: path.to_path_buf(),
@@ -1393,22 +1417,39 @@ impl TuistCache {
     }
 
     async fn grpc_channel(&self) -> Result<Channel> {
+        Ok(self.grpc_channels().await?.requests)
+    }
+
+    async fn grpc_upload_channel(&self) -> Result<Channel> {
+        Ok(self.grpc_channels().await?.uploads)
+    }
+
+    async fn grpc_channels(&self) -> Result<GrpcChannels> {
         let result =
             self.grpc_channel_cache
                 .get_or_init(|| async {
                     let endpoint = self.data_plane_endpoint().await.map_err(|error| {
                         CachedRemoteError::from_error(error, "discover endpoints")
                     })?;
-                    connect_grpc_endpoint(&endpoint)
+                    let connect_error = |message| CachedRemoteError {
+                        operation: "connect endpoint",
+                        message,
+                    };
+                    let endpoint = grpc_endpoint(&endpoint).map_err(connect_error)?;
+                    let requests = endpoint
+                        .clone()
+                        .timeout(GRPC_REQUEST_TIMEOUT)
+                        .connect()
                         .await
-                        .map_err(|message| CachedRemoteError {
-                            operation: "connect endpoint",
-                            message,
-                        })
+                        .map_err(|source| connect_error(format!("{source:?}")))?;
+                    Ok(GrpcChannels {
+                        requests,
+                        uploads: endpoint.connect_lazy(),
+                    })
                 })
                 .await;
         match result {
-            Ok(channel) => Ok(channel.clone()),
+            Ok(channels) => Ok(channels.clone()),
             Err(error) => Err(error.to_error()),
         }
     }
@@ -1704,20 +1745,23 @@ fn remote_action_metadata_error(message: &str) -> Error {
 }
 
 async fn connect_grpc_endpoint(endpoint: &str) -> std::result::Result<Channel, String> {
+    grpc_endpoint(endpoint)?
+        .connect()
+        .await
+        .map_err(|source| format!("{source:?}"))
+}
+
+fn grpc_endpoint(endpoint: &str) -> std::result::Result<Endpoint, String> {
     let endpoint_url = grpc_endpoint_url(endpoint);
     let mut endpoint = Endpoint::from_shared(endpoint_url.clone())
         .map_err(|source| source.to_string())?
-        .connect_timeout(ENDPOINT_PROBE_TIMEOUT)
-        .timeout(GRPC_REQUEST_TIMEOUT);
+        .connect_timeout(ENDPOINT_PROBE_TIMEOUT);
     if endpoint_url.starts_with("https://") {
         endpoint = endpoint
             .tls_config(ClientTlsConfig::new().with_enabled_roots())
             .map_err(|source| format!("{source:?}"))?;
     }
-    endpoint
-        .connect()
-        .await
-        .map_err(|source| format!("{source:?}"))
+    Ok(endpoint)
 }
 
 fn authorized_grpc_request_with_token<T>(

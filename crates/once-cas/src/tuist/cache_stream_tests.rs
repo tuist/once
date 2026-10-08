@@ -100,13 +100,17 @@ async fn cache_for_failing_stream(
         },
     )
     .unwrap();
+    let channel = Endpoint::from_shared(format!("http://{address}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
     cache
         .grpc_channel_cache
-        .set(Ok(Endpoint::from_shared(format!("http://{address}"))
-            .unwrap()
-            .connect()
-            .await
-            .unwrap()))
+        .set(Ok(GrpcChannels {
+            requests: channel.clone(),
+            uploads: channel,
+        }))
         .unwrap();
     cache.auth_token_cache.set(Ok("test-token".into())).unwrap();
     cache
