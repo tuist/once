@@ -35,10 +35,10 @@ defmodule OnceSiteWeb.BlogControllerTest do
 
     assert response =~ ~s(property="og:image:type" content="image/jpeg")
     assert response =~ ~s(property="og:image:width" content="1920")
-    assert response =~ ~s(property="og:image:height" content="960")
+    assert response =~ ~s(property="og:image:height" content="1080")
     assert response =~ ~s(property="og:image:alt" content="Automation needs a git")
     assert response =~ ~s(name="twitter:image:width" content="1920")
-    assert response =~ ~s(name="twitter:image:height" content="960")
+    assert response =~ ~s(name="twitter:image:height" content="1080")
     assert response =~ ~s(name="twitter:image:alt" content="Automation needs a git")
   end
 
