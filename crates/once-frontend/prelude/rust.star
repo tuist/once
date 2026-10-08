@@ -1,3 +1,31 @@
+def _rust_action_subject(ctx):
+    attrs = ctx.get("attr") or {}
+    env = attrs.get("rustc_env") or {}
+    return attrs.get("package_name") or attrs.get("cargo_package") or env.get("CARGO_PKG_NAME") or ctx["label"]["name"]
+
+def _rust_action_metadata(ctx, target, usage = "product", crate_type = ""):
+    attrs = ctx.get("attr") or {}
+    env = attrs.get("rustc_env") or {}
+    version = attrs.get("version") or env.get("CARGO_PKG_VERSION") or ""
+    if version == "0.0.0" and not attrs.get("version"):
+        version = ""
+    source = attrs.get("source") or ""
+    origin = "git" if source.startswith("git+") else "registry" if (source.startswith("registry+") or source.startswith("sparse+")) else "workspace" if attrs.get("cargo_package") else "path"
+    revision = source.split("#")[-1] if origin == "git" and "#" in source else ""
+    package = _action_package("cargo", _rust_action_subject(ctx), version, revision, origin = origin) if version else None
+    label = ""
+    parts = target.split("-")
+    if len(parts) >= 3:
+        os = "Android" if "android" in parts or "androideabi" in parts else "Mac Catalyst" if "macabi" in parts else "Linux" if "linux" in parts else "macOS" if "darwin" in parts else "Windows" if "windows" in parts else "iOS" if "ios" in parts else ""
+        if os:
+            label = os + (" Simulator" if "sim" in parts else "") + " · " + parts[0]
+    return _action_metadata(package = package, platforms = [_action_platform("rust", target, label, usage)] if target else [], context = [_action_context("cargo.crate_type", crate_type)] if crate_type else [])
+
+def _rust_platform_usage(ctx, target, host_triple, crate_type):
+    if crate_type == "proc-macro" or (ctx.get("attr") or {}).get("_cargo_host_tool"):
+        return "build-tool"
+    return "product" if target and target != host_triple else ""
+
 def _ascii_env_key(value):
     upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     out = []
@@ -1227,6 +1255,7 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
     _rust_add_windows_proc_macro_path(build_script_compile_env, deps)
     run_action(
         display_name = "Compile Rust build script · " + ctx["label"]["name"],
+        presentation = _rust_action_metadata(ctx, host_triple, "build-tool"),
         source_files = _action_source_files([script_path]),
         argv = compile_argv,
         inputs = _unique([script_path] + source_inputs + build_script_inputs + dep_inputs + dependency_build_outputs + dependency_build_inputs + wrapped[1] + _rust_extra_inputs(ctx)),
@@ -1251,6 +1280,7 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
     # produced them, the whole package stays the dependency.
     run_action(
         display_name = "Run Rust build script · " + ctx["label"]["name"],
+        presentation = _action_metadata(package = _rust_action_metadata(ctx, "")["package"], context = [_action_context("cargo.build_target", target or host_triple)]),
         source_files = _action_source_files(_unique([runner] + metadata_inputs + source_inputs + build_script_inputs + _rust_extra_inputs(ctx))),
         argv = [host_which("sh"), "-c", run_script],
         inputs = _unique([runner] + metadata_inputs + source_inputs + build_script_inputs + _rust_extra_inputs(ctx)),
@@ -1678,6 +1708,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name, test = False, prov
         compile_cwd = _rust_manifest_dir(ctx, crate_manifest_dir)
     run_action(
         display_name = "Compile Rust crate · " + ctx["label"]["name"],
+        presentation = _rust_action_metadata(ctx, target or host_triple, _rust_platform_usage(ctx, target, host_triple, crate_type), crate_type),
         source_files = _action_source_files(srcs),
         argv = argv,
         inputs = _unique(srcs + dep_inputs + dep_search_inputs + build_inputs + dependency_build_outputs + dependency_build_inputs + linker_script_inputs + (_rust_native_dep_link_inputs(deps) if crate_type != "rlib" else []) + _rust_extra_inputs(ctx)),
@@ -2472,6 +2503,7 @@ def _rust_test_impl(ctx):
     _rust_add_windows_rustc_runtime_path(runner_env, runner_rustc, runner_host_triple)
     run_action(
         display_name = "Compile Rust test runner · " + ctx["label"]["name"],
+        presentation = _action_metadata(platforms = [_action_platform("rust", runner_host_triple, usage = "build-tool")]),
         source_files = _action_source_files([runner_source]),
         argv = [runner_rustc, "--edition", "2021", runner_source, "-o", runner],
         inputs = [runner_source],
@@ -3353,6 +3385,7 @@ def _cargo_merge_aliases(left, right):
 
 def _cargo_metadata_target_spec(package, target, node, source_root, crate_root, name, kind, deps, build_deps, aliases, rust_target, host_tool = False, host_source_root = ""):
     attrs = _cargo_metadata_attrs(package, target, node, source_root, crate_root, aliases, host_source_root)
+    attrs["_cargo_host_tool"] = host_tool
     if rust_target:
         attrs["target"] = rust_target
     checksum = package.get("checksum")

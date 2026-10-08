@@ -19,6 +19,11 @@ def _swift_android_target_with_api(target, android_api):
         return target + str(android_api)
     return target
 
+def _swift_android_presentation(target, abi):
+    suffix = target.split("-")[-1]
+    api = suffix[len("androideabi"):] if suffix.startswith("androideabi") else suffix[len("android"):] if suffix.startswith("android") else ""
+    return _action_metadata(platforms = [_action_platform("swift", target, "Android · " + abi)], context = [_action_context("android.api", api, "API " + api)] if api and all([char in "0123456789" for char in api.elems()]) else [])
+
 def _swift_android_abi_from_target(target):
     if "android" not in target:
         return ""
@@ -315,6 +320,7 @@ def _swift_android_library_impl(ctx):
 
     run_action(
         display_name = "Compile Swift for Android · " + ctx["label"]["name"],
+        presentation = _swift_android_presentation(target, android_abi),
         source_files = _action_source_files(inputs),
         argv = argv,
         inputs = inputs,

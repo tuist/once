@@ -2,6 +2,7 @@
 name = "once_frontend"
 kind = "rust_library"
 deps = [
+  "crates/once-presentation/once_presentation",
   "crates/once-host-tree/once_host_tree",
   "cargo_dependencies",
 ]
@@ -23,6 +24,7 @@ CARGO_PKG_VERSION = "0.0.0"
 name = "once_frontend_unit_tests"
 kind = "rust_test"
 deps = [
+  "crates/once-presentation/once_presentation",
   "crates/once-host-tree/once_host_tree",
   "cargo_dependencies",
 ]

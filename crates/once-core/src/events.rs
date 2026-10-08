@@ -81,6 +81,7 @@ pub enum RunEvent {
         identifier: Option<String>,
         display_name: Option<String>,
         source_files: Vec<String>,
+        presentation: Option<Box<crate::ActionPresentation>>,
         result: TargetResult,
         was_cached: bool,
         duration_ms: i64,

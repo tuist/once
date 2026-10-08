@@ -281,6 +281,10 @@ mise exec -- target/release/once exec -- /bin/sh -c 'printf hello'
 `mise exec --` is required because the project's toolchain is mise-managed;
 calling `cargo` directly will miss the pinned rustc.
 
+## Action presentation
+
+`crates/once-presentation/` owns the bounded, ecosystem-neutral package/platform/context contract; see its AGENTS.md. Emit only selected, resolved metadata in Starlark kinds, not guesses from labels or worker placement. Preserve presentation in deferred expansions and reusable action outcomes without adding it to action identity or execution fingerprints.
+
 ## Live action reporting
 
 Subscribe before publishing the first run event and drain queued completions before shutting down the reporter. Authentication applies to every event service call. Target summaries must not stand in for declared actions: persist per-action identity with reusable target outcomes and replay each as a cache hit. Cover transport delivery in `once-events-client/tests/end_to_end.rs` and retained action identity in the graph target-outcome tests. Source-file statuses are presentation only: classify against the exact reported commit once per run, reclassify cached action paths at event ingestion, and trim paths and their packed statuses together. Failed or incomplete Git tree collection must report UNKNOWN for every path, never legacy empty statuses. A streaming run that receives SIGINT or SIGTERM completes as cancelled with the signal name as its reason, drains for at most a few seconds, and then exits by that signal; a second signal exits at once (the same signal repeated within a quarter of a second counts as the same request), and runs that never connected keep the default signal behavior. A test schedule forwards the first signal to its batch processes, which stream their own runs, and waits for them before exiting. Cover signal handling with the spawned-process tests in `once-cli/tests/cancelled_run.rs`.

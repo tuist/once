@@ -326,6 +326,11 @@ def _zig_mode_args(ctx):
         return ["-O", "ReleaseFast"]
     fail(ctx["label"]["id"] + ": `mode` must be `auto`, `debug`, `release_safe`, `release_small`, or `release_fast`")
 
+def _zig_action_metadata(ctx):
+    target = _zig_effective_string_setting(ctx, "target", "host_target")
+    mode_args = _zig_mode_args(ctx)
+    return _action_metadata(platforms = [_action_platform("zig", target)] if target and target != "native" else [], context = [_action_context("zig.optimize", mode_args[1])] if mode_args else [])
+
 def _zig_threaded_args(ctx):
     threaded = _zig_effective_string_setting(ctx, "threaded", "host_threaded")
     if not threaded:
@@ -739,6 +744,7 @@ def _zig_compile(ctx, kind, default_main, command, provider_kind):
         argv.append("-fsoname=" + _basename(primary_output))
     run_action(
         display_name = "Compile Zig target · " + ctx["label"]["name"],
+        presentation = _zig_action_metadata(ctx),
         source_files = _action_source_files(inputs),
         argv = argv,
         inputs = inputs,

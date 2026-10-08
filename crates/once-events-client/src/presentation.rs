@@ -18,6 +18,21 @@ pub(crate) fn fit_action_presentation(event: &mut RunEvent, max_bytes: usize) {
     if classified && statuses.len() != source_files.len() {
         statuses = vec![crate::proto::SourceFileStatus::Unknown as i32; source_files.len()];
     }
+    while event.encoded_len() > max_bytes {
+        let Some(Payload::ActionCompleted(action)) = &mut event.payload else {
+            return;
+        };
+        let Some(metadata) = &mut action.presentation else {
+            break;
+        };
+        if metadata.context.pop().is_some() {
+            continue;
+        }
+        if metadata.platforms.pop().is_some() {
+            continue;
+        }
+        action.presentation = None;
+    }
     if event.encoded_len() > max_bytes {
         let Some(Payload::ActionCompleted(action)) = &mut event.payload else {
             return;
@@ -85,6 +100,42 @@ mod tests {
             })),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn bounded_context_is_reduced_before_package_and_refills_aligned_sources() {
+        let mut event = event("Compile", vec!["src/main.c".into(), "src/other.c".into()]);
+        let Some(Payload::ActionCompleted(completion)) = &mut event.payload else {
+            unreachable!()
+        };
+        completion.source_file_statuses = vec![1, 2];
+        completion.presentation = Some(Box::new(crate::proto::ActionPresentation {
+            package: Some(crate::proto::ActionPackage {
+                ecosystem: "custom".into(),
+                name: "library".into(),
+                version: "1.2".into(),
+                ..Default::default()
+            }),
+            platforms: vec![crate::proto::ActionPlatform {
+                scheme: "custom".into(),
+                id: "native-target".into(),
+                ..Default::default()
+            }],
+            context: vec![crate::proto::ActionContext {
+                key: "custom.mode".into(),
+                value: "x".repeat(256),
+                ..Default::default()
+            }],
+        }));
+        fit_action_presentation(&mut event, 160);
+        assert!(event.encoded_len() <= 160);
+        let action = action(&event);
+        let metadata = action.presentation.as_ref().unwrap();
+        assert!(metadata.context.is_empty());
+        assert_eq!(metadata.platforms[0].id, "native-target");
+        assert_eq!(metadata.package.as_ref().unwrap().version, "1.2");
+        assert_eq!(action.source_files, ["src/main.c", "src/other.c"]);
+        assert_eq!(action.source_file_statuses, [1, 2]);
     }
 
     fn action(event: &RunEvent) -> &ActionCompleted {

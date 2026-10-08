@@ -3765,6 +3765,7 @@ dependencies = [
  "microsandbox",
  "once-cas",
  "once-host-tree",
+ "once-presentation",
  "reqwest 0.13.5",
  "sea-orm",
  "sea-orm-migration",
@@ -3810,6 +3811,7 @@ dependencies = [
  "glob",
  "include_dir",
  "once-host-tree",
+ "once-presentation",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -3827,6 +3829,14 @@ version = "0.0.0"
 dependencies = [
  "sha2 0.11.0",
  "tempfile",
+]
+
+[[package]]
+name = "once-presentation"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

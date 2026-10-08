@@ -156,6 +156,7 @@ def _cmake_project_impl(ctx):
     write_path(driver, _CMAKE_BUILD_DRIVER)
     run_action(
         display_name = "Configure and build CMake project · " + ctx["label"]["name"],
+        presentation = _action_metadata(context = [_action_context("cmake.generator", generator), _action_context("cmake.build_type", build_type)]),
         source_files = _action_source_files(_unique(inputs + [driver])),
         argv = [
             cmake,

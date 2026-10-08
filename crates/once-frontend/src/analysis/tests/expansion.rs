@@ -6,7 +6,7 @@ fn expand(body: &str) -> anyhow::Result<AnalysisResult> {
 def plan(ctx):
 {body}
 def impl(ctx):
-    expand_actions(implementation = "plan", inputs = ["scan.json"], outputs = ["result"], args = {{"value": "hello"}})
+    expand_actions(implementation = "plan", inputs = ["scan.json"], outputs = ["result"], args = {{"value": "hello"}}, presentation = {{"package": {{"ecosystem": "custom", "name": "parent"}}, "platforms": [{{"scheme": "custom", "id": "native-target"}}], "context": [{{"key": "custom.mode", "value": "release"}}]}})
     return {{}}
 custom = {{"_once_target_kind": True, "kind": "custom", "impl": impl}}
 "#
@@ -26,6 +26,19 @@ fn expansion_preserves_arguments_and_declared_outputs() {
         result.actions[0].operation,
         Some(DeclaredActionOperation::WriteFile { .. })
     ));
+}
+
+#[test]
+fn expansion_inherits_platforms_and_context_but_not_package_ownership() {
+    let result = expand("    write_path(ctx[\"outputs\"][0], \"content\")").unwrap();
+    let metadata = result.actions[0].presentation.as_ref().unwrap();
+    assert!(metadata.package.is_none());
+    assert_eq!(metadata.platforms[0].id, "native-target");
+    assert_eq!(metadata.context[0].value, "release");
+    let result = expand("    write_path(ctx[\"outputs\"][0], \"content\", presentation = {\"package\": {\"ecosystem\": \"custom\", \"name\": \"child\"}})").unwrap();
+    let metadata = result.actions[0].presentation.as_ref().unwrap();
+    assert_eq!(metadata.package.as_ref().unwrap().name, "child");
+    assert!(metadata.platforms.is_empty());
 }
 
 #[test]

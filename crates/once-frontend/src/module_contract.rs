@@ -323,43 +323,44 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
         action_primitives: vec![
             entry("declare_output(name)", "Reserve a durable target output path."),
             entry("_action_source_files(paths)", "Return a workspace-source presentation descriptor for source_files, not a list for execution. When collecting action metadata, Once memoizes existing file selection and repository-relative mapping outside execution observations. Exclude generated .once paths, host paths, directories, and nonportable repository prefixes. Honor GIT_WORK_TREE when explicitly configured. Without a Git checkout or worktree, retain workspace-relative paths. Entries must be strings."),
+            entry("presentation = {package: {ecosystem, name, version, revision, digest, origin}, platforms: [{scheme, id, label, usage}], context: [{key, value, label}]}", "Optional bounded cosmetic data, not identity or cache inputs. All fields default; omit irrelevant concepts. Stable IDs and context values are separate from labels; usage is product or build-tool, never execution placement. No raw environment, credentials, host paths or authenticated URLs. Invalid optional metadata is omitted. At most eight platforms and contexts, 2048 bytes of string data; oversized IDs are dropped, never truncated. Deferred actions inherit platforms and context, not package ownership. Helpers _action_metadata, _action_package, _action_platform, and _action_context construct these records."),
             entry("action presentation", "All executable action primitives accept keyword-only display_name and source_files. These are presentation metadata, not cache inputs or action identity. Source files are repository-relative paths using forward slashes, without absolute paths, dot segments, empty segments, backslashes, drive prefixes, or control characters. Omission preserves legacy behavior; portable file primitives provide readable default names. Keep names free of secrets; control characters are normalized to spaces. Bundled kinds select existing workspace source files through the shared _action_source_files helper, excluding generated .once paths and host files. Source links may be reduced and oversized names omitted to fit server event-size limits without dropping the action outcome."),
             entry(
                 "execution_path(path)",
                 "Resolve a workspace-relative path against the local, sandbox, or remote execution root immediately before process launch.",
             ),
-            entry("write_path(path, content, *, display_name = None, source_files = [])", "Declare a portable file-writing action."),
-            entry("expand_actions(implementation, inputs, outputs, args)", "After prior actions finish, materialize inputs and invoke an exported Starlark planner with ctx.args, ctx.inputs, ctx.outputs, ctx.build_dir and ctx.label. The planner declares actions producing every promised output and returns None or a structured diagnostic. Recursive expansion is rejected."),
+            entry("write_path(path, content, *, display_name = None, source_files = [], presentation = None)", "Declare a portable file-writing action."),
+            entry("expand_actions(implementation, inputs, outputs, args, *, presentation = None)", "After prior actions finish, materialize inputs and invoke an exported Starlark planner with ctx.args, ctx.inputs, ctx.outputs, ctx.build_dir and ctx.label. The planner declares actions producing every promised output and returns None or a structured diagnostic. Recursive expansion is rejected."),
             entry(
-                "copy_path(source, destination, kind = \"file\", inputs = [], toolchain_identity = None, identifier = None, cacheable = True, *, display_name = None, source_files = [])",
+                "copy_path(source, destination, kind = \"file\", inputs = [], toolchain_identity = None, identifier = None, cacheable = True, *, display_name = None, source_files = [], presentation = None)",
                 "Copy one workspace path by value, automatically hashing each source, materializing a directory symlink at the destination, or merge directory contents while preserving their symlink layout.",
             ),
             entry(
-                "materialize_host_file(source, destination, *, display_name = None, source_files = [])",
+                "materialize_host_file(source, destination, *, display_name = None, source_files = [], presentation = None)",
                 "Snapshot a content-verified absolute host toolchain file into a workspace output.",
             ),
             entry(
-                "materialize_host_tree(source, destination, *, display_name = None, source_files = [])",
+                "materialize_host_tree(source, destination, *, display_name = None, source_files = [], presentation = None)",
                 "Snapshot a content-verified absolute host directory into one workspace directory output while preserving file modes and symbolic links.",
             ),
             entry(
-                "link_path(source, destination, identifier = None, *, display_name = None, source_files = [])",
+                "link_path(source, destination, identifier = None, *, display_name = None, source_files = [], presentation = None)",
                 "Declare an uncached relative workspace link from an automatically hashed source without copying or caching the linked contents.",
             ),
             entry(
-                "prepare_path(path, kind, identifier = None, *, display_name = None, source_files = [])",
+                "prepare_path(path, kind, identifier = None, *, display_name = None, source_files = [], presentation = None)",
                 "Declare uncached path removal or directory creation when standalone preparation is required.",
             ),
             entry(
-                "write_tree_digest(root, output, include_suffixes = [], inputs = [], identifier = None, cacheable = True, *, display_name = None, source_files = [])",
+                "write_tree_digest(root, output, include_suffixes = [], inputs = [], identifier = None, cacheable = True, *, display_name = None, source_files = [], presentation = None)",
                 "Declare a deterministic workspace tree digest action that automatically hashes its root.",
             ),
             entry(
-                "write_archive(entries, output, sha256_output = None, format = \"tar\", inputs = [], identifier = None, cacheable = True, uncompressed_sha256_output = None, *, display_name = None, source_files = [])",
+                "write_archive(entries, output, sha256_output = None, format = \"tar\", inputs = [], identifier = None, cacheable = True, uncompressed_sha256_output = None, *, display_name = None, source_files = [], presentation = None)",
                 "Declare a deterministic archive from explicit file, directory, tree, and symlink entries with fixed metadata. Format tar.gz compresses with a fixed gzip header; sha256_output then digests the compressed bytes and uncompressed_sha256_output the tar.",
             ),
             entry(
-                "download_and_extract(url, sha256, destination, authorization_env = None, identifier = None, cacheable = True, *, display_name = None, source_files = [])",
+                "download_and_extract(url, sha256, destination, authorization_env = None, identifier = None, cacheable = True, *, display_name = None, source_files = [], presentation = None)",
                 "Download a checksum-pinned ZIP archive into a cacheable directory output. Authentication, when needed, is read from the named environment variable only while the action executes.",
             ),
             entry(
@@ -367,7 +368,7 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
                 "Build a structured argument list, optionally backed by an argument file.",
             ),
             entry(
-                "run_action(argv, inputs = [], outputs = [], clean_paths = [], create_dirs = [], cwd = None, env = {}, toolchain_identity = None, identifier = None, cacheable = True, inherit_parent_env = False, depends_on_prior_actions = True, stdout = None, stderr = None, sandbox = None, network = None, success_exit_codes = [0], *, display_name = None, source_files = [])",
+                "run_action(argv, inputs = [], outputs = [], clean_paths = [], create_dirs = [], cwd = None, env = {}, toolchain_identity = None, identifier = None, cacheable = True, inherit_parent_env = False, depends_on_prior_actions = True, stdout = None, stderr = None, sandbox = None, network = None, success_exit_codes = [0], *, display_name = None, source_files = [], presentation = None)",
                 "Declare a direct executable invocation with explicit inputs, outputs, setup, caching, sandbox policy, and exit codes that indicate valid outputs. `inherit_parent_env` is available only to uncached local run actions. Explicit `env` values take precedence. Use `once query validate-actions` to investigate filesystem contract drift without changing the sandbox policy.",
             ),
         ],

@@ -14,7 +14,7 @@ use starlark::values::none::NoneType;
 use starlark::values::Value;
 use walkdir::WalkDir;
 
-use super::presentation::{record_action, unpack_source_files};
+use super::presentation::{record_action, unpack_presentation, unpack_source_files};
 use super::store::{
     analysis_active, observe, with_store, with_store_mut, AnalysisObservations, CommandPolicy,
     DeclaredAction, DeclaredActionOperation, DeclaredArchiveEntry, DeclaredArchiveEntryKind,
@@ -571,7 +571,9 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         inputs: Value<'v>,
         outputs: Value<'v>,
         args: Value<'v>,
+        #[starlark(require = named)] presentation: Option<Value<'v>>,
     ) -> anyhow::Result<NoneType> {
+        let presentation = unpack_presentation(presentation);
         let inputs = unpack_string_list(inputs, "inputs")?;
         let outputs = unpack_string_list(outputs, "outputs")?;
         let args = args
@@ -583,6 +585,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         with_store_mut(|store| {
             if let Some(store) = store {
                 store.actions.push(DeclaredAction {
+                    presentation,
                     operation: Some(DeclaredActionOperation::ExpandActions {
                         implementation: implementation.to_string(),
                         args,
@@ -620,6 +623,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     fn write_path<'v>(
         path: &str,
         content: Value<'v>,
+        #[starlark(require = named)] presentation: Option<Value<'v>>,
         #[starlark(require = named)] display_name: Option<String>,
         #[starlark(require = named)] source_files: Option<Value<'v>>,
     ) -> anyhow::Result<NoneType> {
@@ -628,6 +632,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         }
         let bytes = unpack_write_content(content)?;
         let action = DeclaredAction {
+            presentation: unpack_presentation(presentation),
             operation: Some(DeclaredActionOperation::WriteFile {
                 path: path.to_string(),
                 bytes,
@@ -671,6 +676,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         toolchain_identity: Option<String>,
         identifier: Option<String>,
         cacheable: Option<bool>,
+        #[starlark(require = named)] presentation: Option<Value<'v>>,
         #[starlark(require = named)] display_name: Option<String>,
         #[starlark(require = named)] source_files: Option<Value<'v>>,
     ) -> anyhow::Result<NoneType> {
@@ -687,6 +693,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         inputs.sort();
         inputs.dedup();
         let action = DeclaredAction {
+            presentation: unpack_presentation(presentation),
             operation: Some(DeclaredActionOperation::CopyPath {
                 sources,
                 destination: destination.to_string(),
@@ -728,6 +735,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     fn materialize_host_file<'v>(
         source: &str,
         destination: &str,
+        #[starlark(require = named)] presentation: Option<Value<'v>>,
         #[starlark(require = named)] display_name: Option<String>,
         #[starlark(require = named)] source_files: Option<Value<'v>>,
     ) -> anyhow::Result<NoneType> {
@@ -756,6 +764,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             sha256: source_sha256.clone(),
         });
         let action = DeclaredAction {
+            presentation: unpack_presentation(presentation),
             operation: Some(DeclaredActionOperation::MaterializeHostFile {
                 source: source.to_string(),
                 source_sha256,
@@ -797,6 +806,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     fn materialize_host_tree<'v>(
         source: &str,
         destination: &str,
+        #[starlark(require = named)] presentation: Option<Value<'v>>,
         #[starlark(require = named)] display_name: Option<String>,
         #[starlark(require = named)] source_files: Option<Value<'v>>,
     ) -> anyhow::Result<NoneType> {
@@ -834,6 +844,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             sha256: source_sha256.clone(),
         });
         let action = DeclaredAction {
+            presentation: unpack_presentation(presentation),
             operation: Some(DeclaredActionOperation::MaterializeHostTree {
                 source: source.to_string(),
                 source_sha256,
@@ -876,6 +887,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         source: &str,
         destination: &str,
         identifier: Option<String>,
+        #[starlark(require = named)] presentation: Option<Value<'v>>,
         #[starlark(require = named)] display_name: Option<String>,
         #[starlark(require = named)] source_files: Option<Value<'v>>,
     ) -> anyhow::Result<NoneType> {
@@ -886,6 +898,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             return Err(anyhow!("link_path source and destination must differ"));
         }
         let action = DeclaredAction {
+            presentation: unpack_presentation(presentation),
             operation: Some(DeclaredActionOperation::LinkPath {
                 source: source.to_string(),
                 destination: destination.to_string(),
@@ -928,6 +941,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         path: &str,
         kind: &str,
         identifier: Option<String>,
+        #[starlark(require = named)] presentation: Option<Value<'v>>,
         #[starlark(require = named)] display_name: Option<String>,
         #[starlark(require = named)] source_files: Option<Value<'v>>,
     ) -> anyhow::Result<NoneType> {
@@ -940,6 +954,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             DeclaredPreparePathMode::Directory => vec![path.to_string()],
         };
         let action = DeclaredAction {
+            presentation: unpack_presentation(presentation),
             operation: Some(DeclaredActionOperation::PreparePath {
                 path: path.to_string(),
                 mode,
@@ -990,6 +1005,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         inputs: Option<Value<'v>>,
         identifier: Option<String>,
         cacheable: Option<bool>,
+        #[starlark(require = named)] presentation: Option<Value<'v>>,
         #[starlark(require = named)] display_name: Option<String>,
         #[starlark(require = named)] source_files: Option<Value<'v>>,
     ) -> anyhow::Result<NoneType> {
@@ -1008,6 +1024,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         inputs.sort();
         inputs.dedup();
         let action = DeclaredAction {
+            presentation: unpack_presentation(presentation),
             operation: Some(DeclaredActionOperation::WriteTreeDigest {
                 root: root.to_string(),
                 output: output.to_string(),
@@ -1057,6 +1074,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         identifier: Option<String>,
         cacheable: Option<bool>,
         uncompressed_sha256_output: Option<String>,
+        #[starlark(require = named)] presentation: Option<Value<'v>>,
         #[starlark(require = named)] display_name: Option<String>,
         #[starlark(require = named)] source_files: Option<Value<'v>>,
     ) -> anyhow::Result<NoneType> {
@@ -1085,6 +1103,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             outputs.push(path.clone());
         }
         let action = DeclaredAction {
+            presentation: unpack_presentation(presentation),
             operation: Some(DeclaredActionOperation::WriteArchive {
                 entries,
                 output: output.to_string(),
@@ -1134,6 +1153,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         authorization_env: Option<String>,
         identifier: Option<String>,
         cacheable: Option<bool>,
+        #[starlark(require = named)] presentation: Option<Value<'v>>,
         #[starlark(require = named)] display_name: Option<String>,
         #[starlark(require = named)] source_files: Option<Value<'v>>,
     ) -> anyhow::Result<NoneType> {
@@ -1157,6 +1177,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             ));
         }
         let action = DeclaredAction {
+            presentation: unpack_presentation(presentation),
             operation: Some(DeclaredActionOperation::DownloadAndExtract {
                 url: url.to_string(),
                 sha256: sha256.to_string(),
@@ -1272,6 +1293,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         sandbox: Option<String>,
         network: Option<String>,
         success_exit_codes: Option<Value<'v>>,
+        #[starlark(require = named)] presentation: Option<Value<'v>>,
         #[starlark(require = named)] display_name: Option<String>,
         #[starlark(require = named)] source_files: Option<Value<'v>>,
     ) -> anyhow::Result<NoneType> {
@@ -1330,6 +1352,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         success_exit_codes.sort_unstable();
         success_exit_codes.dedup();
         let action = DeclaredAction {
+            presentation: unpack_presentation(presentation),
             operation: None,
             argv: argv.args,
             arg_files: argv.arg_files,

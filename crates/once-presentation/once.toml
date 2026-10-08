@@ -1,0 +1,33 @@
+[[target]]
+name = "once_presentation"
+kind = "rust_library"
+deps = ["cargo_dependencies"]
+srcs = ["src/**/*.rs"]
+
+[target.attrs]
+crate_name = "once_presentation"
+crate_root = "src/lib.rs"
+edition = "2021"
+cargo_package = "once-presentation"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/once-presentation"
+CARGO_PKG_NAME = "once-presentation"
+CARGO_PKG_VERSION = "0.0.0"
+
+[[target]]
+name = "once_presentation_unit_tests"
+kind = "rust_test"
+deps = ["cargo_dependencies"]
+srcs = ["src/**/*.rs"]
+
+[target.attrs]
+crate_name = "once_presentation"
+crate_root = "src/lib.rs"
+edition = "2021"
+cargo_package = "once-presentation"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/once-presentation"
+CARGO_PKG_NAME = "once-presentation"
+CARGO_PKG_VERSION = "0.0.0"

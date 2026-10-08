@@ -253,6 +253,7 @@ pub fn translate(event: CoreEvent, mono_ns: i64) -> Translated {
             identifier,
             display_name,
             source_files,
+            presentation,
             result,
             was_cached,
             duration_ms,
@@ -284,6 +285,9 @@ pub fn translate(event: CoreEvent, mono_ns: i64) -> Translated {
                         source_files.len()
                     ],
                     source_files,
+                    presentation: presentation
+                        .and_then(|metadata| crate::metadata::to_wire(*metadata))
+                        .map(Box::new),
                     result: wire_target_result(result) as i32,
                     was_cached,
                     duration_ms,
@@ -498,6 +502,14 @@ mod tests {
             display_name: Some("Compile main.c".into()),
             source_files: vec!["src/main.c".into(), "include/api.h".into()],
             source_file_statuses: vec![1, 2],
+            presentation: Some(Box::new(crate::proto::ActionPresentation {
+                context: vec![crate::proto::ActionContext {
+                    key: "custom.mode".into(),
+                    value: "test".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
             ..Default::default()
         };
         let legacy = LegacyActionCompleted::decode(current.encode_to_vec().as_slice()).unwrap();
@@ -506,6 +518,7 @@ mod tests {
         assert_eq!(legacy.selected_attempt, 1);
         let decoded = ActionCompleted::decode(legacy.encode_to_vec().as_slice()).unwrap();
         assert_eq!(decoded.display_name, None);
+        assert!(decoded.presentation.is_none());
         assert!(decoded.source_files.is_empty());
         assert!(decoded.source_file_statuses.is_empty());
         assert_eq!(decoded.identifier, current.identifier);
@@ -535,6 +548,7 @@ mod tests {
                 identifier: Some("analysis".into()),
                 display_name: None,
                 source_files: Vec::new(),
+                presentation: None,
                 result: CoreResult::Succeeded,
                 was_cached: false,
                 duration_ms: 5,

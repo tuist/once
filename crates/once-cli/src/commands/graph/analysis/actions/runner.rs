@@ -148,6 +148,7 @@ pub(in crate::commands::graph::analysis) fn run_declared_actions<'a>(
                             let identifier = declared.identifier.clone();
                             let display_name = declared.display_name.clone();
                             let source_files = declared.source_files.clone();
+                            let presentation = declared.presentation.clone();
                             let action_index = u32::try_from(index + offset).unwrap_or(u32::MAX);
                             if let Some(bus) = event_bus {
                                 crate::bus_events::action_attempt_started(
@@ -217,6 +218,7 @@ pub(in crate::commands::graph::analysis) fn run_declared_actions<'a>(
                                     identifier.as_deref(),
                                     display_name.as_deref(),
                                     &source_files,
+                                    presentation.as_ref(),
                                     duration_ms,
                                     was_cached,
                                     exit_code,
@@ -234,6 +236,7 @@ pub(in crate::commands::graph::analysis) fn run_declared_actions<'a>(
                                     identifier,
                                     display_name,
                                     source_files,
+                                    presentation,
                                     index: action_index,
                                     cache_state: outcome.cache_state,
                                     duration_ms: i64::try_from(duration_ms).unwrap_or(i64::MAX),

@@ -73,6 +73,11 @@ def _apple_triple_suffix(platform, sdk_variant):
         return ""
     return "-simulator"
 
+def _apple_action_metadata(triple, platform, sdk_variant, arch, usage = "product"):
+    name = "Mac Catalyst" if triple.endswith("-macabi") else {"ios": "iOS", "macos": "macOS", "macosx": "macOS", "tvos": "tvOS", "watchos": "watchOS", "visionos": "visionOS", "xros": "visionOS"}.get(platform, platform)
+    label = name + (" Simulator" if sdk_variant == "simulator" and name not in ["macOS", "Mac Catalyst"] else "") + " · " + arch
+    return _action_metadata(platforms = [_action_platform("apple", triple, label, usage)])
+
 def _apple_triple(platform, minimum_os, sdk_variant, arch, mac_catalyst):
     # Mac Catalyst surfaces as `<arch>-apple-ios<minOS>-macabi` no
     # matter which platform the manifest set; the iOS triple is what
@@ -2377,6 +2382,7 @@ def _apple_library_impl(ctx):
                     identifier = "swift_module_compile_" + module_name + arch_suffix,
                     display_name = "Compile Swift module · " + module_name + arch_suffix,
                     source_files = _action_source_files(swift_srcs),
+                    presentation = _apple_action_metadata(triple, platform, sdk_variant, arch),
                 )
             else:
                 _apple_swift_action(ctx, attrs, swiftc, ctx["deps"],
@@ -2390,11 +2396,13 @@ def _apple_library_impl(ctx):
                     identifier = "swift_module_compile_" + module_name + arch_suffix,
                     display_name = "Compile Swift module · " + module_name + arch_suffix,
                     source_files = _action_source_files(swift_srcs),
+                    presentation = _apple_action_metadata(triple, platform, sdk_variant, arch),
                 )
 
             swift_libtool = _resolve_libtool(platform, sdk_variant, xcode_developer_dir)
             run_action(
                 display_name = "Archive Swift library · " + ctx["label"]["name"],
+                presentation = _apple_action_metadata(triple, platform, sdk_variant, arch),
                 source_files = _action_source_files(list(swift_objects)),
                 argv = list(swift_libtool["argv"]) + ["-static", "-o", swift_archive] + swift_objects,
                 inputs = list(swift_objects),
@@ -2563,6 +2571,7 @@ def _apple_library_impl(ctx):
             libtool_inputs.extend(arch_clang_objects)
             run_action(
                 display_name = "Merge static libraries · " + ctx["label"]["name"],
+                presentation = _apple_action_metadata(triple, platform, sdk_variant, arch),
                 source_files = _action_source_files(libtool_inputs),
                 argv = libtool_argv,
                 inputs = libtool_inputs,
@@ -2577,6 +2586,7 @@ def _apple_library_impl(ctx):
             libtool_argv.extend(arch_clang_objects)
             run_action(
                 display_name = "Archive static library · " + ctx["label"]["name"],
+                presentation = _apple_action_metadata(triple, platform, sdk_variant, arch),
                 source_files = _action_source_files(list(arch_clang_objects)),
                 argv = libtool_argv,
                 inputs = list(arch_clang_objects),
@@ -2607,6 +2617,7 @@ def _apple_library_impl(ctx):
         lipo_argv.extend(per_arch_archives)
         run_action(
             display_name = "Combine architecture slices · " + ctx["label"]["name"],
+            presentation = _action_metadata(platforms = [_apple_action_metadata(_apple_triple(platform, target_sdk_version, sdk_variant, arch, mac_catalyst), platform, sdk_variant, arch)["platforms"][0] for arch in archs]),
             source_files = _action_source_files(list(per_arch_archives)),
             argv = lipo_argv,
             inputs = list(per_arch_archives),
@@ -3051,6 +3062,7 @@ def _swift_macro_impl(ctx):
         toolchain_identity = swiftc["identity"],
         identifier = "swift_macro_compile_" + module_name,
         display_name = "Compile Swift macro · " + module_name,
+        presentation = _apple_action_metadata(triple, "macos", "device", host_arch(), "build-tool"),
         source_files = _action_source_files(swift_inputs),
     )
 
@@ -3077,6 +3089,7 @@ def _swift_macro_impl(ctx):
         toolchain_identity = swiftc["identity"],
         identifier = "swift_macro_archive_" + module_name,
         display_name = "Archive Swift macro · " + module_name,
+        presentation = _apple_action_metadata(triple, "macos", "device", host_arch(), "build-tool"),
         source_files = _action_source_files(swift_inputs),
     )
 
@@ -3819,6 +3832,7 @@ def _apple_mixed_framework_impl(ctx):
             link_inputs.append(path)
     run_action(
         display_name = "Link framework · " + ctx["label"]["name"],
+        presentation = _apple_action_metadata(triple, platform, sdk_variant, _apple_default_arch(platform, sdk_variant)),
         source_files = _action_source_files(link_inputs),
         argv = link_argv,
         inputs = link_inputs,

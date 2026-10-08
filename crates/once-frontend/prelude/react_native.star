@@ -557,6 +557,7 @@ def _react_native_bundle_impl(ctx):
         metro_outputs.extend([final_bundle, source_map])
     run_action(
         display_name = "Bundle " + _basename(entry) + " with Metro · " + platform,
+        presentation = _action_metadata(context = [_action_context("react-native.platform", platform)]),
         source_files = _action_source_files(files),
         argv = argv,
         inputs = _unique([stage, dependency["node_modules"], metro_wrapper]),
@@ -951,6 +952,7 @@ def _react_native_apple_application_impl(ctx):
     xcode_argv.append("build")
     run_action(
         display_name = "Build React Native Apple app · " + ctx["label"]["name"],
+        presentation = _action_metadata(context = [_action_context("apple.sdk", sdk), _action_context("apple.configuration", configuration)]),
         source_files = _action_source_files(files),
         argv = xcode_argv,
         inputs = native_inputs,
@@ -1105,6 +1107,7 @@ def _react_native_android_application_impl(ctx):
     native_inputs = _unique([stage, dependency["node_modules"]] + [item["generated_sources"] for item in deps["codegen"]] + [item["modules_snapshot"] for item in deps["autolinking"]])
     run_action(
         display_name = "Build React Native Android app · " + ctx["label"]["name"],
+        presentation = _action_metadata(context = [_action_context("android.configuration", configuration)]),
         source_files = _action_source_files(files),
         argv = argv,
         inputs = native_inputs,

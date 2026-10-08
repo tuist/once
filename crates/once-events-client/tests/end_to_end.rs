@@ -552,6 +552,14 @@ async fn authenticated_shutdown_drains_individual_actions_and_metadata() {
             capability: "build".into(),
             action_index: index,
             identifier: Some(format!("action-{index}")),
+            presentation: Some(Box::new(once_core::ActionPresentation {
+                context: vec![once_core::ActionContext {
+                    key: "custom.mode".into(),
+                    value: "release".into(),
+                    label: "Release".into(),
+                }],
+                ..Default::default()
+            })),
             display_name: Some(format!("Compile source-{index}.c")),
             source_files: if index == 2 {
                 (0..3_000)
@@ -644,6 +652,10 @@ async fn authenticated_shutdown_drains_individual_actions_and_metadata() {
         assert_eq!(
             action.display_name.as_deref(),
             Some(format!("Compile source-{index}.c").as_str())
+        );
+        assert_eq!(
+            action.presentation.as_ref().unwrap().context[0].value,
+            "release"
         );
         assert_eq!(action.source_files.len(), action.source_file_statuses.len());
         for (path, status) in action.source_files.iter().zip(&action.source_file_statuses) {
@@ -739,6 +751,7 @@ async fn shutdown_drains_cached_action_burst_beyond_two_seconds() {
             identifier: Some(format!("action-{index}")),
             display_name: None,
             source_files: Vec::new(),
+            presentation: None,
             result: once_core::TargetResult::Succeeded,
             was_cached: true,
             duration_ms: 0,

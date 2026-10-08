@@ -62,6 +62,9 @@ mod dockerfile_instructions;
 #[path = "prelude/oci_containers.rs"]
 mod oci_containers;
 
+#[path = "prelude/action_metadata.rs"]
+mod action_metadata;
+
 fn store_for(workspace: &Path, package: &str) -> AnalysisStore {
     AnalysisStore::new(
         workspace.to_path_buf(),

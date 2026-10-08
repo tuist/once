@@ -780,7 +780,7 @@ phases during import; executing such a record fails until those settings resolve
   characters. These are links, not additional inputs or outputs.
 
 All executable action primitives, including portable file actions, accept
-`display_name` and `source_files` as optional keyword arguments. Portable file
+`display_name`, `source_files`, and `presentation` as optional keyword arguments. Portable file
 operations supply readable default names when no name is given. Bundled target
 kinds give compilation, linking, testing, packaging, and setup work descriptive
 names. Use `source_files = _action_source_files(paths)` to supply a descriptor
@@ -803,13 +803,55 @@ run_action(
 )
 ```
 
+The optional `presentation` record describes ecosystem-native context without
+changing execution or cache identity:
+
+```python
+presentation = _action_metadata(
+    package = _action_package("custom", "library", version = "1.2", origin = "registry"),
+    platforms = [_action_platform("custom", "native-target", label = "Target platform")],
+    context = [_action_context("custom.mode", "release", label = "Release")],
+)
+```
+
+A package may contain `ecosystem`, `name`, `version`, `revision`, `digest`, and
+`origin`. A platform has a stable `scheme` and `id`, an optional display `label`,
+and optional `usage` (`product` or `build-tool`). A context entry has a stable
+namespaced `key` and `value`, and an optional display `label`. All fields default
+to empty; omit irrelevant concepts. Declared output platforms are not execution
+worker placement. Versions, VCS revisions, content digests, SDK levels, and
+compiler versions are separate concepts. Never copy raw environment maps,
+credentials, authenticated URLs, or host paths into presentation.
+
+Once retains at most eight platforms and eight context entries, with at most
+2048 bytes of string data in total. Names are bounded to 128 bytes, namespace
+keys to 64 bytes, identifiers and values to 256 bytes, and display labels to
+128 bytes. Invalid or oversized identifiers are omitted rather than truncated;
+malformed optional records are ignored rather than failing execution. Labels
+normalize control characters to spaces and oversized labels are omitted.
+`expand_actions(..., presentation = ...)` passes platforms and context to
+children that do not declare their own metadata, but never inherits package
+ownership into unrelated generated actions.
+
+Bundled producers select only owned facts: Cargo package versions and compiler
+triples, Apple output triples, Go OS/architecture and effective cgo settings,
+Kotlin JVM levels, Android API levels and native ABIs, Zig's effective optimize
+mode, OCI platform sets and immutable digests, Mix environment and dependency
+identity, and known test/task/build context. Mix registry dependencies use the
+`hex` ecosystem and a package version; Git/local dependencies use `mix`, with a
+Git revision or no version respectively. Opaque CMake/Bazel/React Native steps
+never claim invisible internal package graphs or worker platforms. Shell/file
+operations, runtime test runners, and other actions may correctly omit package
+or platform information. Cargo's ambiguous workspace `0.0.0` default is omitted
+unless an explicit package version is available.
+
 Once includes this metadata in per-action completion events and preserves it
 when replaying cached target outcomes. An event server can show the name and
 link each file at the run's Git revision using its own repository integration.
 Older servers ignore the additional optional fields; no protocol upgrade or
 new required feature is necessary. If optional presentation fields exceed the
 server's event-size limit, Once retains the source links that fit and may omit
-an oversized display name. The action's identity, timing, and result are
+an oversized display name or structured context. The action's identity, timing, and result are
 preserved.
 
 Consumers must include staged output paths in their declared inputs. Mentioning

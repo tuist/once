@@ -270,6 +270,7 @@ def _javascript_test_impl(ctx, runner_type, display_name, default_runner):
     runner_version = host_command(runner_version_argv, cwd = workspace_root()).strip() if runner_is_workspace_input else host_command(runner_version_argv).strip()
     run_action(
         display_name = "Run " + runner_type + " tests · " + ctx["label"]["name"],
+        presentation = _action_metadata(context = [_action_context("javascript.runner", runner_type)]),
         source_files = _action_source_files(_unique(inputs + [adapter])),
         argv = argv,
         inputs = _unique(inputs + [adapter]),

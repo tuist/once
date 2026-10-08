@@ -963,6 +963,7 @@ def _elixir_compile_action(ctx, toolchain, apps, srcs, static_inputs, config, co
     })
     run_action(
         display_name = "Compile Elixir modules · " + ctx["label"]["name"],
+        presentation = _action_metadata(context = [_action_context("mix.env", _elixir_mix_env(ctx), "MIX_ENV " + _elixir_mix_env(ctx))]),
         source_files = _action_source_files(srcs),
         argv = [toolchain["elixir"], _elixir_from_package(ctx, compile_exs)],
         inputs = _unique(compile_inputs + _elixir_app_inputs(apps)),
@@ -1785,6 +1786,13 @@ def _mix_lock_value(entry, index, default = ""):
         return default
     return entry[index]
 
+def _mix_action_metadata(ctx, mix_env, app_name):
+    source = _elixir_attr(ctx, "_mix_source", "") or ""
+    hex = source.startswith("hex:")
+    git = source.startswith("git:")
+    package = _action_package("hex" if hex else "mix", _elixir_attr(ctx, "_mix_package_name", app_name) or app_name, _elixir_attr(ctx, "version", "") if hex else "", _elixir_attr(ctx, "_mix_revision", "") if git else "", origin = "registry" if hex else "git" if git else "path") if source else None
+    return _action_metadata(package = package, context = [_action_context("mix.env", mix_env, "MIX_ENV " + mix_env)])
+
 def _mix_locked_identity(app, entry):
     kind = _mix_lock_value(entry, 0)
     if kind == "hex":
@@ -2345,6 +2353,7 @@ def _mix_rebar_package_action(ctx, source_root, app_name, mix_env, apps, app_dir
         resource_inputs.append(compiled_app_dir + "/priv")
     run_action(
         display_name = "Compile Rebar dependency · " + ctx["label"]["name"],
+        presentation = _mix_action_metadata(ctx, mix_env, app_name),
         source_files = _action_source_files(_unique(_elixir_app_inputs(apps) + [config_file, source_stage] + resource_inputs)),
         argv = argv,
         inputs = _unique(_elixir_app_inputs(apps) + [config_file, source_stage] + resource_inputs),
@@ -2446,7 +2455,8 @@ def _mix_package_impl(ctx):
         write_path(dependency_apps_file, _elixir_lines([app.get("app_name", "") for app in apps if app.get("app_name", "")]))
         write_path(compile_script, _mix_compile_source())
         run_action(
-            display_name = "Compile Mix dependency · " + ctx["label"]["name"],
+            display_name = "Compile Mix dependency · " + (_elixir_attr(ctx, "_mix_package_name", app_name) or app_name),
+            presentation = _mix_action_metadata(ctx, mix_env, app_name),
             source_files = _action_source_files(inputs),
             argv = [
                 toolchain["elixir"],

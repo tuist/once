@@ -34,6 +34,7 @@ manifest_files=(
   crates/once-cas/once.toml
   crates/once-host-tree/once.toml
   crates/once-core/once.toml
+  crates/once-presentation/once.toml
   crates/once-events-client/once.toml
   crates/once-frontend/once.toml
   crates/once/once.toml
@@ -152,12 +153,36 @@ CARGO_PKG_VERSION = "${version}"
 # once release generated targets end
 EOF
 
+cat >>crates/once-presentation/once.toml <<EOF
+# once release generated targets start
+[[target]]
+name = "once_presentation_${suffix}"
+kind = "rust_library"
+deps = ["${dependency_target}"]
+srcs = ["src/**/*.rs"]
+
+[target.attrs]
+crate_name = "once_presentation"
+crate_root = "src/lib.rs"
+edition = "2021"
+target = "${target}"
+rustc_flags = ${release_flags}
+cargo_package = "once-presentation"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/once-presentation"
+CARGO_PKG_NAME = "once-presentation"
+CARGO_PKG_VERSION = "${version}"
+# once release generated targets end
+EOF
+
 cat >>crates/once-core/once.toml <<EOF
 # once release generated targets start
 [[target]]
 name = "once_core_${suffix}"
 kind = "rust_library"
 deps = [
+  "crates/once-presentation/once_presentation_${suffix}",
   "crates/once-cas/once_cas_${suffix}",
   "crates/once-host-tree/once_host_tree_${suffix}",
   "${dependency_target}",
@@ -213,6 +238,7 @@ cat >>crates/once-frontend/once.toml <<EOF
 name = "once_frontend_${suffix}"
 kind = "rust_library"
 deps = [
+  "crates/once-presentation/once_presentation_${suffix}",
   "crates/once-host-tree/once_host_tree_${suffix}",
   "${dependency_target}",
 ]

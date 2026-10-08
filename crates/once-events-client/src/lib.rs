@@ -31,6 +31,7 @@ mod dashboard;
 mod bridge;
 mod buffer;
 mod loss;
+mod metadata;
 mod presentation;
 mod session;
 mod source_files;

@@ -354,7 +354,8 @@ def _nx_task_impl(ctx):
     node_version = host_command([node, "--version"]).strip()
 
     run_action(
-        display_name = "Run Nx task · " + ctx["label"]["name"],
+        display_name = "Run Nx task · " + project + ":" + task,
+        presentation = _action_metadata(context = [_action_context("nx.task", project + ":" + task)]),
         source_files = _action_source_files(inputs),
         argv = _nx_shell_argv(commands),
         inputs = inputs,

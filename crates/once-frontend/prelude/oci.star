@@ -448,6 +448,7 @@ def _oci_image_impl(ctx):
     planner_inputs = _unique([layer["sha256"] for layer in layers] + [layer.get("diff_id") or layer["sha256"] for layer in layers]) + ([base["layout"] + "/index.json"] if base else [])
     expand_actions(
         implementation = "oci_image_plan",
+        presentation = _action_metadata(platforms = [_action_platform("oci", _oci_platform_text({"os": os, "architecture": architecture, "variant": variant}))]),
         inputs = planner_inputs,
         outputs = [layout + "/index.json", layout + "/oci-layout", layout + "/manifest.json", descriptor, manifest, config, archive, archive_digest],
         args = spec,
@@ -695,6 +696,7 @@ def _oci_index_impl(ctx):
                 platforms.append(platform)
     expand_actions(
         implementation = "oci_index_plan",
+        presentation = _action_metadata(platforms = [_action_platform("oci", platform) for platform in platforms]),
         inputs = [image["layout"] + "/index.json" for image in images],
         outputs = [layout + "/index.json", layout + "/oci-layout", descriptor, archive, archive_digest],
         args = {

@@ -1,5 +1,10 @@
 _OCI_CRANE_TOOL = tool("crane", executables = ["crane"])
 
+def _oci_package_metadata(image, digest):
+    if any([marker in image for marker in ["://", "@", "?", "#"]]):
+        return None
+    return _action_package("oci", image, digest = digest, origin = "registry")
+
 def _oci_registry_attr(ctx, name, default):
     return _configured_attr(ctx, name, default)
 
@@ -74,6 +79,7 @@ def _oci_pull_impl(ctx):
     argv.extend([reference, layout])
     run_action(
         display_name = "Pull container image · " + ctx["label"]["name"],
+        presentation = _action_metadata(package = _oci_package_metadata(image, digest), platforms = [_action_platform("oci", platform)] if platform != "all" else []),
         argv = argv,
         outputs = [layout],
         clean_paths = [layout],

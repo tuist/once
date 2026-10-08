@@ -14,6 +14,8 @@ use tempfile::TempDir;
 
 #[path = "tests/expansion.rs"]
 mod expansion;
+#[path = "tests/metadata.rs"]
+mod metadata;
 
 fn run(source: &str) -> starlark::Result<()> {
     Module::with_temp_heap(|module| {
