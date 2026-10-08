@@ -815,7 +815,9 @@ preserved.
 Consumers must include staged output paths in their declared inputs. Mentioning
 a path only in arguments or environment variables does not guarantee that a
 cached staging action materializes it. Prefer disjoint staged output trees
-rather than a parent directory followed by overlapping child copies.
+rather than a parent directory followed by overlapping child copies. If a native
+consumer requires a complete build tree followed by application overlays, each
+child copy must declare the staged parent as an input so it is restored first.
 
 Optional toolchain and action identities are encoded separately in the input
 hash, including presence and embedded separators. Equal concatenated text in

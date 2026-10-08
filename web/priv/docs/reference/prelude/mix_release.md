@@ -7,7 +7,10 @@ Assembles a Mix release from a compiled `mix_project`.
 `mix_release` depends on exactly one target that provides `mix_project`. It
 stages the project manifest, lockfile, configuration, declared data and tools,
 the compiled project environment, and separately cached dependency
-applications into an isolated project.
+applications into an isolated project. The complete compiled environment includes
+compiler-generated resources outside application and consolidation directories,
+so pre-release asset tasks can consume them after a cache restore. Dependency
+application overlays restore the enclosing build tree first.
 
 Optional `pre_tasks` run as ordered, exact task argument vectors before release
 assembly. The release task runs with compilation and dependency checks

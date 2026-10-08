@@ -1265,7 +1265,7 @@ File.rm(summary_file)
 System.halt(status)
 """
 
-def _elixir_stage_apps(ctx, apps, build_root, mix_env, identifier):
+def _elixir_stage_apps(ctx, apps, build_root, mix_env, identifier, stage_inputs = []):
     staged = []
     for app in apps:
         app_name = app.get("app_name", "")
@@ -1278,28 +1278,29 @@ def _elixir_stage_apps(ctx, apps, build_root, mix_env, identifier):
                 app_dir,
                 destination,
                 kind = "tree",
-                inputs = [app_dir],
+                inputs = [app_dir] + stage_inputs,
                 identifier = identifier + ":" + app_name,
                 source_files = _action_source_files([app_dir]),
             )
     return staged
 
 def _elixir_stage_consumer(ctx, root_app, apps, build_root, mix_env, identifier):
-    staged = _elixir_stage_apps(ctx, apps, build_root, mix_env, identifier)
+    staged = []
     root_build_env = root_app.get("build_env_dir", "")
     if root_build_env:
-        source = root_build_env + "/consolidated"
-        destination = build_root + "/" + mix_env + "/consolidated"
+        destination = build_root + "/" + mix_env
         copy_path(
-            source,
+            root_build_env,
             destination,
             kind = "tree",
-            inputs = [source],
-            identifier = identifier + ":consolidated",
-            source_files = _action_source_files([source]),
+            inputs = [root_build_env],
+            identifier = identifier + ":build-tree",
+            source_files = _action_source_files([root_build_env]),
         )
         staged.append(destination)
-    return staged
+    # Restore the enclosing build tree before overlaying dependency applications.
+    apps_staged = _elixir_stage_apps(ctx, apps, build_root, mix_env, identifier, stage_inputs = staged)
+    return staged + apps_staged
 
 def _elixir_test_runner_command(ctx, toolchain, apps, srcs, mix_config):
     test_paths = _elixir_test_paths(ctx, srcs)
