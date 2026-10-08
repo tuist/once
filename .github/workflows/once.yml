@@ -398,6 +398,25 @@ jobs:
       - run: chmod +x target/release/once
       - run: mise exec -- shellspec
 
+  ios-sdk-check:
+    name: iOS SDK check
+    needs: changes
+    if: needs.changes.outputs.rust_ci == 'true'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
+        with:
+          version: "2026.10.2"
+          install_args: "rust"
+      - run: mise exec -- rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ios-sdk-check
+          cache-on-failure: true
+          cache-bin: false
+      - run: mise exec -- cargo check --locked -p once --target aarch64-apple-ios --target aarch64-apple-ios-sim --target x86_64-apple-ios
+
   windows-build:
     name: windows build
     needs: changes
