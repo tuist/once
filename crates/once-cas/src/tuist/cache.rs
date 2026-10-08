@@ -46,11 +46,11 @@ const ENDPOINT_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// that discovery returns can be unreachable from inside the runner network.
 const TUIST_CACHE_ENDPOINT_ENV: &str = "TUIST_CACHE_ENDPOINT";
 const GRPC_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-/// How long a `ByteStream` write may go without the remote accepting more of
-/// it. Writes cannot use `GRPC_REQUEST_TIMEOUT`: their response only arrives
-/// once the whole blob is sent, so a fixed deadline caps the blob size a link
-/// can upload.
-const UPLOAD_STALL_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a `ByteStream` transfer may go without moving. `GRPC_REQUEST_TIMEOUT`
+/// only lasts until response headers arrive. A write's headers come after its
+/// last byte, so a fixed deadline caps the blob size a link can upload; a
+/// read's come before its first, so a body that stops is never bounded.
+const STREAM_STALL_TIMEOUT: Duration = Duration::from_secs(30);
 const BATCH_BLOB_LIMIT: usize = 2 * 1024 * 1024;
 const BATCH_BLOB_LIMIT_I64: i64 = 2 * 1024 * 1024;
 const BYTE_STREAM_CHUNK_SIZE: usize = 2 * 1024 * 1024;
@@ -72,7 +72,7 @@ pub struct TuistCache {
     client: Arc<OnceCell<std::result::Result<reqwest::Client, CachedRemoteError>>>,
     config: TuistCacheConfig,
     grpc_channel_cache: Arc<OnceCell<std::result::Result<GrpcChannels, CachedRemoteError>>>,
-    upload_stall_timeout: Duration,
+    stream_stall_timeout: Duration,
     capabilities_cache: Arc<Mutex<Option<RemoteCapabilities>>>,
     known_remote_blobs: Arc<Mutex<HashMap<Digest, reapi::Digest>>>,
     transfer_limit: Arc<Semaphore>,
@@ -150,7 +150,7 @@ impl TuistCache {
             client: Arc::new(OnceCell::new()),
             config,
             grpc_channel_cache: Arc::new(OnceCell::new()),
-            upload_stall_timeout: UPLOAD_STALL_TIMEOUT,
+            stream_stall_timeout: STREAM_STALL_TIMEOUT,
             capabilities_cache: Arc::new(Mutex::new(None)),
             known_remote_blobs: Arc::new(Mutex::new(HashMap::new())),
             transfer_limit: Arc::new(Semaphore::new(MAX_PARALLEL_TRANSFERS)),
@@ -244,7 +244,9 @@ impl TuistCache {
         let mut stream = response.into_inner();
         let (mut writer, reader) = tokio::io::duplex(64 * 1024);
         let download = async {
-            while let Some(response) = stream.message().await? {
+            while let Some(response) =
+                stall::next_message(&mut stream, self.stream_stall_timeout).await?
+            {
                 writer
                     .write_all(&response.data)
                     .await
@@ -874,7 +876,7 @@ impl TuistCache {
             .authorized_grpc_request(stall::tracked(requests, Arc::clone(&progress)), operation)
             .await?;
         let response =
-            stall::unless_stalled(&progress, self.upload_stall_timeout, client.write(request))
+            stall::unless_stalled(&progress, self.stream_stall_timeout, client.write(request))
                 .await?
                 .into_inner();
         if ![
@@ -982,7 +984,7 @@ impl TuistCache {
             .authorized_grpc_request(stall::tracked(requests, Arc::clone(&progress)), operation)
             .await?;
         let response =
-            stall::unless_stalled(&progress, self.upload_stall_timeout, client.write(request))
+            stall::unless_stalled(&progress, self.stream_stall_timeout, client.write(request))
                 .await;
         if let Some(message) = read_error.lock().await.take() {
             return Err(Error::Io {
@@ -1041,8 +1043,7 @@ impl TuistCache {
         };
         let mut transferred = Vec::with_capacity(initial_capacity);
         let mut stream = response.into_inner();
-        while let Some(response) = stream
-            .message()
+        while let Some(response) = stall::next_message(&mut stream, self.stream_stall_timeout)
             .await
             .map_err(|source| grpc_error(operation, &source))?
         {

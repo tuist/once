@@ -63,6 +63,21 @@ pub(super) async fn unless_stalled<T>(
     }
 }
 
+/// The next message of a response stream, failing when none arrives within
+/// `timeout`.
+pub(super) async fn next_message<T>(
+    stream: &mut tonic::Streaming<T>,
+    timeout: Duration,
+) -> std::result::Result<Option<T>, Status> {
+    tokio::time::timeout(timeout, stream.message())
+        .await
+        .unwrap_or_else(|_| {
+            Err(Status::deadline_exceeded(format!(
+                "download made no progress for {timeout:?}"
+            )))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
