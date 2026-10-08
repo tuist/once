@@ -541,7 +541,11 @@ A resolver or implementation reports an actionable failure by calling `fail` wit
 and optionally `attribute` and `repairs`. The engine attaches the target and
 returns a structured diagnostic with those fields, so agents receive the same
 `code`, `attribute`, and `repairs` shape as schema validation. Any other
-failure text is reported as a generic analysis failure.
+failure text is reported as a generic analysis failure. Actionable resolver
+diagnostics stay attached to the resolver owner rather than preventing unrelated
+targets from loading. Selecting that owner or a dependent target still fails with
+the diagnostic and its repairs. Unexpected resolver evaluation failures remain
+fatal to graph loading.
 
 When an artifact has different link-time and runtime dependency closures,
 publish those closures as separate provider fields. Do not flatten them into
