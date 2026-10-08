@@ -14,6 +14,10 @@ Describe 'apple graph'
     return 1
   }
 
+  macos_runtime_unavailable() {
+    [ "$(uname -s)" != "Darwin" ]
+  }
+
   copy_apple_library_fixture() {
     cp -R "$REPO_ROOT/fixtures/apple_library/." "$WORKSPACE/"
   }
@@ -493,6 +497,7 @@ TOML
   End
 
   It 'runs Apple application artifacts through the simulator launch path'
+    Skip if 'Apple simulator runtimes require macOS' macos_runtime_unavailable
     create_mock_apple_run_fixture
 
     When call env PATH="$WORKSPACE/bin:$PATH" "$ONCE_BIN" -C "$WORKSPACE" --format json run apps/ios/App
@@ -519,6 +524,7 @@ TOML
   End
 
   It 're-runs Apple test runner actions without using the action cache'
+    Skip if 'Apple test runtimes require macOS' macos_runtime_unavailable
     create_mock_apple_test_fixture
 
     When call env PATH="$WORKSPACE/toolchain/usr/bin:$PATH" /bin/sh -c '"$1" -C "$2" --format json test apps/ios/AppTests
