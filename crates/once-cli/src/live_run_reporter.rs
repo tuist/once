@@ -30,6 +30,8 @@ use crate::cache_provider::{credentials_root, resolve_config, ResolvedCacheProvi
 use crate::discovery;
 use crate::termination::{self, SignalWatcher};
 
+mod source_files;
+
 /// How long a cancelled run may spend delivering its terminal event. Well
 /// inside the grace period CI runners give between the first signal and a kill.
 const CANCEL_DRAIN: Duration = Duration::from_secs(2);
@@ -153,6 +155,13 @@ pub async fn spawn(
                     return Ok(0);
                 }
             };
+            let git_rev = source_files::revision(&workspace).await;
+            let mut source_file_tasks = tokio::task::JoinSet::new();
+            let source_workspace = workspace.clone();
+            let source_revision = git_rev.clone();
+            source_file_tasks.spawn(async move {
+                source_files::collect(&source_workspace, &source_revision).await
+            });
             let caps = tokio::time::timeout(Duration::from_secs(5), client.capabilities())
                 .await
                 .map_err(|_| TransportError::PreflightTimeout)??;
@@ -175,7 +184,11 @@ pub async fn spawn(
             if let Some(command) = argv.first_mut() {
                 *command = "once".to_string();
             }
-            let git_rev = git_revision(&workspace);
+            let source_snapshot = source_file_tasks
+                .join_next()
+                .await
+                .and_then(Result::ok)
+                .unwrap_or_default();
             let safe_context =
                 if allowlist_version == crate::argv_normalize::SAFE_LITERAL_ALLOWLIST_VERSION {
                     build_safe_context(&workspace)
@@ -212,6 +225,7 @@ pub async fn spawn(
             let renewal_xdg = xdg.clone();
             let transport = client
                 .with_metadata(metadata)
+                .with_source_files(source_snapshot)
                 .with_cancellation(cancellation.clone())
                 .with_token_provider(move || {
                     let workspace = renewal_workspace.clone();
@@ -405,17 +419,6 @@ fn new_run_id() -> String {
         u32::try_from((non_negative % 1000) * 1_000_000).unwrap_or(0),
     ));
     format!("run-{uuid}")
-}
-
-fn git_revision(workspace: &Path) -> String {
-    std::process::Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(workspace)
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-        .unwrap_or_default()
 }
 
 #[cfg(test)]

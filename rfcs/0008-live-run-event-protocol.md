@@ -1375,3 +1375,18 @@ enum Severity {
   SEVERITY_ERROR = 3;
 }
 ```
+
+## Action source-file classification extension
+
+`ActionCompleted.source_files` (tag 16) retains repository-relative presentation paths in declaration order, including downloaded, generated, and untracked inputs. The additive packed enum field `source_file_statuses` (tag 17) has one entry per path, in the same order:
+
+- `SOURCE_FILE_STATUS_UNSPECIFIED = 0`: no affirmative classification.
+- `SOURCE_FILE_STATUS_COMMITTED = 1`: a regular file or symlink blob exists at that path in the tree of `RunStarted.git_rev`.
+- `SOURCE_FILE_STATUS_NOT_COMMITTED = 2`: the complete tree was read, but contains no blob at that path. Gitlinks and files inside submodules are not blobs in the parent repository.
+- `SOURCE_FILE_STATUS_UNKNOWN = 3`: no usable complete tree, including a missing checkout, lookup failure, timeout, or resource limit.
+
+Consumers retain every path for display and search. Only `COMMITTED` authorizes a repository source link, subject to ordinary path, revision, and connected-repository validation. Unspecified, unknown, and future enum values remain plain text. A nonempty status list whose length differs from the path list disables links for the entire action. An empty list is legacy metadata, for which consumers may retain their previous linking behavior.
+
+Classifying clients send an `UNKNOWN` entry for every path when collection fails, never an empty list alongside paths. Once snapshots the exact reported revision once per run with a Git tree listing bounded by a shared three-second collection deadline, 32 MiB of output, and 200,000 entries, and reclassifies retained action paths at event ingestion. Revision capture is separately bounded by three seconds. Collection overlaps network preflight; the reporter waits for its immutable result before admitting the first event. Exceeding any collection bound makes every path UNKNOWN, rather than treating a partial tree as complete. Classification does not enter action inputs, observations, fingerprints, or persisted target outcomes. Resends use the already classified event. Presentation size trimming drops each path together with its status.
+
+Commit membership does not prove that the commit has been pushed, nor that a dirty working-copy file matches its committed contents. This extension does not fetch dependency sources or check upstream URLs. Deploy server support before releasing the first client that reports classified source files.

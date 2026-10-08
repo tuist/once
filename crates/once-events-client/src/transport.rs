@@ -181,6 +181,7 @@ pub struct EventClient {
     token_slot: TokenSlot,
     token_provider: Option<TokenProvider>,
     cancellation: RunCancellation,
+    source_files: crate::SourceFileSnapshot,
 }
 
 type TokenSlot = Arc<Mutex<Option<MetadataValue<Ascii>>>>;
@@ -252,6 +253,7 @@ impl EventClient {
             dashboard: crate::dashboard::DashboardLink::default(),
             token_provider: None,
             cancellation: RunCancellation::default(),
+            source_files: crate::SourceFileSnapshot::default(),
         }
     }
 
@@ -308,6 +310,7 @@ impl EventClient {
             dashboard: crate::dashboard::DashboardLink::default(),
             token_provider: None,
             cancellation: RunCancellation::default(),
+            source_files: crate::SourceFileSnapshot::default(),
         })
     }
 
@@ -363,6 +366,13 @@ impl EventClient {
     #[must_use]
     pub fn with_metadata(mut self, metadata: crate::proto::RunStarted) -> Self {
         self.metadata = Some(metadata);
+        self
+    }
+
+    /// Classify action sources against the exact commit in the run metadata.
+    #[must_use]
+    pub fn with_source_files(mut self, snapshot: crate::SourceFileSnapshot) -> Self {
+        self.source_files = snapshot;
         self
     }
 
@@ -461,7 +471,8 @@ impl EventClient {
         };
         let stop = stopping.token.clone();
         let delivery = async {
-            let mut session = EventSession::new(self.config.run_id.clone(), self.config.limits);
+            let mut session = EventSession::new(self.config.run_id.clone(), self.config.limits)
+                .with_source_files(self.source_files.clone());
             let mut backoff = policy.initial_backoff;
             for attempt in 0..policy.max_attempts.max(1) {
                 if attempt > 0 {

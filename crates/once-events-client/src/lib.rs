@@ -33,12 +33,14 @@ mod buffer;
 mod loss;
 mod presentation;
 mod session;
+mod source_files;
 mod transport;
 
 pub use bridge::{heartbeat_payload, translate, Translated};
 pub use buffer::{PendingEvent, RingBuffer, RingPushOutcome};
 pub use loss::{LossIntervals, LossPushOutcome};
 pub use session::{AckAction, AckDisposition, EventSession, SessionLimits};
+pub use source_files::SourceFileSnapshot;
 pub use transport::{
     CredentialsError, EventClient, ReconnectPolicy, RunCancellation, TransportConfig,
     TransportError, PROJECT_ID_METADATA,

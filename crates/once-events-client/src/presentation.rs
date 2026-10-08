@@ -1,4 +1,4 @@
-use prost::encoding::{encoded_len_varint, string};
+use prost::encoding::{encoded_len_varint, key_len, string};
 use prost::Message;
 
 use crate::proto::{run_event::Payload, RunEvent};
@@ -13,6 +13,11 @@ pub(crate) fn fit_action_presentation(event: &mut RunEvent, max_bytes: usize) {
         return;
     };
     let source_files = std::mem::take(&mut action.source_files);
+    let mut statuses = std::mem::take(&mut action.source_file_statuses);
+    let classified = !statuses.is_empty();
+    if classified && statuses.len() != source_files.len() {
+        statuses = vec![crate::proto::SourceFileStatus::Unknown as i32; source_files.len()];
+    }
     if event.encoded_len() > max_bytes {
         let Some(Payload::ActionCompleted(action)) = &mut event.payload else {
             return;
@@ -27,8 +32,21 @@ pub(crate) fn fit_action_presentation(event: &mut RunEvent, max_bytes: usize) {
     let envelope_bytes = base_event_bytes
         - action_bytes
         - encoded_len_varint(u64::try_from(action_bytes).unwrap_or(u64::MAX));
-    for path in source_files {
-        let candidate_bytes = action_bytes.saturating_add(string::encoded_len(16, &path));
+    let mut status_bytes = 0_usize;
+    for (index, path) in source_files.into_iter().enumerate() {
+        let candidate_path_bytes = action_bytes.saturating_add(string::encoded_len(16, &path));
+        let status = statuses.get(index).copied().unwrap_or_default();
+        let candidate_status_bytes = status_bytes.saturating_add(encoded_len_varint(
+            u64::try_from(status).unwrap_or(u64::MAX),
+        ));
+        let packed_bytes = if classified {
+            key_len(17)
+                + encoded_len_varint(u64::try_from(candidate_status_bytes).unwrap_or(u64::MAX))
+                + candidate_status_bytes
+        } else {
+            0
+        };
+        let candidate_bytes = candidate_path_bytes.saturating_add(packed_bytes);
         let event_bytes = envelope_bytes
             .saturating_add(candidate_bytes)
             .saturating_add(encoded_len_varint(
@@ -36,7 +54,11 @@ pub(crate) fn fit_action_presentation(event: &mut RunEvent, max_bytes: usize) {
             ));
         if event_bytes <= max_bytes {
             action.source_files.push(path);
-            action_bytes = candidate_bytes;
+            action_bytes = candidate_path_bytes;
+            if classified {
+                action.source_file_statuses.push(status);
+                status_bytes = candidate_status_bytes;
+            }
         }
     }
     tracing::debug!(
@@ -100,6 +122,47 @@ mod tests {
             assert!(action(&event).source_files.len() < 3_000);
             assert_eq!(action(&event).source_files[0], "src/file-0.c");
         }
+    }
+
+    #[test]
+    fn classified_paths_and_statuses_are_trimmed_together() {
+        for limit in [128, 256, 512, 16_384] {
+            let paths = (0..3_000).map(|i| format!("src/file-{i}.c")).collect();
+            let mut event = event("Compile module", paths);
+            let Some(Payload::ActionCompleted(completed)) = &mut event.payload else {
+                unreachable!();
+            };
+            completed.source_file_statuses =
+                (0..3_000).map(|i| if i % 2 == 0 { 1 } else { 2 }).collect();
+            fit_action_presentation(&mut event, limit);
+            assert!(event.encoded_len() <= limit);
+            let action = action(&event);
+            assert!(!action.source_files.is_empty());
+            assert_eq!(action.source_files.len(), action.source_file_statuses.len());
+            for (path, status) in action.source_files.iter().zip(&action.source_file_statuses) {
+                let index: usize = path
+                    .strip_prefix("src/file-")
+                    .unwrap()
+                    .strip_suffix(".c")
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                assert_eq!(*status, if index.is_multiple_of(2) { 1 } else { 2 });
+            }
+        }
+    }
+
+    #[test]
+    fn skipping_a_large_path_keeps_the_smaller_paths_status() {
+        let mut event = event("Compile", vec!["x".repeat(1_000), "src/main.c".into()]);
+        let Some(Payload::ActionCompleted(completed)) = &mut event.payload else {
+            unreachable!();
+        };
+        completed.source_file_statuses = vec![1, 2];
+        fit_action_presentation(&mut event, 128);
+        assert_eq!(action(&event).source_files, ["src/main.c"]);
+        assert_eq!(action(&event).source_file_statuses, [2]);
+        assert!(event.encoded_len() <= 128);
     }
 
     #[test]

@@ -279,6 +279,10 @@ pub fn translate(event: CoreEvent, mono_ns: i64) -> Translated {
                     action_index,
                     identifier: identifier.unwrap_or_default(),
                     display_name,
+                    source_file_statuses: vec![
+                        crate::proto::SourceFileStatus::Unknown as i32;
+                        source_files.len()
+                    ],
                     source_files,
                     result: wire_target_result(result) as i32,
                     was_cached,
@@ -482,12 +486,18 @@ mod tests {
             #[prost(uint32, tag = "14")]
             selected_attempt: u32,
         }
+        #[derive(Clone, PartialEq, Message)]
+        struct PresentationOnlyAction {
+            #[prost(string, repeated, tag = "16")]
+            source_files: Vec<String>,
+        }
         let current = ActionCompleted {
             target_execution_id: "target".into(),
             identifier: "compile".into(),
             selected_attempt: 1,
             display_name: Some("Compile main.c".into()),
             source_files: vec!["src/main.c".into(), "include/api.h".into()],
+            source_file_statuses: vec![1, 2],
             ..Default::default()
         };
         let legacy = LegacyActionCompleted::decode(current.encode_to_vec().as_slice()).unwrap();
@@ -497,8 +507,14 @@ mod tests {
         let decoded = ActionCompleted::decode(legacy.encode_to_vec().as_slice()).unwrap();
         assert_eq!(decoded.display_name, None);
         assert!(decoded.source_files.is_empty());
+        assert!(decoded.source_file_statuses.is_empty());
         assert_eq!(decoded.identifier, current.identifier);
         assert_eq!(decoded.selected_attempt, current.selected_attempt);
+        let legacy = PresentationOnlyAction::decode(current.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(legacy.source_files, current.source_files);
+        let decoded = ActionCompleted::decode(legacy.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(decoded.source_files, current.source_files);
+        assert!(decoded.source_file_statuses.is_empty());
     }
 
     #[test]
