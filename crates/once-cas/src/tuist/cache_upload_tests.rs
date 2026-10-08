@@ -319,7 +319,7 @@ async fn batch_upload_retries_individual_transient_status_but_not_permission_den
 
 #[tokio::test]
 async fn streamed_upload_reopens_file_and_restarts_memory_body_with_fresh_resource() {
-    for (from_file, compressed) in [(false, false), (false, true), (true, false)] {
+    for (from_file, compressed) in [(false, false), (false, true), (true, false), (true, true)] {
         let temp = tempfile::TempDir::new().unwrap();
         let (cache, service, server) = fixture(&temp).await;
         cache

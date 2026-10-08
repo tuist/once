@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
 use std::path::Path;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,7 +17,7 @@ use bazel_remote_apis::{
 use futures::{future::try_join_all, stream};
 use reqwest::{Method, Url};
 use sha2::{Digest as _, Sha256};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, OnceCell, Semaphore};
 use tokio::time::Instant;
 use tonic::metadata::MetadataValue;
@@ -25,8 +26,8 @@ use tonic::{Code, Request, Status};
 use uuid::Uuid;
 
 use super::{
-    env_token, join_url, remote_status_message, retry, stall, TuistAuth, TuistCacheConfig,
-    ENDPOINTS_PATH, PROVIDER_NAME,
+    env_token, file_body, join_url, remote_status_message, retry, stall, TuistAuth,
+    TuistCacheConfig, ENDPOINTS_PATH, PROVIDER_NAME,
 };
 use crate::{ActionResult, Cas, Digest, Error, Result};
 
@@ -919,40 +920,50 @@ impl TuistCache {
             .map_err(|source| Error::Io {
                 path: path.to_path_buf(),
                 source,
-            })?;
+            })?
+            .into_std()
+            .await;
+        let compressor = if self.remote_capabilities().await.zstd_streams {
+            reapi::compressor::Value::Zstd
+        } else {
+            reapi::compressor::Value::Identity
+        };
         let channel = self.grpc_upload_channel().await?;
         let mut client = ByteStreamClient::new(channel);
         let resource_name = byte_stream_write_resource(
             &self.instance_name(),
             digest,
             Uuid::now_v7(),
-            reapi::compressor::Value::Identity as i32,
+            compressor as i32,
         );
         let total = digest.size_bytes;
+        let body = file_body::chunks(
+            file,
+            u64::try_from(total).unwrap_or_default(),
+            compressor == reapi::compressor::Value::Zstd,
+            BYTE_STREAM_CHUNK_SIZE,
+        );
         let read_error = Arc::new(Mutex::new(None::<String>));
-        let request_error = Arc::clone(&read_error);
+        let sent = Arc::new(AtomicI64::new(0));
         let requests = stream::unfold(
-            (file, resource_name, 0_i64, false, request_error),
-            move |(mut file, resource_name, offset, finished, read_error)| async move {
-                if finished {
-                    return None;
-                }
-                let mut data = vec![0_u8; BYTE_STREAM_CHUNK_SIZE];
-                let read = match file.read(&mut data).await {
-                    Ok(read) => read,
+            (
+                body,
+                resource_name,
+                0_i64,
+                Arc::clone(&read_error),
+                Arc::clone(&sent),
+            ),
+            |(mut body, resource_name, offset, read_error, sent)| async move {
+                let chunk = match body.recv().await? {
+                    Ok(chunk) => chunk,
                     Err(error) => {
                         *read_error.lock().await = Some(error.to_string());
                         return None;
                     }
                 };
-                if read == 0 && offset < total {
-                    *read_error.lock().await =
-                        Some("staged blob ended before its declared size".to_string());
-                    return None;
-                }
-                data.truncate(read);
-                let end = offset.saturating_add(i64::try_from(read).unwrap_or(i64::MAX));
-                let finish_write = end == total;
+                let end =
+                    offset.saturating_add(i64::try_from(chunk.data.len()).unwrap_or(i64::MAX));
+                sent.store(end, Ordering::Relaxed);
                 let request = bytestream::WriteRequest {
                     resource_name: if offset == 0 {
                         resource_name.clone()
@@ -960,19 +971,10 @@ impl TuistCache {
                         String::new()
                     },
                     write_offset: offset,
-                    finish_write,
-                    data,
+                    finish_write: chunk.last,
+                    data: chunk.data,
                 };
-                Some((
-                    request,
-                    (
-                        file,
-                        resource_name,
-                        end,
-                        finish_write,
-                        Arc::clone(&read_error),
-                    ),
-                ))
+                Some((request, (body, resource_name, end, read_error, sent)))
             },
         );
         let progress = stall::Progress::new();
@@ -990,7 +992,7 @@ impl TuistCache {
             .into());
         }
         let response = response?.into_inner();
-        if ![-1, total].contains(&response.committed_size) {
+        if ![-1, total, sent.load(Ordering::Relaxed)].contains(&response.committed_size) {
             return Err(Error::Remote {
                 provider: PROVIDER_NAME,
                 operation,
@@ -2039,6 +2041,7 @@ mod upload_tests;
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    use tokio::io::AsyncReadExt;
 
     fn tuist_cache(temp: &TempDir, project: Option<&str>) -> TuistCache {
         TuistCache::new(
