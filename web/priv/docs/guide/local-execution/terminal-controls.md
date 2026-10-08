@@ -32,9 +32,11 @@ On an interactive terminal, the URL is an
 plain text. Once uses the canonical URL supplied by the service, rather than
 constructing a provider-specific route, and prints it only once across reconnects.
 The link remains above the progress panel instead of being overwritten by redraws.
-Captured graph output is rendered without terminal escapes so child output cannot
-replace Once's status or leave a hyperlink or synchronized frame open. Original
-captured output remains unchanged in the cache.
+Captured output shown by the build and test progress reporter is rendered without
+terminal escapes so child output cannot replace Once's status or leave a hyperlink
+or synchronized frame open. Original captured output remains unchanged in the cache.
+Application output from `once run` and literal output from `once exec` retain their
+existing pass-through behavior.
 
 No extra wait is added for the link. For a fast cached run, it can arrive after
 the completion summary while reporting drains. `--quiet` suppresses the dashboard
