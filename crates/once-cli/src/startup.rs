@@ -23,6 +23,7 @@ pub(crate) async fn run() -> ExitCode {
     let command = cli.surface_path().join(" ");
     let format = cli.format;
     let verbose = cli.verbose;
+    crate::terminal::install_panic_hook();
     sound::init(cli.sound);
     let logging = logging::init(cli.verbose);
     let session_id = logging.session_id();
@@ -40,6 +41,26 @@ pub(crate) async fn run() -> ExitCode {
         "session started"
     );
 
+    let status = if !cli.list
+        && matches!(
+            cli.command.as_ref(),
+            Some(
+                cli::Cmd::Build { .. }
+                    | cli::Cmd::Test { .. }
+                    | cli::Cmd::Lint { .. }
+                    | cli::Cmd::Run { .. }
+            )
+        ) {
+        Some(crate::terminal::StatusGuard::start(
+            crate::terminal::Policy::new(
+                cli::Output::new(cli.format, cli.quiet)
+                    .with_terminal_controls(cli.terminal_controls),
+            ),
+            &format!("once {command}"),
+        ))
+    } else {
+        None
+    };
     let outcome = Box::pin(dispatch::dispatch(cli).instrument(session)).await;
     // The cache hangs off a process-wide map that nothing drops, so the run
     // has to hand back what it learned before it ends.
@@ -56,6 +77,9 @@ pub(crate) async fn run() -> ExitCode {
             ExitCode::from(2)
         }
     };
+    if let Some(status) = status {
+        status.finish(code == ExitCode::SUCCESS);
+    }
     // Give the last queued note time to reach the speakers before the process
     // ends. No-op when --sound is off.
     sound::wait_for_tail();

@@ -45,7 +45,7 @@ pub fn init(verbose: u8) -> Logging {
             .with_writer(writer)
             .with_filter(file_filter);
         let stderr_layer = fmt::layer()
-            .with_writer(std::io::stderr)
+            .with_writer(crate::terminal::ConsoleWriter::new())
             .with_filter(stderr_filter);
 
         tracing_subscriber::registry()
@@ -61,7 +61,7 @@ pub fn init(verbose: u8) -> Logging {
 
     fmt()
         .with_env_filter(stderr_filter)
-        .with_writer(std::io::stderr)
+        .with_writer(crate::terminal::ConsoleWriter::new())
         .init();
 
     Logging {

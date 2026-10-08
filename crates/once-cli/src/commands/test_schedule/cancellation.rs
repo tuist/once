@@ -79,6 +79,7 @@ pub(super) async fn supervise<T>(schedule: JoinHandle<T>) -> Result<T, JoinError
         result = &mut schedule => {
             if let Some(signal) = signals.restore() {
                 cancel(signal);
+                crate::terminal::report_cancellation(|| {}).await;
                 termination::terminate(signal);
             }
             return result;
@@ -86,11 +87,13 @@ pub(super) async fn supervise<T>(schedule: JoinHandle<T>) -> Result<T, JoinError
         signal = signals.recv() => signal,
     };
     cancel(signal);
-    tracing::info!(
-        signal = signal.name(),
-        "test schedule cancelled by signal; waiting for batches to report"
-    );
-    let _ = tokio::time::timeout(BATCH_DEADLINE, &mut schedule).await;
+    let notice = crate::terminal::report_cancellation(move || {
+        tracing::info!(
+            signal = signal.name(),
+            "test schedule cancelled by signal; waiting for batches to report"
+        );
+    });
+    let _ = tokio::join!(tokio::time::timeout(BATCH_DEADLINE, &mut schedule), notice);
     termination::terminate(signal)
 }
 

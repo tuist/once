@@ -64,6 +64,7 @@ fn spawn_reporter(
             _ => Verbosity::ExtraVerbose,
         },
         suppress_panel: false,
+        terminal: crate::terminal::Policy::new(output),
     };
     Some(TerminalReporter::spawn(bus, options))
 }
@@ -130,6 +131,7 @@ pub async fn build(
         once_core::Xdg::from_env(),
         crate::cache_provider::account(workspace),
         crate::cache_provider::project(workspace),
+        output,
     )
     .await;
     bus_events::run_started(&bus, target_id, bus_events::now_ms());
@@ -461,6 +463,7 @@ pub async fn test_with_filters(
         once_core::Xdg::from_env(),
         crate::cache_provider::account(workspace),
         crate::cache_provider::project(workspace),
+        output,
     )
     .await;
     bus_events::run_started(&bus, target_id, bus_events::now_ms());
