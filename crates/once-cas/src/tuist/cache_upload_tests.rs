@@ -412,7 +412,7 @@ async fn streamed_upload_outlasts_the_request_timeout_while_it_progresses() {
         let temp = tempfile::TempDir::new().unwrap();
         let (mut cache, service, server) =
             fixture_with_timeout(&temp, Some(Duration::from_millis(200))).await;
-        cache.upload_stall_timeout = Duration::from_secs(5);
+        cache.stream_stall_timeout = Duration::from_secs(5);
         service.0.lock().await.write_message_delay = Some(Duration::from_millis(100));
         let (bytes, digest) = streamed_blob(8);
         if from_file {
@@ -440,7 +440,7 @@ async fn streamed_upload_fails_without_retrying_once_the_remote_stops_reading() 
     for from_file in [false, true] {
         let temp = tempfile::TempDir::new().unwrap();
         let (mut cache, service, server) = fixture(&temp).await;
-        cache.upload_stall_timeout = Duration::from_millis(300);
+        cache.stream_stall_timeout = Duration::from_millis(300);
         service.0.lock().await.write_stops_reading = true;
         let (bytes, digest) = streamed_blob(8);
         let path = temp.path().join("blob");
