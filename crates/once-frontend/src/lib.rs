@@ -16,6 +16,7 @@ mod manifest_editor;
 mod module_contract;
 mod modules;
 mod native_project;
+pub use native_project::{native_invocation, NativeInvocation};
 pub use resolution::{ResolutionRecord, ResolverInputs};
 mod resolution;
 mod script;

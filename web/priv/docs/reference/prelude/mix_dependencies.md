@@ -14,7 +14,11 @@ The lockfile is authoritative. Graph loading fails when an active Mix
 dependency has no lock entry, when the manifest or lockfile is not included in
 `resolver_inputs`, or when a selected source is outside the Once package. When
 `resolver_inputs` is empty or omitted, `srcs` supplies those files instead.
-Resolution does not fetch sources and never writes `mix.lock`.
+Resolution does not fetch sources and never writes `mix.lock`. Native
+discovery can omit the lockfile when the complete active graph contains only
+local path dependencies. External dependencies always require locked identities.
+Missing locked sources report the exact `mix deps.get --check-locked` repair
+before compilation begins.
 
 Dependency sources must already exist under `vendor_dir`, normally `deps`.
 This separates network and registry access from build execution. Package build
@@ -48,6 +52,7 @@ application name or Hex package name.
 
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `_mix_path_only` | bool | no | `false` | Resolver-owned marker allowing an absent lockfile only for an entirely local path dependency graph |
 | `manifest` | string | no | `mix.exs` | Package-relative Mix project manifest used to select the active graph |
 | `lockfile` | string | no | `mix.lock` | Package-relative authoritative lockfile |
 | `resolver_inputs` | list&lt;string&gt; | no | `srcs` | Package-relative text globs supplied to the resolver |

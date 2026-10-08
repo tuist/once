@@ -199,13 +199,8 @@ where
                     return Err(resolution_error(&target.id(), "resolver returned no value"));
                 }
                 Err(source) => {
-                    let unavailable_tool = source.chain().find_map(|cause| {
-                        cause
-                            .downcast_ref::<crate::analysis::AnalysisFailure>()
-                            .filter(|failure| failure.diagnostic.code == "required_tool_not_found")
-                    });
-                    let Some(failure) = unavailable_tool else {
-                        return Err(resolution_error(&target.id(), source.to_string()));
+                    let Some(failure) = actionable_resolver_failure(&source) else {
+                        return Err(resolver_failure(&target.id(), &source));
                     };
                     diagnostics
                         .entry(graph_target.label.id)
@@ -574,6 +569,31 @@ fn display_path(path: &Path) -> String {
         .replace(std::path::MAIN_SEPARATOR, "/")
 }
 
+fn actionable_resolver_failure(
+    source: &anyhow::Error,
+) -> Option<&crate::analysis::AnalysisFailure> {
+    source.chain().find_map(|cause| {
+        cause
+            .downcast_ref::<crate::analysis::AnalysisFailure>()
+            .filter(|failure| failure.diagnostic.code != "target_kind_analysis_failed")
+    })
+}
+
+fn resolver_failure(target: &str, source: &anyhow::Error) -> Error {
+    if let Some(failure) = source
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<crate::analysis::AnalysisFailure>())
+    {
+        Error::Analysis {
+            source: Box::new(crate::analysis::AnalysisFailure {
+                diagnostic: failure.diagnostic.clone(),
+            }),
+        }
+    } else {
+        resolution_error(target, source.to_string())
+    }
+}
+
 fn resolution_error(target: &str, message: impl Into<String>) -> Error {
     Error::Eval {
         path: target.to_string(),
@@ -778,6 +798,60 @@ resolved_set = target_kind(resolver = _resolve)
 
         assert!(error.contains("specific resolver failure"), "{error}");
         assert!(!error.contains("declared actions or outputs"), "{error}");
+    }
+
+    #[test]
+    fn structured_resolver_failures_are_scoped_to_their_owner() {
+        let temp = tempfile::tempdir().unwrap();
+        write(
+            temp.path().join("once.toml"),
+            r#"[modules]
+paths = ["deps.star"]
+
+[[target]]
+name = "packages"
+kind = "resolved_set"
+
+[[target]]
+name = "available"
+kind = "plain"
+
+[[target]]
+name = "consumer"
+kind = "plain"
+deps = ["packages"]
+"#,
+        );
+        write(
+            temp.path().join("deps.star"),
+            r#"def _resolve(ctx):
+    _diagnostic_fail("missing_sources", "vendor_dir", "Sources are absent", "Fetch the locked sources, then retry")
+
+plain = target_kind()
+resolved_set = target_kind(resolver = _resolve)
+"#,
+        );
+        let graph = crate::graph::load_graph_workspace(temp.path()).unwrap();
+        let available = graph
+            .iter()
+            .find(|target| target.label.id == "available")
+            .unwrap();
+        assert!(available.diagnostics.is_empty());
+        let consumer = graph
+            .iter()
+            .find(|target| target.label.id == "consumer")
+            .unwrap();
+        assert_eq!(consumer.deps, ["packages"]);
+        let owner = graph
+            .iter()
+            .find(|target| target.label.id == "packages")
+            .unwrap();
+        assert_eq!(owner.diagnostics.len(), 1);
+        let diagnostic = &owner.diagnostics[0];
+        assert_eq!(diagnostic.code, "missing_sources");
+        assert_eq!(diagnostic.target.as_deref(), Some("packages"));
+        assert_eq!(diagnostic.attribute.as_deref(), Some("vendor_dir"));
+        assert_eq!(diagnostic.repairs, ["Fetch the locked sources, then retry"]);
     }
 
     #[test]

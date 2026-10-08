@@ -12,18 +12,30 @@ test layout with links to the compiled application and dependency bytecode,
 then runs the tests without recompiling the application.
 
 That split lets a changed test file rerun tests without recompiling the
-application. A changed library source invalidates both the compiled library and
-the dependent test result.
+application for explicitly declared targets. Native discovery uses conservative
+project-wide inputs, so a test-file change can also invalidate compilation.
+A changed library source invalidates both the compiled library and the dependent
+test result.
 By default, tests run through direct ExUnit with `elixir`, so a package does not
 need `mix.exs`. A `mix_project` dependency selects Mix mode automatically.
 Once stages declared project, configuration, data, tool, test, and lockfile
 inputs into an isolated project before running `mix test --no-compile
---no-deps-check`. Library bytecode must already be built by Once in both modes.
+--no-deps-check`. Library bytecode must already be built by Once in both modes. Mix mode retains
+native test aliases while consuming the already-compiled application. It loads
+modules used by Mix's recompilation probes without rerunning project compilers.
+Application resources, compile metadata, and protocol consolidation outputs are
+staged as explicit action inputs, including when a previous scratch directory
+has been removed. Command output is streamed to log artifacts rather than
+retained in memory. Mix-mode summaries come from structured ExUnit formatter
+events rather than log text. Skipped tests count once, excluded tests are omitted
+from executed totals, and invalid tests caused by failed setup count as failures.
+This avoids differences between Elixir versions and summary-looking test output.
 
 ## Attributes
 
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `_mix_test_defaults` | bool | no | `false` | Resolver-owned marker that delegates test path and file-pattern selection to Mix |
 | `mix_config` | string | no | empty | Optional package-relative Mix project file. When omitted, tests run through direct ExUnit without requiring a Mix project |
 | `lockfile` | string | no | `mix.lock` | Package-relative lockfile staged when present |
 | `config` | list&lt;string&gt; | no | `["config/**/*.exs"]` | Config file globs included in the test action key |
@@ -49,7 +61,10 @@ archives on the ExUnit code path.
 `elixir_opts` applies only to direct ExUnit mode. When `mix_config` selects Mix
 mode, use `test_args`; combining Mix mode with `elixir_opts` fails validation.
 `setup_tasks` also requires Mix mode. Set `cacheable = false` when setup or the
-test suite must exercise an external service on every invocation.
+test suite must exercise an external service on every invocation. Uncacheable
+tests inherit the host environment, home directory, and tool search path.
+Native discovery selects this mode automatically; explicitly declared targets
+retain the cacheable default.
 
 Each setup task is an exact argument vector. Do not include the `mix`
 executable:

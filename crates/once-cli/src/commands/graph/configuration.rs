@@ -34,6 +34,33 @@ pub struct ResolvedConfiguration {
     /// Empty for the workspace-default configuration.
     pub path_suffix: String,
     pub digest: Digest,
+    pub native_targets: Option<Vec<once_frontend::Target>>,
+}
+
+impl ResolvedConfiguration {
+    pub fn workspace_targets(&self, workspace: &Path) -> Result<Vec<once_frontend::Target>> {
+        self.native_targets.as_ref().map_or_else(
+            || {
+                Ok(once_frontend::load_workspace_with_configuration(
+                    workspace,
+                    &self.configuration,
+                )?)
+            },
+            |targets| Ok(targets.clone()),
+        )
+    }
+
+    pub fn load_graph(&self, workspace: &Path) -> Result<Vec<once_frontend::GraphTarget>> {
+        let targets = self.workspace_targets(workspace)?;
+        let kinds = targets.iter().map(|target| target.kind.clone()).collect();
+        once_frontend::analysis::AnalysisEngine::for_target_kinds(
+            workspace,
+            once_frontend::analysis::AnalysisOptions::default(),
+            &kinds,
+        )?
+        .with_configuration(self.configuration.clone(), self.path_suffix.clone())
+        .load_graph_workspace_from_targets(workspace, targets)
+    }
 }
 
 /// Parse repeated `KEY=VALUE` override strings into typed overrides.
@@ -87,6 +114,7 @@ pub fn resolve(
         configuration: effective,
         path_suffix,
         digest: effective_digest,
+        native_targets: None,
     })
 }
 

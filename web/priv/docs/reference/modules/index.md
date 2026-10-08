@@ -158,6 +158,19 @@ native = native_project(
   directory-spanning markers such as `*.xcodeproj/project.pbxproj`.
 - `max_depth` bounds discovery.
 - `requires_tools` reports executables needed when the seed resolver runs.
+- `workspace_markers` optionally lists literal paths, such as `.git`, that
+  identify a containing workspace. For configuration-free `build` and `test`
+  invocations in a matching native project, Once uses the nearest ancestor
+  containing one of these paths as the filesystem boundary. Only that native
+  project family beneath the invocation directory supplies seeds, so unrelated
+  native integrations elsewhere in the repository do not block the command.
+  Run, lint, and `--all` use the same boundary. Selection requires a marker
+  directly in the selected project directory. A child project cannot change a
+  repository-root invocation without an explicit target. Package-relative native
+  targets select their owning project; sibling native seeds remain selectable.
+  Marker files and directories both count. Without a containing marker, the
+  invocation directory remains the boundary. Existing `once.toml` manifests
+  take priority. The default is `[]`, preserving ordinary workspace discovery.
 - `owns_descendants = true` makes a matched workspace root take precedence over
   other native project seeds beside or below it. Use this for a native
   workspace whose checked tree intentionally contains another package format,
@@ -523,12 +536,16 @@ The implementation returns a dictionary of provider fields. Downstream
 target kinds should read provider fields from `ctx["deps"]` or
 `ctx["deps_by_role"]` instead of inspecting target identities.
 
-An implementation reports an actionable failure by calling `fail` with the text
+A resolver or implementation reports an actionable failure by calling `fail` with the text
 `once.diagnostic.v1 ` followed by one JSON object holding `code`, `message`,
 and optionally `attribute` and `repairs`. The engine attaches the target and
 returns a structured diagnostic with those fields, so agents receive the same
 `code`, `attribute`, and `repairs` shape as schema validation. Any other
-failure text is reported as a generic analysis failure.
+failure text is reported as a generic analysis failure. Actionable resolver
+diagnostics stay attached to the resolver owner rather than preventing unrelated
+targets from loading. Selecting that owner or a dependent target still fails with
+the diagnostic and its repairs. Unexpected resolver evaluation failures remain
+fatal to graph loading.
 
 When an artifact has different link-time and runtime dependency closures,
 publish those closures as separate provider fields. Do not flatten them into
@@ -794,6 +811,18 @@ new required feature is necessary. If optional presentation fields exceed the
 server's event-size limit, Once retains the source links that fit and may omit
 an oversized display name. The action's identity, timing, and result are
 preserved.
+
+Consumers must include staged output paths in their declared inputs. Mentioning
+a path only in arguments or environment variables does not guarantee that a
+cached staging action materializes it. Prefer disjoint staged output trees
+rather than a parent directory followed by overlapping child copies. If a native
+consumer requires a complete build tree followed by application overlays, each
+child copy must declare the staged parent as an input so it is restored first.
+
+Optional toolchain and action identities are encoded separately in the input
+hash, including presence and embedded separators. Equal concatenated text in
+different fields cannot share a cache key. This identity encoding invalidates
+older declared-action cache entries once without changing artifact formats.
 
 The declared action is its executable cache contract. Once hashes its operation,
 arguments, argument files, environment, working directory, path setup,

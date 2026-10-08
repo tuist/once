@@ -2216,7 +2216,7 @@ fn compose_input_fingerprint_with_available(
     available_inputs: &BTreeMap<String, AvailableInput>,
     source_digest_cache: Option<&SourceDigestCache>,
 ) -> Result<InputFingerprintManifest> {
-    let mut builder = InputDigestBuilder::new(b"once.declared_action.input.v4\0");
+    let mut builder = InputDigestBuilder::new(b"once.declared_action.input.v5\0");
     push_declared_action_metadata(&mut builder, declared, workspace)?;
 
     let mut sorted_inputs = declared
@@ -2260,11 +2260,14 @@ fn push_declared_action_metadata(
     declared: &DeclaredAction,
     workspace: &Path,
 ) -> Result<()> {
+    let identities = serde_json::to_vec(&(&declared.toolchain_identity, &declared.identifier))
+        .context("serializing declared action identities")?;
+    builder.push_bytes(&identities);
     if let Some(identity) = &declared.toolchain_identity {
-        builder.push_bytes_component("toolchain", "identity", identity.as_bytes());
+        builder.record_bytes("toolchain", "identity", identity.as_bytes());
     }
     if let Some(identifier) = &declared.identifier {
-        builder.push_bytes_component("action", "identifier", identifier.as_bytes());
+        builder.record_bytes("action", "identifier", identifier.as_bytes());
     }
     if let Some(operation) = &declared.operation {
         let encoded =
@@ -4094,6 +4097,37 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
         };
         let two = compose_input_digest(workspace.path(), &declared2, module_digest(), &[]).unwrap();
         assert_ne!(one, two);
+    }
+
+    #[test]
+    fn input_digest_frames_optional_identities_and_embedded_separators() {
+        let workspace = tempfile::tempdir().unwrap();
+        let mut digests = std::collections::HashSet::new();
+        for (toolchain, identifier) in [
+            (None, None),
+            (Some(""), None),
+            (None, Some("")),
+            (Some("same"), None),
+            (None, Some("same")),
+            (Some("compiler\0action"), None),
+            (Some("compiler"), Some("action")),
+        ] {
+            let declared: DeclaredAction = serde_json::from_value(serde_json::json!({
+                "argv": ["tool"], "outputs": [],
+                "toolchain_identity": toolchain, "identifier": identifier,
+            }))
+            .unwrap();
+            let digest =
+                compose_input_digest(workspace.path(), &declared, module_digest(), &[]).unwrap();
+            assert!(
+                digests.insert(digest),
+                "identities must not collide: {toolchain:?}, {identifier:?}"
+            );
+            assert_eq!(
+                digest,
+                compose_input_digest(workspace.path(), &declared, module_digest(), &[]).unwrap()
+            );
+        }
     }
 
     #[test]

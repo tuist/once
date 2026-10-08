@@ -53,7 +53,7 @@ def source_reference(system, symbol, url, use_when, content_digest = None):
         "content_digest": content_digest,
     }
 
-def native_project(target_kind, markers, name = None, target_name = None, docs = "", inputs = [], exclude = [], input_exclude = [], on_match = "descend", max_depth = 16, requires_tools = [], owns_descendants = False):
+def native_project(target_kind, markers, name = None, target_name = None, docs = "", inputs = [], exclude = [], input_exclude = [], on_match = "descend", max_depth = 16, requires_tools = [], owns_descendants = False, workspace_markers = []):
     return {
         "_once_native_project": True,
         "target_kind": target_kind,
@@ -68,6 +68,7 @@ def native_project(target_kind, markers, name = None, target_name = None, docs =
         "max_depth": max_depth,
         "requires_tools": requires_tools,
         "owns_descendants": owns_descendants,
+        "workspace_markers": workspace_markers,
     }
 
 def _native_project_generated_dirs():

@@ -51,7 +51,9 @@ mix deps.get --check-locked
 
 Run `mix deps.get` without `--check-locked` once when the lockfile needs to be
 created or deliberately updated. Review that change before continuing. A
-dependency-free project does not need `mix.lock`.
+dependency-free project does not need `mix.lock`. A project whose entire active
+dependency graph consists of local path dependencies also works without a
+lockfile.
 
 Once currently requires a concrete lockfile when a project declares external
 dependencies. Library maintainers who do not commit `mix.lock` can generate
@@ -67,7 +69,38 @@ once query workspace
 once query targets
 ```
 
-No `once.toml` is required, and these commands do not write one.
+No `once.toml` is required. From the directory containing `mix.exs`, the
+usual build and test commands select that project automatically:
+
+```sh
+once build
+once test
+```
+
+In a Git repository, these commands use the nearest repository root as the
+filesystem boundary while discovering only the current Mix project family.
+This keeps sibling path dependencies inside the build and avoids resolving
+unrelated native projects elsewhere in the repository. Outside a Git
+repository, the project directory is the boundary; use a containing workspace
+with an explicit target when dependencies live outside it. Neither command
+writes a manifest. `once build` follows `MIX_ENV`, defaulting to `dev`, while
+`once test` compiles and executes the test environment. The same boundary
+applies to `once run`, `once lint`, and `--all`. Explicit targets matching
+another native project marker in the current directory remain selectable.
+Repository-root commands without an explicit native target retain ordinary
+workspace discovery. An explicit package-relative native target selects its
+owning project and target family.
+An explicit `once.toml` between the project and repository root takes priority.
+
+Native compilation conservatively hashes non-hidden project files outside
+generated build and dependency directories. This includes compiler resources,
+such as a version file or native sources outside the Elixir source directories.
+Changing one of these files invalidates compilation; unchanged inputs reuse the
+cached output. Native Mix bytecode cache keys also include the source location,
+since compiled modules can embed directory-sensitive resources. Tests use
+structured ExUnit events for totals, so summary-looking
+output from a test cannot rewrite the result. Invalidated tests count as failures,
+and excluded tests do not count as executed tests.
 
 The identifiers printed by `once query targets` are the source of truth. For a
 Mix project at the workspace root, discovery normally derives:
@@ -97,13 +130,20 @@ once build mix_release
 
 The argument after `--` is a Mix task selected at invocation time.
 `phx.server` is only an example; native discovery does not assume that the
-project uses Phoenix or another framework.
+project uses Phoenix or another framework. Native tests retain the project's
+test aliases, configured test paths, and test file patterns. Once compiles
+application and test-support code first, then runs the aliases and tests against
+those outputs without recompiling dependencies or invoking project compilers
+again.
 
 `mix_lint` runs `mix deps.unlock --check-unused` and
 `mix format --check-formatted`. It does not infer project-specific tools such
 as Credo. The run target is intentionally uncached for servers and interactive
-tasks. Builds, the derived lint target, tests, dependency compilation, and
-release assembly are cacheable.
+tasks. Builds, the derived lint target, dependency compilation, and release
+assembly are cacheable. Automatically discovered tests run on every invocation
+and inherit the host runtime environment, including host tools on `PATH`.
+This matches ordinary Mix tests that depend on databases and other services.
+Explicit test targets can opt into caching when their inputs are fully declared.
 
 `mix_release` is useful for applications that support `mix release`. A library
 can still build, lint, and test even when producing a release is not meaningful.

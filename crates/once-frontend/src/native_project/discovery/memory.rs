@@ -265,6 +265,7 @@ mod tests {
             max_depth: 16,
             requires_tools: Vec::new(),
             owns_descendants: false,
+            workspace_markers: Vec::new(),
         }
     }
 

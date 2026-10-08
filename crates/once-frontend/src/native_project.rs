@@ -9,6 +9,9 @@ use starlark::values::dict::DictRef;
 use starlark::values::list::ListRef;
 
 mod discovery;
+mod invocation;
+
+pub use invocation::{native_invocation, NativeInvocation};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub(crate) struct NativeProjectSchema {
@@ -32,6 +35,7 @@ pub(crate) struct NativeProjectSchema {
     pub(crate) max_depth: usize,
     pub(crate) requires_tools: Vec<String>,
     pub(crate) owns_descendants: bool,
+    pub(crate) workspace_markers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -213,6 +217,10 @@ fn native_project_schema(name: String, dict: &DictRef<'_>) -> Result<NativeProje
     }
     let max_depth = positive_usize(required_i32(dict, "max_depth")?, &name, "max_depth")?;
     let requires_tools = string_list(dict, "requires_tools")?;
+    let workspace_markers = string_list(dict, "workspace_markers")?;
+    for marker in &workspace_markers {
+        validate_relative_literal(&name, "workspace marker", marker)?;
+    }
     for marker in &markers {
         validate_marker(&name, marker)?;
     }
@@ -251,6 +259,7 @@ fn native_project_schema(name: String, dict: &DictRef<'_>) -> Result<NativeProje
         max_depth,
         requires_tools,
         owns_descendants: required_bool(dict, "owns_descendants")?,
+        workspace_markers,
     })
 }
 

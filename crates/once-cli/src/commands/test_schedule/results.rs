@@ -41,6 +41,7 @@ fn aggregate(target: &str, batches: &[&TestBatch], runs: &BTreeMap<&str, &Value>
     let mut native_results = BTreeSet::new();
     let mut coverage = BTreeSet::new();
     let mut all_passed = true;
+    let mut summary_only = [0_u64; 5];
 
     for batch in batches {
         let run = runs.get(batch.id.as_str()).copied();
@@ -67,6 +68,17 @@ fn aggregate(target: &str, batches: &[&TestBatch], runs: &BTreeMap<&str, &Value>
             runner = result.get("runner").cloned();
         }
         if let Some(result_cases) = result.get("cases").and_then(Value::as_array) {
+            if result_cases.is_empty() {
+                for (index, field) in ["total", "passed", "failed", "skipped", "flaky"]
+                    .iter()
+                    .enumerate()
+                {
+                    let count = result["summary"][field].as_u64().unwrap_or(0);
+                    summary_only[index] = summary_only[index]
+                        .checked_add(count)
+                        .context("test summary count overflow")?;
+                }
+            }
             for case in result_cases {
                 if let Some(id) = case.get("id").and_then(Value::as_str) {
                     cases.insert(id.to_string(), case.clone());
@@ -78,10 +90,10 @@ fn aggregate(target: &str, batches: &[&TestBatch], runs: &BTreeMap<&str, &Value>
         collect_artifacts(result, "coverage", &mut coverage);
     }
 
-    let mut passed = 0_u64;
-    let mut failed = 0_u64;
-    let mut skipped = 0_u64;
-    let mut flaky = 0_u64;
+    let mut passed = summary_only[1];
+    let mut failed = summary_only[2];
+    let mut skipped = summary_only[3];
+    let mut flaky = summary_only[4];
     for case in cases.values() {
         match case.get("status").and_then(Value::as_str) {
             Some("passed") => passed += 1,
@@ -112,7 +124,8 @@ fn aggregate(target: &str, batches: &[&TestBatch], runs: &BTreeMap<&str, &Value>
         "runner": runner.unwrap_or_else(|| json!({"type": "unknown", "metadata": {}})),
         "status": status,
         "summary": {
-            "total": cases.len(),
+            "total": u64::try_from(cases.len())?.checked_add(summary_only[0])
+                .context("test summary count overflow")?,
             "passed": passed,
             "failed": failed,
             "skipped": skipped,
@@ -206,6 +219,25 @@ mod tests {
         assert_eq!(value["status"], "passed");
         assert_eq!(value["summary"]["passed"], 1);
         assert_eq!(value["summary"]["failed"], 0);
+    }
+
+    #[test]
+    fn aggregation_preserves_summary_only_runner_counts() {
+        let batch = TestBatch::new("tests/unit", Vec::new()).unwrap();
+        for success in [true, false] {
+            let mut value = run(&batch, "unused");
+            value["success"] = json!(success);
+            value["results"]["status"] = json!(if success { "passed" } else { "failed" });
+            value["results"]["cases"] = json!([]);
+            value["results"]["summary"] = json!({
+                "total": 2143, "passed": if success { 2138 } else { 2137 },
+                "failed": u64::from(!success), "skipped": 5, "flaky": 0,
+            });
+            let runs = BTreeMap::from([(batch.id.as_str(), &value)]);
+            let aggregate = aggregate("tests/unit", &[&batch], &runs).unwrap();
+            assert_eq!(aggregate["summary"], value["results"]["summary"]);
+            assert_eq!(aggregate["status"], value["results"]["status"]);
+        }
     }
 
     fn run(batch: &TestBatch, name: &str) -> Value {
