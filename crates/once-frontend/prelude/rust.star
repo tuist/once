@@ -22,7 +22,7 @@ def _rust_action_metadata(ctx, target, usage = "product", crate_type = ""):
     return _action_metadata(package = package, platforms = [_action_platform("rust", target, label, usage)] if target else [], context = [_action_context("cargo.crate_type", crate_type)] if crate_type else [])
 
 def _rust_platform_usage(ctx, target, host_triple, crate_type):
-    if crate_type == "proc-macro" or (ctx.get("attr") or {}).get("_cargo_host_tool"):
+    if crate_type == "proc-macro" or _rust_attr(ctx, "_cargo_host_tool", False):
         return "build-tool"
     return "product" if target and target != host_triple else ""
 
@@ -3858,6 +3858,7 @@ _RUST_COMMON_ATTRS = [
     attr("cargo_config_env", "map<string, string>", default = "{}", docs = "Environment variables declared by Cargo configuration, applied to the compiler, the build script, the test process, and `once run`. They sit below `env`, `rustc_env`, `test_env`, and `run_env`, matching how Cargo lets its own variables win.", configurable = False),
     attr("_binary_output_name", "string", docs = "Resolver-owned executable name before the platform extension.", configurable = False),
     attr("_cargo_source_root", "string", docs = "Resolver-owned absolute Cargo source directory materialized through a declared host-tree action.", configurable = False),
+    attr("_cargo_host_tool", "bool", default = "false", docs = "Resolver-owned host-tool output role used only for action presentation.", configurable = False),
     attr("_cargo_materialized_source_root", "string", docs = "Resolver-owned Once output directory for one materialized Cargo package.", configurable = False),
     attr("_build_script_inputs", "list<string>", default = "[]", docs = "Resolver-owned source inputs made available to a generated Cargo build script.", configurable = False),
     attr("default_deps", "string", docs = "Reserved Buck-compatible default dependency mode.", configurable = False),

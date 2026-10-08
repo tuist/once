@@ -3391,6 +3391,28 @@ result = repr(_javascript_installed_package_entry(
 }
 
 #[test]
+fn rust_schemas_declare_resolver_owned_host_tool_metadata() {
+    for kind in [
+        "rust_library",
+        "rust_binary",
+        "rust_test",
+        "rust_crate",
+        "rust_proc_macro",
+    ] {
+        let schema = built_in_target_kind_schema(kind).expect("Rust schema");
+        let host_tool = schema
+            .attrs
+            .iter()
+            .find(|attr| attr.name == "_cargo_host_tool")
+            .expect("resolver-owned host-tool attribute is declared");
+        assert_eq!(host_tool.ty, "bool");
+        assert_eq!(host_tool.default.as_deref(), Some("false"));
+        assert!(!host_tool.required);
+        assert!(!host_tool.configurable);
+    }
+}
+
+#[test]
 fn rust_schemas_cover_upstream_parity_fields() {
     for kind in [
         "rust_library",

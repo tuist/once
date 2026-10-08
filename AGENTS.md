@@ -283,7 +283,7 @@ calling `cargo` directly will miss the pinned rustc.
 
 ## Action presentation
 
-`crates/once-presentation/` owns the bounded, ecosystem-neutral package/platform/context contract; see its AGENTS.md. Emit only selected, resolved metadata in Starlark kinds, not guesses from labels or worker placement. Preserve presentation in deferred expansions and reusable action outcomes without adding it to action identity or execution fingerprints.
+`crates/once-presentation/` owns the bounded, ecosystem-neutral package/platform/context contract; see its AGENTS.md. Emit only selected, resolved metadata in Starlark kinds, not guesses from labels or worker placement. Preserve presentation in deferred expansions and reusable action outcomes without adding it to action identity or execution fingerprints. Declare resolver-emitted presentation-only attributes in their target-kind schemas and validate generated starter graphs, not only action-lowering tests.
 
 ## Live action reporting
 

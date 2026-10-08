@@ -843,7 +843,9 @@ Git revision or no version respectively. Opaque CMake/Bazel/React Native steps
 never claim invisible internal package graphs or worker platforms. Shell/file
 operations, runtime test runners, and other actions may correctly omit package
 or platform information. Cargo's ambiguous workspace `0.0.0` default is omitted
-unless an explicit package version is available.
+unless an explicit package version is available. Cargo resolvers annotate
+host-tool outputs with the schema-declared `_cargo_host_tool` boolean. This
+marker controls presentation only, not scheduling or execution placement.
 
 Once includes this metadata in per-action completion events and preserves it
 when replaying cached target outcomes. An event server can show the name and
