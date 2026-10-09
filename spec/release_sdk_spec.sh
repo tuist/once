@@ -24,6 +24,7 @@ Describe 'release SDK packaging scripts'
       "$WORKSPACE/crates/once-core" \
       "$WORKSPACE/crates/once-frontend" \
       "$WORKSPACE/crates/once-host-tree" \
+      "$WORKSPACE/crates/once-presentation" \
       "$WORKSPACE/crates/once" \
       "$WORKSPACE/crates/once-cli" \
       "$WORKSPACE/crates/once-events-client"
@@ -34,6 +35,7 @@ Describe 'release SDK packaging scripts'
       "$WORKSPACE/crates/once-core/once.toml" \
       "$WORKSPACE/crates/once-frontend/once.toml" \
       "$WORKSPACE/crates/once-host-tree/once.toml" \
+      "$WORKSPACE/crates/once-presentation/once.toml" \
       "$WORKSPACE/crates/once/once.toml" \
       "$WORKSPACE/crates/once-cli/once.toml" \
       "$WORKSPACE/crates/once-events-client/once.toml"
