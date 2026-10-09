@@ -13,7 +13,7 @@ use tokio::sync::broadcast;
 
 /// How long [`RunEventBus::publish_all`] waits for the slowest subscriber to
 /// make progress before it stops pacing and lets that subscriber lag.
-const PACING_STALL: Duration = Duration::from_secs(1);
+const PACING_STALL: Duration = Duration::from_secs(5);
 
 /// A structured event emitted during a run.
 ///
@@ -261,6 +261,9 @@ pub struct RunEventBus {
 }
 
 impl RunEventBus {
+    /// Maximum payload of each published log chunk.
+    pub const MAX_LOG_CHUNK_BYTES: usize = 16 * 1024;
+
     /// Create a bus with the given per-subscriber ring capacity.
     pub fn new(capacity: usize) -> Self {
         let capacity = capacity.max(1);
@@ -274,7 +277,26 @@ impl RunEventBus {
     /// Publish an event. Silently succeeds when no subscribers are
     /// attached; publication never blocks a producer.
     pub fn publish(&self, event: RunEvent) {
-        let _ = self.inner.send(event);
+        match event {
+            RunEvent::LogChunk {
+                at_epoch_ms,
+                target_id,
+                stream,
+                bytes,
+            } if bytes.len() > Self::MAX_LOG_CHUNK_BYTES => {
+                for chunk in bytes.chunks(Self::MAX_LOG_CHUNK_BYTES) {
+                    let _ = self.inner.send(RunEvent::LogChunk {
+                        at_epoch_ms,
+                        target_id: target_id.clone(),
+                        stream,
+                        bytes: chunk.to_vec(),
+                    });
+                }
+            }
+            event => {
+                let _ = self.inner.send(event);
+            }
+        }
     }
 
     /// Publish a batch of events without overrunning subscribers.
@@ -343,6 +365,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn oversized_log_chunks_are_split_before_publication() {
+        let bus = RunEventBus::new(4);
+        let mut rx = bus.subscribe();
+        let bytes = vec![b'x'; RunEventBus::MAX_LOG_CHUNK_BYTES * 2 + 1];
+        bus.publish(RunEvent::LogChunk {
+            at_epoch_ms: 1,
+            target_id: "target".into(),
+            stream: LogStream::Stdout,
+            bytes: bytes.clone(),
+        });
+        let mut restored = Vec::new();
+        for _ in 0..3 {
+            let RunEvent::LogChunk { bytes, .. } = rx.recv().await.unwrap() else {
+                panic!("expected log chunk")
+            };
+            assert!(bytes.len() <= RunEventBus::MAX_LOG_CHUNK_BYTES);
+            restored.extend(bytes);
+        }
+        assert_eq!(restored, bytes);
+    }
+
+    #[tokio::test]
     async fn publish_all_paces_a_burst_far_larger_than_the_ring() {
         let bus = RunEventBus::new(16);
         let mut receiver = bus.subscribe();
@@ -372,7 +416,7 @@ mod tests {
         assert_eq!(consumer.await.unwrap(), 2_000);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn publish_all_stops_waiting_for_a_subscriber_that_never_reads() {
         let bus = RunEventBus::new(4);
         let _stuck = bus.subscribe();

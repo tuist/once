@@ -271,8 +271,14 @@ so overflow can never suppress the run's terminal state. Loss itself
 does not need reserved event capacity because it is signalled at
 batch level via `gap_advance` and never consumes a sequence number.
 
-Emission never blocks the build for non-terminal events. When
-ordinary capacity is full, the oldest unacknowledged non-terminal
+Individual event publication never blocks the build. Bulk test reports
+pace against subscribers, allowing up to five seconds without consumer
+progress before falling back to best-effort publication. The live transport
+pauses consumption when its unacknowledged ring lacks event-count or byte
+headroom, including room for fragmented log chunks. Shutdown drains the
+queued backlog incrementally within its existing deadline.
+
+When ordinary capacity is full, the oldest unacknowledged non-terminal
 events are dropped from the client ring and their sequence numbers
 are recorded as a **loss interval** in a locally maintained sorted
 set of intervals. This set is data on the client, not events;

@@ -184,6 +184,10 @@ impl RingBuffer {
         self.events.len()
     }
 
+    pub(crate) fn encoded_bytes(&self) -> usize {
+        self.encoded_bytes
+    }
+
     /// True when the reserved terminal slot holds an event.
     pub fn has_terminal(&self) -> bool {
         self.terminal_slot.is_some()

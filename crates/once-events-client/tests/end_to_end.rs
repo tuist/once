@@ -40,6 +40,7 @@ struct RecordedRun {
     expired_bearer: Option<String>,
     invalid_hash_key: bool,
     ack_delay: std::time::Duration,
+    initial_ack_delay: std::time::Duration,
 }
 
 async fn send_ack(
@@ -220,7 +221,11 @@ impl RunEventService for TestServer {
                         .await;
                     return;
                 }
-                let ack_delay = state.ack_delay;
+                let ack_delay = if state.batches.len() == 1 && !state.initial_ack_delay.is_zero() {
+                    state.initial_ack_delay
+                } else {
+                    state.ack_delay
+                };
                 let close_after_ack = state.stream_failure == StreamFailure::AfterAck;
                 state.stream_failure = StreamFailure::None;
                 drop(state);
@@ -700,6 +705,146 @@ async fn authenticated_shutdown_drains_individual_actions_and_metadata() {
 }
 
 #[tokio::test]
+async fn paced_test_reports_survive_slow_acks_and_shutdown() {
+    use once_events_client::proto::run_event::Payload;
+
+    for (case_count, message_size) in [(10_000_u32, 0), (512, 4_000)] {
+        let (channel, recorded) = start_server().await;
+        {
+            let mut state = recorded.lock().await;
+            state.ack_delay = std::time::Duration::from_millis(5);
+            state.initial_ack_delay = std::time::Duration::from_millis(1_200);
+        }
+        let client = EventClient::new(
+            channel,
+            TransportConfig {
+                run_id: format!("paced-tests-{message_size}"),
+                batch_flush: std::time::Duration::from_millis(5),
+                limits: once_events_client::SessionLimits {
+                    ordinary_capacity: 128,
+                    max_events_per_batch: 32,
+                    max_unacked_bytes: 64 * 1024,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        let bus = RunEventBus::new(128);
+        let rx = bus.subscribe();
+        let (shutdown_tx, shutdown) = tokio::sync::oneshot::channel();
+        let delivery = tokio::spawn(client.run_until_shutdown(rx, shutdown));
+        bus.publish(RunEvent::RunStarted { at_epoch_ms: 1 });
+        let started = RunEvent::TestSuiteStarted {
+            at_epoch_ms: 2,
+            target_id: "tests".into(),
+            planned_case_count: Some(case_count),
+        };
+        let cases = (0..case_count).flat_map(|index| test_case_with_log(index, message_size));
+        let completed = RunEvent::TestSuiteCompleted {
+            at_epoch_ms: 3,
+            target_id: "tests".into(),
+            totals: once_core::TestTotals {
+                failed: case_count,
+                ..Default::default()
+            },
+        };
+        tokio::time::timeout(
+            std::time::Duration::from_mins(1),
+            bus.publish_all(
+                std::iter::once(started)
+                    .chain(cases)
+                    .chain(std::iter::once(completed)),
+            ),
+        )
+        .await
+        .unwrap();
+        bus.publish(RunEvent::RunCompleted {
+            at_epoch_ms: 4,
+            exit_status: 1,
+        });
+        shutdown_tx.send(()).unwrap();
+        delivery.await.unwrap().unwrap();
+
+        let recorded = recorded.lock().await;
+        assert!(recorded
+            .batches
+            .iter()
+            .all(|batch| { batch.gap_advances.is_empty() && batch.producer_dropped_events == 0 }));
+        let payloads: Vec<_> = recorded
+            .batches
+            .iter()
+            .flat_map(|batch| &batch.events)
+            .filter_map(|event| event.payload.as_ref())
+            .collect();
+        let delivered: std::collections::BTreeSet<_> = payloads
+            .iter()
+            .filter_map(|payload| {
+                if let Payload::TestCaseCompleted(case) = payload {
+                    Some(&case.case_id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(delivered.len(), usize::try_from(case_count).unwrap());
+        let log_bytes: usize = payloads
+            .iter()
+            .filter_map(|payload| {
+                if let Payload::LogChunk(log) = payload {
+                    Some(log.bytes.len())
+                } else {
+                    None
+                }
+            })
+            .sum();
+        assert_eq!(
+            log_bytes,
+            if message_size > 0 {
+                64 * RunEventBus::MAX_LOG_CHUNK_BYTES
+            } else {
+                0
+            }
+        );
+        assert_suite_events(&payloads);
+    }
+}
+
+fn assert_suite_events(payloads: &[&once_events_client::proto::run_event::Payload]) {
+    use once_events_client::proto::run_event::Payload;
+    assert!(payloads
+        .iter()
+        .any(|payload| matches!(payload, Payload::TestSuiteStarted(_))));
+    assert!(payloads
+        .iter()
+        .any(|payload| matches!(payload, Payload::TestSuiteCompleted(_))));
+    assert!(payloads
+        .iter()
+        .any(|payload| matches!(payload, Payload::RunCompleted(_))));
+}
+
+fn test_case_with_log(index: u32, message_size: usize) -> impl Iterator<Item = RunEvent> {
+    let case = RunEvent::TestCaseCompleted {
+        at_epoch_ms: 2,
+        target_id: "tests".into(),
+        case_id: format!("case-{index}"),
+        name: format!("case-{index}"),
+        suite_id: "suite".into(),
+        attempt: 1,
+        result: once_core::TestCaseResult::Failed,
+        duration_ms: 0,
+        duration_known: true,
+        failure_message: Some("x".repeat(message_size)),
+    };
+    let log = (message_size > 0 && index.is_multiple_of(8)).then(|| RunEvent::LogChunk {
+        at_epoch_ms: 2,
+        target_id: "tests".into(),
+        stream: once_core::LogStream::Stdout,
+        bytes: vec![b'x'; RunEventBus::MAX_LOG_CHUNK_BYTES],
+    });
+    std::iter::once(case).chain(log)
+}
+
+#[tokio::test]
 async fn canonical_dashboard_link_arrives_while_run_is_active() {
     let (channel, _) = start_server().await;
     let (links, mut received) = tokio::sync::mpsc::unbounded_channel();
@@ -735,77 +880,88 @@ async fn canonical_dashboard_link_arrives_while_run_is_active() {
 #[tokio::test]
 async fn shutdown_drains_cached_action_burst_beyond_two_seconds() {
     use once_events_client::proto::run_event::Payload;
-    let (channel, recorded) = start_server().await;
-    recorded.lock().await.ack_delay = std::time::Duration::from_millis(150);
-    let client = EventClient::new(
-        channel,
-        TransportConfig {
-            run_id: "cached-burst".into(),
-            limits: once_events_client::SessionLimits {
-                max_events_per_batch: 16,
+    for failure in [StreamFailure::None, StreamFailure::BeforeAck] {
+        let (channel, recorded) = start_server().await;
+        {
+            let mut state = recorded.lock().await;
+            state.ack_delay = std::time::Duration::from_millis(150);
+            state.stream_failure = failure;
+        }
+        let client = EventClient::new(
+            channel,
+            TransportConfig {
+                run_id: "cached-burst".into(),
+                limits: once_events_client::SessionLimits {
+                    ordinary_capacity: 64,
+                    max_events_per_batch: 16,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
-            ..Default::default()
-        },
-    );
-    let bus = RunEventBus::new(512);
-    let rx = bus.subscribe();
-    bus.publish(RunEvent::RunStarted { at_epoch_ms: 1 });
-    for index in 0..256 {
-        bus.publish(RunEvent::ActionCompleted {
-            at_epoch_ms: 2,
-            target_id: "cached-target".into(),
-            capability: "build".into(),
-            action_index: index,
-            identifier: Some(format!("action-{index}")),
-            display_name: None,
-            source_files: Vec::new(),
-            history: None,
-            presentation: None,
-            result: once_core::TargetResult::Succeeded,
-            was_cached: true,
-            duration_ms: 0,
-            exit_code: 0,
-            start_at_epoch_ms: 2,
-            worker_id: "local".into(),
-            prepare_ms: 0,
-            execute_ms: 0,
-            cache_key: String::new(),
-            selected_attempt: 1,
+        );
+        let bus = RunEventBus::new(512);
+        let rx = bus.subscribe();
+        bus.publish(RunEvent::RunStarted { at_epoch_ms: 1 });
+        for index in 0..256 {
+            bus.publish(RunEvent::ActionCompleted {
+                at_epoch_ms: 2,
+                target_id: "cached-target".into(),
+                capability: "build".into(),
+                action_index: index,
+                identifier: Some(format!("action-{index}")),
+                display_name: None,
+                source_files: Vec::new(),
+                history: None,
+                presentation: None,
+                result: once_core::TargetResult::Succeeded,
+                was_cached: true,
+                duration_ms: 0,
+                exit_code: 0,
+                start_at_epoch_ms: 2,
+                worker_id: "local".into(),
+                prepare_ms: 0,
+                execute_ms: 0,
+                cache_key: String::new(),
+                selected_attempt: 1,
+            });
+        }
+        bus.publish(RunEvent::RunCompleted {
+            at_epoch_ms: 3,
+            exit_status: 0,
         });
+        let (tx, shutdown) = tokio::sync::oneshot::channel();
+        tx.send(()).unwrap();
+        let started = std::time::Instant::now();
+        let expected_next = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            client.run_with_reconnect(rx, shutdown, once_events_client::ReconnectPolicy::default()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(started.elapsed() > std::time::Duration::from_secs(2));
+        let recorded = recorded.lock().await;
+        let actions: std::collections::BTreeSet<_> = recorded
+            .batches
+            .iter()
+            .flat_map(|batch| &batch.events)
+            .filter_map(|event| match &event.payload {
+                Some(Payload::ActionCompleted(action)) => Some(action.identifier.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(actions.len(), 256);
+        assert!(recorded
+            .batches
+            .iter()
+            .flat_map(|batch| &batch.events)
+            .any(|event| matches!(&event.payload, Some(Payload::RunCompleted(_)))));
+        assert_eq!(recorded.expected_next_seq, expected_next);
+        assert!(recorded
+            .batches
+            .iter()
+            .all(|batch| { batch.gap_advances.is_empty() && batch.producer_dropped_events == 0 }));
     }
-    bus.publish(RunEvent::RunCompleted {
-        at_epoch_ms: 3,
-        exit_status: 0,
-    });
-    let (tx, shutdown) = tokio::sync::oneshot::channel();
-    tx.send(()).unwrap();
-    let started = std::time::Instant::now();
-    let expected_next = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        client.run_until_shutdown(rx, shutdown),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    assert!(started.elapsed() > std::time::Duration::from_secs(2));
-    let recorded = recorded.lock().await;
-    let actions: std::collections::BTreeSet<_> = recorded
-        .batches
-        .iter()
-        .flat_map(|batch| &batch.events)
-        .filter_map(|event| match &event.payload {
-            Some(Payload::ActionCompleted(action)) => Some(action.identifier.clone()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(actions.len(), 256);
-    assert!(recorded
-        .batches
-        .iter()
-        .flat_map(|batch| &batch.events)
-        .any(|event| matches!(&event.payload, Some(Payload::RunCompleted(_)))));
-    assert_eq!(recorded.expected_next_seq, expected_next);
 }
 
 #[tokio::test]

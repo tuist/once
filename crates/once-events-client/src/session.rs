@@ -123,6 +123,15 @@ impl EventSession {
         self.next_seq
     }
 
+    pub(crate) fn can_receive(&self) -> bool {
+        // A producer log chunk can become several encoded events.
+        let log_fragments = once_core::RunEventBus::MAX_LOG_CHUNK_BYTES
+            .div_ceil(self.limits.max_log_chunk_bytes.max(1));
+        let headroom = self.limits.max_event_bytes.saturating_mul(log_fragments);
+        self.ring.ordinary_len() < (self.limits.ordinary_capacity / 2).max(1)
+            && self.ring.encoded_bytes() <= self.limits.max_unacked_bytes.saturating_sub(headroom)
+    }
+
     pub fn record_producer_loss(&mut self, count: u64) {
         self.producer_dropped_events = self.producer_dropped_events.saturating_add(count);
         self.producer_loss_dirty = true;

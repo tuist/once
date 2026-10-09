@@ -583,7 +583,7 @@ impl ActionOutputObserver for BusOutputObserver {
         if bytes.is_empty() {
             return;
         }
-        for chunk in bytes.chunks(16 * 1024) {
+        for chunk in bytes.chunks(RunEventBus::MAX_LOG_CHUNK_BYTES) {
             self.bus.publish(RunEvent::LogChunk {
                 at_epoch_ms: now_epoch_ms(),
                 target_id: self.target_id.clone(),

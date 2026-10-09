@@ -163,11 +163,42 @@ impl RunCancellation {
 struct Stop {
     token: tokio_util::sync::CancellationToken,
     cancellation: RunCancellation,
+    queued_budget: Mutex<Option<usize>>,
 }
 
 impl Stop {
     fn is_stopping(&self) -> bool {
         self.token.is_cancelled()
+    }
+
+    fn has_snapshot(&self) -> bool {
+        self.queued_budget
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
+    }
+
+    fn drain_queued(
+        &self,
+        session: &mut EventSession,
+        bus_rx: &mut broadcast::Receiver<CoreEvent>,
+        metadata: Option<&crate::proto::RunStarted>,
+        started_at_ms: &mut Option<i64>,
+    ) -> bool {
+        let mut snapshot = self
+            .queued_budget
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let remaining = snapshot.get_or_insert_with(|| bus_rx.len());
+        drain_bus(
+            session,
+            bus_rx,
+            metadata,
+            started_at_ms,
+            &self.cancellation,
+            remaining,
+        );
+        *remaining > 0
     }
 }
 
@@ -468,6 +499,7 @@ impl EventClient {
         let stopping = Stop {
             token: tokio_util::sync::CancellationToken::new(),
             cancellation: cancellation.clone(),
+            queued_budget: Mutex::new(None),
         };
         let stop = stopping.token.clone();
         let delivery = async {
@@ -484,7 +516,7 @@ impl EventClient {
                             () = &mut delay => break,
                             // A cancelled run has only its short drain left; retry now.
                             () = stopping.cancellation.cancelled() => break,
-                            event = bus_rx.recv() => match event {
+                            event = bus_rx.recv(), if !stopping.is_stopping() && session.can_receive() => match event {
                                 Ok(event) => enqueue_event(&mut session, event, self.metadata.as_ref(), &mut self.started_at_ms, &self.cancellation),
                                 Err(broadcast::error::RecvError::Lagged(n)) => {
                                     session.record_producer_loss(n);
@@ -644,14 +676,12 @@ impl EventClient {
         heartbeat.tick().await;
         loop {
             if stopping.is_stopping() && bus_open {
-                drain_bus(
+                bus_open = stopping.drain_queued(
                     session,
                     bus_rx,
                     self.metadata.as_ref(),
                     &mut self.started_at_ms,
-                    &self.cancellation,
                 );
-                bus_open = false;
             }
             if !bus_open {
                 complete_abandoned_run(
@@ -675,8 +705,8 @@ impl EventClient {
             };
             tokio::select! {
                 () = deadline => return Err(TransportError::DrainTimeout),
-                () = stopping.token.cancelled(), if bus_open => {},
-                _ = heartbeat.tick(), if bus_open && !session.finalized_locally() => {
+                () = stopping.token.cancelled(), if bus_open && !stopping.has_snapshot() => {},
+                _ = heartbeat.tick(), if bus_open && session.can_receive() && !session.finalized_locally() => {
                     let epoch_ms = now_epoch_ms();
                     session.push_ordinary(crate::bridge::heartbeat_payload(), epoch_ms, 0);
                 },
@@ -702,7 +732,7 @@ impl EventClient {
                     Some(Err(status)) => return Err(status.into()),
                     None => return Err(TransportError::AckStreamClosed),
                 },
-                event = bus_rx.recv(), if bus_open => match event {
+                event = bus_rx.recv(), if bus_open && !stopping.has_snapshot() && session.can_receive() => match event {
                     Ok(event) => enqueue_event(session, event, self.metadata.as_ref(), &mut self.started_at_ms, &self.cancellation),
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         session.record_producer_loss(n);
@@ -738,14 +768,9 @@ async fn prime_stream(
 ) -> Result<String, TransportError> {
     // Some servers send response headers only after receiving the first batch.
     loop {
-        if stopping.is_stopping() {
-            drain_bus(
-                session,
-                bus_rx,
-                metadata,
-                started_at_ms,
-                &stopping.cancellation,
-            );
+        if stopping.is_stopping()
+            && !stopping.drain_queued(session, bus_rx, metadata, started_at_ms)
+        {
             complete_abandoned_run(session, metadata, started_at_ms, &stopping.cancellation);
         }
         if let Some(batch) = session.next_batch() {
@@ -831,21 +856,20 @@ fn drain_bus(
     metadata: Option<&crate::proto::RunStarted>,
     started_at_ms: &mut Option<i64>,
     cancellation: &RunCancellation,
+    remaining: &mut usize,
 ) {
-    // `len` counts publications the buffer already overwrote; those surface as
-    // one `Lagged` and are not received, so they leave the budget at once.
-    let mut remaining = bus_rx.len();
-    while remaining > 0 {
+    // `len` includes overwritten publications, which leave the budget on Lagged.
+    while *remaining > 0 && session.can_receive() {
         match bus_rx.try_recv() {
             Ok(event) => {
-                remaining -= 1;
+                *remaining -= 1;
                 enqueue_event(session, event, metadata, started_at_ms, cancellation);
             }
             Err(broadcast::error::TryRecvError::Lagged(n)) => {
-                remaining = remaining.saturating_sub(usize::try_from(n).unwrap_or(usize::MAX));
+                *remaining = remaining.saturating_sub(usize::try_from(n).unwrap_or(usize::MAX));
                 session.record_producer_loss(n);
             }
-            Err(_) => break,
+            Err(_) => *remaining = 0,
         }
     }
 }
@@ -907,12 +931,14 @@ mod tests {
         }
         let mut session = EventSession::new("run", SessionLimits::default());
         let mut started_at_ms = None;
+        let mut remaining = rx.len();
         drain_bus(
             &mut session,
             &mut rx,
             None,
             &mut started_at_ms,
             &RunCancellation::new(),
+            &mut remaining,
         );
 
         assert_eq!(session.producer_dropped_events(), 8);
