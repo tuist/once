@@ -156,6 +156,7 @@ pub async fn spawn(
                 }
             };
             let git_rev = source_files::revision(&workspace).await;
+            let git_branch = source_files::branch(&workspace).await;
             let mut source_file_tasks = tokio::task::JoinSet::new();
             let source_workspace = workspace.clone();
             let source_revision = git_rev.clone();
@@ -215,6 +216,7 @@ pub async fn spawn(
                 safe_literal_allowlist_version: allowlist_version.to_string(),
                 project_id: project_id.unwrap_or_default(),
                 is_ci: once_events_client::environment::is_ci(),
+                git_branch,
                 ..Default::default()
             };
 
