@@ -754,9 +754,9 @@ KOTLIN
 
     When call once --format json test tests --test-batch "$batch_id"
     The status should be failure
-    The stdout should include 'not in the current plan'
-    The stdout should include 'once query test-plan --target tests'
-    The stdout should include 'whole target'
+    The stderr should include 'not in the current plan'
+    The stderr should include 'once query test-plan --target tests'
+    The stderr should include 'whole target'
   End
 
   It 'keeps plan and batch identity independent of worker capacity'
@@ -772,9 +772,20 @@ KOTLIN
     The stdout should equal 'true'
   End
 
-  It 'fails a batch when native arguments cause the runner to execute extra cases'
+  It 'fails a batch when runner collection adds unrequested cases'
     create_pytest_workspace
-    printf '\n[target.attrs]\nargs = ["tests"]\n' >> "$WORKSPACE/once.toml"
+    cat > "$WORKSPACE/tests/conftest.py" <<'PY'
+import pytest
+
+
+def pytest_collection_modifyitems(config, items):
+    if items and any("::" in arg for arg in config.args):
+        items.append(pytest.Function.from_parent(
+            items[0].parent,
+            name="test_unrequested",
+            callobj=lambda: None,
+        ))
+PY
     once --format json test tests >/dev/null
 
     When call once --format json test tests --jobs 2
@@ -784,10 +795,10 @@ KOTLIN
     The stdout should include '"success":false'
   End
 
-  It 'requires an explicit target and rejects mixed batch selectors'
+  It 'requires an explicit target for batch selection'
     When call once --format json test --test-batch invalid
     The status should be failure
-    The stderr should include 'target'
+    The stderr should include 'TARGET'
   End
 
   It 'discovers and schedules RSpec files as parallel batches'
