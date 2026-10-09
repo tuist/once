@@ -578,7 +578,7 @@ pub async fn test_with_filters(
             .and_then(serde_json::Value::as_array)
             .map_or(0, std::vec::Vec::len);
         tracing::debug!(cases = n, target = target_id, "publishing test cases");
-        publish_test_results_events(&bus, target_id, results);
+        publish_test_results_events(&bus, target_id, results).await;
     }
     let duration_ms: u64 = started_at
         .elapsed()
@@ -608,7 +608,11 @@ pub async fn test_with_filters(
 //
 // Retrospective results carry their own case, suite, and attempt identity.
 // They do not invent a start time when the test runner only exposes a report.
-fn publish_test_results_events(
+//
+// A report can hold thousands of cases, far more than the bus ring, so the
+// events go out paced to the slowest subscriber rather than in one burst
+// that would overrun it.
+async fn publish_test_results_events(
     bus: &once_core::RunEventBus,
     target_id: &str,
     results: &serde_json::Value,
@@ -621,7 +625,8 @@ fn publish_test_results_events(
 
     let case_count = cases.map_or(0, std::vec::Vec::len);
 
-    bus.publish(RunEvent::TestSuiteStarted {
+    let mut events = Vec::with_capacity(case_count + 2);
+    events.push(RunEvent::TestSuiteStarted {
         at_epoch_ms: now,
         target_id: target_id.to_string(),
         planned_case_count: Some(u32::try_from(case_count).unwrap_or(u32::MAX)),
@@ -691,7 +696,7 @@ fn publish_test_results_events(
                     TestCaseResult::TimedOut => totals.timed_out += 1,
                     TestCaseResult::Cancelled => totals.cancelled += 1,
                 }
-                bus.publish(RunEvent::TestCaseCompleted {
+                events.push(RunEvent::TestCaseCompleted {
                     at_epoch_ms: bus_events::now_ms(),
                     target_id: target_id.to_string(),
                     case_id: case_id.to_string(),
@@ -707,11 +712,12 @@ fn publish_test_results_events(
         }
     }
 
-    bus.publish(RunEvent::TestSuiteCompleted {
+    events.push(RunEvent::TestSuiteCompleted {
         at_epoch_ms: bus_events::now_ms(),
         target_id: target_id.to_string(),
         totals,
     });
+    bus.publish_all(events).await;
 }
 
 fn load_test_results_for_events(
@@ -817,8 +823,8 @@ mod tests {
     use once_cas::ActionResult;
     use once_frontend::{Capability, TargetLabel};
 
-    #[test]
-    fn retrospective_cases_preserve_unknown_status_and_attempt_identity() {
+    #[tokio::test]
+    async fn retrospective_cases_preserve_unknown_status_and_attempt_identity() {
         let bus = once_core::RunEventBus::new(16);
         let mut receiver = bus.subscribe();
         let results = serde_json::json!({
@@ -829,7 +835,7 @@ mod tests {
                 "attempts": [{"status": "unknown"}, {"status": "passed"}]
             }]
         });
-        publish_test_results_events(&bus, "tests", &results);
+        publish_test_results_events(&bus, "tests", &results).await;
         assert!(matches!(
             receiver.try_recv().unwrap(),
             once_core::RunEvent::TestSuiteStarted {
@@ -863,8 +869,8 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn case_events_carry_runner_durations_and_failure_messages() {
+    #[tokio::test]
+    async fn case_events_carry_runner_durations_and_failure_messages() {
         let bus = once_core::RunEventBus::new(16);
         let mut receiver = bus.subscribe();
         let results = serde_json::json!({
@@ -889,7 +895,7 @@ mod tests {
                 }
             ]
         });
-        publish_test_results_events(&bus, "tests", &results);
+        publish_test_results_events(&bus, "tests", &results).await;
         assert!(matches!(
             receiver.try_recv().unwrap(),
             once_core::RunEvent::TestSuiteStarted { .. }
