@@ -11,9 +11,9 @@ use once_frontend::analysis::{AnalysisResult, DeclaredActionOperation};
 use once_frontend::GraphTarget;
 
 use super::{
-    expose_target_tools, materialize_available_inputs, run_declared_action, scheduling,
-    AvailableInput, BuildOutcome, DeclaredActionRun, DeclaredActionsState, SourceDigestCache,
-    EVIDENCE_FLUSH_BATCH_SIZE,
+    expose_target_tools, materialize_available_inputs, materialize_prior_results_for,
+    run_declared_action, scheduling, AvailableInput, BuildOutcome, DeclaredActionRun,
+    DeclaredActionsState, SourceDigestCache, EVIDENCE_FLUSH_BATCH_SIZE,
 };
 
 /// Materialise each declared action through the action cache, then
@@ -118,6 +118,14 @@ pub(in crate::commands::graph::analysis) fn run_declared_actions<'a>(
             if batch.len() > 1 {
                 let _permit = resources.acquire(ResourceRequest::default()).await;
                 for action in &batch {
+                    materialize_prior_results_for(
+                        workspace,
+                        cache,
+                        state.pending(),
+                        action,
+                        source_digest_cache,
+                    )
+                    .await?;
                     materialize_available_inputs(
                         workspace,
                         cache,
@@ -133,9 +141,9 @@ pub(in crate::commands::graph::analysis) fn run_declared_actions<'a>(
             }
             let count = batch.len();
             let prior_cached_results = if count == 1 {
-                state.cached_results.as_slice()
+                state.pending()
             } else {
-                &[]
+                super::PendingResults::default()
             };
             let outcomes =
                 futures::future::join_all(batch.into_iter().zip(&input_digests).enumerate().map(
@@ -152,6 +160,7 @@ pub(in crate::commands::graph::analysis) fn run_declared_actions<'a>(
                                 .operation
                                 .as_ref()
                                 .is_some_and(DeclaredActionOperation::is_bookkeeping);
+                            let policy = super::CachedResultPolicy::for_action(&declared, count);
                             let identifier = declared.identifier.clone();
                             let display_name = declared.display_name.clone();
                             let source_files = declared.source_files.clone();
@@ -262,7 +271,7 @@ pub(in crate::commands::graph::analysis) fn run_declared_actions<'a>(
                                     duration_ms: i64::try_from(duration_ms).unwrap_or(i64::MAX),
                                     exit_code,
                                 });
-                                (outcome, retained)
+                                (outcome, retained, policy)
                             })
                         })
                     },
@@ -271,8 +280,8 @@ pub(in crate::commands::graph::analysis) fn run_declared_actions<'a>(
             let mut failure = None;
             for outcome in outcomes {
                 match outcome {
-                    Ok((outcome, retained)) => {
-                        state.record(outcome, !record_success_evidence, retained);
+                    Ok((outcome, retained, policy)) => {
+                        state.record(outcome, !record_success_evidence, retained, &policy);
                     }
                     Err(error) if failure.is_none() => failure = Some(error),
                     Err(_) => {}

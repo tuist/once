@@ -133,6 +133,10 @@ pub enum DeclaredPreparePathMode {
 
 /// A single action declared by a target kind impl.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent field of the declaration run_action records"
+)]
 pub struct DeclaredAction {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub presentation: Option<once_presentation::ActionPresentation>,
@@ -184,6 +188,11 @@ pub struct DeclaredAction {
         skip_serializing_if = "is_true"
     )]
     pub depends_on_prior_actions: bool,
+    /// The outputs are read only by later actions of the same target. A cache
+    /// hit then leaves them in the cache until one of those actions runs and
+    /// needs them, instead of restoring them when the target finishes.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub intermediate: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub toolchain_identity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

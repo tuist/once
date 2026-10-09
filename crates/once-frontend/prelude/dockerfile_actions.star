@@ -471,6 +471,9 @@ def _dockerfile_declare_step(ctx, shared, entry, number, text, contexts, pull_ba
         "sandbox": "copied-inputs",
         "cacheable": shared["cacheable"],
         "depends_on_prior_actions": False,
+        # A snapshot is only read by the next instruction and the export, so
+        # a cached one stays in the cache unless one of those has to run.
+        "intermediate": True,
         "toolchain_identity": shared["identity"],
         "identifier": identifier,
         "display_name": "Container " + entry["opcode"] + " · line " + str(entry["line"]),

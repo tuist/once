@@ -142,6 +142,9 @@ pub(super) struct BuildOutcome {
     pub cache_state: EvidenceCacheState,
     pub result: ActionResult,
     pub cached_results: Vec<ActionResult>,
+    /// Outputs only later actions of the target read. They stay in the cache
+    /// rather than on disk unless one of those actions had to run.
+    pub intermediate_outputs: BTreeSet<String>,
     /// Per-declared-action outcomes recorded during this build.
     ///
     /// One entry per declared action, retained with memoized target outcomes
@@ -852,6 +855,28 @@ impl BuildSession {
     }
 }
 
+/// A reused outcome leaves its intermediate outputs in the cache rather than on
+/// disk, so it is only usable while the local cache still holds the ones that
+/// aren't on disk.
+async fn intermediate_outputs_cached(
+    outcome: &BuildOutcome,
+    workspace: &Path,
+    cache: &CacheProvider,
+) -> bool {
+    for path in &outcome.intermediate_outputs {
+        if workspace.join(path).symlink_metadata().is_ok() {
+            continue;
+        }
+        let Some(digest) = outcome.result.outputs.get(path) else {
+            return false;
+        };
+        if !cache.has_local_blob(digest).await.unwrap_or(false) {
+            return false;
+        }
+    }
+    true
+}
+
 async fn materialize_cached_outputs(
     outcome: &BuildOutcome,
     workspace: &Path,
@@ -1338,7 +1363,13 @@ async fn build_one(
         .as_deref()
         .map(|key| target_outcomes::key(key, &action_digests))
     {
-        if let Some(outcome) = target_outcomes.reuse(&target, &key, &changes) {
+        let reused = match target_outcomes.reuse(&target, &key, &changes) {
+            Some(outcome) if intermediate_outputs_cached(&outcome, &workspace, &cache).await => {
+                Some(outcome)
+            }
+            _ => None,
+        };
+        if let Some(outcome) = reused {
             target_outcomes.carry_forward(&target_id);
             if let Some(bus) = &event_bus {
                 let duration_ms =

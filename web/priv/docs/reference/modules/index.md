@@ -768,6 +768,11 @@ phases during import; executing such a record fails until those settings resolve
   includes prior actions declared by the same target and acts as an ordering
   barrier. With `False`, declared input and output paths determine ordering;
   every consumed generated file must be listed in `inputs`.
+- `intermediate`: `False` by default. Set `True` on an action whose outputs only
+  later actions of the same target read, such as a step that feeds the next
+  one. When the action is a cache hit, its outputs stay in the cache instead of
+  being written to disk at the end of the target, and are restored only when a
+  later action that reads them has to run.
 - `toolchain_identity`: optional string folded into the action digest.
 - `identifier`: stable diagnostic label.
 - `display_name`: optional human-readable name, such as `Compile main.c` or

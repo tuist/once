@@ -618,6 +618,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
                     cacheable: true,
                     inherit_parent_env: false,
                     depends_on_prior_actions: true,
+                    intermediate: false,
                     toolchain_identity: None,
                     identifier: Some(format!("expand_actions:{implementation}")),
                     display_name: None,
@@ -665,6 +666,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cacheable: true,
             inherit_parent_env: false,
             depends_on_prior_actions: false,
+            intermediate: false,
             toolchain_identity: None,
             identifier: Some(format!("write_path:{path}")),
             display_name: display_name
@@ -728,6 +730,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cacheable: cacheable.unwrap_or(true),
             inherit_parent_env: false,
             depends_on_prior_actions: false,
+            intermediate: false,
             toolchain_identity,
             identifier: Some(identifier.unwrap_or_else(|| format!("copy_path:{destination}"))),
             display_name: display_name.or_else(|| {
@@ -800,6 +803,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cacheable: true,
             inherit_parent_env: false,
             depends_on_prior_actions: false,
+            intermediate: false,
             toolchain_identity: None,
             identifier: Some(format!("materialize_host_file:{destination}")),
             display_name: display_name.or_else(|| {
@@ -881,6 +885,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cacheable: true,
             inherit_parent_env: false,
             depends_on_prior_actions: false,
+            intermediate: false,
             toolchain_identity: None,
             identifier: Some(format!("materialize_host_tree:{destination}")),
             display_name: display_name.or_else(|| {
@@ -935,6 +940,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cacheable: false,
             inherit_parent_env: false,
             depends_on_prior_actions: false,
+            intermediate: false,
             toolchain_identity: None,
             identifier: Some(
                 identifier.unwrap_or_else(|| format!("link_path:{source}:{destination}")),
@@ -992,6 +998,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cacheable: false,
             inherit_parent_env: false,
             depends_on_prior_actions: false,
+            intermediate: false,
             toolchain_identity: None,
             identifier: Some(identifier.unwrap_or_else(|| format!("prepare_path:{kind}:{path}"))),
             display_name: display_name.or_else(|| {
@@ -1064,6 +1071,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cacheable: cacheable.unwrap_or(true),
             inherit_parent_env: false,
             depends_on_prior_actions: false,
+            intermediate: false,
             toolchain_identity: None,
             identifier: Some(identifier.unwrap_or_else(|| format!("write_tree_digest:{output}"))),
             display_name: display_name.or_else(|| {
@@ -1146,6 +1154,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cacheable: cacheable.unwrap_or(true),
             inherit_parent_env: false,
             depends_on_prior_actions: false,
+            intermediate: false,
             toolchain_identity: None,
             identifier: Some(identifier.unwrap_or_else(|| format!("write_archive:{output}"))),
             display_name: display_name.or_else(|| {
@@ -1220,6 +1229,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cacheable: cacheable.unwrap_or(true),
             inherit_parent_env: false,
             depends_on_prior_actions: false,
+            intermediate: false,
             toolchain_identity: None,
             identifier: Some(
                 identifier.unwrap_or_else(|| format!("download_and_extract:{destination}")),
@@ -1290,7 +1300,10 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     /// `success_exit_codes`: optional integer list, default `[0]`, whose
     /// members mean the command completed and its outputs are valid;
     /// `toolchain_identity`: optional string folded into the input
-    /// digest; `identifier`: optional label for diagnostics.
+    /// digest; `identifier`: optional label for diagnostics;
+    /// `intermediate`: optional bool, default false, for outputs only later
+    /// actions of the same target read, so a cache hit doesn't restore them
+    /// to disk unless one of those actions has to run.
     #[allow(
         clippy::too_many_arguments,
         reason = "run_action mirrors the declared-action fields, including optional stream redirection"
@@ -1317,6 +1330,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named)] history: Option<Value<'v>>,
         #[starlark(require = named)] display_name: Option<String>,
         #[starlark(require = named)] source_files: Option<Value<'v>>,
+        #[starlark(require = named)] intermediate: Option<bool>,
     ) -> anyhow::Result<NoneType> {
         validate_sandbox(sandbox.as_deref())?;
         validate_network(network.as_deref())?;
@@ -1392,6 +1406,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             cacheable,
             inherit_parent_env,
             depends_on_prior_actions: depends_on_prior_actions.unwrap_or(true),
+            intermediate: intermediate.unwrap_or(false),
             toolchain_identity,
             identifier,
             display_name,

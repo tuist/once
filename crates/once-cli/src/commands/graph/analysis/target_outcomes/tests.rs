@@ -44,6 +44,7 @@ fn outcome(outputs: &[&str]) -> BuildOutcome {
             outputs: BTreeMap::new(),
         },
         cached_results: Vec::new(),
+        intermediate_outputs: std::collections::BTreeSet::new(),
         per_action_outcomes: Vec::new(),
     }
 }
@@ -199,6 +200,34 @@ fn a_missing_recorded_action_output_visits_it_again() {
     });
 
     assert!(reopened.reuse(&target, "key", &changed(&[], &[])).is_none());
+}
+
+#[test]
+fn a_missing_intermediate_output_does_not_visit_it_again() {
+    let workspace = TempDir::new().unwrap();
+    let target = target("apps/image", "image");
+    let mut built = outcome(&[]);
+    built.result.outputs.insert(
+        ".once/out/image/instructions/2/image".to_string(),
+        Digest::of_bytes(b"snapshot"),
+    );
+    built
+        .intermediate_outputs
+        .insert(".once/out/image/instructions/2/image".to_string());
+    let reopened = round_trip(&workspace, |outcomes| {
+        outcomes.record(
+            &target,
+            "key".to_string(),
+            &observations("apps/image", &["Dockerfile"]),
+            &inputs(&[]),
+            &built,
+        );
+    });
+
+    let reused = reopened.reuse(&target, "key", &changed(&[], &[])).unwrap();
+    assert!(reused
+        .intermediate_outputs
+        .contains(".once/out/image/instructions/2/image"));
 }
 
 /// The name folds in the target definition and its dependencies' outcomes, so a

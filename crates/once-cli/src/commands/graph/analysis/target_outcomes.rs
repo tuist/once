@@ -71,6 +71,8 @@ struct Record {
     cache_state: EvidenceCacheState,
     result: ActionResult,
     cached_results: Vec<ActionResult>,
+    #[serde(default)]
+    intermediate_outputs: BTreeSet<String>,
     per_action_outcomes: Vec<super::PerActionOutcome>,
 }
 
@@ -166,6 +168,7 @@ impl TargetOutcomes {
             .result
             .outputs
             .keys()
+            .filter(|output| !record.intermediate_outputs.contains(*output))
             .any(|output| self.workspace.join(output).symlink_metadata().is_err())
         {
             tracing::trace!(target = %target.label.id, "a recorded action output is missing");
@@ -187,6 +190,7 @@ impl TargetOutcomes {
             cache_state: EvidenceCacheState::Hit,
             result: record.result.clone(),
             cached_results: record.cached_results.clone(),
+            intermediate_outputs: record.intermediate_outputs.clone(),
             per_action_outcomes: record
                 .per_action_outcomes
                 .iter()
@@ -250,6 +254,7 @@ impl TargetOutcomes {
             cache_state: outcome.cache_state,
             result: outcome.result.clone(),
             cached_results: outcome.cached_results.clone(),
+            intermediate_outputs: outcome.intermediate_outputs.clone(),
             per_action_outcomes: outcome.per_action_outcomes.clone(),
         };
         self.learned

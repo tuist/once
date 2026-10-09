@@ -976,3 +976,11 @@ fn dockerfile_copy_sources_keep_the_full_context_when_an_argument_and_environmen
     assert!(argument.inputs.iter().any(|path| path == "early.txt"));
     assert!(!argument.inputs.iter().any(|path| path == "late.txt"));
 }
+
+#[test]
+fn dockerfile_instruction_snapshots_are_intermediate_and_the_export_is_not() {
+    let (store, _) = analyze("FROM scratch\nCOPY early.txt /early\n", "build");
+    assert!(action_by_identifier(&store, "image:1:from").intermediate);
+    assert!(action_by_identifier(&store, "image:2:copy").intermediate);
+    assert!(!action_by_identifier(&store, "image:dockerfile-export").intermediate);
+}
