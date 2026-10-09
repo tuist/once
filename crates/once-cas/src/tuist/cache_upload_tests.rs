@@ -508,14 +508,14 @@ async fn an_upload_is_reported_once_and_a_blob_the_remote_already_holds_not_at_a
         stderr: None,
         outputs: BTreeMap::from([("out.txt".to_string(), output)]),
     };
-    crate::transfer::observe(recorder.clone(), async {
+    Box::pin(crate::transfer::observe(recorder.clone(), async {
         cache.put_blob_remote(&digest, bytes).await.unwrap();
         cache.put_blob_remote(&digest, bytes).await.unwrap();
         cache
             .put_action_result_remote(&Digest::of_bytes(b"action"), &result)
             .await
             .unwrap();
-    })
+    }))
     .await;
     server.abort();
 
