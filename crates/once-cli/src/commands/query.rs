@@ -1211,10 +1211,10 @@ pub(crate) fn test_results_value_at(
         None => workspace.join(test_results_path(target_id)?),
     };
     let raw = std::fs::read_to_string(&path).with_context(|| {
-        if !path.exists() {
-            format!("test result file not found at `{}`", path.display())
-        } else {
+        if path.exists() {
             format!("reading test result file `{}`", path.display())
+        } else {
+            format!("test result file not found at `{}`", path.display())
         }
     })?;
     let value = serde_json::from_str(&raw)

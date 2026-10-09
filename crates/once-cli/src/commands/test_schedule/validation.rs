@@ -65,7 +65,7 @@ fn validate_scope(
         .iter()
         .map(|unit| unit.id.as_str())
         .collect::<BTreeSet<_>>();
-    for unit in units.difference(&discovered) {
+    if let Some(unit) = units.difference(&discovered).next() {
         anyhow::bail!("test unit `{unit}` is not present in the current manifest for `{target}`; run `once test {target}` to refresh discovery");
     }
     if complete {

@@ -83,19 +83,7 @@ fn aggregate(target: &str, batches: &[&TestBatch], runs: &BTreeMap<&str, &Value>
                 }
             }
             for case in result_cases {
-                if let Some(id) = case.get("id").and_then(Value::as_str) {
-                    if let Some(previous) = case_batches.insert(id.to_string(), batch.id.clone()) {
-                        anyhow::bail!(
-                            "test case `{id}` overlaps between batches `{previous}` and `{}`",
-                            batch.id
-                        );
-                    }
-                    anyhow::ensure!(
-                        !cases.contains_key(id),
-                        "test case `{id}` overlaps another batch outcome"
-                    );
-                    cases.insert(id.to_string(), case.clone());
-                }
+                merge_case(case, batch, &mut cases, &mut case_batches)?;
             }
         }
         collect_artifacts(result, "logs", &mut logs);
@@ -149,6 +137,28 @@ fn aggregate(target: &str, batches: &[&TestBatch], runs: &BTreeMap<&str, &Value>
     });
     once_core::validate_test_results(&value, target)?;
     Ok(value)
+}
+
+fn merge_case(
+    case: &Value,
+    batch: &TestBatch,
+    cases: &mut BTreeMap<String, Value>,
+    case_batches: &mut BTreeMap<String, String>,
+) -> Result<()> {
+    if let Some(id) = case.get("id").and_then(Value::as_str) {
+        if let Some(previous) = case_batches.insert(id.to_string(), batch.id.clone()) {
+            anyhow::bail!(
+                "test case `{id}` overlaps between batches `{previous}` and `{}`",
+                batch.id
+            );
+        }
+        anyhow::ensure!(
+            !cases.contains_key(id),
+            "test case `{id}` overlaps another batch outcome"
+        );
+        cases.insert(id.to_string(), case.clone());
+    }
+    Ok(())
 }
 
 fn add_synthetic_case(

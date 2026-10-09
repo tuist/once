@@ -70,7 +70,7 @@ pub fn validate_test_results_for_units(
             .iter()
             .map(String::as_str)
             .collect::<BTreeSet<_>>();
-        for id in case_ids.difference(&expected) {
+        if let Some(id) = case_ids.difference(&expected).next() {
             bail!("normalized test results contain unrequested test unit `{id}`; the runner must honor exact filtering");
         }
         ensure!(
