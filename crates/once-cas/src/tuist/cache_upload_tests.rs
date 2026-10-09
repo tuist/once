@@ -22,6 +22,8 @@ struct Observations {
     failures: HashMap<&'static str, VecDeque<Status>>,
     batch_statuses: VecDeque<Code>,
     action_delay: Option<Duration>,
+    write_message_delay: Option<Duration>,
+    write_stops_reading: bool,
 }
 
 #[derive(Clone, Default)]
@@ -173,15 +175,24 @@ impl ByteStream for UploadServer {
         let mut stream = request.into_inner();
         let first = stream.message().await?.expect("first upload chunk");
         let mut chunks = vec![first];
-        {
+        let message_delay = {
             let mut state = self.0.lock().await;
             if let Err(status) = fail(&mut state, "write") {
                 state.writes.push(chunks);
                 return Err(status);
             }
-        }
+            if state.write_stops_reading {
+                state.writes.push(chunks);
+                drop(state);
+                return std::future::pending().await;
+            }
+            state.write_message_delay
+        };
         while let Some(chunk) = stream.message().await? {
             chunks.push(chunk);
+            if let Some(delay) = message_delay {
+                tokio::time::sleep(delay).await;
+            }
         }
         let size = chunks
             .iter()
@@ -232,13 +243,17 @@ async fn fixture_with_timeout(
         },
     )
     .unwrap();
-    let mut endpoint = Endpoint::from_shared(format!("http://{address}")).unwrap();
+    let endpoint = Endpoint::from_shared(format!("http://{address}")).unwrap();
+    let mut requests = endpoint.clone();
     if let Some(timeout) = timeout {
-        endpoint = endpoint.timeout(timeout);
+        requests = requests.timeout(timeout);
     }
     cache
         .grpc_channel_cache
-        .set(Ok(endpoint.connect().await.unwrap()))
+        .set(Ok(GrpcChannels {
+            requests: requests.connect().await.unwrap(),
+            uploads: endpoint.connect().await.unwrap(),
+        }))
         .unwrap();
     cache.auth_token_cache.set(Ok("test-token".into())).unwrap();
     *cache.capabilities_cache.lock().await = Some(RemoteCapabilities::default());
@@ -304,7 +319,7 @@ async fn batch_upload_retries_individual_transient_status_but_not_permission_den
 
 #[tokio::test]
 async fn streamed_upload_reopens_file_and_restarts_memory_body_with_fresh_resource() {
-    for (from_file, compressed) in [(false, false), (false, true), (true, false)] {
+    for (from_file, compressed) in [(false, false), (false, true), (true, false), (true, true)] {
         let temp = tempfile::TempDir::new().unwrap();
         let (cache, service, server) = fixture(&temp).await;
         cache
@@ -381,6 +396,72 @@ async fn request_timeouts_are_not_retried() {
     assert!(error.to_string().contains("Timeout expired"), "{error}");
     assert_eq!(service.0.lock().await.actions.len(), 1);
     server.abort();
+}
+
+fn streamed_blob(chunks: usize) -> (Vec<u8>, reapi::Digest) {
+    let bytes: Vec<u8> = (0..BYTE_STREAM_CHUNK_SIZE * chunks)
+        .map(|index| u8::try_from(index % 251).unwrap())
+        .collect();
+    let digest = sha256_digest(&bytes).unwrap();
+    (bytes, digest)
+}
+
+#[tokio::test]
+async fn streamed_upload_outlasts_the_request_timeout_while_it_progresses() {
+    for from_file in [false, true] {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut cache, service, server) =
+            fixture_with_timeout(&temp, Some(Duration::from_millis(200))).await;
+        cache.stream_stall_timeout = Duration::from_secs(5);
+        service.0.lock().await.write_message_delay = Some(Duration::from_millis(100));
+        let (bytes, digest) = streamed_blob(8);
+        if from_file {
+            let path = temp.path().join("blob");
+            tokio::fs::write(&path, &bytes).await.unwrap();
+            cache
+                .write_reapi_blob_file_stream(&digest, &path, "put blob")
+                .await
+                .unwrap();
+        } else {
+            cache
+                .upload_reapi_blob(&digest, &bytes, "put blob")
+                .await
+                .unwrap();
+        }
+        let state = service.0.lock().await;
+        assert_eq!(state.writes.len(), 1);
+        assert_eq!(state.writes[0].len(), 8);
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn streamed_upload_fails_without_retrying_once_the_remote_stops_reading() {
+    for from_file in [false, true] {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut cache, service, server) = fixture(&temp).await;
+        cache.stream_stall_timeout = Duration::from_millis(300);
+        service.0.lock().await.write_stops_reading = true;
+        let (bytes, digest) = streamed_blob(8);
+        let path = temp.path().join("blob");
+        tokio::fs::write(&path, &bytes).await.unwrap();
+        let upload = async {
+            if from_file {
+                cache
+                    .write_reapi_blob_file_stream(&digest, &path, "put blob")
+                    .await
+            } else {
+                cache.upload_reapi_blob(&digest, &bytes, "put blob").await
+            }
+        };
+        let error = tokio::time::timeout(Duration::from_secs(5), upload)
+            .await
+            .expect("a stalled upload must fail at its stall timeout")
+            .unwrap_err();
+        assert!(error.to_string().contains("made no progress"), "{error}");
+        assert_eq!(service.0.lock().await.writes.len(), 1);
+        server.abort();
+    }
 }
 
 #[test]

@@ -1,5 +1,6 @@
 use super::*;
 use bytestream::byte_stream_server::{ByteStream, ByteStreamServer};
+use futures::StreamExt;
 use std::pin::Pin;
 use tonic::Response;
 
@@ -8,6 +9,7 @@ struct BlobServer {
     chunks: Vec<std::result::Result<bytestream::ReadResponse, Status>>,
     failures: Vec<Status>,
     reads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    stalls: bool,
 }
 
 #[tonic::async_trait]
@@ -33,7 +35,11 @@ impl ByteStream for BlobServer {
                 failure.clone()
             )]))));
         }
-        Ok(Response::new(Box::pin(stream::iter(self.chunks.clone()))))
+        let chunks = stream::iter(self.chunks.clone());
+        if self.stalls {
+            return Ok(Response::new(Box::pin(chunks.chain(stream::pending()))));
+        }
+        Ok(Response::new(Box::pin(chunks)))
     }
 
     async fn write(
@@ -56,7 +62,8 @@ async fn cache_for_stream(
     digest: Digest,
     chunks: Vec<std::result::Result<bytestream::ReadResponse, Status>>,
 ) -> (TuistCache, tokio::task::JoinHandle<()>) {
-    let (cache, server, _) = cache_for_failing_stream(temp, digest, chunks, Vec::new()).await;
+    let (cache, server, _) =
+        cache_for_failing_stream(temp, digest, chunks, Vec::new(), false).await;
     (cache, server)
 }
 
@@ -65,6 +72,7 @@ async fn cache_for_failing_stream(
     digest: Digest,
     chunks: Vec<std::result::Result<bytestream::ReadResponse, Status>>,
     failures: Vec<Status>,
+    stalls: bool,
 ) -> (
     TuistCache,
     tokio::task::JoinHandle<()>,
@@ -75,6 +83,7 @@ async fn cache_for_failing_stream(
         chunks,
         failures,
         reads: reads.clone(),
+        stalls,
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -100,13 +109,17 @@ async fn cache_for_failing_stream(
         },
     )
     .unwrap();
+    let channel = Endpoint::from_shared(format!("http://{address}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
     cache
         .grpc_channel_cache
-        .set(Ok(Endpoint::from_shared(format!("http://{address}"))
-            .unwrap()
-            .connect()
-            .await
-            .unwrap()))
+        .set(Ok(GrpcChannels {
+            requests: channel.clone(),
+            uploads: channel,
+        }))
         .unwrap();
     cache.auth_token_cache.set(Ok("test-token".into())).unwrap();
     cache
@@ -189,6 +202,7 @@ async fn transient_stream_failures_are_retried_on_a_fresh_read() {
             Status::internal("h2 protocol error: http2 error"),
             Status::cancelled("operation was canceled"),
         ],
+        false,
     )
     .await;
     let result =
@@ -210,6 +224,7 @@ async fn non_transient_stream_failures_are_not_retried() {
         digest,
         chunks,
         vec![Status::permission_denied("no access")],
+        false,
     )
     .await;
     let result =
@@ -218,4 +233,39 @@ async fn non_transient_stream_failures_are_not_retried() {
     assert!(result.expect("failed restoration must terminate").is_err());
     assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert!(!cache.local.has_blob(&digest).await.unwrap());
+}
+
+#[tokio::test]
+async fn stalled_streams_fail_at_the_stall_timeout_without_retrying() {
+    let bytes = vec![9; 300_000];
+    let temp = tempfile::TempDir::new().unwrap();
+    let digest = Digest::of_bytes(&bytes);
+    let chunks = vec![Ok(bytestream::ReadResponse {
+        data: bytes[..100_000].to_vec(),
+    })];
+    let (mut cache, server, reads) =
+        cache_for_failing_stream(&temp, digest, chunks, Vec::new(), true).await;
+    cache.stream_stall_timeout = Duration::from_millis(200);
+
+    let restore = tokio::time::timeout(Duration::from_secs(5), cache.ensure_blob_local(&digest))
+        .await
+        .expect("a stalled restoration must fail at its stall timeout")
+        .unwrap_err();
+    assert!(
+        restore.to_string().contains("made no progress"),
+        "{restore}"
+    );
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(!cache.local.has_blob(&digest).await.unwrap());
+
+    let remote_digest = sha256_digest(&bytes).unwrap();
+    let read = tokio::time::timeout(
+        Duration::from_secs(5),
+        cache.read_reapi_blob_stream(&remote_digest, "get blob"),
+    )
+    .await
+    .expect("a stalled read must fail at its stall timeout")
+    .unwrap_err();
+    assert!(read.to_string().contains("made no progress"), "{read}");
+    server.abort();
 }
