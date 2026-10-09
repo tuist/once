@@ -66,6 +66,27 @@ pub enum DeclaredActionOperation {
     },
 }
 
+impl DeclaredActionOperation {
+    /// Whether the operation is Once's own file plumbing (writing a
+    /// generated file; copying, linking, or preparing a path; bringing a host
+    /// file or tree in; digesting a tree) rather than work the build
+    /// declares. Run insights leave these out, so they don't count as
+    /// actions or cache hits.
+    #[must_use]
+    pub fn is_bookkeeping(&self) -> bool {
+        matches!(
+            self,
+            Self::WriteFile { .. }
+                | Self::CopyPath { .. }
+                | Self::LinkPath { .. }
+                | Self::PreparePath { .. }
+                | Self::MaterializeHostFile { .. }
+                | Self::MaterializeHostTree { .. }
+                | Self::WriteTreeDigest { .. }
+        )
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct DeclaredArchiveEntry {
     pub kind: DeclaredArchiveEntryKind,

@@ -35,7 +35,9 @@ use super::source_digest_cache::KnownChanges;
 use super::{AvailableInput, BuildOutcome};
 use crate::commands::change_tracker::ChangePosition;
 
-const SCHEMA: &str = "once.target-outcomes.v4";
+// v5: retained actions no longer include Once's own file plumbing, so older
+// records would keep replaying it as actions.
+const SCHEMA: &str = "once.target-outcomes.v5";
 
 /// A pattern set one target's analysis expanded, and where it was anchored.
 ///
