@@ -37,6 +37,7 @@ pub(super) fn persist(workspace: &Path, plan: &TestPlan, runs: &[Value]) -> Resu
 fn aggregate(target: &str, batches: &[&TestBatch], runs: &BTreeMap<&str, &Value>) -> Result<Value> {
     let mut runner = None;
     let mut cases = BTreeMap::<String, Value>::new();
+    let mut case_batches = BTreeMap::<String, String>::new();
     let mut logs = BTreeSet::new();
     let mut native_results = BTreeSet::new();
     let mut coverage = BTreeSet::new();
@@ -58,7 +59,9 @@ fn aggregate(target: &str, batches: &[&TestBatch], runs: &BTreeMap<&str, &Value>
             // normalized results (the process layer keeps the subprocess status
             // authoritative). Record its outcome to match that verdict instead of
             // always synthesizing a failure.
-            add_synthetic_case(target, batch, success, &mut cases);
+            let evidenced_success = success && batch.test_filters.is_empty();
+            all_passed &= evidenced_success;
+            add_synthetic_case(target, batch, evidenced_success, &mut cases);
             continue;
         };
         once_core::validate_test_results_for_units(result, target, &batch.test_filters)
@@ -81,6 +84,16 @@ fn aggregate(target: &str, batches: &[&TestBatch], runs: &BTreeMap<&str, &Value>
             }
             for case in result_cases {
                 if let Some(id) = case.get("id").and_then(Value::as_str) {
+                    if let Some(previous) = case_batches.insert(id.to_string(), batch.id.clone()) {
+                        anyhow::bail!(
+                            "test case `{id}` overlaps between batches `{previous}` and `{}`",
+                            batch.id
+                        );
+                    }
+                    anyhow::ensure!(
+                        !cases.contains_key(id),
+                        "test case `{id}` overlaps another batch outcome"
+                    );
                     cases.insert(id.to_string(), case.clone());
                 }
             }
@@ -200,6 +213,41 @@ mod tests {
         assert_eq!(value["summary"]["total"], 2);
         assert_eq!(value["cases"][0]["id"], "tests/unit::a");
         assert_eq!(value["cases"][1]["id"], "tests/unit::b");
+    }
+
+    #[test]
+    fn aggregation_rejects_cross_batch_overlap_instead_of_replacing_a_failure() {
+        let first = TestBatch::new("tests/unit", vec!["tests/unit::a".to_string()]).unwrap();
+        let mut second = first.clone();
+        second.id = "another-attempt".to_string();
+        let mut failure = run(&first, "a");
+        failure["success"] = json!(false);
+        failure["results"]["cases"][0]["status"] = json!("failed");
+        let passing = run(&second, "a");
+        let runs = BTreeMap::from([
+            (first.id.as_str(), &failure),
+            (second.id.as_str(), &passing),
+        ]);
+        let error = aggregate("tests/unit", &[&first, &second], &runs)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("overlaps between batches"));
+        assert!(error.contains(&first.id));
+        assert!(error.contains(&second.id));
+    }
+
+    #[test]
+    fn missing_exact_evidence_never_synthesizes_a_pass() {
+        let batch = TestBatch::new("tests/unit", vec!["tests/unit::a".to_string()]).unwrap();
+        let run = json!({"success": true, "results": null});
+        let value = aggregate(
+            "tests/unit",
+            &[&batch],
+            &BTreeMap::from([(batch.id.as_str(), &run)]),
+        )
+        .unwrap();
+        assert_eq!(value["status"], "failed");
+        assert_eq!(value["summary"]["failed"], 1);
     }
 
     #[test]

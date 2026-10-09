@@ -1,3 +1,5 @@
+mod validation;
+
 use once_cas::Digest;
 use serde::{Deserialize, Serialize};
 
@@ -60,6 +62,10 @@ pub struct TestPlan {
 }
 
 impl TestPlan {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        validation::validate(self)
+    }
+
     pub fn for_selected_targets(selection: TestSelectionReport) -> Result<Self, serde_json::Error> {
         let batches = selection
             .tests

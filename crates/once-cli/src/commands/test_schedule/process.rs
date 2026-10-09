@@ -66,19 +66,31 @@ pub(super) fn run_test_target(
         .get("test_results")
         .and_then(Value::as_str)
         .or(fallback_results_path.as_deref());
-    let (results, results_error) = match crate::commands::query::test_results_value_at(
-        workspace,
-        &batch.target,
-        results_path,
-        &batch.test_filters,
-    ) {
+    let loaded = if !batch.test_filters.is_empty()
+        && output.status.success()
+        && (record["target"].as_str() != Some(batch.target.as_str())
+            || record["capability"].as_str() != Some("test")
+            || record["status"].as_str() != Some("completed"))
+    {
+        Err(anyhow::anyhow!(
+            "exact batch did not return a completed test execution record"
+        ))
+    } else {
+        load_batch_results(workspace, batch, results_path)
+    };
+    let (results, results_error) = match loaded {
         Ok(results) => (Some(results), None),
         Err(error) => (None, Some(format!("{error:#}"))),
     };
     // Whole-target execution keeps the subprocess status authoritative because
     // normalized results are optional. Exact batches also require normalized
     // evidence that every requested unit ran.
-    let success = batch_succeeded(output.status.success(), batch, results_error.as_deref());
+    let success = batch_succeeded(
+        output.status.success(),
+        batch,
+        results.as_ref(),
+        results_error.as_deref(),
+    );
     Ok(json!({
         "batch_id": batch.id,
         "target": batch.target,
@@ -94,12 +106,57 @@ pub(super) fn run_test_target(
     }))
 }
 
+fn load_batch_results(
+    workspace: &Path,
+    batch: &TestBatch,
+    results_path: Option<&str>,
+) -> Result<Value> {
+    if !batch.test_filters.is_empty() {
+        let path = once_core::WorkspacePath::try_from(
+            results_path.context("exact batch did not declare a result path")?,
+        )?;
+        let directory = std::path::PathBuf::from(".once/out")
+            .join(crate::commands::query::target_id_path(&batch.target)?)
+            .join("test/batches")
+            .join(&batch.id);
+        anyhow::ensure!(
+            std::path::Path::new(path.as_str()).starts_with(&directory),
+            "exact batch result must be inside `{}`; the runner must isolate batch outputs",
+            directory.display()
+        );
+    }
+    crate::commands::query::test_results_value_at(
+        workspace,
+        &batch.target,
+        results_path,
+        &batch.test_filters,
+    )
+}
+
 fn batch_succeeded(
     process_succeeded: bool,
     batch: &TestBatch,
+    results: Option<&Value>,
     results_error: Option<&str>,
 ) -> bool {
-    process_succeeded && (batch.test_filters.is_empty() || results_error.is_none())
+    let evidence_passed = results.is_some_and(|results| {
+        results["status"].as_str() == Some("passed")
+            && results["summary"]["failed"].as_u64() == Some(0)
+            && results["cases"].as_array().is_some_and(|cases| {
+                cases.iter().all(|case| {
+                    matches!(
+                        case["status"].as_str(),
+                        Some("passed" | "flaky" | "skipped" | "pending" | "todo" | "disabled")
+                    )
+                })
+            })
+    });
+    process_succeeded
+        && if batch.test_filters.is_empty() {
+            results.is_none() || evidence_passed
+        } else {
+            results_error.is_none() && evidence_passed
+        }
 }
 
 pub(super) fn classify_run(
@@ -150,24 +207,4 @@ fn parse_json_record(stdout: &str) -> (Value, Option<String>) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn exact_batch_requires_valid_results() {
-        let exact = TestBatch::new("tests", vec!["tests::requested".to_string()]).unwrap();
-        let whole_target = TestBatch::new("tests", Vec::new()).unwrap();
-
-        assert!(!batch_succeeded(
-            true,
-            &exact,
-            Some("missing requested unit")
-        ));
-        assert!(batch_succeeded(true, &exact, None));
-        assert!(batch_succeeded(
-            true,
-            &whole_target,
-            Some("optional normalized results are unavailable")
-        ));
-    }
-}
+mod tests;

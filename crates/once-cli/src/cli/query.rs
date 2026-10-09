@@ -111,8 +111,16 @@ pub enum QueryCmd {
         /// Select one current, filterable unit from `once query test-manifest`.
         /// Planning fails when the target does not support exact filtering or
         /// the unit is absent from the persisted whole-target manifest.
-        #[usage(long = "test-unit", requires = "target")]
+        #[usage(long = "test-unit", requires = "target", conflicts = "test_batch")]
         test_unit: Option<String>,
+        /// Select one batch ID from the current plan for this target.
+        #[usage(
+            long = "test-batch",
+            value_name = "ID",
+            requires = "target",
+            conflicts = "test_unit"
+        )]
+        test_batch: Option<String>,
     },
 
     /// Read normalized `once.test_results.v1` results for a target.

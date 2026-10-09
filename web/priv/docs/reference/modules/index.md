@@ -1289,8 +1289,12 @@ records into the target's canonical result after the schedule completes.
 
 Case identifiers are stable target-qualified semantic names. Declare
 `case_filtering = "runner_args"` only when every requested identifier is
-translated exactly into the native runner invocation. Otherwise declare
-`unsupported`.
+translated exactly into the native runner invocation. For a nonempty exact
+request, normalized `cases` must contain exactly the requested IDs, each once,
+and `summary.total` must equal the observed case count. Reporting additional
+cases is not accepted as successful exact filtering. Parameterized cases need
+distinct discovered IDs; setup diagnostics belong in runner metadata or
+artifacts, not additional case identities. Otherwise declare `unsupported`.
 
 Set `sharding.supported` only when exact filtering and batch-isolated outputs
 are both implemented. `granularity = "file"` groups all discovered cases with
@@ -1304,7 +1308,19 @@ matching failed result when possible. A successful host process status must
 never turn a runner crash or missing successful terminal record into a pass.
 Once validates this complete record before it derives discovery data or marks
 a scheduled batch as successful. A malformed runner, summary, attempt, or
-artifact record fails the run instead of being accepted as partial evidence.
+artifact record fails an exact batch instead of being accepted as partial
+evidence. A successful exact batch also requires a completed execution record,
+a passing result status, no reported failing cases, and a batch-owned result
+path. A nonzero process exit always fails regardless of existing result files.
+Whole-target runners may omit normalized results, but they cannot advertise
+exact execution without them.
+
+A complete-target plan must cover every unit in the current manifest with
+non-overlapping batches. Explicit unit and batch requests intentionally cover
+only their requested scope and never replace complete discovery. The adapter
+owns inventory completeness: declared discovery inputs must include every
+input that changes test registration, and failed or incomplete collection must
+not be reported as a successful complete run.
 
 ## Authoring Target Kinds
 

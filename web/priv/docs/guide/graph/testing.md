@@ -184,6 +184,33 @@ Planning verifies both conditions before it creates an exact batch:
 Run the whole target again when discovery is missing or stale. Do not construct
 runner-specific filters from names that Once did not return.
 
+## Rerun One Batch
+
+A batch is a stable group of test units, not a worker number. Inspect the
+current target plan and copy a batch's `id`:
+
+```sh
+once query test-plan --target tests/unit --format json
+once query test-plan --target tests/unit --test-batch '<batch-id>' --format json
+once test tests/unit --test-batch '<batch-id>' --format json
+```
+
+The batch request requires one explicit target. It cannot be combined with
+`--test-unit`, `--all`, or changed-path selection. Once resolves it against the
+current plan before starting work. A missing or obsolete ID fails with current
+batch suggestions and the command to inspect them. Changed discovery inputs
+can make an old exact batch unavailable until a whole-target run refreshes the
+manifest.
+
+Replaying a file batch preserves every case in that batch, including its
+fixture boundary. It does not replace the complete discovery manifest with the
+filtered result. Worker count does not change the batch ID. This reproduces the
+scope of the work, not necessarily its outcome after code or environment changes.
+
+The agent tools `once_query_test_plan` and `once_run_tests` accept `test_batch`
+with the same rules. The returned plan and schedule identify the exact work and
+its attempt.
+
 ## Understand Current Ecosystem Coverage
 
 | Target kind | Stable unit discovery | Exact unit execution | Automatic granularity |
@@ -217,13 +244,30 @@ imports, fixtures, database setup, and interpreter startup. Every discovered
 case from one file stays in the same batch. Historical batch durations let
 Once balance those stable files without coupling the plan to four, eight, or
 any other fixed number of workers. A target can opt into case granularity when
-its runner and setup make smaller batches worthwhile.
+its runner and setup make smaller batches worthwhile. Use `batching = "target"`
+for the dynamic-language runners when repeated startup or shared fixtures cost
+more than parallel execution saves. More workers do not force a finer batch
+size, and more batches are not a guarantee of a faster run.
 
 Concurrent batches write results, logs, and native output below isolated batch
 directories. After all batches finish, Once validates and merges them into one
 canonical target result. The plan contains no provider-specific or
 worker-specific assignment, so local or future remote placement does not
-redefine test identity.
+redefine test identity. The current test scheduler coordinates local workers;
+this is not yet a distributed queue or an exported CI shard matrix.
+
+Before scheduling a complete target scope, Once verifies that exact batches are
+disjoint and cover its current discovered units. Exact batch results must report
+every requested unit exactly once and no unrequested units. A runner that
+ignores a filter, reports duplicate IDs, or exits successfully without valid
+passing evidence fails the batch. A startup failure retains its exit status and
+diagnostic output instead of being replaced by a capability acknowledgement
+error. Results must remain in the batch's isolated output directory.
+
+Discovery freshness depends on declared collection inputs. A runner must report
+a complete whole-target inventory and declare inputs that change dynamic test
+registration. A fingerprint cannot prove that an adapter reported every real
+case. Periodic whole-target runs help detect inventory drift.
 
 ## Add Selection to a Project Module
 

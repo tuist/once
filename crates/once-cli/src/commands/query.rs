@@ -717,14 +717,43 @@ pub async fn test_plan_request(
     changed_paths: &[String],
     target: Option<&str>,
     test_unit: Option<&str>,
+    test_batch: Option<&str>,
 ) -> Result<()> {
-    let plan = match (target, test_unit) {
-        (Some(target), Some(test_unit)) => explicit_test_unit_plan(workspace, target, test_unit)?,
-        (Some(target), None) => explicit_test_plan(workspace, &[target.to_string()])?,
-        (None, None) => test_plan_for_paths(workspace, changed_paths)?,
-        (None, Some(_)) => anyhow::bail!("a test unit requires an explicit target"),
-    };
+    let plan = test_plan_selection(workspace, changed_paths, target, test_unit, test_batch)?;
     write_body(output, || render_test_plan_human(&plan), &plan).await
+}
+
+pub(crate) fn test_plan_selection(
+    workspace: &Path,
+    changed_paths: &[String],
+    target: Option<&str>,
+    test_unit: Option<&str>,
+    test_batch: Option<&str>,
+) -> Result<test_plan::TestPlan> {
+    anyhow::ensure!(
+        test_unit.is_none() || test_batch.is_none(),
+        "`test_unit` and `test_batch` are mutually exclusive"
+    );
+    anyhow::ensure!(
+        (test_unit.is_none() && test_batch.is_none()) || changed_paths.is_empty(),
+        "exact unit or batch requests and `changed_paths` are mutually exclusive"
+    );
+    match (target, test_unit, test_batch) {
+        (Some(target), Some(unit), None) => explicit_test_unit_plan(workspace, target, unit),
+        (Some(target), None, Some(batch)) => explicit_test_batch_plan(workspace, target, batch),
+        (Some(target), None, None) => explicit_test_plan(workspace, &[target.to_string()]),
+        (None, None, None) => test_plan_for_paths(workspace, changed_paths),
+        _ => anyhow::bail!("a test unit or batch requires exactly one explicit target"),
+    }
+}
+
+pub(crate) fn explicit_test_batch_plan(
+    workspace: &Path,
+    target: &str,
+    batch: &str,
+) -> Result<test_plan::TestPlan> {
+    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
+    test_plan::explicit_batch_plan(workspace, &graph, target, batch)
 }
 
 pub(crate) fn test_plan_for_paths(
@@ -981,10 +1010,19 @@ pub(crate) fn test_manifest_is_current(
     target_id: &str,
     manifest: &TestManifest,
 ) -> bool {
-    let Some(expected) = manifest.discovery_fingerprint.as_deref() else {
+    let Ok(graph) = once_frontend::load_graph_workspace(workspace) else {
         return false;
     };
-    let Ok(graph) = once_frontend::load_graph_workspace(workspace) else {
+    test_manifest_is_current_with_graph(workspace, target_id, manifest, &graph)
+}
+
+pub(crate) fn test_manifest_is_current_with_graph(
+    workspace: &Path,
+    target_id: &str,
+    manifest: &TestManifest,
+    graph: &[once_frontend::GraphTarget],
+) -> bool {
+    let Some(expected) = manifest.discovery_fingerprint.as_deref() else {
         return false;
     };
     let Some(target) = graph.iter().find(|target| target.label.id == target_id) else {
@@ -1172,12 +1210,17 @@ pub(crate) fn test_results_value_at(
             .resolve(workspace),
         None => workspace.join(test_results_path(target_id)?),
     };
-    let raw =
-        std::fs::read_to_string(&path).with_context(|| format!("reading `{}`", path.display()))?;
-    let value =
-        serde_json::from_str(&raw).with_context(|| format!("parsing `{}`", path.display()))?;
+    let raw = std::fs::read_to_string(&path).with_context(|| {
+        if !path.exists() {
+            format!("test result file not found at `{}`", path.display())
+        } else {
+            format!("reading test result file `{}`", path.display())
+        }
+    })?;
+    let value = serde_json::from_str(&raw)
+        .with_context(|| format!("invalid test result JSON at `{}`", path.display()))?;
     once_core::validate_test_results_for_units(&value, target_id, expected_units)
-        .with_context(|| format!("validating `{}`", path.display()))?;
+        .with_context(|| format!("invalid test result record at `{}`", path.display()))?;
     Ok(value)
 }
 

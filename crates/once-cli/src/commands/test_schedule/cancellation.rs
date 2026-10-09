@@ -31,6 +31,9 @@ static BATCHES: Mutex<Batches> = Mutex::new(Batches {
     cancelled: None,
 });
 
+#[cfg(all(test, unix))]
+pub(super) static TEST_LOCK: Mutex<()> = Mutex::new(());
+
 fn batches() -> std::sync::MutexGuard<'static, Batches> {
     BATCHES.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -108,6 +111,7 @@ mod tests {
     // inside one test.
     #[test]
     fn cancelling_signals_running_batches_and_any_started_afterwards() {
+        let _guard = super::TEST_LOCK.lock().unwrap();
         let mut running = Command::new("sleep").arg("30").spawn().unwrap();
         let tracked = track(running.id());
         cancel(Termination::Terminate);
@@ -118,5 +122,6 @@ mod tests {
         let tracked = track(late.id());
         assert_eq!(late.wait().unwrap().signal(), Some(libc::SIGTERM));
         drop(tracked);
+        super::batches().cancelled = None;
     }
 }

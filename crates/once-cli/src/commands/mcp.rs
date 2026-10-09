@@ -451,18 +451,13 @@ impl Server {
 
     fn tool_query_test_plan(&self, args: &Value) -> Result<Value> {
         let args: TestPlanQueryArgs = serde_json::from_value(tool_args(args))?;
-        let plan = match (args.target.as_deref(), args.test_unit.as_deref()) {
-            (Some(target), Some(test_unit)) => {
-                crate::commands::query::explicit_test_unit_plan(&self.workspace, target, test_unit)?
-            }
-            (Some(target), None) => {
-                crate::commands::query::explicit_test_plan(&self.workspace, &[target.to_string()])?
-            }
-            (None, None) => {
-                crate::commands::query::test_plan_for_paths(&self.workspace, &args.changed_paths)?
-            }
-            (None, Some(_)) => anyhow::bail!("a test unit requires an explicit target"),
-        };
+        let plan = crate::commands::query::test_plan_selection(
+            &self.workspace,
+            &args.changed_paths,
+            args.target.as_deref(),
+            args.test_unit.as_deref(),
+            args.test_batch.as_deref(),
+        )?;
         Ok(serde_json::to_value(plan)?)
     }
 
@@ -680,6 +675,14 @@ fn run_test_plan_args(
     workspace: &std::path::Path,
     args: &RunTestsArgs,
 ) -> Result<crate::commands::query::test_plan::TestPlan> {
+    anyhow::ensure!(
+        args.test_unit.is_none() || args.test_batch.is_none(),
+        "`test_unit` and `test_batch` are mutually exclusive"
+    );
+    anyhow::ensure!(
+        (args.test_unit.is_none() && args.test_batch.is_none()) || args.changed_paths.is_empty(),
+        "exact unit or batch requests and `changed_paths` are mutually exclusive"
+    );
     let mut targets = args.targets.clone();
     if let Some(target) = &args.target {
         targets.push(target.clone());
@@ -688,6 +691,17 @@ fn run_test_plan_args(
         targets.sort();
         targets.dedup();
         validate_test_targets(workspace, &targets)?;
+        if let Some(test_batch) = &args.test_batch {
+            anyhow::ensure!(
+                targets.len() == 1,
+                "`test_batch` requires exactly one explicit test target"
+            );
+            return crate::commands::query::explicit_test_batch_plan(
+                workspace,
+                &targets[0],
+                test_batch,
+            );
+        }
         if let Some(test_unit) = &args.test_unit {
             if targets.len() != 1 {
                 anyhow::bail!("`test_unit` requires exactly one explicit test target");
@@ -701,8 +715,8 @@ fn run_test_plan_args(
         return crate::commands::query::explicit_test_plan(workspace, &targets);
     }
 
-    if args.test_unit.is_some() {
-        anyhow::bail!("`test_unit` requires an explicit `target`");
+    if args.test_unit.is_some() || args.test_batch.is_some() {
+        anyhow::bail!("`test_unit` or `test_batch` requires an explicit `target`");
     }
 
     let plan = crate::commands::query::test_plan_for_paths(workspace, &args.changed_paths)?;
@@ -973,6 +987,8 @@ struct TestPlanQueryArgs {
     target: Option<String>,
     #[serde(default)]
     test_unit: Option<String>,
+    #[serde(default)]
+    test_batch: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -1063,6 +1079,8 @@ struct RunTestsArgs {
     jobs: Option<usize>,
     #[serde(default)]
     test_unit: Option<String>,
+    #[serde(default)]
+    test_batch: Option<String>,
     #[serde(default)]
     summary_only: bool,
 }
@@ -2193,6 +2211,18 @@ srcs = ["other_spec.sh"]
                 .collect::<Vec<_>>(),
             vec!["spec/all", "spec/other"]
         );
+    }
+
+    #[test]
+    fn exact_batch_selection_rejects_ambiguous_requests() {
+        let tmp = TempDir::new().unwrap();
+        for args in [
+            json!({"test_batch": "unknown"}),
+            json!({"target": "tests", "test_unit": "a", "test_batch": "unknown"}),
+            json!({"target": "tests", "test_batch": "unknown", "changed_paths": ["source"]}),
+        ] {
+            assert!(run_test_plan(tmp.path(), &args).is_err());
+        }
     }
 
     #[test]
