@@ -27,7 +27,7 @@ once-host-tree = { version = "0.0.0", path = "crates/once-host-tree" }
 once-presentation = { version = "0.0.0", path = "crates/once-presentation" }
 
 anyhow = "1"
-bazel-remote-apis = "0.29"
+bazel-remote-apis = "0.30"
 base64 = "0.23"
 blake3 = "1"
 usage = { package = "usage-rs", version = "6.4.1" }
