@@ -5610,7 +5610,7 @@ def _apple_test_bundle_impl(ctx):
         write_path(entry_point_source, _apple_swift_testing_entry_point_source())
         swift_srcs = swift_srcs + [entry_point_source]
 
-    test_dir = ctx["build_dir"] + "/test"
+    test_dir = _test_output_dir(ctx)
     results = test_dir + "/test_results.json"
     log = test_dir + "/swift-testing.log" if swift_testing else test_dir + "/xctest.log"
     native_results = test_dir + "/native_results.txt"

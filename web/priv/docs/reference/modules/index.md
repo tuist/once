@@ -1311,7 +1311,12 @@ a scheduled batch as successful. A malformed runner, summary, attempt, or
 artifact record fails an exact batch instead of being accepted as partial
 evidence. A successful exact batch also requires a completed execution record,
 a passing result status, no reported failing cases, and a batch-owned result
-path. A nonzero process exit always fails regardless of existing result files.
+path. For exact requests, use the shared `_test_output_dir(ctx)` helper for
+results and their companion artifacts. It selects
+`<build_dir>/test/batches/<batch_id>` when `ctx["test"]["batch_id"]` is set and
+`<build_dir>/test` otherwise. Explicit unit requests require this isolation even
+when automatic sharding is disabled. A nonzero process exit always fails
+regardless of existing result files.
 Whole-target runners may omit normalized results, but they cannot advertise
 exact execution without them.
 

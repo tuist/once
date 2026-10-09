@@ -857,7 +857,8 @@ PY
     When call /bin/sh -c '
       "$1" -C "$2" --format json query test-manifest hello_tests > "$2/manifest.json" &&
       "$1" -C "$2" --format json query test-plan --target hello_tests --test-unit "hello_tests::returns_greeting" > "$2/plan.json" &&
-      "$1" -C "$2" --format json test hello_tests --test-unit "hello_tests::returns_greeting"
+      "$1" -C "$2" --format json test hello_tests --test-unit "hello_tests::returns_greeting" &&
+      "$1" -C "$2" --format json query test-manifest hello_tests > "$2/complete-manifest.json"
     ' sh "$ONCE_BIN" "$WORKSPACE"
     The status should be success
     The stdout should include 'once.test_schedule.v1'
@@ -866,9 +867,12 @@ PY
     The contents of file "$WORKSPACE/manifest.json" should include 'hello_tests::returns_greeting'
     The contents of file "$WORKSPACE/manifest.json" should include 'hello_tests::other_greeting'
     The contents of file "$WORKSPACE/plan.json" should include '"test_filters":["hello_tests::returns_greeting"]'
-    The contents of file "$WORKSPACE/.once/out/hello_tests/test/test_results.json" should include '"total":1'
-    The contents of file "$WORKSPACE/.once/out/hello_tests/test/test_results.json" should include 'hello_tests::returns_greeting'
-    The contents of file "$WORKSPACE/.once/out/hello_tests/test/test_results.json" should not include 'hello_tests::other_greeting'
+    The stdout should include '/test/batches/'
+    The contents of file "$WORKSPACE/.once/out/hello_tests/test/batches/"*/test_results.json should include '"total":1'
+    The contents of file "$WORKSPACE/.once/out/hello_tests/test/batches/"*/test_results.json should include 'hello_tests::returns_greeting'
+    The contents of file "$WORKSPACE/.once/out/hello_tests/test/batches/"*/test_results.json should not include 'hello_tests::other_greeting'
+    The contents of file "$WORKSPACE/complete-manifest.json" should include 'hello_tests::returns_greeting'
+    The contents of file "$WORKSPACE/complete-manifest.json" should include 'hello_tests::other_greeting'
   End
 
   It 'rejects an unknown Rust test unit while planning'
@@ -931,8 +935,9 @@ PY
     The contents of file "$WORKSPACE/manifest.json" should include 'once.test_manifest.v1'
     The contents of file "$WORKSPACE/manifest.json" should include '"case_filtering":"runner_args"'
     The stdout should include 'once.test_schedule.v1'
-    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingTests/test/test_results.json" should include 'GreetingTest.testMessage'
-    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingTests/test/test_results.json" should include '"total":1'
+    The stdout should include '/test/batches/'
+    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingTests/test/batches/"*/test_results.json should include 'GreetingTest.testMessage'
+    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingTests/test/batches/"*/test_results.json should include '"total":1'
   End
 
   It 'runs Android instrumentation test targets end to end'
@@ -962,8 +967,9 @@ PY
     The status should be success
     The stdout should include 'once.test_schedule.v1'
     The contents of file "$WORKSPACE/plan.json" should include '"test_filters":["libs/greeting/GreetingDeviceTests::dev.once.greeting.GreetingInstrumentedTest.useAppContext"]'
-    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingDeviceTests/test/native_results.txt" should include '-e class dev.once.greeting.GreetingInstrumentedTest#useAppContext'
-    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingDeviceTests/test/test_results.json" should include '"total":1'
+    The stdout should include '/test/batches/'
+    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingDeviceTests/test/batches/"*/native_results.txt should include '-e class dev.once.greeting.GreetingInstrumentedTest#useAppContext'
+    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingDeviceTests/test/batches/"*/test_results.json should include '"total":1'
   End
 
   It 'fails Android instrumentation when the device-side process crashes'

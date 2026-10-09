@@ -2514,7 +2514,7 @@ def _rust_test_impl(ctx):
         fail(ctx["label"]["id"] + ": use_libtest_harness = false is declared for Bazel parity but is not implemented by rust_test yet")
     _rust_reject_unsupported_attrs(ctx, ["crate"])
     provider = _rust_compile(ctx, "bin", "src/lib.rs", _rust_output_name(ctx, "bin"), test = True, provider_kind = "rust_test")
-    test_dir = ctx["build_dir"] + "/test"
+    test_dir = _test_output_dir(ctx)
     results = test_dir + "/test_results.json"
     log = test_dir + "/rust-libtest.log"
     native_results = test_dir + "/native_results.txt"

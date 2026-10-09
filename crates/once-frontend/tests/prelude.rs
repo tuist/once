@@ -8822,11 +8822,16 @@ fn prelude_apple_test_bundle_shard_filters_select_specific_cases() {
     let (store2, _workspace2) = apple_test_bundle_store();
     let sharded = apple_test_bundle_source(
         "test",
-        "\n    \"test\": {\"filters\": [\"tests/PluginTests::NetworkTests/testTimeout\", \"tests/PluginTests::NetworkTests/testRetry\"]},",
+        "\n    \"test\": {\"batch_id\": \"stable-batch\", \"filters\": [\"tests/PluginTests::NetworkTests/testTimeout\", \"tests/PluginTests::NetworkTests/testRetry\"]},",
     );
     let (store2, _) = with_active_store(store2, || eval_prelude_source_to_repr(sharded));
     let runner2 = action_by_identifier(&store2, "apple_xctest:tests/PluginTests");
+    assert_eq!(
+        runner2.outputs,
+        [".once/out/tests/PluginTests/test/batches/stable-batch"]
+    );
     let script2 = runner2.argv.last().expect("runner script");
+    assert!(script2.contains("/test/batches/stable-batch/test_results.json"));
     assert!(
         script2.contains("NetworkTests/testTimeout,NetworkTests/testRetry"),
         "shard must select only its cases: {script2}"
