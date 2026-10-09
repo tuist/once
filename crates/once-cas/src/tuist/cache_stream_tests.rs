@@ -269,3 +269,32 @@ async fn stalled_streams_fail_at_the_stall_timeout_without_retrying() {
     assert!(read.to_string().contains("made no progress"), "{read}");
     server.abort();
 }
+
+#[tokio::test]
+async fn a_streamed_download_is_reported_once_and_a_local_blob_not_at_all() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let bytes = b"downloaded output".to_vec();
+    let digest = Digest::of_bytes(&bytes);
+    let chunks = vec![Ok(bytestream::ReadResponse {
+        data: bytes.clone(),
+    })];
+    let (cache, server) = cache_for_stream(&temp, digest, chunks).await;
+    let recorder = Arc::new(crate::transfer::Recorder::default());
+    crate::transfer::observe(recorder.clone(), async {
+        cache.ensure_blob_local(&digest).await.unwrap();
+        cache.ensure_blob_local(&digest).await.unwrap();
+    })
+    .await;
+    server.abort();
+
+    let transfers = recorder.transfers();
+    assert_eq!(transfers.len(), 1, "{transfers:?}");
+    assert_eq!(transfers[0].direction, TransferDirection::Download);
+    assert_eq!(transfers[0].digest, digest);
+    // The size is the one the remote digest declares; the fixture maps every
+    // blob to the same placeholder remote digest.
+    assert_eq!(
+        transfers[0].size_bytes,
+        sha256_digest(b"test mapping").unwrap().size_bytes as u64
+    );
+}

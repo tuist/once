@@ -493,3 +493,45 @@ fn batch_upload_outcome_classifies_per_blob_statuses() {
         ));
     }
 }
+
+#[tokio::test]
+async fn an_upload_is_reported_once_and_a_blob_the_remote_already_holds_not_at_all() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let (cache, _service, server) = fixture(&temp).await;
+    let recorder = Arc::new(crate::transfer::Recorder::default());
+    let bytes = b"artifact to publish";
+    let digest = cache.local.put_blob(bytes).await.unwrap();
+    let output = cache.local.put_blob(b"action output").await.unwrap();
+    let result = ActionResult {
+        exit_code: 0,
+        stdout: None,
+        stderr: None,
+        outputs: BTreeMap::from([("out.txt".to_string(), output)]),
+    };
+    crate::transfer::observe(recorder.clone(), async {
+        cache.put_blob_remote(&digest, bytes).await.unwrap();
+        cache.put_blob_remote(&digest, bytes).await.unwrap();
+        cache
+            .put_action_result_remote(&Digest::of_bytes(b"action"), &result)
+            .await
+            .unwrap();
+    })
+    .await;
+    server.abort();
+
+    let transfers = recorder.transfers();
+    assert_eq!(
+        transfers
+            .iter()
+            .map(|transfer| (transfer.direction, transfer.digest, transfer.size_bytes))
+            .collect::<Vec<_>>(),
+        vec![
+            (TransferDirection::Upload, digest, bytes.len() as u64),
+            (
+                TransferDirection::Upload,
+                output,
+                b"action output".len() as u64
+            ),
+        ]
+    );
+}

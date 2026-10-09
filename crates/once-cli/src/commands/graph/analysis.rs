@@ -539,36 +539,44 @@ impl BuildSession {
             validate_provider(target, &analysis.provider)?;
             let workers =
                 crate::bus_events::WorkerSlots::new(self.resources.max_parallel_actions());
-            let outcome = run_declared_actions(
-                Some(&self.analyzer),
-                &self.workspace,
-                &self.cache,
-                self.module_source_digest,
-                target,
-                capability,
-                analysis,
-                &dep_action_digests,
-                &available_inputs,
-                &self.tool_paths,
-                Some(&self.source_digest_cache),
-                self.sandbox,
-                &self.resources,
-                self.output_observer.as_deref(),
+            let outcome = crate::bus_events::observe_target_transfers(
                 self.event_bus.as_ref(),
-                &workers,
+                &target.label.id,
+                async {
+                    let outcome = run_declared_actions(
+                        Some(&self.analyzer),
+                        &self.workspace,
+                        &self.cache,
+                        self.module_source_digest,
+                        target,
+                        capability,
+                        analysis,
+                        &dep_action_digests,
+                        &available_inputs,
+                        &self.tool_paths,
+                        Some(&self.source_digest_cache),
+                        self.sandbox,
+                        &self.resources,
+                        self.output_observer.as_deref(),
+                        self.event_bus.as_ref(),
+                        &workers,
+                    )
+                    .await
+                    .with_context(|| format!("executing {capability} for {}", target.label.id))?;
+                    materialize_cached_outputs(
+                        &outcome,
+                        &self.workspace,
+                        &self.cache,
+                        Some(&self.source_digest_cache),
+                    )
+                    .await
+                    .with_context(|| {
+                        format!("materializing {capability} outputs for {}", target.label.id)
+                    })?;
+                    Ok::<_, anyhow::Error>(outcome)
+                },
             )
-            .await
-            .with_context(|| format!("executing {capability} for {}", target.label.id))?;
-            materialize_cached_outputs(
-                &outcome,
-                &self.workspace,
-                &self.cache,
-                Some(&self.source_digest_cache),
-            )
-            .await
-            .with_context(|| {
-                format!("materializing {capability} outputs for {}", target.label.id)
-            })?;
+            .await?;
             self.persist_graph_tool_cache();
             Ok(Some(outcome))
         })
@@ -855,55 +863,6 @@ async fn materialize_cached_outputs(
             None => once_core::materialize_outputs(result, workspace, cache)
                 .await
                 .map_err(anyhow::Error::from)?,
-        }
-    }
-    Ok(())
-}
-
-/// Like [`materialize_cached_outputs`] but also publishes one
-/// `CacheContentTransferred` event per output blob on the given bus
-/// so the Once Cache tab's Content Objects view fills in with real
-/// digests + sizes. Kept as a wrapper (instead of extending the
-/// original signature) so tests and other callers that don't have an
-/// event bus stay unchanged.
-async fn materialize_cached_outputs_with_events(
-    outcome: &BuildOutcome,
-    target_id: &str,
-    workspace: &Path,
-    cache: &CacheProvider,
-    source_digest_cache: Option<&SourceDigestCache>,
-    event_bus: Option<&once_core::RunEventBus>,
-) -> Result<()> {
-    materialize_cached_outputs(outcome, workspace, cache, source_digest_cache).await?;
-    if let Some(bus) = event_bus {
-        // After materialize succeeds every output blob is present in
-        // the local tier, so `blob_size` is a cheap metadata read.
-        // Look at both the aggregated `result.outputs` (which the
-        // executor populates as it aggregates each declared action's
-        // hit results) and the per-action `cached_results` — either
-        // may be authoritative depending on how the outcome was
-        // assembled. Deduplicate across both so we count a shared
-        // blob once.
-        let mut seen = std::collections::HashSet::new();
-        let mut digests: Vec<once_cas::Digest> = outcome.result.outputs.values().copied().collect();
-        for result in &outcome.cached_results {
-            for digest in result.outputs.values() {
-                digests.push(*digest);
-            }
-        }
-        for digest in digests {
-            if !seen.insert(digest) {
-                continue;
-            }
-            let size = cache.blob_size(&digest).await.unwrap_or(0);
-            crate::bus_events::cache_content_transferred(
-                bus,
-                "download",
-                target_id,
-                &digest.to_string(),
-                size,
-                0,
-            );
         }
     }
     Ok(())
