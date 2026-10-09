@@ -64,6 +64,20 @@ async fn commit_membership_keeps_ignored_and_untracked_sources_visible() {
 }
 
 #[tokio::test]
+async fn the_checked_out_branch_is_reported_and_a_detached_head_has_none() {
+    let root = repository();
+    git(root.path(), &["checkout", "-q", "-b", "feat/report-branch"]);
+    assert_eq!(checked_out_branch(root.path()).await, "feat/report-branch");
+    assert_eq!(
+        checked_out_branch(&root.path().join("app")).await,
+        "feat/report-branch"
+    );
+
+    git(root.path(), &["checkout", "-q", "--detach"]);
+    assert_eq!(checked_out_branch(root.path()).await, "");
+}
+
+#[tokio::test]
 async fn nested_workspace_paths_already_have_the_repository_prefix() {
     let root = repository();
     let workspace = root.path().join("app");

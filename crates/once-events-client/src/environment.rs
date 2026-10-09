@@ -70,6 +70,65 @@ pub fn is_ci() -> bool {
     })
 }
 
+/// Branch variables in the order each provider should be read. A pull or
+/// merge request names its source branch separately from the ref the job
+/// checked out (GitHub's `GITHUB_REF_NAME` is `123/merge` there), so those
+/// come first. `GITHUB_REF_NAME` is also a tag name on tag pushes, which is
+/// why it is only read when `GITHUB_REF_TYPE` says it is a branch.
+const CI_BRANCH_VARIABLES: &[&str] = &[
+    // GitHub Actions
+    "GITHUB_HEAD_REF",
+    "GITHUB_REF_NAME",
+    // GitLab
+    "CI_MERGE_REQUEST_SOURCE_BRANCH_NAME",
+    "CI_COMMIT_BRANCH",
+    // Buildkite, CircleCI, Bitrise, Bitbucket Pipelines
+    "BUILDKITE_BRANCH",
+    "CIRCLE_BRANCH",
+    "BITRISE_GIT_BRANCH",
+    "BITBUCKET_BRANCH",
+    // Azure Pipelines
+    "SYSTEM_PULLREQUEST_SOURCEBRANCH",
+    "BUILD_SOURCEBRANCH",
+    // Travis, AppVeyor, Drone
+    "TRAVIS_PULL_REQUEST_BRANCH",
+    "TRAVIS_BRANCH",
+    "APPVEYOR_PULL_REQUEST_HEAD_REPO_BRANCH",
+    "APPVEYOR_REPO_BRANCH",
+    "DRONE_SOURCE_BRANCH",
+    "DRONE_BRANCH",
+    // AWS CodeBuild
+    "CODEBUILD_WEBHOOK_HEAD_REF",
+    // Jenkins multibranch pipelines
+    "CHANGE_BRANCH",
+    "BRANCH_NAME",
+];
+
+/// The branch a CI job was started for, as its provider reports it.
+///
+/// CI checkouts are usually a detached HEAD, where git has no branch name
+/// to give, so the provider's variable is the only reliable source there.
+/// Off CI this returns `None` and the caller asks git instead: a developer
+/// may have one of these names exported from an unrelated job.
+pub fn ci_branch() -> Option<String> {
+    if !is_ci() {
+        return None;
+    }
+    ci_branch_from(|name| std::env::var(name).ok())
+}
+
+fn ci_branch_from(lookup: impl Fn(&str) -> Option<String>) -> Option<String> {
+    CI_BRANCH_VARIABLES.iter().find_map(|name| {
+        if *name == "GITHUB_REF_NAME" && lookup("GITHUB_REF_TYPE").as_deref() != Some("branch") {
+            return None;
+        }
+        let value = lookup(name)?;
+        let branch = value.trim();
+        let branch = branch.strip_prefix("refs/heads/").unwrap_or(branch);
+        (!branch.is_empty()).then(|| branch.to_string())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,6 +183,63 @@ mod tests {
         }
 
         body()
+    }
+
+    fn branch_from(vars: &[(&str, &str)]) -> Option<String> {
+        let vars: std::collections::HashMap<String, String> = vars
+            .iter()
+            .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+            .collect();
+        ci_branch_from(|name| vars.get(name).cloned())
+    }
+
+    #[test]
+    fn a_pull_request_reports_its_source_branch_not_the_merge_ref() {
+        assert_eq!(
+            branch_from(&[
+                ("GITHUB_HEAD_REF", "feat/cache"),
+                ("GITHUB_REF_NAME", "42/merge"),
+                ("GITHUB_REF_TYPE", "branch"),
+            ]),
+            Some("feat/cache".to_string())
+        );
+    }
+
+    #[test]
+    fn a_push_reports_the_pushed_branch() {
+        assert_eq!(
+            branch_from(&[
+                ("GITHUB_HEAD_REF", ""),
+                ("GITHUB_REF_NAME", "main"),
+                ("GITHUB_REF_TYPE", "branch"),
+            ]),
+            Some("main".to_string())
+        );
+    }
+
+    #[test]
+    fn a_tag_push_has_no_branch() {
+        assert_eq!(
+            branch_from(&[("GITHUB_REF_NAME", "1.2.3"), ("GITHUB_REF_TYPE", "tag")]),
+            None
+        );
+    }
+
+    #[test]
+    fn full_refs_are_reduced_to_the_branch_name() {
+        assert_eq!(
+            branch_from(&[("BUILD_SOURCEBRANCH", "refs/heads/release/1.0")]),
+            Some("release/1.0".to_string())
+        );
+        assert_eq!(
+            branch_from(&[("CODEBUILD_WEBHOOK_HEAD_REF", "refs/heads/main")]),
+            Some("main".to_string())
+        );
+    }
+
+    #[test]
+    fn no_branch_variable_means_no_branch() {
+        assert_eq!(branch_from(&[]), None);
     }
 
     #[test]

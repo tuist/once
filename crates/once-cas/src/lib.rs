@@ -19,6 +19,7 @@ mod model;
 mod provider;
 mod stats;
 mod store;
+pub mod transfer;
 mod tuist;
 
 pub use digest::Digest;

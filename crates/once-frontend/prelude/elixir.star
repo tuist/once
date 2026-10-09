@@ -1145,22 +1145,77 @@ def _elixir_test_formatter_source():
     return """
 defmodule Once.TestFormatter do
   use GenServer
-  def init(_opts), do: {:ok, %{total: 0, passed: 0, failed: 0, skipped: 0, flaky: 0}}
-  def handle_cast({:test_finished, %{state: state}}, counts) do
-    field = case state do
-      nil -> :passed
-      {:skipped, _} -> :skipped
-      {:excluded, _} -> nil
-      _ -> :failed
+
+  @limit 4000
+
+  # Each finished test is reduced to a small record right away, so the
+  # formatter never holds test structs or failure terms for the whole run.
+  def init(_opts) do
+    {:ok, %{summary: %{total: 0, passed: 0, failed: 0, skipped: 0, flaky: 0}, cases: [], module_failures: %{}}}
+  end
+
+  def handle_cast({:test_finished, %ExUnit.Test{} = test}, state) do
+    case status(test.state) do
+      nil ->
+        {:noreply, state}
+
+      status ->
+        summary = state.summary |> Map.update!(:total, &(&1 + 1)) |> Map.update!(status, &(&1 + 1))
+        {:noreply, %{state | summary: summary, cases: [record(test, status) | state.cases]}}
     end
-    counts = if field, do: counts |> Map.update!(:total, &(&1 + 1)) |> Map.update!(field, &(&1 + 1)), else: counts
-    {:noreply, counts}
   end
-  def handle_cast({:suite_finished, _}, counts) do
-    File.write!(System.fetch_env!("ONCE_EXUNIT_SUMMARY"), :json.encode(counts))
-    {:noreply, counts}
+
+  # A failing `setup_all` fails every test in the module without a failure
+  # of their own, so the module's failure is kept to explain them.
+  def handle_cast({:module_finished, %ExUnit.TestModule{state: {:failed, failures}} = module}, state) do
+    message = bounded(ExUnit.Formatter.format_test_all_failure(module, failures, 1, 80, &plain/2))
+    {:noreply, %{state | module_failures: Map.put(state.module_failures, inspect(module.name), message)}}
   end
-  def handle_cast(_, counts), do: {:noreply, counts}
+
+  def handle_cast({:suite_finished, _}, state) do
+    cases =
+      state.cases
+      |> Enum.reverse()
+      |> Enum.map(fn
+        %{invalid_module: module} = record ->
+          record |> Map.delete(:invalid_module) |> put_present(:message, Map.get(state.module_failures, module))
+
+        record ->
+          record
+      end)
+
+    File.write!(System.fetch_env!("ONCE_EXUNIT_SUMMARY"), :json.encode(%{summary: state.summary, cases: cases}))
+    {:noreply, state}
+  end
+
+  def handle_cast(_, state), do: {:noreply, state}
+
+  defp status(nil), do: :passed
+  defp status({:skipped, _}), do: :skipped
+  defp status({:excluded, _}), do: nil
+  defp status(_), do: :failed
+
+  defp record(test, status) do
+    %{module: inspect(test.module), name: to_string(test.name), status: Atom.to_string(status)}
+    |> put_present(:file, test.tags[:file] && Path.relative_to_cwd(test.tags[:file]))
+    |> put_present(:line, test.tags[:line])
+    |> put_present(:time_us, if(is_integer(test.time), do: test.time))
+    |> failure(test)
+  end
+
+  defp failure(record, %ExUnit.Test{state: {:failed, failures}} = test) do
+    put_present(record, :message, bounded(ExUnit.Formatter.format_test_failure(test, failures, 1, 80, &plain/2)))
+  end
+
+  defp failure(record, %ExUnit.Test{state: {:invalid, module}}), do: Map.put(record, :invalid_module, inspect(module.name))
+  defp failure(record, _test), do: record
+
+  defp put_present(map, _key, nil), do: map
+  defp put_present(map, key, value), do: Map.put(map, key, value)
+
+  defp plain(_key, value), do: value
+
+  defp bounded(message), do: message |> String.trim() |> String.slice(0, @limit)
 end
 """
 
@@ -1248,16 +1303,42 @@ total = executed + skipped
 passed = max(executed - failed, 0)
 run_status = if status == 0, do: "passed", else: "failed"
 
+to_case = fn record ->
+  status = record["status"]
+  attempt = %{status: status}
+  attempt = if is_integer(record["time_us"]), do: Map.put(attempt, :duration_ms, div(record["time_us"] + 500, 1000)), else: attempt
+  attempt = if status == "failed" and is_binary(record["message"]) and record["message"] != "", do: Map.put(attempt, :failure, %{message: record["message"]}), else: attempt
+  entry = %{
+    id: target <> "::" <> record["module"] <> "/" <> record["name"],
+    name: record["name"],
+    suite: record["module"],
+    status: status,
+    attempts: [attempt],
+    runner_metadata: if(is_integer(record["line"]), do: %{line: record["line"]}, else: %{})
+  }
+  if is_binary(record["file"]), do: Map.put(entry, :file, record["file"]), else: entry
+end
+
+# The formatter loaded into the test VM reports every case. When it never
+# ran, such as a setup task failing first, the totals scraped from the
+# console output stand in and no cases are reported.
+{summary, cases} =
+  case File.read(summary_file) do
+    {:ok, contents} ->
+      report = :json.decode(contents)
+      {report["summary"], Enum.map(report["cases"], to_case)}
+
+    _ ->
+      {%{total: total, passed: passed, failed: failed, skipped: skipped, flaky: 0}, []}
+  end
+
 payload = %{
   schema: "once.test_results.v1",
   target: target,
   runner: %{type: runner_type, metadata: %{}},
   status: run_status,
-  summary: case File.read(summary_file) do
-    {:ok, contents} -> :json.decode(contents)
-    _ -> %{total: total, passed: passed, failed: failed, skipped: skipped, flaky: 0}
-  end,
-  cases: [],
+  summary: summary,
+  cases: cases,
   artifacts: %{logs: [log_artifact], native_results: [native_artifact]}
 }
 

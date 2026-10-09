@@ -29,6 +29,9 @@ mod swift_testing_library;
 #[path = "prelude/swift_testing_results.rs"]
 mod swift_testing_results;
 
+#[path = "prelude/elixir_test_results.rs"]
+mod elixir_test_results;
+
 #[path = "prelude/rust_test_results.rs"]
 mod rust_test_results;
 

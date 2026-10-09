@@ -8,9 +8,7 @@ use once_frontend::GraphTarget;
 use serde_json::Value as JsonValue;
 use tokio::task::JoinSet;
 
-use super::{
-    build_one, materialize_cached_outputs_with_events, AvailableInput, BuildContext, BuildOutcome,
-};
+use super::{build_one, materialize_cached_outputs, AvailableInput, BuildContext, BuildOutcome};
 
 pub(super) struct BuildScheduler<'a> {
     root_id: &'a str,
@@ -74,13 +72,15 @@ impl<'a> BuildScheduler<'a> {
             let materialize_worker = self.context.workers.acquire().await;
             let materialize_started_at_ms = crate::bus_events::now_ms();
             let materialize_started_at = std::time::Instant::now();
-            materialize_cached_outputs_with_events(
-                &outcome,
-                &target_id,
-                &self.context.workspace,
-                &self.context.cache,
-                Some(&self.context.source_digest_cache),
+            crate::bus_events::observe_target_transfers(
                 self.context.event_bus.as_ref(),
+                &target_id,
+                materialize_cached_outputs(
+                    &outcome,
+                    &self.context.workspace,
+                    &self.context.cache,
+                    Some(&self.context.source_digest_cache),
+                ),
             )
             .await
             .with_context(|| format!("materializing outputs for {target_id}"))?;
@@ -143,7 +143,11 @@ impl<'a> BuildScheduler<'a> {
                 "spawning graph target build task"
             );
 
-            running.spawn(build_one(self.context.clone(), target, inputs));
+            let bus = self.context.event_bus.clone();
+            let build = build_one(self.context.clone(), target, inputs);
+            running.spawn(async move {
+                crate::bus_events::observe_target_transfers(bus.as_ref(), &target_id, build).await
+            });
         }
         Ok(())
     }

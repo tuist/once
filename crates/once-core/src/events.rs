@@ -8,7 +8,12 @@
 //! executor.
 
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::broadcast;
+
+/// How long [`RunEventBus::publish_all`] waits for the slowest subscriber to
+/// make progress before it stops pacing and lets that subscriber lag.
+const PACING_STALL: Duration = Duration::from_secs(1);
 
 /// A structured event emitted during a run.
 ///
@@ -252,14 +257,17 @@ pub struct TestTotals {
 #[derive(Clone)]
 pub struct RunEventBus {
     inner: Arc<broadcast::Sender<RunEvent>>,
+    capacity: usize,
 }
 
 impl RunEventBus {
     /// Create a bus with the given per-subscriber ring capacity.
     pub fn new(capacity: usize) -> Self {
-        let (tx, _rx) = broadcast::channel(capacity.max(1));
+        let capacity = capacity.max(1);
+        let (tx, _rx) = broadcast::channel(capacity);
         Self {
             inner: Arc::new(tx),
+            capacity,
         }
     }
 
@@ -267,6 +275,44 @@ impl RunEventBus {
     /// attached; publication never blocks a producer.
     pub fn publish(&self, event: RunEvent) {
         let _ = self.inner.send(event);
+    }
+
+    /// Publish a batch of events without overrunning subscribers.
+    ///
+    /// [`Self::publish`] never waits, which is right for events produced
+    /// as work happens. A producer that emits far more events at once than
+    /// the ring holds, such as a test report with thousands of cases, would
+    /// overrun every subscriber and lose most of them, so this waits for
+    /// the slowest subscriber to catch up whenever half the ring is unread.
+    /// A subscriber that makes no progress for [`PACING_STALL`] is left to
+    /// lag, so one stuck consumer cannot hold the run.
+    pub async fn publish_all(&self, events: impl IntoIterator<Item = RunEvent>) {
+        let high_water = (self.capacity / 2).max(1);
+        let mut pacing = true;
+        for event in events {
+            if pacing {
+                pacing = self.wait_for_room(high_water).await;
+            }
+            self.publish(event);
+        }
+    }
+
+    /// Wait until fewer than `high_water` events are unread by the slowest
+    /// subscriber. Returns `false` when that subscriber stalled instead.
+    async fn wait_for_room(&self, high_water: usize) -> bool {
+        let mut backlog = self.inner.len();
+        let mut stalled_since = tokio::time::Instant::now();
+        while backlog >= high_water {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            let now = self.inner.len();
+            if now < backlog {
+                stalled_since = tokio::time::Instant::now();
+            } else if stalled_since.elapsed() >= PACING_STALL {
+                return false;
+            }
+            backlog = now;
+        }
+        true
     }
 
     /// Subscribe to events published after this call returns.
@@ -291,6 +337,50 @@ impl std::fmt::Debug for RunEventBus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn started(at_epoch_ms: i64) -> RunEvent {
+        RunEvent::RunStarted { at_epoch_ms }
+    }
+
+    #[tokio::test]
+    async fn publish_all_paces_a_burst_far_larger_than_the_ring() {
+        let bus = RunEventBus::new(16);
+        let mut receiver = bus.subscribe();
+        let consumer = tokio::spawn(async move {
+            let mut received = 0_i64;
+            loop {
+                match receiver.recv().await {
+                    Ok(RunEvent::RunStarted { at_epoch_ms }) => {
+                        assert_eq!(at_epoch_ms, received, "events arrived out of order");
+                        received += 1;
+                        if received % 64 == 0 {
+                            tokio::time::sleep(Duration::from_millis(1)).await;
+                        }
+                    }
+                    Ok(other) => panic!("unexpected event {other:?}"),
+                    Err(broadcast::error::RecvError::Lagged(missed)) => {
+                        panic!("lost {missed} events")
+                    }
+                    Err(broadcast::error::RecvError::Closed) => return received,
+                }
+            }
+        });
+
+        bus.publish_all((0..2_000).map(started)).await;
+        drop(bus);
+
+        assert_eq!(consumer.await.unwrap(), 2_000);
+    }
+
+    #[tokio::test]
+    async fn publish_all_stops_waiting_for_a_subscriber_that_never_reads() {
+        let bus = RunEventBus::new(4);
+        let _stuck = bus.subscribe();
+
+        tokio::time::timeout(PACING_STALL * 3, bus.publish_all((0..100).map(started)))
+            .await
+            .expect("a stuck subscriber must not hold the producer");
+    }
 
     #[tokio::test]
     async fn subscriber_receives_published_event() {

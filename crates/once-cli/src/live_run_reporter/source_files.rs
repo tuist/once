@@ -19,6 +19,27 @@ pub(super) async fn revision(workspace: &Path) -> String {
         .unwrap_or_default()
 }
 
+/// The branch the run was built from, or an empty string when there is none,
+/// such as a detached HEAD outside CI.
+pub(super) async fn branch(workspace: &Path) -> String {
+    match once_events_client::environment::ci_branch() {
+        Some(branch) => branch,
+        None => checked_out_branch(workspace).await,
+    }
+}
+
+async fn checked_out_branch(workspace: &Path) -> String {
+    git_output(
+        workspace,
+        &["symbolic-ref", "--quiet", "--short", "HEAD"],
+        1024,
+    )
+    .await
+    .and_then(|bytes| String::from_utf8(bytes).ok())
+    .map(|branch| branch.trim().to_string())
+    .unwrap_or_default()
+}
+
 pub(super) async fn collect(workspace: &Path, revision: &str) -> SourceFileSnapshot {
     collect_complete(workspace, revision)
         .await
