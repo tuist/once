@@ -228,13 +228,59 @@ pub fn target_phase_completed(
     });
 }
 
-/// Emit one content-blob transfer against the cache. Kind is
-/// "download" (blob pulled into the workspace from the cache) or
-/// "upload" (blob pushed from the workspace back into the cache).
+/// Run `future` with every remote cache transfer it causes published as a
+/// `CacheContentTransferred` event for `target_id`. Without a bus the
+/// future runs unobserved.
+pub async fn observe_target_transfers<F: std::future::Future>(
+    bus: Option<&RunEventBus>,
+    target_id: &str,
+    future: F,
+) -> F::Output {
+    match bus {
+        Some(bus) => {
+            let observer = Arc::new(TargetTransfers {
+                bus: bus.clone(),
+                target_id: target_id.to_string(),
+            });
+            once_cas::transfer::observe(observer, future).await
+        }
+        None => future.await,
+    }
+}
+
+/// Publishes the remote transfers made while building one target.
+struct TargetTransfers {
+    bus: RunEventBus,
+    target_id: String,
+}
+
+impl once_cas::transfer::TransferObserver for TargetTransfers {
+    fn observe(&self, transfer: once_cas::transfer::Transfer) {
+        let kind = match transfer.direction {
+            once_cas::transfer::TransferDirection::Download => "download",
+            once_cas::transfer::TransferDirection::Upload => "upload",
+        };
+        cache_content_transferred(
+            &self.bus,
+            kind,
+            &self.target_id,
+            &transfer.digest.to_string(),
+            transfer.size_bytes,
+            u64::try_from(transfer.duration.as_millis()).unwrap_or(u64::MAX),
+        );
+    }
+}
+
+/// Emit one content-blob transfer against the remote cache. Kind is
+/// "download" (blob pulled from the remote tier into the local store) or
+/// "upload" (blob pushed from the local store into the remote tier).
 /// The server projects these into `once_cache_events` so the Cache
 /// tab's Content Objects view lists real digests + sizes and the
 /// summary widgets can total `content_downloaded` / `content_uploaded`.
-pub fn cache_content_transferred(
+/// Only transfers the cache provider reports are published: a blob
+/// already in the local store, or already in the remote tier when
+/// uploading, moved nothing.
+fn cache_content_transferred(
     bus: &RunEventBus,
     kind: &str,
     target_id: &str,

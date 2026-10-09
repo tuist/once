@@ -252,7 +252,9 @@ fn spawn_prefetch(
     digest: Digest,
 ) {
     let blob_path = staging_dir.join(format!("{index}.blob"));
-    tasks.spawn(async move {
+    // The download runs on its own task, so it takes the caller's transfer
+    // observer with it; otherwise the bytes it pulls go unreported.
+    tasks.spawn(once_cas::transfer::propagate(async move {
         cache.copy_blob_to_file(&digest, &blob_path).await?;
         Ok(PrefetchedOutput {
             index,
@@ -260,7 +262,7 @@ fn spawn_prefetch(
             digest,
             blob_path,
         })
-    });
+    }));
 }
 
 struct PrefetchedOutput {

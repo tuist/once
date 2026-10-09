@@ -29,6 +29,7 @@ use super::{
     env_token, file_body, join_url, remote_status_message, retry, stall, TuistAuth,
     TuistCacheConfig, ENDPOINTS_PATH, PROVIDER_NAME,
 };
+use crate::transfer::{self, TransferDirection};
 use crate::{ActionResult, Cas, Digest, Error, Result};
 
 /// Ceiling on blobs transferred to or from the remote cache at once. The
@@ -180,6 +181,7 @@ impl TuistCache {
             return Ok(Vec::new());
         }
 
+        let started = Instant::now();
         let bytes = self.get_blob_remote(digest).await?;
         let mirrored = self.local.mirror_blob(digest, &bytes).await?;
         if mirrored != *digest {
@@ -189,6 +191,12 @@ impl TuistCache {
                 message: format!("remote blob {digest} did not match requested digest"),
             });
         }
+        transfer::record(
+            TransferDirection::Download,
+            *digest,
+            bytes.len() as u64,
+            started.elapsed(),
+        );
         Ok(bytes)
     }
 
@@ -201,10 +209,18 @@ impl TuistCache {
             return Ok(());
         }
         let remote_digest = self.remote_blob_digest(digest).await?;
+        let started = Instant::now();
         retry::grpc("get blob", || {
             self.stream_remote_blob(digest, &remote_digest)
         })
-        .await
+        .await?;
+        transfer::record(
+            TransferDirection::Download,
+            *digest,
+            u64::try_from(remote_digest.size_bytes).unwrap_or_default(),
+            started.elapsed(),
+        );
+        Ok(())
     }
 
     /// Streams one remote blob into the local store. Each attempt opens a
@@ -391,7 +407,14 @@ impl TuistCache {
         if self.reapi_blob_exists(&sha256).await? {
             tracing::debug!(blob_digest = %digest, bytes = bytes.len(), "remote blob already present");
         } else {
+            let started = Instant::now();
             self.upload_reapi_blob(&sha256, bytes, "put blob").await?;
+            transfer::record(
+                TransferDirection::Upload,
+                *digest,
+                bytes.len() as u64,
+                started.elapsed(),
+            );
             tracing::debug!(blob_digest = %digest, bytes = bytes.len(), "uploaded blob to remote cache");
         }
         self.put_blob_mapping(digest, &sha256).await?;
@@ -507,8 +530,15 @@ impl TuistCache {
                 .acquire()
                 .await
                 .expect("transfer semaphore remains open");
+            let started = Instant::now();
             self.write_reapi_blob_file_stream(&remote_digest, &path, operation)
                 .await?;
+            transfer::record(
+                TransferDirection::Upload,
+                *digest,
+                u64::try_from(remote_digest.size_bytes).unwrap_or_default(),
+                started.elapsed(),
+            );
         }
         self.put_blob_mapping(digest, &remote_digest).await?;
         self.known_remote_blobs
@@ -704,6 +734,7 @@ impl TuistCache {
                 .insert(local_digest, digest.clone());
             return Ok(local_digest);
         }
+        let started = Instant::now();
         let Some(bytes) = self.read_reapi_blob(digest, operation).await? else {
             return Err(Error::Remote {
                 provider: PROVIDER_NAME,
@@ -716,6 +747,12 @@ impl TuistCache {
         };
         let local_digest = Digest::of_bytes(&bytes);
         self.local.mirror_blob(&local_digest, &bytes).await?;
+        transfer::record(
+            TransferDirection::Download,
+            local_digest,
+            bytes.len() as u64,
+            started.elapsed(),
+        );
         self.known_remote_blobs
             .lock()
             .await
