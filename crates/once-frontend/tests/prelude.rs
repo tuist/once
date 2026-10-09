@@ -6498,6 +6498,7 @@ result = repr([provider["transitive_linkopts"], provider["transitive_data"]])
         "[[\"-Wl,--as-needed\", \"-Wl,--gc-sections\"], [\"pkg/runtime-data/fixture.txt\"]]"
     );
     let action = action_by_identifier(&store, "pkg/lib:rustc");
+    assert_eq!(action.history.as_ref().unwrap().namespace, "once.cargo.v1");
     assert!(action
         .argv
         .iter()
@@ -6623,7 +6624,6 @@ result = repr([
     let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
     let out = out.unwrap();
-    assert!(out.contains("SharedRust"), "{out}");
     assert!(out.contains("rust_mobile_library"), "{out}");
     assert!(
         out.contains("rust-mobile/SharedRust/android/libshared_rust.so"),
@@ -6631,6 +6631,7 @@ result = repr([
     );
     assert!(out.contains("arm64-v8a"), "{out}");
     let android = action_by_identifier(&store, "SharedRust:rustc:android");
+    assert_eq!(android.history.as_ref().unwrap().namespace, "once.cargo.v1");
     assert_eq!(store.actions.len(), 1);
     assert!(android
         .outputs
@@ -7086,6 +7087,9 @@ result = repr(provider["test_info"])
         .iter()
         .any(|input| input == "crates/app/tests/greeting_test.rs"));
     let runner_compile = action_by_identifier(&store, "crates/app/app_tests:test-runner-rustc");
+    assert!(rustc.history.is_some());
+    assert!(runner_compile.history.is_some());
+    assert_ne!(rustc.history, runner_compile.history);
     assert!(runner_compile
         .inputs
         .iter()

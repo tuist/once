@@ -552,6 +552,10 @@ async fn authenticated_shutdown_drains_individual_actions_and_metadata() {
             capability: "build".into(),
             action_index: index,
             identifier: Some(format!("action-{index}")),
+            history: Some(Box::new(once_core::ActionHistoryKey {
+                namespace: "test.history.v1".into(),
+                key: format!("action-{index}"),
+            })),
             presentation: Some(Box::new(once_core::ActionPresentation {
                 context: vec![once_core::ActionContext {
                     key: "custom.mode".into(),
@@ -632,6 +636,11 @@ async fn authenticated_shutdown_drains_individual_actions_and_metadata() {
         })
         .collect();
     assert_eq!(actions.len(), 3);
+    for action in &actions {
+        let history = action.history.as_ref().expect("field 19 retains history");
+        assert_eq!(history.namespace, "test.history.v1");
+        assert_eq!(history.key, format!("action-{}", action.action_index));
+    }
     assert_eq!(
         events
             .iter()
@@ -751,6 +760,7 @@ async fn shutdown_drains_cached_action_burst_beyond_two_seconds() {
             identifier: Some(format!("action-{index}")),
             display_name: None,
             source_files: Vec::new(),
+            history: None,
             presentation: None,
             result: once_core::TargetResult::Succeeded,
             was_cached: true,

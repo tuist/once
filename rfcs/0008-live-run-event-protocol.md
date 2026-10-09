@@ -1431,8 +1431,36 @@ Core result, identity, counters, timing and cache facts are never sacrificed for
 presentation. Deferred planners propagate platforms and context to children
 that lack their own metadata, but never inherit package ownership.
 
-Consumers can consolidate sources beneath the Action label, show at most two
-neutral badges, and disclose full target/native identifiers with keyboard-
-accessible details. Search uses retained native IDs/values as well as labels and
-source paths; it must not derive semantics by parsing the display label. Deploy
-server support before publishing a client that sends this envelope.
+Consumers can show a compact linked action name and secondary metadata line,
+with complete native identifiers and sources on an occurrence detail page.
+Search uses retained native IDs/values as well as labels and source paths; it
+must not derive semantics by parsing the display label. Deploy server support
+before publishing a client that sends this envelope.
+
+## Logical action history extension
+
+`ActionCompleted.history` (optional message tag 19) carries a producer-owned
+`ActionHistoryKey { namespace = 1, key = 2 }`. It is independent of a run's
+occurrence identity and every execution/cache digest. Absent or invalid keys
+mean no authoritative cross-run grouping, never label/index/cache-key matching.
+Namespaces are ASCII tokens of 1–64 bytes; opaque UTF-8 keys are 1–128 bytes
+without control characters. Producers must omit credentials and private paths.
+The Starlark `action_history_key` helper hashes 1–8 canonical JSON string
+components with a 2048-byte aggregate bound. Version the namespace whenever the
+derivation changes. Use logical owners/steps and native structural variants,
+not source contents, toolchain versions, run IDs or declaration order.
+
+Declared actions and reusable outcomes serde-default this field; cached replay
+retains it. Deferred children do not inherit a parent's key, and event fitting
+must not trim it. Synthetic phase spans and legacy outcomes have no history.
+The server derives a project- and capability-scoped UUID from domain-separated,
+length-framed SHA-256 input. It retains occurrences separately, serializes
+same-run/key inserts under an advisory transaction lock and marks all colliding
+occurrences ambiguous rather than rejecting or guessing. Resent completions
+remain idempotent. Queries always scope the project and matching run.
+
+History includes only retained runs that supplied valid unambiguous keys.
+First-observed/failure dates are not true creation/onset dates. Execution counts,
+failure counts and durations exclude restored actions; cache rates require an
+observed hit or cache digest. Structural output variants may have separate
+histories, as defined by the producer. Roll out server support before clients.

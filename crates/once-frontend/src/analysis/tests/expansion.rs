@@ -14,7 +14,23 @@ custom = {{"_once_target_kind": True, "kind": "custom", "impl": impl}}
     let workspace = TempDir::new()?;
     let target = target("custom");
     let analysis = engine.analyze_target(&target, workspace.path(), &[])?;
-    engine.expand_actions(&target, workspace.path(), &analysis.actions[0])
+    let mut parent = analysis.actions[0].clone();
+    parent.history = Some(once_presentation::ActionHistoryKey {
+        namespace: "parent.v1".into(),
+        key: "parent".into(),
+    });
+    engine.expand_actions(&target, workspace.path(), &parent)
+}
+
+#[test]
+fn expansion_never_inherits_history_but_preserves_explicit_child_keys() {
+    let result = expand("    run_action([\"tool\"], outputs = ctx[\"outputs\"])").unwrap();
+    assert!(result.actions[0].history.is_none());
+    let result = expand("    run_action([\"tool\"], outputs = ctx[\"outputs\"], history = action_history_key(\"child.v1\", [\"child\"]))").unwrap();
+    assert_eq!(
+        result.actions[0].history.as_ref().unwrap().namespace,
+        "child.v1"
+    );
 }
 
 #[test]

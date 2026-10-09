@@ -2517,6 +2517,7 @@ mod tests {
         let workspace = tempfile::tempdir().unwrap();
         std::fs::write(workspace.path().join("present.rs"), b"fn main() {}").unwrap();
         let declared = DeclaredAction {
+            history: None,
             presentation: None,
             operation: None,
             argv: vec!["tool".to_string()],
@@ -2578,6 +2579,7 @@ mod tests {
         let workspace = tempfile::tempdir().unwrap();
         let declared = DeclaredAction {
             operation: None,
+            history: None,
             presentation: None,
             argv: vec!["tool".to_string(), "--version".to_string()],
             arg_files: Vec::new(),
@@ -2682,6 +2684,7 @@ mod tests {
             argv: vec!["tool".to_string()],
             arg_files: Vec::new(),
             inputs: Vec::new(),
+            history: None,
             presentation: None,
             outputs: vec![".once/out/tree".to_string()],
             stdout: None,
@@ -3214,6 +3217,7 @@ mod tests {
                 depends_on_prior_actions: true,
                 toolchain_identity: None,
                 identifier: Some("one".to_string()),
+                history: None,
                 presentation: None,
                 display_name: None,
                 source_files: Vec::new(),
@@ -3375,6 +3379,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
                 depends_on_prior_actions: true,
                 toolchain_identity: None,
                 identifier: Some("cached".to_string()),
+                history: None,
                 presentation: None,
                 display_name: None,
                 source_files: Vec::new(),
@@ -3810,6 +3815,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             diagnostics: Vec::new(),
         };
         let action = |name: &str| DeclaredAction {
+            history: None,
             presentation: None,
             operation: None,
             argv: vec![
@@ -3938,6 +3944,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
                     depends_on_prior_actions: true,
                     toolchain_identity: None,
                     identifier: Some("first".to_string()),
+                    history: None,
                     presentation: None,
                     display_name: None,
                     source_files: Vec::new(),
@@ -3967,6 +3974,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
                     depends_on_prior_actions: false,
                     toolchain_identity: None,
                     identifier: Some("second".to_string()),
+                    history: None,
                     presentation: None,
                     display_name: None,
                     source_files: Vec::new(),
@@ -4093,6 +4101,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             cacheable: true,
             inherit_parent_env: false,
             depends_on_prior_actions: true,
+            history: None,
             presentation: None,
             toolchain_identity: Some("id-1".to_string()),
             identifier: None,
@@ -4145,6 +4154,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
         std::fs::write(workspace.path().join("input.txt"), b"content").unwrap();
         let declared = DeclaredAction {
             operation: None,
+            history: None,
             presentation: None,
             argv: vec!["tool".to_string(), "--token=command-secret".to_string()],
             arg_files: Vec::new(),
@@ -4214,7 +4224,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
     }
 
     #[test]
-    fn presentation_metadata_does_not_change_action_cache_identity() {
+    fn presentation_and_history_do_not_change_action_cache_identity() {
         let workspace = tempfile::tempdir().unwrap();
         let mut declared: DeclaredAction = serde_json::from_value(serde_json::json!({
             "argv": ["tool"], "outputs": ["output"], "identifier": "compile",
@@ -4222,6 +4232,10 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
         .unwrap();
         let original =
             compose_input_digest(workspace.path(), &declared, module_digest(), &[]).unwrap();
+        declared.history = Some(once_core::ActionHistoryKey {
+            namespace: "custom.v1".into(),
+            key: "stable-step".into(),
+        });
         declared.display_name = Some("Compile a friendlier name".to_string());
         declared.source_files = vec!["src/not-an-input.c".to_string()];
         declared.presentation = Some(once_core::ActionPresentation {
@@ -4244,6 +4258,10 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             SandboxMode::Off,
         )
         .unwrap();
+        declared.history = Some(once_core::ActionHistoryKey {
+            namespace: "custom.v2".into(),
+            key: "different-step".into(),
+        });
         declared.display_name = Some("Another display name".to_string());
         declared.source_files.clear();
         declared.presentation = None;
@@ -4283,6 +4301,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             identifier: None,
             display_name: None,
             source_files: Vec::new(),
+            history: None,
             presentation: None,
         };
         let one = compose_input_digest(workspace.path(), &declared, module_digest(), &[]).unwrap();
@@ -4303,6 +4322,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
         std::fs::write(workspace.path().join("input.txt"), b"content").unwrap();
         let declared = DeclaredAction {
             operation: None,
+            history: None,
             presentation: None,
             argv: vec!["tool".to_string(), "@.once/out/args.rsp".to_string()],
             arg_files: vec![DeclaredArgFile {
@@ -4369,6 +4389,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             identifier: None,
             display_name: None,
             source_files: Vec::new(),
+            history: None,
             presentation: None,
         };
         let one = compose_input_digest(
@@ -4415,6 +4436,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             identifier: None,
             display_name: None,
             source_files: Vec::new(),
+            history: None,
             presentation: None,
         };
         let available = |content| {
@@ -4476,6 +4498,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             identifier: None,
             display_name: None,
             source_files: Vec::new(),
+            history: None,
             presentation: None,
         };
         let available = |_producer: &[u8], content: &[u8]| {
@@ -4548,6 +4571,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             identifier: None,
             display_name: None,
             source_files: Vec::new(),
+            history: None,
             presentation: None,
         };
         let a = compose_input_digest(

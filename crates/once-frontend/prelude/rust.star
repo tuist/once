@@ -1,3 +1,62 @@
+def _rust_history_bucket(version):
+    # Cargo can co-resolve incompatible ranges. Prereleases remain exact rather
+    # than guessing compatibility with a stable release.
+    core = version.split("+")[0]
+    if "-" in core:
+        return core
+    parts = core.split(".")
+    if len(parts) != 3:
+        return version
+    for part in parts:
+        if not part:
+            return version
+        for ch in part.elems():
+            if ch not in "0123456789":
+                return version
+    if parts[0] != "0":
+        return parts[0]
+    return "0." + parts[1] if parts[1] != "0" else core
+
+def _rust_action_history(ctx, step, target):
+    attrs = ctx.get("attr") or {}
+    env = attrs.get("rustc_env") or {}
+    source = attrs.get("source") or ""
+    version = attrs.get("version") or env.get("CARGO_PKG_VERSION") or ""
+    name = _rust_action_subject(ctx)
+    if type(source) != "string" or type(version) != "string" or type(name) != "string":
+        return None
+    if source:
+        # Revisions and requested refs are changes to the same source, not a new
+        # action. Strip userinfo before hashing so usernames/credentials are not
+        # encoded in the identity, including ordinary git-over-SSH origins.
+        owner = source.split("#")[0].split("?")[0]
+        url = owner.split("://")
+        if len(url) == 2:
+            authority = url[1].split("/")[0]
+            owner = url[0] + "://" + authority.split("@")[-1] + url[1][len(authority):]
+        if owner in ["registry+https://github.com/rust-lang/crates.io-index", "sparse+https://index.crates.io/", "sparse+https://index.crates.io"]:
+            owner = "cargo.crates-io"
+        if "@" in owner or not version:
+            return None
+        bucket = _rust_history_bucket(version)
+    else:
+        # Source-less package-name declarations lack a portable origin. Keep
+        # them ungrouped rather than guessing from labels or manifest paths.
+        if attrs.get("package_name") and not attrs.get("cargo_package"):
+            return None
+        owner = ctx["label"]["id"]
+        bucket = ""
+    role = "build-tool" if _rust_attr(ctx, "_cargo_host_tool", False) else "product"
+    scoped_owner = action_history_key("once.cargo.owner.v1", [ctx["label"].get("package") or "", owner])
+    suffix = ctx.get("_action_suffix") or ""
+    consumer = ctx.get("_history_consumer") or ""
+    if suffix and not consumer:
+        return None
+    variant = action_history_key("once.cargo.variant.v1", [suffix, consumer])
+    if scoped_owner == None or variant == None:
+        return None
+    return action_history_key("once.cargo.v1", [scoped_owner["key"], name, bucket, _rust_crate_name(ctx), step, target, role, variant["key"]])
+
 def _rust_action_subject(ctx):
     attrs = ctx.get("attr") or {}
     env = attrs.get("rustc_env") or {}
@@ -1255,6 +1314,7 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
     _rust_add_windows_proc_macro_path(build_script_compile_env, deps)
     run_action(
         display_name = "Compile Rust build script · " + ctx["label"]["name"],
+        history = _rust_action_history(ctx, "build-script.compile", target or host_triple),
         presentation = _rust_action_metadata(ctx, host_triple, "build-tool"),
         source_files = _action_source_files([script_path]),
         argv = compile_argv,
@@ -1280,6 +1340,7 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
     # produced them, the whole package stays the dependency.
     run_action(
         display_name = "Run Rust build script · " + ctx["label"]["name"],
+        history = _rust_action_history(ctx, "build-script.run", target or host_triple),
         presentation = _action_metadata(package = _rust_action_metadata(ctx, "")["package"], context = [_action_context("cargo.build_target", target or host_triple)]),
         source_files = _action_source_files(_unique([runner] + metadata_inputs + source_inputs + build_script_inputs + _rust_extra_inputs(ctx))),
         argv = [host_which("sh"), "-c", run_script],
@@ -1708,6 +1769,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name, test = False, prov
         compile_cwd = _rust_manifest_dir(ctx, crate_manifest_dir)
     run_action(
         display_name = "Compile Rust crate · " + ctx["label"]["name"],
+        history = _rust_action_history(ctx, "test.compile" if test else "crate.compile." + crate_type, target or host_triple),
         presentation = _rust_action_metadata(ctx, target or host_triple, _rust_platform_usage(ctx, target, host_triple, crate_type), crate_type),
         source_files = _action_source_files(srcs),
         argv = argv,
@@ -1810,6 +1872,7 @@ def _rust_mobile_variant_ctx(ctx, provider, target_attr, variant, materialized =
         "build_dir": ctx.get("build_dir") or _rust_build_dir(ctx),
         "scratch_dir": ctx.get("scratch_dir") or _rust_scratch_dir(ctx),
         "_action_suffix": variant,
+        "_history_consumer": (ctx.get("label") or {}).get("id") or "",
     }
     for key in ["build_deps", "capability", "run"]:
         value = ctx.get(key)
@@ -2503,6 +2566,7 @@ def _rust_test_impl(ctx):
     _rust_add_windows_rustc_runtime_path(runner_env, runner_rustc, runner_host_triple)
     run_action(
         display_name = "Compile Rust test runner · " + ctx["label"]["name"],
+        history = _rust_action_history(ctx, "test-runner.compile", runner_host_triple),
         presentation = _action_metadata(platforms = [_action_platform("rust", runner_host_triple, usage = "build-tool")]),
         source_files = _action_source_files([runner_source]),
         argv = [runner_rustc, "--edition", "2021", runner_source, "-o", runner],

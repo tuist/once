@@ -11,6 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build_server(true)
         .build_client(true)
         .boxed(".once.events.v1.ActionCompleted.presentation")
+        .boxed(".once.events.v1.ActionCompleted.history")
         .compile_protos(&[proto], &["proto"])?;
     Ok(())
 }

@@ -1,3 +1,9 @@
+def _action_history(ctx, ecosystem, step, variants = []):
+    owner = (ctx.get("label") or {}).get("id") or ""
+    if not owner:
+        return None
+    return action_history_key("once." + ecosystem + ".v1", [owner, step] + variants)
+
 def _action_metadata(package = None, platforms = [], context = []):
     return {"package": package, "platforms": platforms, "context": context}
 

@@ -160,6 +160,8 @@ pub(super) struct PerActionOutcome {
     pub source_files: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub presentation: Option<once_core::ActionPresentation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<once_core::ActionHistoryKey>,
     pub index: u32,
     pub cache_state: EvidenceCacheState,
     pub duration_ms: i64,
@@ -1393,6 +1395,7 @@ async fn build_one(
                         action.display_name.as_deref(),
                         &action.source_files,
                         action.presentation.as_ref(),
+                        action.history.as_ref(),
                         0,
                         true,
                         action.exit_code,

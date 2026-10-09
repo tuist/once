@@ -111,6 +111,7 @@ def _kotlin_apple_framework_impl(ctx):
 
     run_action(
         display_name = "Compile Kotlin native framework · " + ctx["label"]["name"],
+        history = _action_history(ctx, "kotlin", "native.compile", [target]),
         presentation = _action_metadata(platforms = [_action_platform("kotlin-native", target)]),
         source_files = _action_source_files(sources),
         argv = argv,
@@ -317,6 +318,7 @@ def _kotlin_jvm_compile(ctx, target_kind):
     module_name = _kotlin_jvm_attr(ctx, "module_name", "") or ctx["label"]["name"]
     run_action(
         display_name = "Compile Kotlin JVM classes · " + ctx["label"]["name"],
+        history = _action_history(ctx, "kotlin", "jvm.compile"),
         presentation = _action_metadata(context = [_action_context("kotlin.jvm_target", _kotlin_jvm_attr(ctx, "jvm_target", "17"), "JVM " + _kotlin_jvm_attr(ctx, "jvm_target", "17"))]),
         source_files = _action_source_files(_unique(sources + _kotlin_jvm_workspace_inputs(compile_jars + plugin_jars))),
         argv = _kotlin_jvm_compile_argv(ctx, tools, sources, compile_jars, output),
@@ -476,6 +478,7 @@ def _kotlin_jvm_test_impl(ctx):
     prepare_path(classes, kind = "directory", identifier = "kotlin_jvm_test_classes_prepare:" + ctx["label"]["id"])
     run_action(
         display_name = "Compile Kotlin tests · " + ctx["label"]["name"],
+        history = _action_history(ctx, "kotlin", "test.compile"),
         presentation = _action_metadata(context = [_action_context("kotlin.jvm_target", _kotlin_jvm_attr(ctx, "jvm_target", "17"), "JVM " + _kotlin_jvm_attr(ctx, "jvm_target", "17"))]),
         source_files = _action_source_files(_unique(sources + _kotlin_jvm_workspace_inputs(compile_jars + plugin_jars))),
         argv = _kotlin_jvm_compile_argv(ctx, tools, sources, compile_jars, classes),

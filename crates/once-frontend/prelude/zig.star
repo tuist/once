@@ -744,6 +744,7 @@ def _zig_compile(ctx, kind, default_main, command, provider_kind):
         argv.append("-fsoname=" + _basename(primary_output))
     run_action(
         display_name = "Compile Zig target · " + ctx["label"]["name"],
+        history = _action_history(ctx, "zig", "compile", [command, _zig_target_os(ctx), _zig_target_architecture(ctx)]),
         presentation = _zig_action_metadata(ctx),
         source_files = _action_source_files(inputs),
         argv = argv,

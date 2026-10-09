@@ -116,6 +116,8 @@ pub struct DeclaredAction {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub presentation: Option<once_presentation::ActionPresentation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<once_presentation::ActionHistoryKey>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation: Option<DeclaredActionOperation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub argv: Vec<String>,

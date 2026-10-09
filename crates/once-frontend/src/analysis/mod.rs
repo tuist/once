@@ -10,6 +10,7 @@
 //! live in Starlark module files, while Rust provides execution and data
 //! plumbing.
 
+mod action_history;
 mod engine;
 mod globals;
 mod presentation;

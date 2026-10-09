@@ -254,6 +254,7 @@ pub fn translate(event: CoreEvent, mono_ns: i64) -> Translated {
             display_name,
             source_files,
             presentation,
+            history,
             result,
             was_cached,
             duration_ms,
@@ -288,6 +289,12 @@ pub fn translate(event: CoreEvent, mono_ns: i64) -> Translated {
                     presentation: presentation
                         .and_then(|metadata| crate::metadata::to_wire(*metadata))
                         .map(Box::new),
+                    history: history.and_then(|key| key.normalize()).map(|key| {
+                        Box::new(crate::proto::ActionHistoryKey {
+                            namespace: key.namespace,
+                            key: key.key,
+                        })
+                    }),
                     result: wire_target_result(result) as i32,
                     was_cached,
                     duration_ms,
@@ -548,6 +555,7 @@ mod tests {
                 identifier: Some("analysis".into()),
                 display_name: None,
                 source_files: Vec::new(),
+                history: None,
                 presentation: None,
                 result: CoreResult::Succeeded,
                 was_cached: false,

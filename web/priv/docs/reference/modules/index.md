@@ -639,7 +639,10 @@ separate update workflow.
   for action-private helper files and `declare_output` for durable
   target outputs. `arg_format` defaults to `@{}` and must contain
   exactly one `{}` placeholder.
-- `run_action(...)` records a command action for Once to execute.
+- `run_action(...)` records a command action for Once to execute. Its optional keyword-only `history` reports a producer-owned logical identity for cross-run history, independently of execution and cache identity.
+- `action_history_key(namespace, components)` creates a bounded opaque descriptor for `run_action(history = ...)`. Use a versioned ASCII namespace (1–64 bytes) and 1–8 string components (2048 bytes total, no controls). Components are encoded as a canonical JSON array and SHA-256 hashed. Choose a stable owner, native operation and structural output variant; never use run IDs, action indices, cache digests, source revisions, display labels, absolute paths or credentials. Invalid optional metadata is omitted without failing analysis. Deferred children need their own explicit keys, while cached outcomes retain recorded keys. Older actions stay ungrouped.
+
+Built-in history currently covers Rust compilation/build scripts/test-runner compilation, Go compilation, Kotlin native/JVM/test compilation, Zig compilation and delegated CMake builds. Other actions still have occurrence details but do not claim cross-run equivalence. Rust registry/git dependencies use resolver-directory and source identity without revision/requested-ref or userinfo, package and native target names, a Cargo-compatible version bucket, phase, output triple, host-tool role and mobile variant/consumer. Crates.io index protocols normalize to one origin. Stable `1.x` versions share a bucket, `0.x` versions use the minor range, and `0.0.x` and prereleases stay exact. Workspace labels are version-independent; source-less generated dependency origins remain ungrouped. Target renames and incompatible versions start new histories. Producer derivation changes require a namespace version bump. The server omits ambiguous within-run keys from historical comparisons and qualifies first observations using retained reports.
 - `write_path(path, content)` materializes generated text or byte-list
   files through normal actions.
 - `copy_path(source, destination, inputs = [])` copies one workspace

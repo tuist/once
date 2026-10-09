@@ -14,6 +14,7 @@ use starlark::values::none::NoneType;
 use starlark::values::Value;
 use walkdir::WalkDir;
 
+use super::action_history::{make_history, unpack_history};
 use super::presentation::{record_action, unpack_presentation, unpack_source_files};
 use super::store::{
     analysis_active, observe, with_store, with_store_mut, AnalysisObservations, CommandPolicy,
@@ -43,6 +44,15 @@ pub fn globals_for_prelude() -> Globals {
 
 #[starlark_module]
 fn prelude_globals(builder: &mut GlobalsBuilder) {
+    #[allow(clippy::unnecessary_wraps)]
+    fn action_history_key<'v>(
+        namespace: Value<'v>,
+        components: Value<'v>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<Value<'v>> {
+        Ok(make_history(namespace, components, eval.heap()))
+    }
+
     /// Host CPU architecture as a normalized string (e.g. `"arm64"`,
     /// `"x86_64"`). Schema parsing returns `""`.
     #[allow(clippy::unnecessary_wraps)]
@@ -586,6 +596,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             if let Some(store) = store {
                 store.actions.push(DeclaredAction {
                     presentation,
+                    history: None,
                     operation: Some(DeclaredActionOperation::ExpandActions {
                         implementation: implementation.to_string(),
                         args,
@@ -633,6 +644,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         let bytes = unpack_write_content(content)?;
         let action = DeclaredAction {
             presentation: unpack_presentation(presentation),
+            history: None,
             operation: Some(DeclaredActionOperation::WriteFile {
                 path: path.to_string(),
                 bytes,
@@ -694,6 +706,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         inputs.dedup();
         let action = DeclaredAction {
             presentation: unpack_presentation(presentation),
+            history: None,
             operation: Some(DeclaredActionOperation::CopyPath {
                 sources,
                 destination: destination.to_string(),
@@ -765,6 +778,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         });
         let action = DeclaredAction {
             presentation: unpack_presentation(presentation),
+            history: None,
             operation: Some(DeclaredActionOperation::MaterializeHostFile {
                 source: source.to_string(),
                 source_sha256,
@@ -845,6 +859,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         });
         let action = DeclaredAction {
             presentation: unpack_presentation(presentation),
+            history: None,
             operation: Some(DeclaredActionOperation::MaterializeHostTree {
                 source: source.to_string(),
                 source_sha256,
@@ -899,6 +914,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         }
         let action = DeclaredAction {
             presentation: unpack_presentation(presentation),
+            history: None,
             operation: Some(DeclaredActionOperation::LinkPath {
                 source: source.to_string(),
                 destination: destination.to_string(),
@@ -955,6 +971,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         };
         let action = DeclaredAction {
             presentation: unpack_presentation(presentation),
+            history: None,
             operation: Some(DeclaredActionOperation::PreparePath {
                 path: path.to_string(),
                 mode,
@@ -1025,6 +1042,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         inputs.dedup();
         let action = DeclaredAction {
             presentation: unpack_presentation(presentation),
+            history: None,
             operation: Some(DeclaredActionOperation::WriteTreeDigest {
                 root: root.to_string(),
                 output: output.to_string(),
@@ -1104,6 +1122,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         }
         let action = DeclaredAction {
             presentation: unpack_presentation(presentation),
+            history: None,
             operation: Some(DeclaredActionOperation::WriteArchive {
                 entries,
                 output: output.to_string(),
@@ -1178,6 +1197,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         }
         let action = DeclaredAction {
             presentation: unpack_presentation(presentation),
+            history: None,
             operation: Some(DeclaredActionOperation::DownloadAndExtract {
                 url: url.to_string(),
                 sha256: sha256.to_string(),
@@ -1294,6 +1314,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         network: Option<String>,
         success_exit_codes: Option<Value<'v>>,
         #[starlark(require = named)] presentation: Option<Value<'v>>,
+        #[starlark(require = named)] history: Option<Value<'v>>,
         #[starlark(require = named)] display_name: Option<String>,
         #[starlark(require = named)] source_files: Option<Value<'v>>,
     ) -> anyhow::Result<NoneType> {
@@ -1353,6 +1374,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         success_exit_codes.dedup();
         let action = DeclaredAction {
             presentation: unpack_presentation(presentation),
+            history: unpack_history(history),
             operation: None,
             argv: argv.args,
             arg_files: argv.arg_files,
@@ -2218,7 +2240,7 @@ fn path_expansion_kind(kind: &str) -> &'static str {
     }
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(super) fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = sha2::Sha256::new();
     hasher.update(bytes);
     hex_lower(&hasher.finalize())
@@ -2946,6 +2968,7 @@ mod observation_completeness_tests {
     /// their arguments. Nothing about them needs recording, because replaying
     /// the same call with the same arguments cannot produce a different answer.
     const PURE: &[&str] = &[
+        "action_history_key",
         "cmd_args",
         "content_sha256",
         "copy_path",
