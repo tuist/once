@@ -12,8 +12,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use tempfile::TempDir;
 
+#[path = "tests/action_history.rs"]
+mod action_history;
 #[path = "tests/expansion.rs"]
 mod expansion;
+#[path = "tests/metadata.rs"]
+mod metadata;
+#[path = "tests/producer_history.rs"]
+mod producer_history;
 
 fn run(source: &str) -> starlark::Result<()> {
     Module::with_temp_heap(|module| {

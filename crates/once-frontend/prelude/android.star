@@ -690,6 +690,7 @@ def _android_link_resources(ctx, attrs, tools, manifest, compiled_zips, dep_comp
     )
     run_action(
         display_name = "Link Android resources · " + ctx["label"]["name"],
+        presentation = _action_metadata(context = [_action_context("android.compile_sdk", tools["compile_sdk"], "Compile SDK " + tools["compile_sdk"]), _action_context("android.min_sdk", min_sdk, "minSdk " + min_sdk), _action_context("android.target_sdk", target_sdk, "targetSdk " + target_sdk)]),
         source_files = _action_source_files(_unique([manifest, link_tool_hash] + compiled_zips + dep_compiled_zips + asset_files)),
         argv = [tools["java"], "-cp", link_tool_classes, "OnceAndroidAapt2Link", r_txt] + argv,
         inputs = _unique([manifest, link_tool_hash] + compiled_zips + dep_compiled_zips + asset_files),
@@ -1640,6 +1641,7 @@ def _android_dex(ctx, attrs, tools, runtime_jars):
     prepare_path(dex_dir, kind = "directory", identifier = "android_dex_prepare:" + ctx["label"]["id"])
     run_action(
         display_name = "Compile DEX bytecode · " + ctx["label"]["name"],
+        presentation = _action_metadata(context = [_action_context("android.min_sdk", min_sdk, "minSdk " + min_sdk)]),
         source_files = _action_source_files(_android_workspace_inputs(runtime_jars)),
         argv = base_args,
         inputs = _android_workspace_inputs(runtime_jars),
@@ -1693,6 +1695,7 @@ def _android_package_unsigned_apk(ctx, tools, resource_apk, dex_dir, dex_hash, n
     if len(native_libraries) > 0:
         run_action(
             display_name = "Package APK native libraries · " + ctx["label"]["name"],
+            presentation = _action_metadata(platforms = [_action_platform("android-abi", abi, "Android · " + abi) for abi in _unique([library.get("abi") or "" for library in native_libraries]) if abi]),
             source_files = _action_source_files(_unique([unsigned_apk] + _android_native_library_paths(native_libraries))),
             argv = [tools["jar"], "uf", unsigned_apk, "-C", native_staging, "lib"],
             inputs = _unique([unsigned_apk] + _android_native_library_paths(native_libraries)),

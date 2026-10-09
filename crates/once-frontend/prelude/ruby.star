@@ -220,6 +220,7 @@ def _ruby_test_impl(ctx, runner_type, display_name, adapter_source, adapter_name
         runner_identity = "\x00runner\x00" + runner + "\x00" + host_command([runner, "--version"]).strip()
     run_action(
         display_name = "Run " + runner_type + " tests · " + ctx["label"]["name"],
+        presentation = _action_metadata(context = [_action_context("ruby.runner", runner_type)]),
         source_files = _action_source_files(_unique(inputs + [adapter])),
         argv = argv,
         inputs = _unique(inputs + [adapter]),

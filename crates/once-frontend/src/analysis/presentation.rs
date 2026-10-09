@@ -130,6 +130,19 @@ pub(super) fn unpack_source_files(value: Option<Value<'_>>) -> Result<Vec<String
     Ok(unique)
 }
 
+pub(super) fn unpack_presentation(
+    value: Option<Value<'_>>,
+) -> Option<once_presentation::ActionPresentation> {
+    let value = value.filter(|value| !value.is_none())?;
+    value
+        .to_json_value()
+        .ok()
+        .and_then(|value| {
+            serde_json::from_value::<once_presentation::ActionPresentation>(value).ok()
+        })
+        .and_then(once_presentation::ActionPresentation::normalized)
+}
+
 pub(super) fn record_action(mut action: DeclaredAction) {
     action.display_name = normalize_display_name(action.display_name);
     with_store_mut(|store| {

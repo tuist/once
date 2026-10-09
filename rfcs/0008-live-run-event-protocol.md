@@ -1390,3 +1390,77 @@ Consumers retain every path for display and search. Only `COMMITTED` authorizes 
 Classifying clients send an `UNKNOWN` entry for every path when collection fails, never an empty list alongside paths. Once snapshots the exact reported revision once per run with a Git tree listing bounded by a shared three-second collection deadline, 32 MiB of output, and 200,000 entries, and reclassifies retained action paths at event ingestion. Revision capture is separately bounded by three seconds. Collection overlaps network preflight; the reporter waits for its immutable result before admitting the first event. Exceeding any collection bound makes every path UNKNOWN, rather than treating a partial tree as complete. Classification does not enter action inputs, observations, fingerprints, or persisted target outcomes. Resends use the already classified event. Presentation size trimming drops each path together with its status.
 
 Commit membership does not prove that the commit has been pushed, nor that a dirty working-copy file matches its committed contents. This extension does not fetch dependency sources or check upstream URLs. Deploy server support before releasing the first client that reports classified source files.
+
+## Action presentation metadata extension
+
+`ActionCompleted.presentation` (message tag 18) is optional, producer-owned,
+presentation-only context. Existing `identifier`, action identity, source fields
+and classification semantics are unchanged. Older consumers ignore it; missing
+fields in old persisted outcomes retain legacy rendering. Reused outcomes carry
+metadata without requiring an execution to repopulate it. Presentation is not an
+execution input, observation, action fingerprint, or action-result cache key.
+
+The envelope contains an optional `ActionPackage` (`ecosystem`, `name`, `version`,
+`revision`, `digest`, `origin`), repeated `ActionPlatform` (`scheme`, `id`, `label`,
+`usage`), and repeated `ActionContext` (`key`, `value`, `label`). Stable scheme/ID
+and namespaced key/value pairs are distinct from cosmetic labels. All strings
+have legacy empty defaults. Native identifiers remain opaque to generic clients
+and servers. Safe future namespaces and usages survive normalization.
+
+A package refers to the action's subject, not an arbitrary dependency of an
+aggregate. Opaque ecosystem versions, revisions, and digests remain separate.
+Platforms describe declared product/build-tool output, never actual worker
+placement. JVM levels, Android API levels, and other non-platform facts use
+namespaced context. Resolved defaults may be included only when they were really
+used; unknown or irrelevant facts are omitted. Producers must not emit raw
+environment maps, command lines, host paths, authenticated URLs, or credentials.
+
+Bound the envelope to eight platforms, eight context entries, and 2048 bytes of
+string data in total. Namespace tokens are ASCII alphanumerics plus `.`, `_`,
+`-`, at most 64 bytes. Package names and labels are at most 128 bytes; identifiers
+and context/version/revision/digest values at most 256 bytes. Invalid or oversized
+stable identifiers are omitted, never truncated into a different identity.
+Control characters invalidate identifiers and values; labels normalize them to
+spaces, and oversized labels are omitted. Empty/invalid optional metadata must
+not reject an otherwise valid action.
+
+An oversized event first fits source paths/statuses together around retained
+metadata. If the event without sources still does not fit, it reduces context,
+platforms and package metadata, then refills source paths with aligned statuses.
+Core result, identity, counters, timing and cache facts are never sacrificed for
+presentation. Deferred planners propagate platforms and context to children
+that lack their own metadata, but never inherit package ownership.
+
+Consumers can show a compact linked action name and secondary metadata line,
+with complete native identifiers and sources on an occurrence detail page.
+Search uses retained native IDs/values as well as labels and source paths; it
+must not derive semantics by parsing the display label. Deploy server support
+before publishing a client that sends this envelope.
+
+## Logical action history extension
+
+`ActionCompleted.history` (optional message tag 19) carries a producer-owned
+`ActionHistoryKey { namespace = 1, key = 2 }`. It is independent of a run's
+occurrence identity and every execution/cache digest. Absent or invalid keys
+mean no authoritative cross-run grouping, never label/index/cache-key matching.
+Namespaces are ASCII tokens of 1–64 bytes; opaque UTF-8 keys are 1–128 bytes
+without control characters. Producers must omit credentials and private paths.
+The Starlark `action_history_key` helper hashes 1–8 canonical JSON string
+components with a 2048-byte aggregate bound. Version the namespace whenever the
+derivation changes. Use logical owners/steps and native structural variants,
+not source contents, toolchain versions, run IDs or declaration order.
+
+Declared actions and reusable outcomes serde-default this field; cached replay
+retains it. Deferred children do not inherit a parent's key, and event fitting
+must not trim it. Synthetic phase spans and legacy outcomes have no history.
+The server derives a project- and capability-scoped UUID from domain-separated,
+length-framed SHA-256 input. It retains occurrences separately, serializes
+same-run/key inserts under an advisory transaction lock and marks all colliding
+occurrences ambiguous rather than rejecting or guessing. Resent completions
+remain idempotent. Queries always scope the project and matching run.
+
+History includes only retained runs that supplied valid unambiguous keys.
+First-observed/failure dates are not true creation/onset dates. Execution counts,
+failure counts and durations exclude restored actions; cache rates require an
+observed hit or cache digest. Structural output variants may have separate
+histories, as defined by the producer. Roll out server support before clients.

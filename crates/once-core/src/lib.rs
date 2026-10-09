@@ -6,12 +6,14 @@
 //! buffered.
 
 mod action;
+pub use once_presentation::ActionHistoryKey;
 mod archive;
 mod contract;
 mod directory_blob;
 mod env;
 mod error;
 mod events;
+pub use once_presentation::{ActionContext, ActionPackage, ActionPlatform, ActionPresentation};
 mod evidence;
 mod execute;
 mod execution_path;

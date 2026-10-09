@@ -8,6 +8,7 @@ members = [
     "crates/once-events-client",
     "crates/once-frontend",
     "crates/once-host-tree",
+    "crates/once-presentation",
 ]
 
 [workspace.package]
@@ -23,6 +24,7 @@ once-core = { version = "0.0.0", path = "crates/once-core", default-features = f
 once-cas = { version = "0.0.0", path = "crates/once-cas" }
 once-frontend = { version = "0.0.0", path = "crates/once-frontend" }
 once-host-tree = { version = "0.0.0", path = "crates/once-host-tree" }
+once-presentation = { version = "0.0.0", path = "crates/once-presentation" }
 
 anyhow = "1"
 bazel-remote-apis = "0.29"

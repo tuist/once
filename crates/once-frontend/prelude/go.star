@@ -459,6 +459,8 @@ def _go_declared_build(ctx, mode, explicit_mode = True):
         outputs.append(header)
     run_action(
         display_name = "Compile Go package · " + ctx["label"]["name"],
+        history = _action_history(ctx, "go", "package.compile", [_go_target_os(ctx), _go_target_arch(ctx), mode]),
+        presentation = _action_metadata(platforms = [_action_platform("go", _go_target_os(ctx) + "/" + _go_target_arch(ctx))], context = [_action_context("go.build_mode", mode), _action_context("go.cgo", "on" if _go_cgo_enabled(ctx) else "off", "cgo " + ("on" if _go_cgo_enabled(ctx) else "off"))]),
         source_files = _action_source_files(_go_source_inputs(ctx)),
         argv = args,
         inputs = _unique(inputs),
@@ -1043,6 +1045,8 @@ def _go_test_impl(ctx):
     inputs.extend(native_info["headers"] + native_info["static_libraries"] + native_info["dynamic_libraries"])
     run_action(
         display_name = "Compile Go tests · " + ctx["label"]["name"],
+        history = _action_history(ctx, "go", "test.compile", [_go_target_os(ctx), _go_target_arch(ctx)]),
+        presentation = _action_metadata(platforms = [_action_platform("go", _go_target_os(ctx) + "/" + _go_target_arch(ctx))]),
         source_files = _action_source_files(_unique(inputs)),
         argv = args,
         inputs = _unique(inputs),

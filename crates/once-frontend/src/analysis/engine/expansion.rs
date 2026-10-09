@@ -24,7 +24,7 @@ impl AnalysisEngine {
             build_dir.clone(),
             self.host_cache.clone(),
         );
-        let (store, result) = with_active_store(store, || {
+        let (mut store, result) = with_active_store(store, || {
             Module::with_temp_heap(|module| {
                 let callback = self
                     .module
@@ -71,6 +71,14 @@ impl AnalysisEngine {
                 anyhow::bail!(
                     "action planner `{implementation}` did not declare promised output `{output}`"
                 );
+            }
+        }
+        for expanded in &mut store.actions {
+            if expanded.presentation.is_none() {
+                expanded.presentation = action.presentation.clone().and_then(|mut inherited| {
+                    inherited.package = None;
+                    inherited.normalized()
+                });
             }
         }
         Ok(AnalysisResult {

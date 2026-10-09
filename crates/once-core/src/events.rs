@@ -86,6 +86,8 @@ pub enum RunEvent {
         identifier: Option<String>,
         display_name: Option<String>,
         source_files: Vec<String>,
+        presentation: Option<Box<crate::ActionPresentation>>,
+        history: Option<Box<crate::ActionHistoryKey>>,
         result: TargetResult,
         was_cached: bool,
         duration_ms: i64,
@@ -345,13 +347,13 @@ mod tests {
         let bus = RunEventBus::new(16);
         let mut receiver = bus.subscribe();
         let consumer = tokio::spawn(async move {
-            let mut received = 0_i64;
+            let mut event_count = 0_i64;
             loop {
                 match receiver.recv().await {
                     Ok(RunEvent::RunStarted { at_epoch_ms }) => {
-                        assert_eq!(at_epoch_ms, received, "events arrived out of order");
-                        received += 1;
-                        if received % 64 == 0 {
+                        assert_eq!(at_epoch_ms, event_count, "events arrived out of order");
+                        event_count += 1;
+                        if event_count % 64 == 0 {
                             tokio::time::sleep(Duration::from_millis(1)).await;
                         }
                     }
@@ -359,7 +361,7 @@ mod tests {
                     Err(broadcast::error::RecvError::Lagged(missed)) => {
                         panic!("lost {missed} events")
                     }
-                    Err(broadcast::error::RecvError::Closed) => return received,
+                    Err(broadcast::error::RecvError::Closed) => return event_count,
                 }
             }
         });

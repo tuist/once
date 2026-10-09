@@ -295,6 +295,6 @@ async fn a_streamed_download_is_reported_once_and_a_local_blob_not_at_all() {
     // blob to the same placeholder remote digest.
     assert_eq!(
         transfers[0].size_bytes,
-        sha256_digest(b"test mapping").unwrap().size_bytes as u64
+        u64::try_from(sha256_digest(b"test mapping").unwrap().size_bytes).unwrap()
     );
 }

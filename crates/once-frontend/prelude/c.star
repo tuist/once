@@ -162,6 +162,7 @@ def _c_library_impl(ctx):
             compiler = cxx if _c_source_uses_cxx(src) else cc
             run_action(
                 display_name = "Compile " + src,
+                presentation = _action_metadata(context = [_action_context("c.language", "C++" if _c_source_uses_cxx(src) else "C")]),
                 source_files = _action_source_files([src]),
                 argv = [compiler] + _c_compile_args(src, obj, attrs, compile_context),
                 inputs = _unique([src] + compile_context["headers"]),

@@ -220,6 +220,7 @@ def _python_pytest_impl(ctx):
     pytest_version = host_command([python, "-c", "import pytest; print(pytest.__version__)"]).strip()
     run_action(
         display_name = "Run Python tests · " + ctx["label"]["name"],
+        presentation = _action_metadata(context = [_action_context("python.runner", "pytest")]),
         source_files = _action_source_files(_unique(inputs + [adapter])),
         argv = argv,
         inputs = _unique(inputs + [adapter]),

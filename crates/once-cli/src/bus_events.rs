@@ -217,6 +217,8 @@ pub fn target_phase_completed(
         identifier: Some(phase.to_string()),
         display_name: None,
         source_files: Vec::new(),
+        presentation: None,
+        history: None,
         result: TargetResult::Succeeded,
         was_cached: false,
         duration_ms: i64::try_from(duration_ms).unwrap_or(i64::MAX),
@@ -438,6 +440,8 @@ pub fn action_completed(
     identifier: Option<&str>,
     display_name: Option<&str>,
     source_files: &[String],
+    presentation: Option<&once_core::ActionPresentation>,
+    history: Option<&once_core::ActionHistoryKey>,
     duration_ms: u64,
     was_cached: bool,
     exit_code: i32,
@@ -481,6 +485,11 @@ pub fn action_completed(
         identifier: identifier.map(str::to_string),
         display_name: display_name.map(str::to_string),
         source_files: source_files.to_vec(),
+        presentation: presentation.cloned().map(Box::new),
+        history: history
+            .cloned()
+            .and_then(once_core::ActionHistoryKey::normalize)
+            .map(Box::new),
         result,
         was_cached,
         duration_ms: i64::try_from(duration_ms).unwrap_or(i64::MAX),

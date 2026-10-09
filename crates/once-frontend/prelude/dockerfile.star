@@ -425,6 +425,7 @@ def _dockerfile_buildkit_impl(ctx, fallback_reason = None, inherits_onbuild = Fa
         build_outputs.append(layer_cache)
     run_action(
         display_name = "Build container image · " + ctx["label"]["name"],
+        presentation = _action_metadata(platforms = [_action_platform("oci", platform)] if platform else [], context = [_action_context("dockerfile.stage", _dockerfile_attr(ctx, "target", ""))] if _dockerfile_attr(ctx, "target", "") else []),
         source_files = _action_source_files(inputs),
         argv = argv,
         inputs = inputs,

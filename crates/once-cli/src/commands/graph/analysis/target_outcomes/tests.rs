@@ -336,6 +336,18 @@ fn a_reused_outcome_reports_a_hit_however_it_was_produced() {
             identifier: Some(format!("action-{index}")),
             display_name: Some(format!("Compile source-{index}.c")),
             source_files: vec![format!("src/source-{index}.c")],
+            history: Some(once_core::ActionHistoryKey {
+                namespace: "test.history.v1".into(),
+                key: format!("compile-{index}"),
+            }),
+            presentation: Some(once_core::ActionPresentation {
+                context: vec![once_core::ActionContext {
+                    key: "custom.mode".into(),
+                    value: "test".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
             index,
             cache_state: EvidenceCacheState::Miss,
             duration_ms: 42,
@@ -369,6 +381,14 @@ fn a_reused_outcome_reports_a_hit_however_it_was_produced() {
             Some(format!("Compile source-{index}.c").as_str())
         );
         assert_eq!(action.source_files, [format!("src/source-{index}.c")]);
+        assert_eq!(
+            action.history.as_ref().unwrap().key,
+            format!("compile-{index}")
+        );
+        assert_eq!(
+            action.presentation.as_ref().unwrap().context[0].value,
+            "test"
+        );
         assert_eq!(action.index as usize, index);
         assert_eq!(
             action.action_digest,

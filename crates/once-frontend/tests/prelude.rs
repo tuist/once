@@ -65,6 +65,9 @@ mod dockerfile_instructions;
 #[path = "prelude/oci_containers.rs"]
 mod oci_containers;
 
+#[path = "prelude/action_metadata.rs"]
+mod action_metadata;
+
 fn store_for(workspace: &Path, package: &str) -> AnalysisStore {
     AnalysisStore::new(
         workspace.to_path_buf(),
@@ -3391,6 +3394,38 @@ result = repr(_javascript_installed_package_entry(
 }
 
 #[test]
+fn rust_schemas_declare_resolver_owned_host_tool_metadata() {
+    for kind in [
+        "rust_library",
+        "rust_binary",
+        "rust_test",
+        "rust_crate",
+        "rust_proc_macro",
+    ] {
+        let schema = built_in_target_kind_schema(kind).expect("Rust schema");
+        let host_tool = schema
+            .attrs
+            .iter()
+            .find(|attr| attr.name == "_cargo_host_tool")
+            .expect("resolver-owned host-tool attribute is declared");
+        assert_eq!(host_tool.ty, "bool");
+        assert_eq!(host_tool.default.as_deref(), Some("false"));
+        assert!(!host_tool.required);
+        assert!(!host_tool.configurable);
+        assert!(host_tool.docs.contains("logical history"));
+        let resolver = schema
+            .attrs
+            .iter()
+            .find(|attr| attr.name == "_cargo_resolver")
+            .expect("resolver-owned history scope is declared");
+        assert_eq!(resolver.ty, "string");
+        assert_eq!(resolver.default.as_deref(), Some(""));
+        assert!(!resolver.required);
+        assert!(!resolver.configurable);
+    }
+}
+
+#[test]
 fn rust_schemas_cover_upstream_parity_fields() {
     for kind in [
         "rust_library",
@@ -6476,6 +6511,7 @@ result = repr([provider["transitive_linkopts"], provider["transitive_data"]])
         "[[\"-Wl,--as-needed\", \"-Wl,--gc-sections\"], [\"pkg/runtime-data/fixture.txt\"]]"
     );
     let action = action_by_identifier(&store, "pkg/lib:rustc");
+    assert_eq!(action.history.as_ref().unwrap().namespace, "once.cargo.v1");
     assert!(action
         .argv
         .iter()
@@ -6601,7 +6637,6 @@ result = repr([
     let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
 
     let out = out.unwrap();
-    assert!(out.contains("SharedRust"), "{out}");
     assert!(out.contains("rust_mobile_library"), "{out}");
     assert!(
         out.contains("rust-mobile/SharedRust/android/libshared_rust.so"),
@@ -6609,6 +6644,7 @@ result = repr([
     );
     assert!(out.contains("arm64-v8a"), "{out}");
     let android = action_by_identifier(&store, "SharedRust:rustc:android");
+    assert_eq!(android.history.as_ref().unwrap().namespace, "once.cargo.v1");
     assert_eq!(store.actions.len(), 1);
     assert!(android
         .outputs
@@ -7064,6 +7100,9 @@ result = repr(provider["test_info"])
         .iter()
         .any(|input| input == "crates/app/tests/greeting_test.rs"));
     let runner_compile = action_by_identifier(&store, "crates/app/app_tests:test-runner-rustc");
+    assert!(rustc.history.is_some());
+    assert!(runner_compile.history.is_some());
+    assert_ne!(rustc.history, runner_compile.history);
     assert!(runner_compile
         .inputs
         .iter()

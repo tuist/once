@@ -438,6 +438,7 @@ def _bazel_emit_spawn_action(ctx, action, index, shadow_rel):
     ])
     run_action(
         display_name = "Bazel " + action["mnemonic"] + " · " + ctx["label"]["name"],
+        presentation = _action_metadata(context = [_action_context("bazel.mnemonic", action["mnemonic"])]),
         source_files = _action_source_files([_package_relative(ctx, path) for path in action["inputs"] if not path.startswith("bazel-out/") and not path.startswith("external/")]),
         argv = action["arguments"],
         inputs = [],
