@@ -122,10 +122,27 @@ fn ci_branch_from(lookup: impl Fn(&str) -> Option<String>) -> Option<String> {
         if *name == "GITHUB_REF_NAME" && lookup("GITHUB_REF_TYPE").as_deref() != Some("branch") {
             return None;
         }
+        let tag_variable = match *name {
+            "BUILDKITE_BRANCH" => Some("BUILDKITE_TAG"),
+            "CIRCLE_BRANCH" => Some("CIRCLE_TAG"),
+            "BITBUCKET_BRANCH" => Some("BITBUCKET_TAG"),
+            "TRAVIS_BRANCH" => Some("TRAVIS_TAG"),
+            "DRONE_BRANCH" => Some("DRONE_TAG"),
+            "BRANCH_NAME" => Some("TAG_NAME"),
+            "BITRISE_GIT_BRANCH" => Some("BITRISE_GIT_TAG"),
+            _ => None,
+        };
+        if tag_variable.is_some_and(|tag| lookup(tag).is_some_and(|value| !value.trim().is_empty()))
+            || (*name == "APPVEYOR_REPO_BRANCH"
+                && lookup("APPVEYOR_REPO_TAG")
+                    .is_some_and(|value| value.eq_ignore_ascii_case("true")))
+        {
+            return None;
+        }
         let value = lookup(name)?;
         let branch = value.trim();
         let branch = branch.strip_prefix("refs/heads/").unwrap_or(branch);
-        (!branch.is_empty()).then(|| branch.to_string())
+        (!branch.is_empty() && !branch.starts_with("refs/")).then(|| branch.to_string())
     })
 }
 
@@ -215,6 +232,26 @@ mod tests {
             ]),
             Some("main".to_string())
         );
+    }
+
+    #[test]
+    fn other_provider_tags_do_not_become_branches() {
+        for variable in ["BUILD_SOURCEBRANCH", "CODEBUILD_WEBHOOK_HEAD_REF"] {
+            assert_eq!(branch_from(&[(variable, "refs/tags/v1.2.3")]), None);
+            assert_eq!(branch_from(&[(variable, "refs/pull/42/merge")]), None);
+        }
+        for (branch, tag, value) in [
+            ("BUILDKITE_BRANCH", "BUILDKITE_TAG", "v1.2.3"),
+            ("CIRCLE_BRANCH", "CIRCLE_TAG", "v1.2.3"),
+            ("BITBUCKET_BRANCH", "BITBUCKET_TAG", "v1.2.3"),
+            ("TRAVIS_BRANCH", "TRAVIS_TAG", "v1.2.3"),
+            ("DRONE_BRANCH", "DRONE_TAG", "v1.2.3"),
+            ("BRANCH_NAME", "TAG_NAME", "v1.2.3"),
+            ("BITRISE_GIT_BRANCH", "BITRISE_GIT_TAG", "v1.2.3"),
+            ("APPVEYOR_REPO_BRANCH", "APPVEYOR_REPO_TAG", "true"),
+        ] {
+            assert_eq!(branch_from(&[(branch, "v1.2.3"), (tag, value)]), None);
+        }
     }
 
     #[test]
