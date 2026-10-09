@@ -17,11 +17,32 @@ result = repr([
     metadata({"host_mode": "release_safe"})["context"][0]["value"],
     metadata({})["context"],
     metadata({"target": "native"})["platforms"],
-    metadata({"host_target": "aarch64-linux-gnu"})["platforms"][0]["id"],
+    metadata({"target": "aarch64-linux-gnu"})["platforms"][0]["id"],
+    metadata({"host_target": "aarch64-linux-gnu"})["platforms"],
 ])
 "#
         ),
-        r#"["ReleaseFast", "ReleaseSmall", "ReleaseSafe", [], [], "aarch64-linux-gnu"]"#
+        r#"["ReleaseFast", "ReleaseSmall", "ReleaseSafe", [], [], "aarch64-linux-gnu", []]"#
+    );
+}
+
+#[test]
+fn zig_history_resolves_native_without_changing_declared_outputs() {
+    assert_eq!(
+        evaluate(
+            r#"
+native = {"attr": {"target": "native"}, "label": {"id": "pkg/lib", "name": "lib"}}
+unset = {"attr": {}, "label": {"id": "pkg/lib", "name": "lib"}}
+result = repr([
+    _zig_history_platform(native) == _zig_history_platform(unset),
+    _zig_history_platform(native)[0] == host_os(),
+    _zig_history_platform(native)[1] == _once_normalize_architecture(host_arch()),
+    _zig_output_name(native, "shared") == "liblib.so",
+    _zig_output_name(native, "binary") == "lib",
+])
+"#
+        ),
+        "[True, True, True, True, True]"
     );
 }
 

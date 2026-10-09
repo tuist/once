@@ -43,7 +43,7 @@ fn cargo_history_is_stable_across_versions_labels_revisions_and_registry_protoco
         include_str!("../../../prelude/rust.star"),
         r#"
 def ctx(version, source, label, host = False):
-    return {"attr": {"package_name": "serde", "crate_name": "serde", "version": version, "source": source, "_cargo_host_tool": host}, "label": {"id": label, "name": label}}
+    return {"attr": {"package_name": "serde", "crate_name": "serde", "version": version, "source": source, "_cargo_host_tool": host, "_cargo_resolver": "pkg/dependencies"}, "label": {"id": label, "name": label}}
 def emit(c, step = "crate.compile.rlib", target = "x86_64-unknown-linux-gnu"):
     run_action(["tool"], history = _rust_action_history(c, step, target))
 emit(ctx("1.0.200", "registry+https://github.com/rust-lang/crates.io-index", "serde-1.0.200"))
@@ -93,6 +93,35 @@ emit(bad)
     assert!(keys[13].is_some());
     assert_eq!(keys[13], keys[14]);
     assert!(keys[15].is_none());
+}
+
+#[test]
+fn cargo_resolvers_in_one_package_have_distinct_history_for_products_and_host_tools() {
+    let tmp = TempDir::new().unwrap();
+    let source = format!(
+        "{}\n{}\n{}",
+        include_str!("../../../prelude/common.star"),
+        include_str!("../../../prelude/rust.star"),
+        r#"
+package = {"name": "serde", "version": "1.0.228", "source": "sparse+https://index.crates.io/"}
+target = {"name": "serde", "kind": ["lib"]}
+def emit(resolver, host):
+    ctx = {"label": {"id": resolver, "package": "pkg"}}
+    attrs = _cargo_metadata_attrs(ctx, package, target, {}, "vendor/serde", "vendor/serde/src/lib.rs", {})
+    attrs["_cargo_host_tool"] = host
+    child = {"label": {"id": "pkg/serde-1.0.228", "package": "pkg", "name": "serde-1.0.228"}, "attr": attrs}
+    run_action(["rustc"], history = _rust_action_history(child, "crate.compile.rlib", "x86_64-unknown-linux-gnu"))
+emit("pkg/dependencies", False)
+emit("pkg/dependencies_release", False)
+emit("pkg/dependencies", True)
+emit("pkg/dependencies_release", True)
+"#
+    );
+    let (store, ()) = with_active_store(store_for(tmp.path(), "pkg"), || run(&source).unwrap());
+    assert!(store.actions.iter().all(|action| action.history.is_some()));
+    assert_ne!(store.actions[0].history, store.actions[1].history);
+    assert_ne!(store.actions[2].history, store.actions[3].history);
+    assert_ne!(store.actions[0].history, store.actions[2].history);
 }
 
 #[test]

@@ -47,7 +47,8 @@ def _rust_action_history(ctx, step, target):
         owner = ctx["label"]["id"]
         bucket = ""
     role = "build-tool" if _rust_attr(ctx, "_cargo_host_tool", False) else "product"
-    scoped_owner = action_history_key("once.cargo.owner.v1", [ctx["label"].get("package") or "", owner])
+    resolver = attrs.get("_cargo_resolver") or ctx["label"]["id"]
+    scoped_owner = action_history_key("once.cargo.owner.v1", [ctx["label"].get("package") or "", resolver, owner])
     suffix = ctx.get("_action_suffix") or ""
     consumer = ctx.get("_history_consumer") or ""
     if suffix and not consumer:
@@ -3417,8 +3418,9 @@ def _cargo_rustc_env(package, target, source_root):
         env["CARGO_MANIFEST_LINKS"] = links
     return env
 
-def _cargo_metadata_attrs(package, target, node, source_root, crate_root, aliases, host_source_root = ""):
+def _cargo_metadata_attrs(ctx, package, target, node, source_root, crate_root, aliases, host_source_root = ""):
     attrs = {
+        "_cargo_resolver": (ctx.get("label") or {}).get("id") or "",
         "package_name": package["name"],
         "crate_name": _cargo_crate_name(package, target),
         "version": package["version"],
@@ -3447,8 +3449,8 @@ def _cargo_merge_aliases(left, right):
         out[key] = value
     return out
 
-def _cargo_metadata_target_spec(package, target, node, source_root, crate_root, name, kind, deps, build_deps, aliases, rust_target, host_tool = False, host_source_root = ""):
-    attrs = _cargo_metadata_attrs(package, target, node, source_root, crate_root, aliases, host_source_root)
+def _cargo_metadata_target_spec(ctx, package, target, node, source_root, crate_root, name, kind, deps, build_deps, aliases, rust_target, host_tool = False, host_source_root = ""):
+    attrs = _cargo_metadata_attrs(ctx, package, target, node, source_root, crate_root, aliases, host_source_root)
     attrs["_cargo_host_tool"] = host_tool
     if rust_target:
         attrs["target"] = rust_target
@@ -3522,20 +3524,20 @@ def _cargo_metadata_resolution(ctx, metadata, host_metadata = None, materialize_
         if kind == "rust_proc_macro":
             deps, aliases = _cargo_metadata_deps(host_node, id_to_host_name, False, True)
             build_deps, build_aliases = _cargo_metadata_build_deps(host_node, id_to_host_name, True) if has_build_script else ([], {})
-            targets.append(_cargo_metadata_target_spec(package, target, host_node, source_root, crate_root, name, kind, deps, build_deps, _cargo_merge_aliases(aliases, build_aliases), "", host_source_root = host_source_root))
+            targets.append(_cargo_metadata_target_spec(ctx, package, target, host_node, source_root, crate_root, name, kind, deps, build_deps, _cargo_merge_aliases(aliases, build_aliases), "", host_source_root = host_source_root))
             continue
 
         if target_package_ids.get(package_id):
             deps, aliases = _cargo_metadata_deps(node, id_to_target_name, False, True)
             build_deps, build_aliases = _cargo_metadata_build_deps(node, id_to_host_name, True) if has_build_script else ([], {})
-            targets.append(_cargo_metadata_target_spec(package, target, node, source_root, crate_root, name, kind, deps, build_deps, _cargo_merge_aliases(aliases, build_aliases), rust_target, host_source_root = host_source_root))
+            targets.append(_cargo_metadata_target_spec(ctx, package, target, node, source_root, crate_root, name, kind, deps, build_deps, _cargo_merge_aliases(aliases, build_aliases), rust_target, host_source_root = host_source_root))
 
         host_name = id_to_host_name.get(package_id)
         if host_name and host_name != name:
             host_materialized_source_root = _cargo_materialized_source_root(ctx, host_name) if materialize_sources else source_root
             host_deps, host_aliases = _cargo_metadata_deps(host_node, id_to_host_name, False, True)
             host_build_deps, host_build_aliases = _cargo_metadata_build_deps(host_node, id_to_host_name, True) if has_build_script else ([], {})
-            targets.append(_cargo_metadata_target_spec(package, target, host_node, host_materialized_source_root, host_materialized_source_root + "/" + rel_root, host_name, kind, host_deps, host_build_deps, _cargo_merge_aliases(host_aliases, host_build_aliases), "", host_tool = True, host_source_root = host_source_root))
+            targets.append(_cargo_metadata_target_spec(ctx, package, target, host_node, host_materialized_source_root, host_materialized_source_root + "/" + rel_root, host_name, kind, host_deps, host_build_deps, _cargo_merge_aliases(host_aliases, host_build_aliases), "", host_tool = True, host_source_root = host_source_root))
     workspace = _cargo_workspace_dependency_names(metadata, id_to_target_name, id_to_host_name)
     return {
         "specs": targets,
@@ -3922,7 +3924,8 @@ _RUST_COMMON_ATTRS = [
     attr("cargo_config_env", "map<string, string>", default = "{}", docs = "Environment variables declared by Cargo configuration, applied to the compiler, the build script, the test process, and `once run`. They sit below `env`, `rustc_env`, `test_env`, and `run_env`, matching how Cargo lets its own variables win.", configurable = False),
     attr("_binary_output_name", "string", docs = "Resolver-owned executable name before the platform extension.", configurable = False),
     attr("_cargo_source_root", "string", docs = "Resolver-owned absolute Cargo source directory materialized through a declared host-tree action.", configurable = False),
-    attr("_cargo_host_tool", "bool", default = "false", docs = "Resolver-owned host-tool output role used only for action presentation.", configurable = False),
+    attr("_cargo_host_tool", "bool", default = "false", docs = "Resolver-owned host-tool output role used for action presentation and logical history.", configurable = False),
+    attr("_cargo_resolver", "string", default = "", docs = "Resolver-owned logical label scopes action history independently of package versions and execution/cache identity.", configurable = False),
     attr("_cargo_materialized_source_root", "string", docs = "Resolver-owned Once output directory for one materialized Cargo package.", configurable = False),
     attr("_build_script_inputs", "list<string>", default = "[]", docs = "Resolver-owned source inputs made available to a generated Cargo build script.", configurable = False),
     attr("default_deps", "string", docs = "Reserved Buck-compatible default dependency mode.", configurable = False),

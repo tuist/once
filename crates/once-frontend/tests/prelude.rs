@@ -3409,6 +3409,16 @@ fn rust_schemas_declare_resolver_owned_host_tool_metadata() {
         assert_eq!(host_tool.default.as_deref(), Some("false"));
         assert!(!host_tool.required);
         assert!(!host_tool.configurable);
+        assert!(host_tool.docs.contains("logical history"));
+        let resolver = schema
+            .attrs
+            .iter()
+            .find(|attr| attr.name == "_cargo_resolver")
+            .expect("resolver-owned history scope is declared");
+        assert_eq!(resolver.ty, "string");
+        assert_eq!(resolver.default.as_deref(), Some(""));
+        assert!(!resolver.required);
+        assert!(!resolver.configurable);
     }
 }
 
