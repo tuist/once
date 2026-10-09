@@ -118,15 +118,7 @@ pub(crate) fn explicit_unit_plan(
     )?)
 }
 
-pub(crate) fn plan_from_selection(
-    workspace: &Path,
-    selection: TestSelectionReport,
-) -> Result<TestPlan> {
-    let graph = once_frontend::load_graph_workspace(workspace).context("loading graph")?;
-    plan_from_selection_with_graph(workspace, &graph, selection)
-}
-
-fn plan_from_selection_with_graph(
+pub(crate) fn plan_from_selection_with_graph(
     workspace: &Path,
     graph: &[GraphTarget],
     selection: TestSelectionReport,
@@ -270,6 +262,27 @@ mod tests {
         assert!(error
             .to_string()
             .contains("target `application` does not expose the test capability"));
+    }
+
+    #[test]
+    fn follow_up_plan_uses_scoped_graph_without_reloading_workspace() {
+        let workspace = TempDir::new().unwrap();
+        std::fs::write(workspace.path().join("once.toml"), "not valid TOML").unwrap();
+        write_manifest(
+            workspace.path(),
+            TestSharding {
+                supported: false,
+                granularity: "target".to_string(),
+            },
+            vec![unit("a", "one.py")],
+        );
+
+        let plan = plan_from_selection_with_graph(workspace.path(), &[], selection()).unwrap();
+
+        assert_eq!(
+            plan.batches,
+            [TestBatch::new("tests/unit", vec![]).unwrap()]
+        );
     }
 
     fn write_manifest(workspace: &Path, sharding: TestSharding, units: Vec<TestUnit>) {

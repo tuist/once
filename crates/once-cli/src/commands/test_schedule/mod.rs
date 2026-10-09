@@ -80,8 +80,9 @@ pub(crate) async fn execute(
         .iter()
         .any(|batch| batch.test_filters.is_empty())
     {
-        crate::commands::query::test_plan::plan_from_selection(
+        crate::commands::query::test_plan::plan_from_selection_with_graph(
             &workspace_path,
+            &graph,
             plan.selection.clone(),
         )?
     } else {
