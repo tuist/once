@@ -261,6 +261,7 @@ async fn run_command(
             all,
             changed_paths,
             test_unit,
+            test_batch,
             batch_test_units,
             test_batch_id,
         } => {
@@ -276,6 +277,7 @@ async fn run_command(
                     all,
                     changed_paths,
                     test_unit,
+                    test_batch,
                     batch_test_units,
                     test_batch_id,
                     resource_limits: resource_limits.clone(),
@@ -410,6 +412,7 @@ struct TestDispatchArgs {
     all: bool,
     changed_paths: Vec<String>,
     test_unit: Option<String>,
+    test_batch: Option<String>,
     batch_test_units: Vec<String>,
     test_batch_id: Option<String>,
     resource_limits: ResourceLimits,
@@ -438,6 +441,7 @@ async fn dispatch_test(workspace: &Path, xdg: &Xdg, args: TestDispatchArgs) -> R
         && args.changed_paths.is_empty()
         && args.jobs.is_none()
         && args.test_unit.is_none()
+        && args.test_batch.is_none()
     {
         let target = resolve_required_target(workspace, args.target)?;
         let cache = crate::cache_provider::resolve(workspace, xdg)?;
@@ -459,7 +463,14 @@ async fn dispatch_test(workspace: &Path, xdg: &Xdg, args: TestDispatchArgs) -> R
     let plan = match args.target {
         Some(target) => {
             let target = resolve_target_arg(workspace, &target)?;
-            if let Some(test_unit) = args.test_unit {
+            if let Some(test_batch) = args.test_batch {
+                commands::query::test_plan::explicit_batch_plan(
+                    workspace,
+                    &graph,
+                    &target,
+                    &test_batch,
+                )?
+            } else if let Some(test_unit) = args.test_unit {
                 commands::query::explicit_test_unit_plan_with_graph(
                     workspace, &graph, &target, &test_unit,
                 )?
@@ -579,7 +590,18 @@ async fn run_query_command(
             changed_paths,
             target,
             test_unit,
-        }) => run_test_plan_query(workspace, output, &changed_paths, target, test_unit).await,
+            test_batch,
+        }) => {
+            run_test_plan_query(
+                workspace,
+                output,
+                &changed_paths,
+                target,
+                test_unit,
+                test_batch,
+            )
+            .await
+        }
         Some(cli::QueryCmd::TestResults {
             target,
             summary_only,
@@ -641,6 +663,7 @@ async fn run_test_plan_query(
     changed_paths: &[String],
     target: Option<String>,
     test_unit: Option<String>,
+    test_batch: Option<String>,
 ) -> Result<ExitCode> {
     commands::query::test_plan_request(
         workspace,
@@ -648,6 +671,7 @@ async fn run_test_plan_query(
         changed_paths,
         target.as_deref(),
         test_unit.as_deref(),
+        test_batch.as_deref(),
     )
     .await
     .map(|()| ExitCode::SUCCESS)

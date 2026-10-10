@@ -306,7 +306,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_query_test_plan",
             description: "Create an immutable test plan without assigning work to runners.",
-            long_description: "Returns the selection policy, normalized changed paths, unmatched paths, selected tests, and stable execution batches. The plan deliberately contains no local worker, remote provider, or fixed-job assignment, so scheduling can change without changing test identity or invalidating reusable results. Before a target's first complete run, or when its discovery inputs change, the plan intentionally contains one whole-target batch. Run that target once with `once_run_tests`, inspect `once_query_test_manifest`, then query the plan again to see automatic file or case batches. Pass `target` with a `test_unit` from the manifest to create an exact unit-filtered plan. Planning rejects targets that do not declare exact filtering and units absent from the persisted whole-target manifest. The matching command-line operations are `once query test-plan --changed-path <path> --format json` and `once query test-plan --target <target> --test-unit <unit> --format json`.",
+            long_description: "Returns the selection policy, normalized changed paths, unmatched paths, selected tests, and stable execution batches. The plan deliberately contains no local worker, remote provider, or fixed-job assignment, so scheduling can change without changing test identity or invalidating reusable results. Before a target's first complete run, or when its discovery inputs change, the plan intentionally contains one whole-target batch. Run that target once with `once_run_tests`, inspect `once_query_test_manifest`, then query the plan again to see automatic file or case batches. Pass `target` with a `test_unit` from the manifest to create an exact unit-filtered plan. Planning rejects targets that do not declare exact filtering and units absent from the persisted whole-target manifest. Pass `target` with `test_batch` to select one batch ID from that target's current plan. Batch and unit selectors are mutually exclusive and cannot be combined with changed paths. The matching batch command is `once query test-plan --target <target> --test-batch <id> --format json`. The matching command-line operations are `once query test-plan --changed-path <path> --format json` and `once query test-plan --target <target> --test-unit <unit> --format json`.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -322,6 +322,10 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                     "test_unit": {
                         "type": "string",
                         "description": "One stable unit identifier from once_query_test_manifest. Requires target."
+                    },
+                    "test_batch": {
+                        "type": "string",
+                        "description": "One batch ID from the target's current once_query_test_plan. Requires target; conflicts with test_unit and changed_paths."
                     }
                 }
             }),
@@ -330,7 +334,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_run_tests",
             description: "Run test targets by id, or run tests affected by changed workspace paths.",
-            long_description: "Creates the same immutable plan as `once_query_test_plan`, then pulls stable batches from a shared local queue. Batches with longer historical uncached durations are queued first, and idle workers dynamically take the next batch. Explicit `target` or `targets` produce an exact plan; otherwise `changed_paths` drive conservative graph selection. With exactly one target, `test_unit` runs a stable unit returned by `once_query_test_manifest` when the target kind declares filtering support. `jobs` caps workers without changing plan or batch identity. Set `summary_only` for compact normalized totals without case-level records. The result's `plan` is the work that just executed. Its `next_plan` is recomputed after complete runs refresh discovery, so use that field to assess file or case batching for the next run. The result also includes actual schedule attempts and normalized test results. Failed tests are returned as normal tool content with `success: false` rather than a tool protocol error, so agents can inspect failures and iterate. The matching command-line operations are `once test --changed-path <path> --jobs <count> --format json` and `once test <target> --test-unit <unit> --format json`.",
+            long_description: "Creates the same immutable plan as `once_query_test_plan`, then pulls stable batches from a shared local queue. Batches with longer historical uncached durations are queued first, and idle workers dynamically take the next batch. Explicit `target` or `targets` produce an exact plan; otherwise `changed_paths` drive conservative graph selection. With exactly one target, `test_unit` runs a stable unit returned by `once_query_test_manifest` when the target kind declares filtering support. With exactly one target, `test_batch` reruns one batch ID from the target's current plan without splitting its fixture scope. It conflicts with `test_unit` and changed paths. Unknown or obsolete IDs fail before execution and suggest current batches. The matching command is `once test <target> --test-batch <id> --format json`. `jobs` caps workers without changing plan or batch identity. Set `summary_only` for compact normalized totals without case-level records. The result's `plan` is the work that just executed. Its `next_plan` is recomputed after complete runs refresh discovery, so use that field to assess file or case batching for the next run. The result also includes actual schedule attempts and normalized test results. Failed tests are returned as normal tool content with `success: false` rather than a tool protocol error, so agents can inspect failures and iterate. The matching command-line operations are `once test --changed-path <path> --jobs <count> --format json` and `once test <target> --test-unit <unit> --format json`.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -357,6 +361,10 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                     "test_unit": {
                         "type": "string",
                         "description": "Run one stable unit identifier returned by once_query_test_manifest. Requires exactly one explicit target."
+                    },
+                    "test_batch": {
+                        "type": "string",
+                        "description": "Run one batch ID from the target's current once_query_test_plan. Requires exactly one explicit target; conflicts with test_unit and changed_paths."
                     },
                     "summary_only": {
                         "type": "boolean",

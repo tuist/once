@@ -727,6 +727,80 @@ KOTLIN
     The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'tests/test_string.py'
   End
 
+  It 'replays one file batch without losing its fixture scope or complete manifest'
+    create_pytest_workspace
+    once --format json test --jobs 2 tests > "$WORKSPACE/discovery.json"
+    batch_id="$(jq -r '.next_plan.batches | max_by(.test_filters | length) | .id' "$WORKSPACE/discovery.json")"
+
+    When call /bin/sh -c '
+      "$1" -C "$2" --format json query test-plan --target tests --test-batch "$3" > "$2/replay-plan.json" &&
+      "$1" -C "$2" --format json test tests --test-batch "$3" > "$2/replay-run.json" &&
+      jq -e --arg id "$3" ".plan.batches | length == 1" "$2/replay-run.json" &&
+      jq -e ".plan.batches[0].test_filters | length == 2" "$2/replay-run.json" &&
+      "$1" -C "$2" --format json query test-manifest tests | jq -e ".units | length == 3"
+    ' sh "$ONCE_BIN" "$WORKSPACE" "$batch_id"
+    The status should be success
+    The stdout should include 'true'
+    The contents of file "$WORKSPACE/replay-run.json" should include 'requested_test_batch'
+    The contents of file "$WORKSPACE/replay-run.json" should include "$batch_id"
+    The contents of file "$WORKSPACE/replay-run.json" should not include 'tests/test_string.py'
+  End
+
+  It 'rejects an obsolete batch rather than executing a stale inventory'
+    create_pytest_workspace
+    once --format json test --jobs 2 tests > "$WORKSPACE/discovery.json"
+    batch_id="$(jq -r '.next_plan.batches[0].id' "$WORKSPACE/discovery.json")"
+    printf '\ndef test_new_case():\n    assert True\n' >> "$WORKSPACE/tests/test_math.py"
+
+    When call once --format json test tests --test-batch "$batch_id"
+    The status should be failure
+    The stderr should include 'not in the current plan'
+    The stderr should include 'once query test-plan --target tests'
+    The stderr should include 'whole target'
+  End
+
+  It 'keeps plan and batch identity independent of worker capacity'
+    create_pytest_workspace
+    once --format json test tests >/dev/null
+
+    When call /bin/sh -c '
+      "$1" -C "$2" --format json test tests --jobs 1 > "$2/one.json" &&
+      "$1" -C "$2" --format json test tests --jobs 4 > "$2/four.json" &&
+      jq -e -s ".[0].plan == .[1].plan and .[0].schedule.workers == 1 and .[1].schedule.workers == 2" "$2/one.json" "$2/four.json"
+    ' sh "$ONCE_BIN" "$WORKSPACE"
+    The status should be success
+    The stdout should equal 'true'
+  End
+
+  It 'fails a batch when runner collection adds unrequested cases'
+    create_pytest_workspace
+    cat > "$WORKSPACE/tests/conftest.py" <<'PY'
+import pytest
+
+
+def pytest_collection_modifyitems(config, items):
+    if items and any("::" in arg for arg in config.args):
+        items.append(pytest.Function.from_parent(
+            items[0].parent,
+            name="test_unrequested",
+            callobj=lambda: None,
+        ))
+PY
+    once --format json test tests >/dev/null
+
+    When call once --format json test tests --jobs 2
+    The status should be failure
+    The stdout should include 'unrequested test unit'
+    The stdout should include 'runner must honor exact filtering'
+    The stdout should include '"success":false'
+  End
+
+  It 'requires an explicit target for batch selection'
+    When call once --format json test --test-batch invalid
+    The status should be failure
+    The stderr should include 'TARGET'
+  End
+
   It 'discovers and schedules RSpec files as parallel batches'
     create_rspec_workspace
     once --format json test tests >/dev/null
@@ -783,7 +857,8 @@ KOTLIN
     When call /bin/sh -c '
       "$1" -C "$2" --format json query test-manifest hello_tests > "$2/manifest.json" &&
       "$1" -C "$2" --format json query test-plan --target hello_tests --test-unit "hello_tests::returns_greeting" > "$2/plan.json" &&
-      "$1" -C "$2" --format json test hello_tests --test-unit "hello_tests::returns_greeting"
+      "$1" -C "$2" --format json test hello_tests --test-unit "hello_tests::returns_greeting" &&
+      "$1" -C "$2" --format json query test-manifest hello_tests > "$2/complete-manifest.json"
     ' sh "$ONCE_BIN" "$WORKSPACE"
     The status should be success
     The stdout should include 'once.test_schedule.v1'
@@ -792,9 +867,12 @@ KOTLIN
     The contents of file "$WORKSPACE/manifest.json" should include 'hello_tests::returns_greeting'
     The contents of file "$WORKSPACE/manifest.json" should include 'hello_tests::other_greeting'
     The contents of file "$WORKSPACE/plan.json" should include '"test_filters":["hello_tests::returns_greeting"]'
-    The contents of file "$WORKSPACE/.once/out/hello_tests/test/test_results.json" should include '"total":1'
-    The contents of file "$WORKSPACE/.once/out/hello_tests/test/test_results.json" should include 'hello_tests::returns_greeting'
-    The contents of file "$WORKSPACE/.once/out/hello_tests/test/test_results.json" should not include 'hello_tests::other_greeting'
+    The stdout should include '/test/batches/'
+    The contents of file "$WORKSPACE/.once/out/hello_tests/test/batches/"*/test_results.json should include '"total":1'
+    The contents of file "$WORKSPACE/.once/out/hello_tests/test/batches/"*/test_results.json should include 'hello_tests::returns_greeting'
+    The contents of file "$WORKSPACE/.once/out/hello_tests/test/batches/"*/test_results.json should not include 'hello_tests::other_greeting'
+    The contents of file "$WORKSPACE/complete-manifest.json" should include 'hello_tests::returns_greeting'
+    The contents of file "$WORKSPACE/complete-manifest.json" should include 'hello_tests::other_greeting'
   End
 
   It 'rejects an unknown Rust test unit while planning'
@@ -857,8 +935,9 @@ KOTLIN
     The contents of file "$WORKSPACE/manifest.json" should include 'once.test_manifest.v1'
     The contents of file "$WORKSPACE/manifest.json" should include '"case_filtering":"runner_args"'
     The stdout should include 'once.test_schedule.v1'
-    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingTests/test/test_results.json" should include 'GreetingTest.testMessage'
-    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingTests/test/test_results.json" should include '"total":1'
+    The stdout should include '/test/batches/'
+    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingTests/test/batches/"*/test_results.json should include 'GreetingTest.testMessage'
+    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingTests/test/batches/"*/test_results.json should include '"total":1'
   End
 
   It 'runs Android instrumentation test targets end to end'
@@ -888,8 +967,9 @@ KOTLIN
     The status should be success
     The stdout should include 'once.test_schedule.v1'
     The contents of file "$WORKSPACE/plan.json" should include '"test_filters":["libs/greeting/GreetingDeviceTests::dev.once.greeting.GreetingInstrumentedTest.useAppContext"]'
-    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingDeviceTests/test/native_results.txt" should include '-e class dev.once.greeting.GreetingInstrumentedTest#useAppContext'
-    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingDeviceTests/test/test_results.json" should include '"total":1'
+    The stdout should include '/test/batches/'
+    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingDeviceTests/test/batches/"*/native_results.txt should include '-e class dev.once.greeting.GreetingInstrumentedTest#useAppContext'
+    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingDeviceTests/test/batches/"*/test_results.json should include '"total":1'
   End
 
   It 'fails Android instrumentation when the device-side process crashes'

@@ -3,6 +3,7 @@ mod executor;
 mod process;
 mod report;
 mod results;
+mod validation;
 mod worker;
 
 use std::path::Path;
@@ -51,7 +52,7 @@ pub(crate) async fn execute(
         Some(graph) => graph,
         None => once_frontend::load_graph_workspace(workspace).context("loading graph")?,
     };
-    validate_plan_targets(workspace, &graph, &plan)?;
+    validation::validate_plan_targets(workspace, &graph, &plan)?;
     let store = TestTimingStore::open_workspace(workspace);
     let estimates = store.duration_estimates().await?;
     let executable = std::env::current_exe().context("resolving current once executable")?;
@@ -79,8 +80,9 @@ pub(crate) async fn execute(
         .iter()
         .any(|batch| batch.test_filters.is_empty())
     {
-        crate::commands::query::test_plan::plan_from_selection(
+        crate::commands::query::test_plan::plan_from_selection_with_graph(
             &workspace_path,
+            &graph,
             plan.selection.clone(),
         )?
     } else {
@@ -128,36 +130,6 @@ fn validate_workers(workers: Option<usize>) -> Result<()> {
         }
         if workers > MAX_TEST_WORKERS {
             anyhow::bail!("test worker count must not exceed {MAX_TEST_WORKERS}");
-        }
-    }
-    Ok(())
-}
-
-fn validate_plan_targets(
-    workspace: &Path,
-    graph: &[once_frontend::GraphTarget],
-    plan: &TestPlan,
-) -> Result<()> {
-    for batch in &plan.batches {
-        let target = graph
-            .iter()
-            .find(|target| target.label.id == batch.target)
-            .with_context(|| format!("no target matches `{}`", batch.target))?;
-        if !target
-            .capabilities
-            .iter()
-            .any(|capability| capability.name == "test")
-        {
-            anyhow::bail!(
-                "target `{}` does not expose the test capability",
-                batch.target
-            );
-        }
-        if !batch.test_filters.is_empty() {
-            let manifest = crate::commands::query::test_manifest_record(workspace, &batch.target)?;
-            for test_filter in &batch.test_filters {
-                crate::commands::query::validate_test_unit(&manifest, &batch.target, test_filter)?;
-            }
         }
     }
     Ok(())

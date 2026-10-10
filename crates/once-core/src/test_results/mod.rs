@@ -26,8 +26,11 @@ pub fn validate_test_results(value: &Value, expected_target: &str) -> Result<()>
     }
 
     let cases = array(root, "cases", "normalized test results")?;
+    let mut case_ids = BTreeSet::new();
     for (index, case) in cases.iter().enumerate() {
         validate_case(case).with_context(|| format!("validating normalized test case {index}"))?;
+        let id = case["id"].as_str().expect("validated test case id");
+        ensure!(case_ids.insert(id), "duplicate normalized test case `{id}`");
     }
 
     let artifacts = nested_object(root, "artifacts", "normalized test results")?;
@@ -60,6 +63,19 @@ pub fn validate_test_results_for_units(
         ensure!(
             case_ids.contains(expected_unit.as_str()),
             "normalized test results are missing requested test unit `{expected_unit}`"
+        );
+    }
+    if !expected_units.is_empty() {
+        let expected = expected_units
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        if let Some(id) = case_ids.difference(&expected).next() {
+            bail!("normalized test results contain unrequested test unit `{id}`; the runner must honor exact filtering");
+        }
+        ensure!(
+            value["summary"]["total"].as_u64() == Some(u64::try_from(cases.len())?),
+            "exact test result summary total must equal the observed case count"
         );
     }
     Ok(())

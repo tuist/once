@@ -1547,7 +1547,7 @@ def _android_instrumentation_test_info(ctx, attrs, command_argv, command_env, re
     }
 
 def _android_instrumentation_metadata_provider(ctx, attrs):
-    test_dir = ctx["build_dir"] + "/test"
+    test_dir = _test_output_dir(ctx)
     results = test_dir + "/test_results.json"
     log = test_dir + "/android-instrumentation-test.log"
     native_results = test_dir + "/native_results.txt"
@@ -1945,7 +1945,7 @@ def _android_local_test_impl(ctx):
     java_classes_dir, java_classes_hash = _android_compile_local_java(ctx, attrs, tools, java_sources, compile_jars)
     classes_dir, classes_hash = _android_compile_kotlin(ctx, attrs, tools, kotlin_sources, java_classes_dir, java_classes_hash, compile_jars)
     runner_classes, runner_hash = _android_compile_local_test_runner(ctx, tools)
-    test_dir = ctx["build_dir"] + "/test"
+    test_dir = _test_output_dir(ctx)
     results = test_dir + "/test_results.json"
     log = test_dir + "/android-local-test.log"
     native_results = test_dir + "/native_results.txt"
@@ -2015,7 +2015,7 @@ def _android_instrumentation_test_impl(ctx):
     java_tools = _android_host_java_tools(ctx, attrs)
     adb_tools = _android_adb_tools(ctx, attrs)
     runner_classes, runner_hash = _android_compile_instrumentation_runner(ctx, java_tools)
-    test_dir = ctx["build_dir"] + "/test"
+    test_dir = _test_output_dir(ctx)
     results = test_dir + "/test_results.json"
     log = test_dir + "/android-instrumentation-test.log"
     native_results = test_dir + "/native_results.txt"

@@ -1,5 +1,8 @@
 mod inputs;
+mod replay;
 mod selection;
+
+pub(crate) use replay::explicit_batch_plan;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -24,7 +27,7 @@ pub(crate) fn plan(
     changed_paths: &[String],
 ) -> Result<TestPlan> {
     let selection = selection::selection_report(workspace, graph, changed_paths)?;
-    plan_from_selection(workspace, selection)
+    plan_from_selection_with_graph(workspace, graph, selection)
 }
 
 pub(crate) fn default_plan(
@@ -33,7 +36,7 @@ pub(crate) fn default_plan(
     resolver_kinds: &BTreeSet<String>,
 ) -> Result<TestPlan> {
     let selection = selection::default_selection_report(graph, resolver_kinds);
-    plan_from_selection(workspace, selection)
+    plan_from_selection_with_graph(workspace, graph, selection)
 }
 
 pub(crate) fn explicit_plan(
@@ -65,8 +68,9 @@ pub(crate) fn explicit_plan(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    plan_from_selection(
+    plan_from_selection_with_graph(
         workspace,
+        graph,
         TestSelectionReport {
             schema: TEST_SELECTION_SCHEMA.to_string(),
             policy: TestSelectionPolicy {
@@ -114,8 +118,9 @@ pub(crate) fn explicit_unit_plan(
     )?)
 }
 
-pub(crate) fn plan_from_selection(
+pub(crate) fn plan_from_selection_with_graph(
     workspace: &Path,
+    graph: &[GraphTarget],
     selection: TestSelectionReport,
 ) -> Result<TestPlan> {
     let mut batches = Vec::new();
@@ -129,7 +134,7 @@ pub(crate) fn plan_from_selection(
             && manifest.case_filtering == "runner_args"
             && manifest.sharding.supported
             && !manifest.units.is_empty()
-            && super::test_manifest_is_current(workspace, &test.id, &manifest);
+            && super::test_manifest_is_current_with_graph(workspace, &test.id, &manifest, graph);
         if !sharded {
             batches.push(TestBatch::new(&test.id, Vec::new())?);
             continue;
@@ -257,6 +262,27 @@ mod tests {
         assert!(error
             .to_string()
             .contains("target `application` does not expose the test capability"));
+    }
+
+    #[test]
+    fn follow_up_plan_uses_scoped_graph_without_reloading_workspace() {
+        let workspace = TempDir::new().unwrap();
+        std::fs::write(workspace.path().join("once.toml"), "not valid TOML").unwrap();
+        write_manifest(
+            workspace.path(),
+            TestSharding {
+                supported: false,
+                granularity: "target".to_string(),
+            },
+            vec![unit("a", "one.py")],
+        );
+
+        let plan = plan_from_selection_with_graph(workspace.path(), &[], selection()).unwrap();
+
+        assert_eq!(
+            plan.batches,
+            [TestBatch::new("tests/unit", vec![]).unwrap()]
+        );
     }
 
     fn write_manifest(workspace: &Path, sharding: TestSharding, units: Vec<TestUnit>) {

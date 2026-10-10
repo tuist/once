@@ -400,9 +400,19 @@ pub enum Cmd {
             long = "test-unit",
             value_name = "UNIT",
             requires = "target",
-            conflicts("changed_paths", "all", "batch_test_units")
+            conflicts("changed_paths", "all", "batch_test_units", "test_batch")
         )]
         test_unit: Option<String>,
+
+        /// Run one batch ID from the current plan for this target.
+        /// Inspect it with `once query test-plan --target <target>`.
+        #[usage(
+            long = "test-batch",
+            value_name = "ID",
+            requires = "target",
+            conflicts("test_unit", "all", "changed_paths", "batch_test_units")
+        )]
+        test_batch: Option<String>,
 
         #[usage(
             long = "batch-test-unit",

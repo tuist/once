@@ -55,6 +55,63 @@ fn requires_every_requested_test_unit() {
 }
 
 #[test]
+fn rejects_duplicate_cases_even_when_the_last_observation_passes() {
+    let mut results = valid_results();
+    let passing = results["cases"][0].clone();
+    results["cases"][0]["status"] = json!("failed");
+    results["cases"].as_array_mut().unwrap().push(passing);
+
+    let error = validate_test_results(&results, "tests/example").unwrap_err();
+    assert!(error.to_string().contains("duplicate normalized test case"));
+}
+
+#[test]
+fn exact_selection_rejects_a_runner_that_ignores_its_filters() {
+    let mut results = valid_results();
+    let mut extra = results["cases"][0].clone();
+    extra["id"] = json!("tests/example::unrequested");
+    results["cases"].as_array_mut().unwrap().push(extra);
+    results["summary"]["total"] = json!(2);
+    results["summary"]["passed"] = json!(2);
+    validate_test_results_for_units(&results, "tests/example", &[]).unwrap();
+
+    let error = validate_test_results_for_units(
+        &results,
+        "tests/example",
+        &["tests/example::case-name".to_string()],
+    )
+    .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("unrequested test unit `tests/example::unrequested`"));
+}
+
+#[test]
+fn exact_selection_rejects_empty_results_and_inconsistent_totals() {
+    let mut results = valid_results();
+    results["cases"] = json!([]);
+    assert!(validate_test_results_for_units(
+        &results,
+        "tests/example",
+        &["tests/example::case-name".to_string()],
+    )
+    .unwrap_err()
+    .to_string()
+    .contains("missing requested test unit"));
+
+    let mut results = valid_results();
+    results["summary"]["total"] = json!(2);
+    assert!(validate_test_results_for_units(
+        &results,
+        "tests/example",
+        &["tests/example::case-name".to_string()],
+    )
+    .unwrap_err()
+    .to_string()
+    .contains("summary total"));
+}
+
+#[test]
 fn rejects_a_result_for_another_target() {
     let error = validate_test_results(&valid_results(), "tests/other").unwrap_err();
     assert!(error.to_string().contains("must be `tests/other`"));
