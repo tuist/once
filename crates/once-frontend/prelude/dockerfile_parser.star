@@ -214,6 +214,22 @@ def _dockerfile_env_pairs(argument):
         return pairs
     return [(words[0], argument.strip()[len(words[0]):].strip())]
 
+def _dockerfile_raw_env_values(argument):
+    if "\\" in argument:
+        return None
+    values = []
+    rest = argument.strip()
+    for _ in range(len(rest) + 1):
+        if not rest:
+            return values
+        word, rest = _dockerfile_raw_word(rest)
+        rest = rest.strip()
+        name, separator, value = word.partition("=")
+        if not separator or not name:
+            return None
+        values.append(value)
+    return None
+
 def _dockerfile_annotate(ctx, instructions):
     commands = _dockerfile_commands(instructions)
     supplied = dict(_dockerfile_attr(ctx, "build_args", {}))
@@ -232,9 +248,9 @@ def _dockerfile_annotate(ctx, instructions):
             parent = aliases.get(base.lower())
             if parent != None:
                 inherited = states[parent]
-                state = {"scope": dict(inherited["scope"]), "args": dict(inherited["args"]), "order": list(inherited["order"])}
+                state = {"scope": dict(inherited["scope"]), "args": dict(inherited["args"]), "order": list(inherited["order"]), "env": dict(inherited["env"])}
             else:
-                state = {"scope": {}, "args": {}, "order": []}
+                state = {"scope": {}, "args": {}, "order": [], "env": {}}
             states[str(stage)] = state
             aliases[str(stage)] = str(stage)
             if len(words) >= 3 and words[-2].upper() == "AS":
@@ -271,15 +287,31 @@ def _dockerfile_annotate(ctx, instructions):
             pairs = _dockerfile_env_pairs(instruction["argument"])
             argument = instruction["argument"]
             quoted = "\\" in argument or "'" in argument or '"' in argument
+            # Quotes in the `NAME=value` form follow shell rules, so each value
+            # resolves from its raw text, which keeps a single-quoted `$` literal.
+            raw_values = _dockerfile_raw_env_values(argument) if quoted and pairs and "=" in _dockerfile_words(argument)[0] else None
+            if raw_values != None and len(raw_values) != len(pairs):
+                raw_values = None
             before = dict(state["scope"])
-            for name, value in pairs or []:
-                resolved_value, resolved = _dockerfile_resolve(value, before)
+            for name, _ in pairs or []:
+                state["env"][name] = True
+            for index, (name, value) in enumerate(pairs or []):
+                if raw_values != None:
+                    resolved_value, resolved = _dockerfile_resolve_word(raw_values[index], before)
+                    quoted = False
+                else:
+                    resolved_value, resolved = _dockerfile_resolve(value, before)
                 if resolved and not quoted:
                     state["scope"][name] = resolved_value
                 else:
                     state["scope"].pop(name, None)
             if pairs == None:
                 state["scope"] = {}
+        # Each instruction is built after its stage's ARG lines are replayed,
+        # over the ENV values inherited from the previous snapshot, and Docker
+        # and the replayed step can disagree on which of the two a name takes.
+        # A name both define has no value the step is certain to see.
+        instruction["scope"] = {name: value for name, value in state["scope"].items() if state["args"].get(name) == None or (name not in state["env"] and state["args"][name] == value)}
         instruction["arg_lines"] = ["ARG " + name + ("=" + _dockerfile_quote_arg(state["args"][name]) if state["args"][name] != None else "") for name in state["order"]]
     return instructions
 

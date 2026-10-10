@@ -84,6 +84,19 @@ def _dockerfile_copy_sources(instruction):
     inner = body[1:].strip() if body.startswith("[") else ""
     paths = json_decode(body) if body.startswith("[") and (inner.startswith('"') or inner == "]") else _dockerfile_words(body)
     sources = paths[:-1]
+    if any(["$" in source for source in sources]):
+        # Docker expands the stage's ARG and ENV values in sources. When every
+        # reference resolves, the sources are as precise as literal paths; an
+        # escape, a single quote, or an unknown variable keeps the full context.
+        if "\\" in body or "'" in body:
+            return None
+        resolved = []
+        for source in sources:
+            value, ok = _dockerfile_resolve(source, instruction.get("scope") or {})
+            if not ok:
+                return None
+            resolved.append(value)
+        sources = resolved
     if any(["$" in source or "*" in source or "?" in source or "[" in source for source in sources]):
         return None
     normalized = []

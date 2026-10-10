@@ -916,3 +916,63 @@ result = repr(_dockerfile_image_impl(ctx))
         from.argv
     );
 }
+
+#[test]
+fn dockerfile_copy_sources_resolve_the_stage_arguments_and_environment() {
+    let (store, _) = analyze(
+        "FROM scratch\nENV NAME=\"early\"\nARG SUFFIX=txt\nCOPY ${NAME}.$SUFFIX /early\nCOPY [\"$NAME.txt\", \"/json\"]\n",
+        "build",
+    );
+    for identifier in ["image:4:copy", "image:5:copy"] {
+        let action = action_by_identifier(&store, identifier);
+        assert!(
+            action.inputs.iter().any(|path| path == "early.txt"),
+            "{identifier}"
+        );
+        assert!(
+            !action.inputs.iter().any(|path| path == "late.txt"),
+            "{identifier}"
+        );
+    }
+}
+
+#[test]
+fn dockerfile_copy_sources_keep_the_full_context_when_a_variable_cannot_be_resolved() {
+    let (store, _) = analyze(
+        "FROM scratch\nARG UNSET\nENV LITERAL='$NAME' NAME=early\nCOPY $UNSET.txt /unset\nCOPY '$NAME.txt' /quoted\nCOPY $LITERAL.txt /literal\n",
+        "build",
+    );
+    for identifier in ["image:4:copy", "image:5:copy", "image:6:copy"] {
+        let action = action_by_identifier(&store, identifier);
+        assert!(
+            action.inputs.iter().any(|path| path == "early.txt"),
+            "{identifier}"
+        );
+        assert!(
+            action.inputs.iter().any(|path| path == "late.txt"),
+            "{identifier}"
+        );
+    }
+}
+
+#[test]
+fn dockerfile_copy_sources_keep_the_full_context_when_an_argument_and_environment_disagree() {
+    let (store, _) = analyze(
+        "FROM scratch\nARG NAME=late\nENV NAME=early\nCOPY $NAME.txt /picked\nENV OTHER=early\nARG OTHER=late\nCOPY $OTHER.txt /other\nARG ONLY=early\nCOPY $ONLY.txt /only\n",
+        "build",
+    );
+    for identifier in ["image:4:copy", "image:7:copy"] {
+        let ambiguous = action_by_identifier(&store, identifier);
+        assert!(
+            ambiguous.inputs.iter().any(|path| path == "early.txt"),
+            "{identifier}"
+        );
+        assert!(
+            ambiguous.inputs.iter().any(|path| path == "late.txt"),
+            "{identifier}"
+        );
+    }
+    let argument = action_by_identifier(&store, "image:9:copy");
+    assert!(argument.inputs.iter().any(|path| path == "early.txt"));
+    assert!(!argument.inputs.iter().any(|path| path == "late.txt"));
+}
