@@ -93,7 +93,7 @@ fn build_command_surface(
             .cmd
             .aliases
             .iter()
-            .filter(|alias| !command.hidden_aliases.contains(alias))
+            .filter(|alias| !command.hidden_aliases().contains(alias))
             .map(ToString::to_string)
             .collect::<Vec<_>>(),
         args,
@@ -148,7 +148,7 @@ fn flag_syntax(flag: &FlagMeta<'_>) -> String {
     if flag.flag.takes_value {
         let value = flag
             .value_name
-            .or_else(|| flag.value_names.first().copied())
+            .or_else(|| flag.value_names().first().copied())
             .unwrap_or("VALUE");
         syntax.push(' ');
         syntax.push('<');
