@@ -784,3 +784,34 @@ async fn capability_runs_are_salted_by_dependency_action_digests() {
 
     assert_ne!(first.action_digest, second.action_digest);
 }
+
+#[tokio::test]
+async fn a_reused_outcome_needs_its_absent_intermediate_outputs_in_the_local_cache() {
+    let workspace = tempfile::tempdir().unwrap();
+    let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+    let snapshot = ".once/out/image/instructions/2/image";
+    let digest = Digest::of_bytes(b"snapshot");
+    let outcome = BuildOutcome {
+        provider: Arc::new(serde_json::json!({})),
+        action_digest: Digest::of_bytes(b"action"),
+        input_digest: None,
+        input_fingerprint: None,
+        available_inputs: BTreeMap::new(),
+        outputs: Vec::new(),
+        cache_tag: "hit",
+        cache_state: once_core::EvidenceCacheState::Hit,
+        result: ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
+            outputs: BTreeMap::from([(snapshot.to_string(), digest)]),
+        },
+        cached_results: Vec::new(),
+        intermediate_outputs: BTreeSet::from([snapshot.to_string()]),
+        per_action_outcomes: Vec::new(),
+    };
+
+    assert!(!intermediate_outputs_cached(&outcome, workspace.path(), &cache).await);
+    assert_eq!(cache.put_blob(b"snapshot").await.unwrap(), digest);
+    assert!(intermediate_outputs_cached(&outcome, workspace.path(), &cache).await);
+}

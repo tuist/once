@@ -50,7 +50,7 @@ struct DeclaredActionRun<'a> {
     input_action_digests: &'a [(String, Digest)],
     available_inputs: &'a BTreeMap<String, AvailableInput>,
     source_digest_cache: Option<&'a SourceDigestCache>,
-    prior_cached_results: &'a [ActionResult],
+    prior_cached_results: PendingResults<'a>,
     record_success_evidence: bool,
     sandbox: SandboxMode,
     resources: &'a Arc<ResourcePool>,
@@ -85,6 +85,10 @@ struct DeclaredActionsState {
     outputs: Vec<String>,
     result: ActionResult,
     cached_results: Vec<ActionResult>,
+    /// Cache hits whose outputs are intermediate: restored only before an
+    /// action that may read them without declaring them runs.
+    pending_intermediate: Vec<ActionResult>,
+    intermediate_outputs: BTreeSet<String>,
     evidence_records: Vec<EvidenceRecord>,
     per_action_outcomes: Vec<PerActionOutcome>,
 }
@@ -106,6 +110,8 @@ impl DeclaredActionsState {
                 outputs: BTreeMap::new(),
             },
             cached_results: Vec::new(),
+            pending_intermediate: Vec::new(),
+            intermediate_outputs: BTreeSet::new(),
             evidence_records: Vec::new(),
             per_action_outcomes: Vec::new(),
         }
@@ -130,7 +136,13 @@ impl DeclaredActionsState {
         outcome: DeclaredActionOutcome,
         streams: bool,
         per_action: Option<PerActionOutcome>,
+        policy: &CachedResultPolicy,
     ) {
+        let restored = if outcome.cache_state == EvidenceCacheState::Hit {
+            Vec::new()
+        } else {
+            self.restored_before(policy)
+        };
         self.per_action_outcomes.extend(per_action);
         self.prior_actions_digest = Some(extend_prior_actions_digest(
             self.prior_actions_digest,
@@ -172,9 +184,49 @@ impl DeclaredActionsState {
                 .iter()
                 .map(|(path, digest)| (path.clone(), *digest)),
         );
-        track_cached_result(&mut self.cached_results, &outcome);
+        for path in outcome.result.outputs.keys() {
+            if policy.intermediate {
+                self.intermediate_outputs.insert(path.clone());
+            } else {
+                self.intermediate_outputs.remove(path);
+            }
+        }
+        // What was restored before the action ran is on disk now, possibly
+        // with the action's changes inside it, so it must not be restored
+        // again for a later reader.
+        for path in restored {
+            if let Some(input) = self.available_inputs.get_mut(&path) {
+                input.materialized = true;
+            }
+        }
+        track_cached_result(&mut self.cached_results, &outcome, policy, false);
+        track_cached_result(&mut self.pending_intermediate, &outcome, policy, true);
         self.input_fingerprints.push(outcome.input_fingerprint);
         self.evidence_records.extend(outcome.evidence_record);
+    }
+
+    /// The pending results the scheduler restores to disk before running an
+    /// action under `policy`.
+    pub(super) fn pending(&self) -> PendingResults<'_> {
+        PendingResults {
+            restored_at_end: &self.cached_results,
+            intermediate: &self.pending_intermediate,
+        }
+    }
+
+    /// Paths of the pending outputs an action under `policy` found restored
+    /// before it ran.
+    fn restored_before(&self, policy: &CachedResultPolicy) -> Vec<String> {
+        let pending = self.pending();
+        let results = if policy.restores_prior {
+            pending.all().cloned().collect::<Vec<_>>()
+        } else {
+            overlapping_results(pending.all(), &policy.touched)
+        };
+        results
+            .into_iter()
+            .flat_map(|result| result.outputs.into_keys())
+            .collect()
     }
 
     fn take_evidence_records(&mut self) -> Vec<EvidenceRecord> {
@@ -200,6 +252,7 @@ impl DeclaredActionsState {
             cache_state,
             result: self.result,
             cached_results: self.cached_results,
+            intermediate_outputs: self.intermediate_outputs,
             per_action_outcomes: self.per_action_outcomes,
         }
     }
@@ -210,7 +263,7 @@ struct DeclaredActionContext<'a> {
     cache: &'a CacheProvider,
     source_digest_cache: Option<&'a SourceDigestCache>,
     available_inputs: &'a BTreeMap<String, AvailableInput>,
-    prior_cached_results: &'a [ActionResult],
+    prior_cached_results: PendingResults<'a>,
     target_id: &'a str,
     capability: &'a str,
     index: usize,
@@ -434,14 +487,172 @@ fn extend_prior_actions_digest(
     builder.finish()
 }
 
-fn track_cached_result(cached_results: &mut Vec<ActionResult>, outcome: &DeclaredActionOutcome) {
-    if outcome.cache_state == EvidenceCacheState::Hit {
-        if !outcome.result.outputs.is_empty() {
-            cached_results.push(outcome.result.clone());
-        }
-        return;
+/// How an action's result affects the cached outputs still waiting to be put on
+/// disk when the target finishes.
+pub(super) struct CachedResultPolicy {
+    /// The action's outputs are only read by later actions of the target.
+    pub(super) intermediate: bool,
+    /// The action restored every waiting output before it ran, if it ran.
+    pub(super) restores_prior: bool,
+    /// Paths the action writes, cleans, removes, or creates when it runs.
+    pub(super) touched: Vec<TouchedPath>,
+}
+
+/// Cache hits whose outputs aren't on disk yet.
+#[derive(Clone, Copy, Default)]
+pub(super) struct PendingResults<'a> {
+    /// Restored when the target finishes.
+    pub(super) restored_at_end: &'a [ActionResult],
+    /// Intermediate outputs, restored only before an action that may read
+    /// them without declaring them.
+    pub(super) intermediate: &'a [ActionResult],
+}
+
+impl<'a> PendingResults<'a> {
+    fn all(self) -> impl Iterator<Item = &'a ActionResult> {
+        self.restored_at_end.iter().chain(self.intermediate)
     }
-    cached_results.clear();
+}
+
+/// A path an action changes when it runs.
+pub(super) enum TouchedPath {
+    /// Written, cleaned, or removed: whatever was at or under it is replaced.
+    Replaced(String),
+    /// Created as a directory: what is already under it stays.
+    Created(String),
+}
+
+impl TouchedPath {
+    /// Whether restoring `pending` after the action ran would undo some of
+    /// what the action did.
+    fn conflicts_with(&self, pending: &str) -> bool {
+        match self {
+            Self::Replaced(path) => paths_overlap(pending, path),
+            Self::Created(path) => pending == path || contains(pending, path),
+        }
+    }
+}
+
+impl CachedResultPolicy {
+    pub(super) fn for_action(declared: &DeclaredAction, batch_size: usize) -> Self {
+        Self {
+            intermediate: declared.intermediate,
+            restores_prior: batch_size == 1 && declared.depends_on_prior_actions,
+            touched: touched_paths(declared),
+        }
+    }
+}
+
+/// Paths an action writes, cleans, removes, or creates when it runs.
+fn touched_paths(declared: &DeclaredAction) -> Vec<TouchedPath> {
+    let mut paths = declared
+        .outputs
+        .iter()
+        .chain(&declared.clean_paths)
+        .chain(&declared.stdout)
+        .chain(&declared.stderr)
+        .chain(declared.arg_files.iter().map(|file| &file.path))
+        .cloned()
+        .map(TouchedPath::Replaced)
+        .chain(
+            declared
+                .create_dirs
+                .iter()
+                .cloned()
+                .map(TouchedPath::Created),
+        )
+        .collect::<Vec<_>>();
+    match &declared.operation {
+        Some(DeclaredActionOperation::PreparePath {
+            path,
+            mode: DeclaredPreparePathMode::Remove,
+        }) => paths.push(TouchedPath::Replaced(path.clone())),
+        Some(DeclaredActionOperation::PreparePath {
+            path,
+            mode: DeclaredPreparePathMode::Directory,
+        }) => paths.push(TouchedPath::Created(path.clone())),
+        _ => {}
+    }
+    paths
+}
+
+/// Whether `outer` is a directory above `inner`.
+fn contains(outer: &str, inner: &str) -> bool {
+    inner
+        .strip_prefix(outer)
+        .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// Whether one path is the other or contains it.
+fn paths_overlap(left: &str, right: &str) -> bool {
+    left == right || contains(left, right) || contains(right, left)
+}
+
+/// The waiting outputs that would undo part of what the action does if they
+/// were restored after it ran.
+fn overlapping_results<'a>(
+    results: impl Iterator<Item = &'a ActionResult>,
+    touched: &[TouchedPath],
+) -> Vec<ActionResult> {
+    results
+        .filter_map(|result| {
+            let outputs = result
+                .outputs
+                .iter()
+                .filter(|(path, _)| touched.iter().any(|touched| touched.conflicts_with(path)))
+                .map(|(path, digest)| (path.clone(), *digest))
+                .collect::<BTreeMap<_, _>>();
+            (!outputs.is_empty()).then_some(ActionResult {
+                exit_code: 0,
+                stdout: None,
+                stderr: None,
+                outputs,
+            })
+        })
+        .collect()
+}
+
+/// Keep one list of pending cache hits current after `outcome`: the outputs
+/// restored when the target finishes, or, with `intermediate`, the ones
+/// restored only for an action that may read them undeclared.
+fn track_cached_result(
+    cached_results: &mut Vec<ActionResult>,
+    outcome: &DeclaredActionOutcome,
+    policy: &CachedResultPolicy,
+    intermediate: bool,
+) {
+    if outcome.cache_state != EvidenceCacheState::Hit {
+        if policy.restores_prior {
+            cached_results.clear();
+            return;
+        }
+        // The action restored the waiting outputs it overlaps before it ran
+        // and then changed them, so they must not be restored again over
+        // what it left.
+        for result in cached_results.iter_mut() {
+            result.outputs.retain(|path, _| {
+                !policy
+                    .touched
+                    .iter()
+                    .any(|touched| touched.conflicts_with(path))
+            });
+        }
+    }
+    // A later output replaces an earlier one at the same path, so restoring
+    // the earlier result when the target finishes would put stale bytes back.
+    for result in cached_results.iter_mut() {
+        output_state::prune_replaced_descendants(&mut result.outputs, &outcome.result.outputs);
+        result
+            .outputs
+            .retain(|path, _| !outcome.result.outputs.contains_key(path));
+    }
+    cached_results.retain(|result| !result.outputs.is_empty());
+    if outcome.cache_state == EvidenceCacheState::Hit
+        && policy.intermediate == intermediate
+        && !outcome.result.outputs.is_empty()
+    {
+        cached_results.push(outcome.result.clone());
+    }
 }
 
 fn deduplicate_outputs(outputs: &mut Vec<String>) {
@@ -684,10 +895,11 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
     let outcome = if cacheable {
         run_cacheable_declared_action(context, action, &declared).await
     } else {
-        materialize_prior_cached_results(
+        materialize_prior_results_for(
             workspace,
             cache,
             prior_cached_results,
+            &declared,
             source_digest_cache,
         )
         .await?;
@@ -948,10 +1160,11 @@ async fn execute_declared_cache_miss(
         .resources
         .acquire(action.resource_request().clone())
         .await;
-    materialize_prior_cached_results(
+    materialize_prior_results_for(
         context.workspace,
         context.cache,
         context.prior_cached_results,
+        declared,
         context.source_digest_cache,
     )
     .await
@@ -1020,6 +1233,28 @@ async fn execute_declared_cache_miss(
         result,
         cache: once_core::CacheState::Miss,
     })
+}
+
+/// Restore the cached outputs still waiting to be put on disk that the action
+/// can observe before it runs.
+///
+/// An action that depends on the ones before it may read any of them. One
+/// that doesn't declares what it reads, which `materialize_available_inputs`
+/// restores, so only the outputs it is about to write over, clean, or remove
+/// come back first, leaving the rest for the target's end.
+pub(super) async fn materialize_prior_results_for(
+    workspace: &Path,
+    cache: &CacheProvider,
+    pending: PendingResults<'_>,
+    declared: &DeclaredAction,
+    source_digest_cache: Option<&SourceDigestCache>,
+) -> Result<()> {
+    let results = if declared.depends_on_prior_actions {
+        pending.all().cloned().collect::<Vec<_>>()
+    } else {
+        overlapping_results(pending.all(), &touched_paths(declared))
+    };
+    materialize_prior_cached_results(workspace, cache, &results, source_digest_cache).await
 }
 
 async fn materialize_prior_cached_results(
@@ -2539,6 +2774,7 @@ mod tests {
             cacheable: true,
             inherit_parent_env: false,
             depends_on_prior_actions: true,
+            intermediate: false,
             toolchain_identity: None,
             identifier: None,
             display_name: None,
@@ -2600,6 +2836,7 @@ mod tests {
             cacheable: true,
             inherit_parent_env: false,
             depends_on_prior_actions: true,
+            intermediate: false,
             toolchain_identity: None,
             identifier: None,
             display_name: None,
@@ -2702,6 +2939,7 @@ mod tests {
             cacheable: true,
             inherit_parent_env: false,
             depends_on_prior_actions: true,
+            intermediate: false,
             toolchain_identity: None,
             identifier: None,
             display_name: None,
@@ -3215,6 +3453,7 @@ mod tests {
                 cacheable: true,
                 inherit_parent_env: false,
                 depends_on_prior_actions: true,
+                intermediate: false,
                 toolchain_identity: None,
                 identifier: Some("one".to_string()),
                 history: None,
@@ -3377,6 +3616,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
                 cacheable: true,
                 inherit_parent_env: false,
                 depends_on_prior_actions: true,
+                intermediate: false,
                 toolchain_identity: None,
                 identifier: Some("cached".to_string()),
                 history: None,
@@ -3838,6 +4078,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             cacheable: false,
             inherit_parent_env: false,
             depends_on_prior_actions: true,
+            intermediate: false,
             toolchain_identity: None,
             identifier: Some(name.to_string()),
             display_name: None,
@@ -3942,6 +4183,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
                     cacheable: true,
                     inherit_parent_env: false,
                     depends_on_prior_actions: true,
+                    intermediate: false,
                     toolchain_identity: None,
                     identifier: Some("first".to_string()),
                     history: None,
@@ -3972,6 +4214,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
                     cacheable: true,
                     inherit_parent_env: false,
                     depends_on_prior_actions: false,
+                    intermediate: false,
                     toolchain_identity: None,
                     identifier: Some("second".to_string()),
                     history: None,
@@ -4101,6 +4344,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             cacheable: true,
             inherit_parent_env: false,
             depends_on_prior_actions: true,
+            intermediate: false,
             history: None,
             presentation: None,
             toolchain_identity: Some("id-1".to_string()),
@@ -4172,6 +4416,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             cacheable: true,
             inherit_parent_env: false,
             depends_on_prior_actions: true,
+            intermediate: false,
             toolchain_identity: Some("toolchain-secret".to_string()),
             identifier: Some("compile".to_string()),
             display_name: None,
@@ -4297,6 +4542,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             cacheable: true,
             inherit_parent_env: false,
             depends_on_prior_actions: true,
+            intermediate: false,
             toolchain_identity: None,
             identifier: None,
             display_name: None,
@@ -4344,6 +4590,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             cacheable: true,
             inherit_parent_env: false,
             depends_on_prior_actions: true,
+            intermediate: false,
             toolchain_identity: None,
             identifier: None,
             display_name: None,
@@ -4385,6 +4632,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             cacheable: true,
             inherit_parent_env: false,
             depends_on_prior_actions: true,
+            intermediate: false,
             toolchain_identity: None,
             identifier: None,
             display_name: None,
@@ -4432,6 +4680,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             cacheable: true,
             inherit_parent_env: false,
             depends_on_prior_actions: true,
+            intermediate: false,
             toolchain_identity: None,
             identifier: None,
             display_name: None,
@@ -4494,6 +4743,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             cacheable: true,
             inherit_parent_env: false,
             depends_on_prior_actions: true,
+            intermediate: false,
             toolchain_identity: None,
             identifier: None,
             display_name: None,
@@ -4567,6 +4817,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             cacheable: true,
             inherit_parent_env: false,
             depends_on_prior_actions: true,
+            intermediate: false,
             toolchain_identity: None,
             identifier: None,
             display_name: None,
@@ -4864,5 +5115,403 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
             once_core::RunEvent::ActionCompleted { action_index: 0, identifier: Some(id), .. }
                 if id == "copy_path:.once/out/copied.txt"
         ));
+    }
+
+    fn shell_action(
+        identifier: &str,
+        script: &str,
+        inputs: &[&str],
+        outputs: &[&str],
+        intermediate: bool,
+    ) -> DeclaredAction {
+        DeclaredAction {
+            operation: None,
+            argv: vec!["/bin/sh".to_string(), "-c".to_string(), script.to_string()],
+            arg_files: Vec::new(),
+            inputs: inputs.iter().map(ToString::to_string).collect(),
+            outputs: outputs.iter().map(ToString::to_string).collect(),
+            stdout: None,
+            stderr: None,
+            clean_paths: Vec::new(),
+            create_dirs: vec![".once/out".to_string()],
+            cwd: None,
+            env: BTreeMap::new(),
+            sandbox: None,
+            network: None,
+            success_exit_codes: vec![0],
+            cacheable: true,
+            inherit_parent_env: false,
+            depends_on_prior_actions: false,
+            intermediate,
+            toolchain_identity: None,
+            identifier: Some(identifier.to_string()),
+            history: None,
+            presentation: None,
+            display_name: None,
+            source_files: Vec::new(),
+        }
+    }
+
+    /// A snapshot chain: `step` writes an intermediate file and `final`
+    /// derives the target's output from it.
+    fn intermediate_chain_analysis(final_suffix: &str) -> AnalysisResult {
+        AnalysisResult {
+            actions: vec![
+                shell_action(
+                    "step",
+                    "printf step > .once/out/step.txt",
+                    &[],
+                    &[".once/out/step.txt"],
+                    true,
+                ),
+                shell_action(
+                    "final",
+                    &format!(
+                        "{{ cat .once/out/step.txt; printf %s {final_suffix}; }} > .once/out/final.txt"
+                    ),
+                    &[".once/out/step.txt"],
+                    &[".once/out/final.txt"],
+                    false,
+                ),
+            ],
+            provider: serde_json::json!({}),
+            declared_outputs: Vec::new(),
+            observations: once_frontend::analysis::AnalysisObservations::default(),
+        }
+    }
+
+    async fn run_chain(
+        workspace: &Path,
+        cache: &CacheProvider,
+        analysis: AnalysisResult,
+    ) -> BuildOutcome {
+        run_declared_actions(
+            None,
+            workspace,
+            cache,
+            module_digest(),
+            &cached_test_target(),
+            "build",
+            analysis,
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            Some(&SourceDigestCache::open(workspace)),
+            SandboxMode::default(),
+            test_resources(),
+            None,
+            None,
+            test_workers(),
+        )
+        .await
+        .unwrap()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cached_intermediate_outputs_are_not_restored_when_the_target_finishes() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        run_chain(workspace.path(), &cache, intermediate_chain_analysis("-a")).await;
+        std::fs::remove_dir_all(workspace.path().join(".once/out")).unwrap();
+
+        let second = run_chain(workspace.path(), &cache, intermediate_chain_analysis("-a")).await;
+
+        assert_eq!(second.cache_tag, "hit");
+        assert_eq!(
+            second
+                .cached_results
+                .iter()
+                .flat_map(|result| result.outputs.keys())
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            [".once/out/final.txt"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_action_that_runs_restores_only_the_cached_outputs_it_reads() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let mut analysis = intermediate_chain_analysis("-a");
+        analysis.actions.insert(
+            0,
+            shell_action(
+                "unrelated",
+                "printf unrelated > .once/out/unrelated.txt",
+                &[],
+                &[".once/out/unrelated.txt"],
+                false,
+            ),
+        );
+        run_chain(workspace.path(), &cache, analysis.clone()).await;
+        std::fs::remove_dir_all(workspace.path().join(".once/out")).unwrap();
+
+        analysis.actions[2] = intermediate_chain_analysis("-b").actions.remove(1);
+        let second = run_chain(workspace.path(), &cache, analysis).await;
+
+        assert_eq!(second.cache_tag, "miss");
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join(".once/out/final.txt")).unwrap(),
+            "step-b"
+        );
+        assert!(!workspace.path().join(".once/out/unrelated.txt").exists());
+        assert_eq!(
+            second
+                .cached_results
+                .iter()
+                .flat_map(|result| result.outputs.keys())
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            [".once/out/unrelated.txt"],
+            "the unrelated output still waits to be restored when the target finishes"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_cached_output_an_independent_action_replaces_is_not_restored_over_it() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let analysis = |second: &str| AnalysisResult {
+            actions: vec![
+                shell_action(
+                    "first",
+                    "printf first > .once/out/shared.txt",
+                    &[],
+                    &[".once/out/shared.txt"],
+                    false,
+                ),
+                shell_action(
+                    "second",
+                    &format!("printf {second} > .once/out/shared.txt"),
+                    &[],
+                    &[".once/out/shared.txt"],
+                    false,
+                ),
+            ],
+            ..intermediate_chain_analysis("-a")
+        };
+        run_chain(workspace.path(), &cache, analysis("second")).await;
+
+        let rerun = run_chain(workspace.path(), &cache, analysis("changed")).await;
+
+        assert!(rerun
+            .cached_results
+            .iter()
+            .all(|result| !result.outputs.contains_key(".once/out/shared.txt")));
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join(".once/out/shared.txt")).unwrap(),
+            "changed"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_cached_directory_is_restored_before_an_independent_action_writes_into_it() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let analysis = |child: &str| AnalysisResult {
+            actions: vec![
+                shell_action(
+                    "tree",
+                    "mkdir -p .once/out/tree && printf kept > .once/out/tree/kept.txt",
+                    &[],
+                    &[".once/out/tree"],
+                    false,
+                ),
+                shell_action(
+                    "child",
+                    &format!("printf {child} > .once/out/tree/new.txt"),
+                    &[],
+                    &[".once/out/tree/new.txt"],
+                    false,
+                ),
+            ],
+            ..intermediate_chain_analysis("-a")
+        };
+        run_chain(workspace.path(), &cache, analysis("first")).await;
+        std::fs::remove_dir_all(workspace.path().join(".once/out")).unwrap();
+
+        let rerun = run_chain(workspace.path(), &cache, analysis("second")).await;
+
+        let tree = workspace.path().join(".once/out/tree");
+        assert_eq!(
+            std::fs::read_to_string(tree.join("kept.txt")).unwrap(),
+            "kept"
+        );
+        assert_eq!(
+            std::fs::read_to_string(tree.join("new.txt")).unwrap(),
+            "second"
+        );
+        assert!(rerun.cached_results.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_cached_output_a_later_action_removes_stays_removed() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let mut remove = shell_action("remove", "", &[], &[], false);
+        remove.argv = Vec::new();
+        remove.cacheable = false;
+        remove.operation = Some(DeclaredActionOperation::PreparePath {
+            path: ".once/out/file.txt".to_string(),
+            mode: DeclaredPreparePathMode::Remove,
+        });
+        let analysis = AnalysisResult {
+            actions: vec![
+                shell_action(
+                    "file",
+                    "printf file > .once/out/file.txt",
+                    &[],
+                    &[".once/out/file.txt"],
+                    false,
+                ),
+                remove,
+            ],
+            ..intermediate_chain_analysis("-a")
+        };
+        run_chain(workspace.path(), &cache, analysis.clone()).await;
+
+        let rerun = run_chain(workspace.path(), &cache, analysis).await;
+
+        assert!(!workspace.path().join(".once/out/file.txt").exists());
+        assert!(rerun.cached_results.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn intermediate_outputs_are_recorded_with_the_outcome() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+
+        let outcome = run_chain(workspace.path(), &cache, intermediate_chain_analysis("-a")).await;
+
+        assert_eq!(
+            outcome
+                .intermediate_outputs
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            [".once/out/step.txt"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_batch_writing_into_a_cached_directory_keeps_it_for_later_readers() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let analysis = |child: &str| AnalysisResult {
+            actions: vec![
+                shell_action(
+                    "tree",
+                    "mkdir -p .once/out/tree && printf kept > .once/out/tree/kept.txt",
+                    &[],
+                    &[".once/out/tree"],
+                    false,
+                ),
+                shell_action(
+                    "child",
+                    &format!("printf {child} > .once/out/tree/new.txt"),
+                    &[],
+                    &[".once/out/tree/new.txt"],
+                    false,
+                ),
+                shell_action(
+                    "unrelated",
+                    "printf unrelated > .once/out/unrelated.txt",
+                    &[],
+                    &[".once/out/unrelated.txt"],
+                    false,
+                ),
+                shell_action(
+                    "listing",
+                    "ls .once/out/tree > .once/out/listing.txt",
+                    &[".once/out/tree"],
+                    &[".once/out/listing.txt"],
+                    false,
+                ),
+            ],
+            ..intermediate_chain_analysis("-a")
+        };
+        run_chain(workspace.path(), &cache, analysis("first")).await;
+        std::fs::remove_dir_all(workspace.path().join(".once/out")).unwrap();
+
+        let mut changed = analysis("second");
+        changed.actions[3].argv[2].push_str(" && true");
+        run_chain(workspace.path(), &cache, changed).await;
+
+        let tree = workspace.path().join(".once/out/tree");
+        assert_eq!(
+            std::fs::read_to_string(tree.join("kept.txt")).unwrap(),
+            "kept"
+        );
+        assert_eq!(
+            std::fs::read_to_string(tree.join("new.txt")).unwrap(),
+            "second"
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join(".once/out/listing.txt")).unwrap(),
+            "kept.txt\nnew.txt\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_ordered_action_finds_the_cached_intermediate_outputs_it_reads_undeclared() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let analysis = |suffix: &str| {
+            let mut analysis = intermediate_chain_analysis(suffix);
+            analysis.actions[1].inputs = Vec::new();
+            analysis.actions[1].depends_on_prior_actions = true;
+            analysis
+        };
+        run_chain(workspace.path(), &cache, analysis("-a")).await;
+        std::fs::remove_dir_all(workspace.path().join(".once/out")).unwrap();
+
+        run_chain(workspace.path(), &cache, analysis("-b")).await;
+
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join(".once/out/final.txt")).unwrap(),
+            "step-b"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_cached_output_a_later_action_redirects_into_is_not_restored_over_it() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let analysis = |message: &str| {
+            let mut redirect =
+                shell_action("redirect", &format!("printf {message}"), &[], &[], false);
+            redirect.stdout = Some(".once/out/shared.log".to_string());
+            AnalysisResult {
+                actions: vec![
+                    shell_action(
+                        "first",
+                        "printf first > .once/out/shared.log",
+                        &[],
+                        &[".once/out/shared.log"],
+                        false,
+                    ),
+                    redirect,
+                ],
+                ..intermediate_chain_analysis("-a")
+            }
+        };
+        run_chain(workspace.path(), &cache, analysis("second")).await;
+
+        let rerun = run_chain(workspace.path(), &cache, analysis("changed")).await;
+
+        assert!(rerun.cached_results.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join(".once/out/shared.log")).unwrap(),
+            "changed"
+        );
     }
 }
