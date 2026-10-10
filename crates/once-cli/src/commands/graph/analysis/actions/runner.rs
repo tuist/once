@@ -145,13 +145,20 @@ pub(in crate::commands::graph::analysis) fn run_declared_actions<'a>(
                             let worker = workers.acquire().await;
                             let start_at = crate::bus_events::now_ms();
                             let started = std::time::Instant::now();
+                            // Once's own file plumbing still runs, but isn't
+                            // reported as an action or a cache hit unless it
+                            // fails, so a failure still names what broke.
+                            let reported = !declared
+                                .operation
+                                .as_ref()
+                                .is_some_and(DeclaredActionOperation::is_bookkeeping);
                             let identifier = declared.identifier.clone();
                             let display_name = declared.display_name.clone();
                             let source_files = declared.source_files.clone();
                             let presentation = declared.presentation.clone();
                             let history = declared.history.clone();
                             let action_index = u32::try_from(index + offset).unwrap_or(u32::MAX);
-                            if let Some(bus) = event_bus {
+                            if let Some(bus) = event_bus.filter(|_| reported) {
                                 crate::bus_events::action_attempt_started(
                                     bus,
                                     &target.label.id,
@@ -201,7 +208,17 @@ pub(in crate::commands::graph::analysis) fn run_declared_actions<'a>(
                                             )
                                         }),
                                 };
-                            if let Some(bus) = event_bus {
+                            let failed = outcome.is_err() || exit_code != 0;
+                            if let Some(bus) = event_bus.filter(|_| reported || failed) {
+                                if !reported {
+                                    crate::bus_events::action_attempt_started(
+                                        bus,
+                                        &target.label.id,
+                                        capability,
+                                        action_index,
+                                        worker.worker_id(),
+                                    );
+                                }
                                 crate::bus_events::action_attempt_completed(
                                     bus,
                                     &target.label.id,
@@ -233,7 +250,7 @@ pub(in crate::commands::graph::analysis) fn run_declared_actions<'a>(
                                 );
                             }
                             outcome.map(|outcome| {
-                                let retained = super::PerActionOutcome {
+                                let retained = reported.then(|| super::PerActionOutcome {
                                     action_digest: outcome.digest,
                                     identifier,
                                     display_name,
@@ -244,7 +261,7 @@ pub(in crate::commands::graph::analysis) fn run_declared_actions<'a>(
                                     cache_state: outcome.cache_state,
                                     duration_ms: i64::try_from(duration_ms).unwrap_or(i64::MAX),
                                     exit_code,
-                                };
+                                });
                                 (outcome, retained)
                             })
                         })

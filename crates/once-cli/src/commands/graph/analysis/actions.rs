@@ -129,9 +129,9 @@ impl DeclaredActionsState {
         &mut self,
         outcome: DeclaredActionOutcome,
         streams: bool,
-        per_action: PerActionOutcome,
+        per_action: Option<PerActionOutcome>,
     ) {
-        self.per_action_outcomes.push(per_action);
+        self.per_action_outcomes.extend(per_action);
         self.prior_actions_digest = Some(extend_prior_actions_digest(
             self.prior_actions_digest,
             self.action_digests.len(),
@@ -4728,5 +4728,141 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
         } if id == "compile")
         );
         assert!(rx.try_recv().is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn file_plumbing_runs_without_being_reported_as_an_action() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        std::fs::write(workspace.path().join("input.txt"), "input").unwrap();
+        let mut analysis = cached_test_analysis("input.txt");
+        let mut write = analysis.actions[0].clone();
+        write.operation = Some(DeclaredActionOperation::WriteFile {
+            path: ".once/out/recipe.txt".to_string(),
+            bytes: b"recipe".to_vec(),
+        });
+        write.argv = Vec::new();
+        write.inputs = Vec::new();
+        write.outputs = vec![".once/out/recipe.txt".to_string()];
+        write.identifier = Some("write_path:.once/out/recipe.txt".to_string());
+        analysis.actions.insert(0, write);
+        let bus = once_core::RunEventBus::new(16);
+        let mut rx = bus.subscribe();
+
+        let outcome = run_declared_actions(
+            None,
+            workspace.path(),
+            &cache,
+            module_digest(),
+            &cached_test_target(),
+            "build",
+            analysis,
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            None,
+            SandboxMode::default(),
+            test_resources(),
+            None,
+            Some(&bus),
+            test_workers(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join(".once/out/recipe.txt")).unwrap(),
+            "recipe"
+        );
+        let mut reported = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                once_core::RunEvent::ActionAttemptStarted { action_index, .. }
+                | once_core::RunEvent::ActionAttemptCompleted { action_index, .. } => {
+                    reported.push(action_index);
+                }
+                once_core::RunEvent::ActionCompleted {
+                    action_index,
+                    identifier,
+                    ..
+                } => {
+                    assert_eq!(identifier.as_deref(), Some("cached"));
+                    reported.push(action_index);
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(reported, [1, 1, 1]);
+        assert_eq!(
+            outcome
+                .per_action_outcomes
+                .iter()
+                .map(|action| action.identifier.as_deref())
+                .collect::<Vec<_>>(),
+            [Some("cached")]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn failing_file_plumbing_is_still_reported() {
+        let workspace = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cas")));
+        let mut analysis = cached_test_analysis("input.txt");
+        let mut copy = analysis.actions[0].clone();
+        copy.operation = Some(DeclaredActionOperation::CopyPath {
+            sources: vec!["missing.txt".to_string()],
+            destination: ".once/out/copied.txt".to_string(),
+            mode: DeclaredCopyPathMode::File,
+        });
+        copy.argv = Vec::new();
+        copy.inputs = vec!["missing.txt".to_string()];
+        copy.outputs = vec![".once/out/copied.txt".to_string()];
+        copy.identifier = Some("copy_path:.once/out/copied.txt".to_string());
+        analysis.actions = vec![copy];
+        let bus = once_core::RunEventBus::new(16);
+        let mut rx = bus.subscribe();
+
+        let result = run_declared_actions(
+            None,
+            workspace.path(),
+            &cache,
+            module_digest(),
+            &cached_test_target(),
+            "build",
+            analysis,
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            None,
+            SandboxMode::default(),
+            test_resources(),
+            None,
+            Some(&bus),
+            test_workers(),
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            once_core::RunEvent::ActionAttemptStarted {
+                action_index: 0,
+                ..
+            }
+        ));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            once_core::RunEvent::ActionAttemptCompleted {
+                action_index: 0,
+                ..
+            }
+        ));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            once_core::RunEvent::ActionCompleted { action_index: 0, identifier: Some(id), .. }
+                if id == "copy_path:.once/out/copied.txt"
+        ));
     }
 }
