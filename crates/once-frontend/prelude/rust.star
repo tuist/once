@@ -1178,6 +1178,48 @@ def _rust_build_script_tool_identity(tool_paths):
         parts.append(host_file_sha256(path))
     return "\x00tools\x00" + "\x00".join(parts)
 
+# The value of the last `-C <name>=<value>` codegen flag, or "" when none sets
+# it. rustc accepts `-C name=value`, `-Cname=value`, `--codegen name=value`
+# and `--codegen=name=value`, and a later flag overrides an earlier one.
+def _rust_codegen_flag(flags, name):
+    prefix = name + "="
+    value = ""
+    index = 0
+    for _ in range(len(flags) + 1):
+        if index >= len(flags):
+            break
+        flag = flags[index]
+        option = ""
+        if flag in ("-C", "--codegen"):
+            if index + 1 < len(flags):
+                option = flags[index + 1]
+            index += 2
+        else:
+            if flag.startswith("-C"):
+                option = flag[len("-C"):]
+            elif flag.startswith("--codegen="):
+                option = flag[len("--codegen="):]
+            index += 1
+        if option.startswith(prefix):
+            value = option[len(prefix):]
+    return value
+
+# Cargo tells a build script how the package itself is compiled, and the `cc`
+# crate compiles C sources with that optimization level and debug info, so a
+# crate built with `-C opt-level=3` must not hand its build script `OPT_LEVEL=0`:
+# BLAKE3's NEON code compiled at -O0 hashes an order of magnitude slower.
+# `DEBUG` follows an explicit `-C debuginfo` only, since Cargo sets it
+# independently of the optimization level. `PROFILE` follows Cargo profile
+# inheritance, which rustc flags can't express, so it keeps the dev default.
+def _rust_build_script_profile_env(ctx):
+    flags = _rust_user_flags(ctx)
+    debuginfo = _rust_codegen_flag(flags, "debuginfo")
+    return {
+        "DEBUG": "false" if debuginfo in ("0", "none", "false", "n", "no", "off") else "true",
+        "OPT_LEVEL": _rust_codegen_flag(flags, "opt-level") or "0",
+        "PROFILE": "debug",
+    }
+
 def _rust_build_script_env(ctx, rustc, target, host_triple, out_dir, script_path, tool_paths = []):
     env = _rust_compile_env(ctx)
     _rust_merge_env_lower_precedence(env, _rust_c_tool_env(target or host_triple, host_triple))
@@ -1191,16 +1233,13 @@ def _rust_build_script_env(ctx, rustc, target, host_triple, out_dir, script_path
         env["CARGO_FEATURE_" + _ascii_env_key(feature)] = "1"
     if not env.get("CARGO_MANIFEST_DIR"):
         env["CARGO_MANIFEST_DIR"] = _workspace_absolute(_parent_dir(script_path))
-    if "DEBUG" not in env:
-        env["DEBUG"] = "true"
+    for key, value in _rust_build_script_profile_env(ctx).items():
+        if key not in env:
+            env[key] = value
     env["HOST"] = host_triple
     if "NUM_JOBS" not in env:
         env["NUM_JOBS"] = "1"
-    if "OPT_LEVEL" not in env:
-        env["OPT_LEVEL"] = "0"
     env["OUT_DIR"] = execution_path(out_dir)
-    if "PROFILE" not in env:
-        env["PROFILE"] = "debug"
     env["RUSTC"] = rustc
     env["RUSTDOC"] = _parent_dir(rustc) + "/" + _host_exe("rustdoc")
     env["TARGET"] = target or host_triple

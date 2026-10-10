@@ -11859,6 +11859,61 @@ result = repr(env.get("CARGO_ENCODED_RUSTFLAGS"))
     assert_eq!(out.unwrap(), "\"-C\\x1fopt-level=3\"");
 }
 
+#[cfg(unix)]
+#[test]
+fn prelude_rust_build_script_env_reports_the_crate_optimization_level() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+rustc, _identity, host_triple = _rustc_toolchain("")
+def build_script_env(flags, env = {{}}):
+    ctx = {{
+        "label": {{
+            "package": "crates/app",
+            "name": "app",
+            "id": "crates/app/app",
+        }},
+        "attr": {{"rustc_flags": flags, "env": env}},
+        "deps": [],
+        "srcs": [],
+    }}
+    env = _rust_build_script_env(
+        ctx,
+        rustc,
+        host_triple,
+        host_triple,
+        ".once/out/app/build",
+        "crates/app/build.rs",
+    )
+    return [env.get(key) for key in ("OPT_LEVEL", "PROFILE", "DEBUG")]
+result = repr([
+    build_script_env([]),
+    build_script_env(["-C", "opt-level=3", "-C", "codegen-units=1"]),
+    build_script_env(["-Copt-level=1", "--codegen=opt-level=s"]),
+    build_script_env(["--codegen", "opt-level=2", "-C", "debuginfo=1"]),
+    build_script_env(["-C", "opt-level=0", "-Cdebuginfo=0"]),
+    build_script_env(["-C", "opt-level=3"], {{"OPT_LEVEL": "1"}}),
+])
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(workspace.path(), "crates/app/app");
+
+    let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(
+        out.unwrap(),
+        concat!(
+            r#"[["0", "debug", "true"], "#,
+            r#"["3", "debug", "true"], "#,
+            r#"["s", "debug", "true"], "#,
+            r#"["2", "debug", "true"], "#,
+            r#"["0", "debug", "false"], "#,
+            r#"["1", "debug", "true"]]"#,
+        )
+    );
+}
+
 #[test]
 fn prelude_rustc_wrapper_passes_initial_argv_positionally() {
     let prelude = all_prelude_source();
