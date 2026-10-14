@@ -71,6 +71,57 @@ metadata_file = "cargo-metadata.json"' "$WORKSPACE/once.toml"
     [ "$(wc -l < "$WORKSPACE/cargo-invocations.log" | tr -d ' ')" -eq 1 ]
   }
 
+  run_rust_consumer_with_cargo_managed_sources() {
+    prepare_counted_live_cargo || return
+    mv "$WORKSPACE/third_party/rust/vendor" "$WORKSPACE/cargo-source-cache" || return
+    sed -i.bak '/vendor_dir =/d' "$WORKSPACE/once.toml" || return
+    sed -i.bak 's@third_party/rust/vendor@cargo-source-cache@' "$WORKSPACE/.cargo/config.toml" || return
+
+    once --format json query validate-workspace > "$WORKSPACE/validation.json" || return
+    once --format json build apps/hello/hello > "$WORKSPACE/first-build.json" || return
+    first=$("$WORKSPACE/.once/out/apps/hello/hello/hello") || return
+    [ "$first" = "42" ] || return
+    rm -rf "$WORKSPACE/.once/out"
+    once --format json build apps/hello/hello > "$WORKSPACE/second-build.json" || return
+    "$WORKSPACE/.once/out/apps/hello/hello/hello"
+  }
+
+  run_rust_consumer_with_cold_registry_cache() {
+    mv "$WORKSPACE/cargo-metadata.json" "$WORKSPACE/cargo-metadata.snapshot.json" || return
+    sed -i.bak '/vendor_dir =/d; /cargo-metadata.json/d' "$WORKSPACE/once.toml" || return
+    start_python_server "$REPO_ROOT/spec/support/cargo_registry.py" "$WORKSPACE" \
+      "$REPO_ROOT/crates/once-frontend/prelude/examples/rust-binary-with-crate/third_party/rust/vendor/itoa-1.0.14" \
+      > "$WORKSPACE/registry.log" 2>&1 &
+    registry_pid=$!
+    registry_status=0
+    wait_for_server_file "$WORKSPACE/.once/registry-fixture/ready" "$registry_pid" &&
+      fetch_and_restore_cold_registry_sources || registry_status=$?
+    if [ -n "$registry_pid" ]; then
+      kill "$registry_pid" 2>/dev/null || :
+      wait "$registry_pid" 2>/dev/null || :
+    fi
+    return "$registry_status"
+  }
+
+  fetch_and_restore_cold_registry_sources() {
+    rm -rf "$WORKSPACE/third_party/rust/vendor"
+    cargo_home="$WORKSPACE/cold-cargo-home"
+    mkdir "$cargo_home" || return
+
+    CARGO_HOME="$cargo_home" once --format json query validate-workspace > "$WORKSPACE/validation.json" || return
+    CARGO_HOME="$cargo_home" once --format json build apps/hello/hello > "$WORKSPACE/first-build.json" || return
+    first=$("$WORKSPACE/.once/out/apps/hello/hello/hello") || return
+    [ "$first" = "42" ] || return 1
+    find "$cargo_home/registry/src" -name lib.rs > "$WORKSPACE/fetched-sources.txt" || return
+    kill "$registry_pid" || return
+    wait "$registry_pid" 2>/dev/null || :
+    registry_pid=""
+    rm -rf "$WORKSPACE/.once/out" "$cargo_home/registry/src"
+    CARGO_HOME="$cargo_home" CARGO_NET_OFFLINE=true once --format json query validate-workspace > "$WORKSPACE/restored-validation.json" || return
+    CARGO_HOME="$cargo_home" CARGO_NET_OFFLINE=true once --format json build apps/hello/hello > "$WORKSPACE/second-build.json" || return
+    "$WORKSPACE/.once/out/apps/hello/hello/hello"
+  }
+
   resolve_build_and_run_elixir_consumer() {
     once --format json query targets > "$WORKSPACE/targets.json" || return
     once --format json build greeting > "$WORKSPACE/build.json" || return
@@ -146,6 +197,33 @@ vendor_path = "Vendor/Greeting/VendorScratch"' "$WORKSPACE/once.toml"
     The status should be success
     The contents of file "$WORKSPACE/cargo-invocations.log" should equal 'metadata'
     The contents of file "$WORKSPACE/validation.json" should include '"valid":true'
+  End
+
+  It 'validates, builds, and restores Cargo dependencies without a vendor directory'
+    Skip if 'Rust toolchain unavailable on this host' rust_adapter_tools_unavailable
+    copy_dependency_example rust-binary-with-crate
+
+    When call run_rust_consumer_with_cargo_managed_sources
+    The status should be success
+    The stdout should equal '42'
+    The contents of file "$WORKSPACE/validation.json" should include '"valid":true'
+    The path "$WORKSPACE/third_party/rust/vendor" should not be exist
+    The contents of file "$WORKSPACE/second-build.json" should include '"target":"apps/hello/hello"'
+    The contents of file "$WORKSPACE/second-build.json" should include '"cache":"hit"'
+  End
+
+  It 'fetches a locked Cargo crate into a cold cache and recovers after source cleanup offline'
+    Skip if 'Rust toolchain unavailable on this host' rust_adapter_tools_unavailable
+    copy_dependency_example rust-binary-with-crate
+
+    When call run_rust_consumer_with_cold_registry_cache
+    The status should be success
+    The stdout should equal '42'
+    The contents of file "$WORKSPACE/validation.json" should include '"valid":true'
+    The contents of file "$WORKSPACE/restored-validation.json" should include '"valid":true'
+    The contents of file "$WORKSPACE/fetched-sources.txt" should include 'itoa-1.0.14/src/lib.rs'
+    The path "$WORKSPACE/third_party/rust/vendor" should not be exist
+    The contents of file "$WORKSPACE/second-build.json" should include '"cache":"hit"'
   End
 
   It 'loads Mix packages and links them into a local Elixir library'

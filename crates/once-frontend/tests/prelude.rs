@@ -50,6 +50,9 @@ mod native_graphs;
 #[path = "prelude/cargo_paths.rs"]
 mod cargo_paths;
 
+#[path = "prelude/cargo_sources.rs"]
+mod cargo_sources;
+
 #[path = "prelude/swift_package_paths.rs"]
 mod swift_package_paths;
 

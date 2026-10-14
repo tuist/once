@@ -132,6 +132,19 @@ reference implementation. Treat their module-owned examples, schema
 metadata, validation, and MCP/CLI discovery shape as the template when
 wiring a new toolchain.
 
+## Cargo Source Resolution
+
+`cargo_dependencies` and `cargo_workspace` share locked metadata resolution.
+Without `vendor_dir`, Cargo fetches missing sources and Once snapshots each
+package through a cacheable host-tree action. Keep compilation as separate
+crate targets so scheduling and cache reuse follow the dependency graph.
+Explicit `vendor_dir` opts into pre-vendored inputs and is required for checked
+metadata snapshots on `cargo_dependencies`. That target requires a declared,
+existing lockfile; native `cargo_workspace` discovery may bootstrap a missing
+one. Do not require a separate dependency-preparation task for the default
+path. Cover both modes, cold registry fetching, and restoration after output
+and extracted-source cleanup.
+
 ## Target Names And Paths
 
 Do not invent a path-like target grammar. When a target can be

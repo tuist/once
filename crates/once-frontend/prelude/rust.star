@@ -2714,9 +2714,10 @@ def _cargo_feature_args(ctx):
         args.extend(["--features", ",".join(features)])
     return args
 
-def _cargo_resolved_metadata(ctx, default_vendor_dir = "third_party/rust/vendor", materialize_sources = False):
+def _cargo_resolved_metadata(ctx):
     manifest = _package_relative(ctx, _rust_attr(ctx, "manifest", "Cargo.toml"))
-    vendor_dir = _trim_trailing_slash(_rust_attr(ctx, "vendor_dir", default_vendor_dir))
+    vendor_dir = _trim_trailing_slash(_rust_attr(ctx, "vendor_dir", ""))
+    materialize_sources = not vendor_dir
     target = _rust_target(ctx)
     metadata_file = _rust_attr(ctx, "metadata_file", "")
     host_metadata_file = _rust_attr(ctx, "host_metadata_file", "")
@@ -2999,9 +3000,34 @@ def _cargo_attach_locked_checksums(metadata, lock):
 
 def _cargo_dependencies_resolver(ctx):
     _cargo_require_resolver_file(ctx, "manifest", "Cargo.toml")
+    lockfile = _rust_attr(ctx, "lockfile", "Cargo.lock")
+    lockfile_key = lockfile[2:] if lockfile.startswith("./") else lockfile
+    if lockfile_key not in ctx["files"]:
+        package = ctx["label"]["package"]
+        owner_lockfile = package + "/" + lockfile_key if package else lockfile_key
+        if host_file_exists(_workspace_absolute(owner_lockfile)):
+            _diagnostic_fail(
+                "missing_source",
+                "lockfile",
+                "Cargo lockfile `" + lockfile + "` must be included in resolver_inputs, or srcs when resolver_inputs is omitted",
+                "Include the existing lockfile in resolver_inputs or srcs so dependency resolution always runs with --locked",
+            )
+        _diagnostic_fail(
+            "missing_source",
+            "lockfile",
+            "Cargo lockfile `" + lockfile + "` does not exist",
+            "Run cargo generate-lockfile and commit the lockfile, then include it in resolver_inputs or srcs",
+        )
     metadata_file = _rust_attr(ctx, "metadata_file", "")
     host_metadata_file = _rust_attr(ctx, "host_metadata_file", "")
     if metadata_file:
+        if not _trim_trailing_slash(_rust_attr(ctx, "vendor_dir", "")):
+            _diagnostic_fail(
+                "missing_required_attr",
+                "vendor_dir",
+                "Checked Cargo metadata requires an explicit vendor_dir instead of snapshot host paths",
+                "Set vendor_dir to the pre-vendored package directory (previous default: third_party/rust/vendor), or remove metadata_file and host_metadata_file to resolve locked sources with Cargo",
+            )
         _cargo_resolver_file(ctx, metadata_file, "Cargo metadata snapshot")
     if host_metadata_file:
         _cargo_resolver_file(ctx, host_metadata_file, "host Cargo metadata snapshot")
@@ -3831,8 +3857,7 @@ def _cargo_attach_bin_deps(spec, binary_refs):
 
 def _cargo_workspace_resolver(ctx):
     _cargo_require_resolver_file(ctx, "manifest", "Cargo.toml")
-    vendor_dir = _rust_attr(ctx, "vendor_dir", "")
-    resolved = _cargo_resolved_metadata(ctx, vendor_dir, not vendor_dir)
+    resolved = _cargo_resolved_metadata(ctx)
     metadata = resolved["metadata"]
     packages = metadata.get("packages") or []
     workspace_member_ids = _cargo_workspace_member_ids(metadata, packages)
@@ -4075,9 +4100,9 @@ cargo_dependencies = target_kind(
         attr("manifest", "string", default = "Cargo.toml", docs = "Package-relative Cargo manifest path passed to `cargo metadata --manifest-path`.", configurable = False),
         attr("lockfile", "string", default = "Cargo.lock", docs = "Package-relative Cargo lockfile path read as a declared resolver input.", configurable = False),
         attr("resolver_inputs", "list<string>", default = "[]", docs = "Package-relative text globs supplied to the resolver. Defaults to srcs when empty or omitted; set this when build sources include binary or large files.", configurable = False),
-        attr("metadata_file", "string", docs = "Optional checked-in JavaScript Object Notation output from cargo metadata with once_snapshot input, selection, and compiler host provenance.", configurable = False),
+        attr("metadata_file", "string", docs = "Optional checked-in JavaScript Object Notation output from cargo metadata with once_snapshot input, selection, and compiler host provenance. Requires an explicit vendor_dir.", configurable = False),
         attr("host_metadata_file", "string", docs = "Checked-in Cargo metadata snapshot with host selection provenance for the execution host. Required when metadata_file is combined with an explicit target.", configurable = False),
-        attr("vendor_dir", "string", default = "third_party/rust/vendor", docs = "Package-relative directory containing vendored crate sources.", configurable = False),
+        attr("vendor_dir", "string", docs = "Package-relative directory containing pre-vendored crate sources. Required with metadata_file; otherwise, when omitted or empty, Once snapshots locked sources from Cargo's local cache into target outputs.", configurable = False),
         attr("packages", "list<string>", default = "[]", docs = "Optional package names to expose from this dependency set. Defaults to all resolved external packages.", configurable = True),
         attr("features", "list<string>", default = "[]", docs = "Cargo features passed to `cargo metadata --features`.", configurable = True),
         attr("all_features", "bool", default = "false", docs = "Pass `--all-features` to Cargo metadata.", configurable = True),
