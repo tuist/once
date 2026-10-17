@@ -402,10 +402,7 @@ pub(super) fn reject_unsupported_clauses(tree: &tree_sitter::Tree) -> Result<()>
         if node.kind() == "match_clause" && match_clause_is_optional(node) {
             bail!("query expressions are read-only; `OPTIONAL` is not supported");
         }
-        for index in (0..node.child_count())
-            .rev()
-            .filter_map(|index| u32::try_from(index).ok())
-        {
+        for index in (0..node.child_count()).rev() {
             if let Some(child) = node.child(index) {
                 nodes.push(child);
             }
@@ -415,12 +412,10 @@ pub(super) fn reject_unsupported_clauses(tree: &tree_sitter::Tree) -> Result<()>
 }
 
 fn match_clause_is_optional(node: tree_sitter::Node<'_>) -> bool {
-    (0..node.child_count())
-        .filter_map(|index| u32::try_from(index).ok())
-        .any(|index| {
-            node.child(index)
-                .is_some_and(|child| child.kind() == "optional")
-        })
+    (0..node.child_count()).any(|index| {
+        node.child(index)
+            .is_some_and(|child| child.kind() == "optional")
+    })
 }
 
 fn reject_duplicate_relationship_aliases(left: &NodePattern, right: &NodePattern) -> Result<()> {
