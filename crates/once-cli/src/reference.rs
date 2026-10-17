@@ -157,7 +157,7 @@ fn option_entry(arg: &FlagMeta<'_>) -> OptionEntry {
     let takes_value = arg.flag.takes_value;
     let value_name = arg
         .value_name
-        .or_else(|| arg.value_names.first().copied())
+        .or_else(|| arg.value_names().first().copied())
         .map(ToString::to_string);
     let default = arg.default.first().map(ToString::to_string);
     OptionEntry {
