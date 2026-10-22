@@ -371,11 +371,27 @@ authority for third-party packages.
 
 Keep third-party requirements in `Cargo.toml` and exact versions in
 `Cargo.lock`. A root `cargo_dependencies` target lets Cargo resolve the
-packages while Once builds the resolved crates as graph dependencies. The
-bundled starter omits `metadata_file` and resolves live in locked, offline mode
-so the same example remains portable across compiler hosts. To opt into a
-checked snapshot instead, include it in the resolver inputs and set
-`metadata_file`:
+packages while Once builds the resolved crates as graph dependencies. Omit
+`vendor_dir` to let Cargo fetch missing locked sources and Once materialize each
+package through a cacheable action. You do not need a separate `cargo vendor`
+or dependency-preparation step:
+
+```toml
+[[target]]
+name = "cargo_dependencies"
+kind = "cargo_dependencies"
+srcs = ["Cargo.toml", "Cargo.lock", "apps/*/Cargo.toml"]
+```
+
+An explicit `vendor_dir` remains supported for pre-vendored sources. The bundled
+starter uses that mode so it can resolve live without network access and remain
+portable across compiler hosts. This target requires an existing `Cargo.lock`
+in `resolver_inputs` or `srcs`; it never bootstraps a missing lockfile.
+
+The old implicit `third_party/rust/vendor` default has been removed. Set
+`vendor_dir` explicitly to retain pre-vendored resolution. Checked snapshots
+require that attribute rather than using snapshot host paths. To opt into a
+checked snapshot, include it in the resolver inputs and set `metadata_file`:
 
 ```toml
 [[target]]
@@ -426,9 +442,10 @@ CARGO_PKG_VERSION = "0.0.0"
 
 With this configuration, the dependency target reads the checked-in Cargo
 metadata snapshot while loading the graph. If `metadata_file` is omitted, it runs
-`cargo metadata --locked --offline` instead.
-Registry and Git packages come from the configured vendor directory. Workspace
-and path packages remain first-party Once targets. The Cargo manifests and
+`cargo metadata --locked` instead.
+Registry and Git packages come from Cargo's local source cache unless
+`vendor_dir` selects pre-vendored sources. Workspace members remain first-party
+Once targets. The Cargo manifests and
 lockfile stay authoritative for package names, versions, active features,
 renamed dependencies, procedural macros, and build dependencies.
 Every external metadata package must match an exact name, version, and source
@@ -439,7 +456,8 @@ A manifest, configuration, feature, target, or compiler host change therefore
 rejects stale metadata during graph loading. Once asks the selected Rust
 compiler for its host triple before accepting a native snapshot.
 
-For live offline metadata, configure Cargo to use the same vendored sources:
+For live resolution against pre-vendored sources, configure Cargo to use the
+same vendor directory:
 
 ```toml
 [source.crates-io]
@@ -450,8 +468,11 @@ directory = "third_party/rust/vendor"
 ```
 
 Keep that configuration in `resolver_inputs` with the manifests and lockfile.
-Generated crate targets include the complete vendored package tree, which
-covers files read through Rust source inclusion macros as well as package data.
+Cargo's `[net] offline = true` configuration is also respected when network
+access should be disabled. Generated crate targets include the complete package
+tree, whether materialized from Cargo's cache or read from a vendor directory.
+This covers files read through Rust source inclusion macros as well as package
+data.
 
 Each resolved package becomes a synthetic `rust_crate` or `rust_proc_macro`
 target. Normal Cargo edges use `deps`; build-script edges use the named
