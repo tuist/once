@@ -127,6 +127,12 @@ pub enum QueryCmd {
         /// Create an explicit plan for this target instead of selecting by changed path.
         #[usage(long, conflicts = "changed_paths")]
         target: Option<String>,
+        /// Upload the plan to the configured host and emit a CI shard matrix.
+        #[usage(long, value_name = "COUNT")]
+        shards: Option<u32>,
+        /// Hosted execution reference. Defaults to `TUIST_SHARD_REFERENCE` or the CI run.
+        #[usage(long, requires = "shards")]
+        reference: Option<String>,
     },
 
     /// Read normalized `once.test_results.v1` results for a target.

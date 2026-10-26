@@ -1,5 +1,6 @@
 mod cancellation;
 mod executor;
+pub(crate) mod hosted;
 pub(crate) mod portable;
 mod process;
 mod report;
@@ -62,6 +63,7 @@ pub(crate) async fn execute(
         sandbox,
         resource_limits,
         None,
+        false,
     )
     .await
 }
@@ -75,6 +77,7 @@ async fn execute_validated(
     sandbox: SandboxMode,
     resource_limits: ResourceLimits,
     portable: Option<portable::Invocation>,
+    reporting: bool,
 ) -> Result<TestExecutionReport> {
     validate_workers(requested_workers)?;
     anyhow::ensure!(!plan.batches.is_empty(), "test plan contains no batches");
@@ -96,7 +99,7 @@ async fn execute_validated(
             portable.as_ref(),
         )
     });
-    let completed = cancellation::supervise(schedule)
+    let completed = cancellation::supervise(schedule, reporting)
         .await
         .context("joining test scheduler")??;
     results::persist(&workspace_path, &plan, &completed.runs)?;

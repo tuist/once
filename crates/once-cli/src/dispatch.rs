@@ -305,6 +305,10 @@ async fn run_command(
             sandbox,
             config,
             jobs,
+            shard_plan,
+            shard_index,
+            shard_attempt,
+            shard_report_revision,
             plan,
             batches,
             external_group,
@@ -318,6 +322,20 @@ async fn run_command(
             test_batch_id,
         } => {
             let resolved = resolve_configuration(&config)?;
+            if let Some(id) = shard_plan {
+                return Box::pin(commands::test_schedule::hosted::run(
+                    workspace,
+                    output,
+                    &id,
+                    shard_index,
+                    shard_attempt,
+                    shard_report_revision,
+                    jobs,
+                    sandbox,
+                    resource_limits.clone(),
+                ))
+                .await;
+            }
             Box::pin(dispatch_test(
                 workspace,
                 xdg,
@@ -700,7 +718,21 @@ async fn run_query_command(
         Some(cli::QueryCmd::TestPlan {
             changed_paths,
             target,
+            shards,
+            reference,
         }) => {
+            if let Some(shards) = shards {
+                return commands::test_schedule::hosted::plan(
+                    workspace,
+                    output,
+                    &changed_paths,
+                    target.as_deref(),
+                    shards,
+                    reference,
+                )
+                .await
+                .map(|()| ExitCode::SUCCESS);
+            }
             commands::query::test_plan_request(workspace, output, &changed_paths, target.as_deref())
                 .await
                 .map(|()| ExitCode::SUCCESS)

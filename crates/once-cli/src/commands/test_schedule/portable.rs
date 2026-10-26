@@ -40,6 +40,7 @@ impl Invocation {
 
     pub fn add_to_command(&self, command: &mut std::process::Command, batch_id: &str) {
         command
+            .env_remove("TUIST_SHARD_PLAN_ID")
             .arg("--plan")
             .arg(&self.path)
             .arg("--batch")
@@ -109,6 +110,51 @@ pub(crate) async fn run(
     sandbox: SandboxMode,
     resource_limits: ResourceLimits,
 ) -> Result<ExitCode> {
+    let value = execute(
+        workspace,
+        graph,
+        invocation,
+        batches,
+        requested_workers,
+        sandbox,
+        resource_limits,
+        false,
+    )
+    .await?;
+    let success = value["success"] == true;
+    crate::commands::query::write_body(
+        output,
+        || {
+            format!(
+                "{}\n",
+                if success {
+                    "Test partition passed"
+                } else {
+                    "Test partition failed or incomplete"
+                }
+            )
+        },
+        &value,
+    )
+    .await?;
+    Ok(if success {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn execute(
+    workspace: &Path,
+    graph: Vec<once_frontend::GraphTarget>,
+    invocation: Invocation,
+    batches: &[String],
+    requested_workers: Option<usize>,
+    sandbox: SandboxMode,
+    resource_limits: ResourceLimits,
+    reporting: bool,
+) -> Result<serde_json::Value> {
     let portable = PortableTestPlan::read(&invocation.path)?;
     portable.validate(workspace, &graph)?;
     invocation.context(&portable.id, "")?;
@@ -134,6 +180,7 @@ pub(crate) async fn run(
         sandbox,
         resource_limits,
         Some(invocation),
+        reporting,
     )
     .await?;
     let complete = report.runs.len() == selected_batch_ids.len()
@@ -148,29 +195,9 @@ pub(crate) async fn run(
                 }) || (!run["results"].is_null() && run["results_error"].is_null()))
         });
     let success = complete && report.succeeded();
-    let value = json!({
+    Ok(json!({
         "schema": "once.portable_test_execution.v1", "plan_id": portable.id,
         "selected_batch_ids": selected_batch_ids, "complete": complete,
         "success": success, "execution": report,
-    });
-    crate::commands::query::write_body(
-        output,
-        || {
-            format!(
-                "{}\n",
-                if success {
-                    "Test partition passed"
-                } else {
-                    "Test partition failed or incomplete"
-                }
-            )
-        },
-        &value,
-    )
-    .await?;
-    Ok(if success {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
-    })
+    }))
 }

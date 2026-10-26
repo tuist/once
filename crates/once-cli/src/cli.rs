@@ -418,6 +418,37 @@ pub enum Cmd {
         #[usage(short = 'j', long, value_name = "COUNT")]
         jobs: Option<usize>,
 
+        /// Download, execute, and report an exact hosted shard plan UUID.
+        #[usage(
+            long,
+            value_name = "UUID",
+            env = "TUIST_SHARD_PLAN_ID",
+            conflicts(
+                "plan",
+                "target",
+                "all",
+                "changed_paths",
+                "test_unit",
+                "test_batch",
+                "batch_test_units",
+                "test_batch_id",
+                "config"
+            )
+        )]
+        shard_plan: Option<String>,
+
+        /// Zero-based hosted shard index. Defaults to `TUIST_SHARD_INDEX`.
+        #[usage(long, requires = "shard_plan")]
+        shard_index: Option<u32>,
+
+        /// Positive execution attempt. Defaults to `TUIST_SHARD_ATTEMPT` or the CI attempt.
+        #[usage(long, requires = "shard_plan")]
+        shard_attempt: Option<u32>,
+
+        /// Immutable report revision within this attempt. Defaults to zero.
+        #[usage(long, requires = "shard_plan", default = "0")]
+        shard_report_revision: u32,
+
         /// Execute an exported `once.portable_test_plan.v1` document.
         #[usage(
             long,

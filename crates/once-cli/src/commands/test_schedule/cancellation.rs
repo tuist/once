@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
-use tokio::task::{JoinError, JoinHandle};
+use tokio::task::JoinHandle;
 
 use crate::termination::{self, SignalWatcher, Termination};
 
@@ -73,9 +73,9 @@ fn cancel(signal: Termination) {
 
 /// Wait for `schedule`, cancelling its batches on the first termination
 /// signal. Returns only when the schedule finishes without being signalled.
-pub(super) async fn supervise<T>(schedule: JoinHandle<T>) -> Result<T, JoinError> {
+pub(super) async fn supervise<T>(schedule: JoinHandle<T>, reporting: bool) -> anyhow::Result<T> {
     let Some(mut signals) = SignalWatcher::install() else {
-        return schedule.await;
+        return Ok(schedule.await?);
     };
     tokio::pin!(schedule);
     let signal = tokio::select! {
@@ -83,9 +83,12 @@ pub(super) async fn supervise<T>(schedule: JoinHandle<T>) -> Result<T, JoinError
             if let Some(signal) = signals.restore() {
                 cancel(signal);
                 crate::terminal::report_cancellation(|| {}).await;
+                if reporting {
+                    return Err(Interrupted { signal, _watcher: None }.into());
+                }
                 termination::terminate(signal);
             }
-            return result;
+            return Ok(result?);
         }
         signal = signals.recv() => signal,
     };
@@ -97,8 +100,38 @@ pub(super) async fn supervise<T>(schedule: JoinHandle<T>) -> Result<T, JoinError
         );
     });
     let _ = tokio::join!(tokio::time::timeout(BATCH_DEADLINE, &mut schedule), notice);
+    if reporting {
+        return Err(Interrupted {
+            signal,
+            _watcher: Some(signals),
+        }
+        .into());
+    }
     termination::terminate(signal)
 }
+
+pub(super) struct Interrupted {
+    pub signal: Termination,
+    _watcher: Option<SignalWatcher>,
+}
+
+impl std::fmt::Display for Interrupted {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "test schedule cancelled by {}",
+            self.signal.name()
+        )
+    }
+}
+
+impl std::fmt::Debug for Interrupted {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, formatter)
+    }
+}
+
+impl std::error::Error for Interrupted {}
 
 #[cfg(all(test, unix))]
 mod tests {

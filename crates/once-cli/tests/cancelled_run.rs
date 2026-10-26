@@ -26,6 +26,8 @@ use tonic::{Request, Response, Status, Streaming};
 
 #[path = "support/cache_miss.rs"]
 mod cache_miss;
+#[path = "support/hosted.rs"]
+mod hosted;
 #[path = "support/reporting.rs"]
 mod reporting;
 #[path = "support/terminal.rs"]
@@ -456,4 +458,57 @@ async fn repeating_the_same_signal_exits_without_waiting_for_the_drain() {
         "took {:?}",
         signalled.elapsed()
     );
+}
+
+#[tokio::test]
+async fn hosted_cancellation_submits_one_failed_partition_and_preserves_the_signal() {
+    for signal in [
+        nix::sys::signal::Signal::SIGTERM,
+        nix::sys::signal::Signal::SIGINT,
+    ] {
+        let fixture = hosted::Fixture::new().await;
+        fixture.plan().await;
+        let ran = fixture.workspace.path().join("ran");
+        std::fs::remove_file(&ran).unwrap();
+        std::fs::write(fixture.workspace.path().join("mode"), "sleep").unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let mut command = fixture.command(
+            home.path(),
+            &[
+                "test",
+                "--shard-plan",
+                hosted::ID,
+                "--shard-index",
+                "0",
+                "--jobs",
+                "1",
+            ],
+        );
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let child = command.spawn().unwrap();
+        wait_until(Duration::from_secs(30), || ran.exists()).await;
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(i32::try_from(child.id().unwrap()).unwrap()),
+            signal,
+        )
+        .unwrap();
+        let output = tokio::time::timeout(Duration::from_secs(10), child.wait_with_output())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            output.status.signal(),
+            Some(signal as i32),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let state = fixture.state.lock().unwrap();
+        assert_eq!(state.reports.len(), 1);
+        assert_eq!(state.reports[0]["status"], "failure");
+        assert_eq!(
+            std::fs::read_to_string(&ran).unwrap().lines().count(),
+            1,
+            "queued batches must not start after cancellation"
+        );
+    }
 }

@@ -19,6 +19,7 @@ once-frontend.workspace = true
 anyhow.workspace = true
 base64.workspace = true
 blake3.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 hex = "0.4"
 usage.workspace = true
 console.workspace = true

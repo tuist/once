@@ -291,6 +291,66 @@ test report per partition. Native batch events remain available for diagnostics
 and must not independently replace or duplicate the partition's shared test
 report. This context does not assert partition completion.
 
+## Distribute Tests Through Tuist
+
+Hosted sharding requires a Once release with `--shards` and `--shard-plan`.
+Once 0.71.0 supports portable plans only. The server must support immutable
+shard reports and return `reporting_version = 1` for your account.
+
+Configure the existing native Tuist provider in the root `once.toml`:
+
+```toml
+[infrastructure.cache]
+provider = "tuist"
+
+[infrastructures.tuist]
+kind = "tuist"
+account = "acme"
+project = "app"
+```
+
+The default server is `https://tuist.dev`; set `url` on the provider for another
+server. Once reuses its native OAuth credentials, `TUIST_TOKEN`, or supported CI
+OIDC authentication. No Tuist executable is needed.
+
+After complete discovery, the planning job creates hosted assignments from
+opaque portable batch IDs and uploads the portable bytes bound to the hosted UUID:
+
+```sh
+once query test-plan --shards 4 --reference "$CI_EXECUTION_ID" --format json
+```
+
+The output is `{"shard_plan_id":"<UUID>","shards":[0,1,2,3]}`. Read the
+actual returned indices to construct your CI matrix. An empty plan returns an
+empty UUID and array. `--target` and repeated `--changed-path` retain their usual
+selection behavior. The reference defaults to `TUIST_SHARD_REFERENCE` or the
+detected CI run; pass it explicitly outside supported CI environments.
+
+Each worker uses the exact hosted UUID, not a reference that another planning
+job can replace:
+
+```sh
+once test --shard-plan "$SHARD_PLAN_ID" --shard-index "$SHARD_INDEX" --jobs 4
+```
+
+`TUIST_SHARD_PLAN_ID` and `TUIST_SHARD_INDEX` can supply the worker selection.
+Once downloads and validates the UUID-bound artifact, executes every assigned
+batch through its resource-budgeted scheduler, and submits one immutable REST
+report. An empty assignment runs nothing. Missing results, failed processes,
+and interrupted work cannot pass the partition. Cancellation attempts a bounded
+failed report upload, then exits by the original signal. Native events remain
+diagnostic and do not assert partition completion.
+
+Case retries retain their ordered attempts. Shared Tests identity remains the
+native target, suite, and case name; distinct native case IDs with the same
+target/suite/name share that existing identity. Batch IDs are never case names.
+
+For a rerun, increase `--shard-attempt`. It defaults to `TUIST_SHARD_ATTEMPT`,
+then the GitHub run attempt, then 1. `--shard-report-revision` defaults to 0 and
+can increase for a corrected report within the same attempt. Each invocation
+submits one report with one UUID and the supplied attempt and revision. These
+counters are separate from retries within a test case.
+
 ## Understand Current Ecosystem Coverage
 
 | Target kind | Stable unit discovery | Exact unit execution | Automatic granularity |
