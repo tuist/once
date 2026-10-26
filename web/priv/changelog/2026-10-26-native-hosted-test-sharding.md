@@ -13,5 +13,5 @@ target/suite/name identities, ordered case retries, and explicit attempt and
 revision counters. Empty assignments run nothing; missing evidence, failed
 processes, and cancellation cannot produce a successful partition report.
 
-This requires a release containing the hosted commands and a Tuist account
-enrolled in immutable shard reporting. Once 0.71.0 supports portable plans only.
+This requires a release containing the hosted commands. Once 0.71.0 supports
+portable plans only.

@@ -15,13 +15,16 @@ struct Artifact {
     schema: String,
     #[serde(rename = "shardPlanID")]
     shard_plan_id: String,
-    reporting_version: u32,
     portable_plan: String,
 }
 
 pub(super) fn write(path: &Path, id: &str, bytes: &[u8]) -> Result<()> {
     let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
-    write!(file, "{{\"schema\":\"tuist.once_shard_plan.v1\",\"shardPlanID\":{},\"reportingVersion\":1,\"portablePlan\":\"", serde_json::to_string(id)?)?;
+    write!(
+        file,
+        "{{\"schema\":\"tuist.once_shard_plan.v1\",\"shardPlanID\":{},\"portablePlan\":\"",
+        serde_json::to_string(id)?
+    )?;
     let mut encoder = base64::write::EncoderWriter::new(&mut file, &STANDARD);
     encoder.write_all(bytes)?;
     encoder.finish()?;
@@ -55,9 +58,8 @@ pub(super) async fn unpack(
             .context("reading hosted portable plan artifact")?;
     ensure!(
         artifact.schema == "tuist.once_shard_plan.v1"
-            && artifact.reporting_version == 1
             && uuid::Uuid::parse_str(&artifact.shard_plan_id)? == uuid::Uuid::parse_str(id)?,
-        "hosted artifact belongs to another plan or reporting contract"
+        "unsupported hosted artifact or mismatched plan UUID"
     );
     let decoder = base64::read::DecoderReader::new(artifact.portable_plan.as_bytes(), &STANDARD);
     let mut bounded = decoder.take(MAX_ARTIFACT_BYTES);

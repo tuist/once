@@ -26,7 +26,6 @@ pub(crate) async fn plan(
     } else {
         let host = client::Host::resolve(workspace)?;
         let created = host.post("shards", &json!({"reference": reference, "modules": portable.plan.batches.iter().map(|batch| &batch.id).collect::<Vec<_>>(), "granularity": "module", "shard_total": shards})).await?;
-        ensure!(created["reporting_version"] == 1, "hosted Once sharding requires reporting_version=1; upgrade and enroll the account before planning");
         let id =
             uuid::Uuid::parse_str(created["id"].as_str().context("missing hosted plan UUID")?)?
                 .to_string();

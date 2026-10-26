@@ -294,8 +294,7 @@ report. This context does not assert partition completion.
 ## Distribute Tests Through Tuist
 
 Hosted sharding requires a Once release with `--shards` and `--shard-plan`.
-Once 0.71.0 supports portable plans only. The server must support immutable
-shard reports and return `reporting_version = 1` for your account.
+Once 0.71.0 supports portable plans only.
 
 Configure the existing native Tuist provider in the root `once.toml`:
 

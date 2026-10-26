@@ -11,7 +11,6 @@ use super::cache_miss;
 pub const ID: &str = "01900000-0000-7000-8000-000000000001";
 
 pub struct State {
-    pub version: u32,
     pub modules: Vec<String>,
     pub assigned: Option<Vec<String>>,
     pub artifact: Vec<u8>,
@@ -31,7 +30,6 @@ impl Fixture {
     #[allow(clippy::too_many_lines)]
     pub async fn new() -> Self {
         let state = Arc::new(Mutex::new(State {
-            version: 1,
             modules: vec![],
             assigned: None,
             artifact: vec![],
@@ -120,7 +118,11 @@ impl Fixture {
                         } else if route.ends_with("/tests/shards") {
                             state.modules =
                                 serde_json::from_value(value["modules"].clone()).unwrap();
-                            (200, json!({"id": ID, "shard_count": 2, "reporting_version": state.version}).to_string().into_bytes(), false)
+                            (
+                                200,
+                                json!({"id": ID, "shard_count": 2}).to_string().into_bytes(),
+                                false,
+                            )
                         } else if route.ends_with("upload/start") {
                             (
                                 200,

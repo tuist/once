@@ -21,7 +21,6 @@ async fn hosted_batches_round_trip_exact_bytes_and_publish_native_retries() {
         let state = fixture.state.lock().unwrap();
         let artifact: Value = serde_json::from_slice(&state.artifact).unwrap();
         assert_eq!(artifact["shardPlanID"], hosted::ID);
-        assert_eq!(artifact["reportingVersion"], 1);
         assert_eq!(
             base64::engine::general_purpose::STANDARD
                 .decode(artifact["portablePlan"].as_str().unwrap())
@@ -179,15 +178,8 @@ async fn empty_failed_incomplete_and_rejected_reports_never_become_successful_pa
 }
 
 #[tokio::test]
-async fn legacy_reporting_upload_failure_and_foreign_artifacts_are_rejected() {
+async fn upload_failure_and_foreign_artifacts_are_rejected() {
     let fixture = hosted::Fixture::new().await;
-    fixture.state.lock().unwrap().version = 0;
-    let output = fixture
-        .invoke(&["query", "test-plan", "--shards", "2", "--reference", "ref"])
-        .await;
-    assert!(!output.status.success());
-    assert!(fixture.state.lock().unwrap().artifact.is_empty());
-    fixture.state.lock().unwrap().version = 1;
     fixture.state.lock().unwrap().reject_upload = true;
     assert!(!fixture
         .invoke(&["query", "test-plan", "--shards", "2", "--reference", "ref"])
