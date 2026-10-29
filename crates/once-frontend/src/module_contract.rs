@@ -295,6 +295,8 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
             entry("host_arch()", "Read the normalized host architecture."),
             entry("host_os()", "Read the normalized host operating system."),
             entry("host_env(name)", "Read one host environment variable."),
+            entry("host_environment_sha256()", "Record a digest of the complete inherited host environment without storing its names or values. Use before discovery commands whose results depend on arbitrary environment variables; any environment change invalidates reuse."),
+            entry("analysis_warning(message)", "Emit a user-facing warning to standard error during analysis without failing the target. Warnings do not appear in graph validation diagnostics or replay when a graph is reused."),
             entry("workspace_root()", "Read the absolute workspace root."),
             entry("host_which(name)", "Resolve a required executable."),
             entry("host_which_optional(name)", "Resolve an optional executable."),

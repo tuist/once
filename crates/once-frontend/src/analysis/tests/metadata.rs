@@ -42,13 +42,14 @@ run_action(["tool"], presentation = {"platforms": [{"scheme": "custom", "id": "t
 fn ecosystem_helpers_keep_native_identity_and_version_semantics() {
     let tmp = TempDir::new().unwrap();
     let source = format!(
-        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
         include_str!("../../../prelude/common.star"),
         include_str!("../../../prelude/rust.star"),
         include_str!("../../../prelude/elixir.star"),
         include_str!("../../../prelude/apple_modules.star"),
         include_str!("../../../prelude/apple_linux.star"),
         include_str!("../../../prelude/apple_artifacts.star"),
+        include_str!("../../../prelude/apple_build_tools.star"),
         include_str!("../../../prelude/apple.star"),
         r#"
 rust = {"attr": {"package_name": "serde", "version": "1.0", "source": "git+https://example.invalid/repo#abcdef"}, "label": {"name": "serde-1.0"}}

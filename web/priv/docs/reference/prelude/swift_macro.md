@@ -40,7 +40,7 @@ import inference and should not be authored manually.
 
 | Edge | Accepts | Description |
 | --- | --- | --- |
-| `deps` | `apple_linkable` | Libraries the plugin links against (typically a swift-syntax checkout) |
+| `deps` | `apple_linkable`, `apple_generated_files` | Libraries and generated sources used to compile the plugin |
 
 ## Providers
 

@@ -1,0 +1,8 @@
+[[target]]
+name = "workspace"
+kind = "xcode_workspace"
+srcs = ["**/*"]
+
+[target.attrs]
+project = "Fetch.xcworkspace"
+configuration = "Development"

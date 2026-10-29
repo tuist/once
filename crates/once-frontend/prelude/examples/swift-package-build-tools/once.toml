@@ -1,0 +1,4 @@
+[[target]]
+name = "package"
+kind = "swift_package_workspace"
+srcs = ["Package.swift", "Sources/**/*", "Plugins/**/*"]

@@ -1247,7 +1247,7 @@ def _resolve_attrs(ctx, attrs, label_id, non_configurable):
             fail(label_id + ": Mac Catalyst is not supported by the Linux Darwin SDK; set mac_catalyst = false")
         if out.get("swift_testing") or out.get("xctest_support"):
             fail(label_id + ": Apple testing frameworks require macOS; set swift_testing = false and xctest_support = false for Linux builds")
-    return out
+    return _apple_build_tool_attrs(ctx, out)
 
 def _attr_has_value(value):
     if value == None:
@@ -1995,7 +1995,7 @@ def _apple_library_impl(ctx):
         resolved_header_dir = _package_relative(ctx, header_dir)
         if resolved_header_dir and resolved_header_dir not in own_private_header_dirs:
             own_private_header_dirs.append(resolved_header_dir)
-    own_private_header_files = _unique((ctx["attr"].get("private_headers") or []) + _apple_header_inputs(ctx, own_private_header_dirs))
+    own_private_header_files = _unique((attrs.get("private_headers") or []) + _apple_header_inputs(ctx, own_private_header_dirs))
 
     staged_headers = []
     staged_headers_dir = ""
@@ -2764,6 +2764,7 @@ def _apple_library_impl(ctx):
         "transitive_linkopts": transitive_linkopts,
         "transitive_plugin_dylibs": transitive_plugin_dylibs,
         "transitive_plugin_executables": transitive_plugin_executables,
+        "transitive_plugin_resource_inputs": _collect_transitive(deps, "transitive_plugin_resource_inputs", []),
         "transitive_defines": transitive_defines,
         "transitive_link_framework_bundles": transitive_link_framework_bundles,
         "transitive_framework_bundles": transitive_framework_bundles,
@@ -3152,15 +3153,22 @@ def _swift_macro_impl(ctx):
         source_files = _action_source_files(swift_inputs),
     )
 
+    embedded_resources = {"files": []}
+    if _apple_collect_resource_bundles(deps):
+        embedded_resources = _apple_embed_resource_bundles(ctx, deps, "", _resolve_codesign(xcode_developer_dir), "swift_macro_embed_resource")
     return {
         "label_id": ctx["label"]["id"],
         "plugin_executable": plugin_executable,
         "module_name": module_name,
         "plugin_module_name": module_name,
         "transitive_plugin_executables": [plugin_executable + "#" + module_name],
+        "transitive_plugin_resource_inputs": _collect_transitive(deps, "transitive_plugin_resource_inputs", embedded_resources["files"]),
+        "transitive_plugin_resource_bundles": _apple_collect_resource_bundles(deps),
         "transitive_plugin_module_dirs": _unique([ctx["build_dir"]] + dep_swiftmodule_dirs),
         "transitive_plugin_modulemaps": list(dep_modulemaps),
         "transitive_plugin_header_dirs": list(dep_header_dirs),
+        "transitive_plugin_framework_search_dirs": list(dep_framework_search_dirs),
+        "transitive_plugin_framework_files": list(dep_framework_files),
         "transitive_plugin_hmaps": list(dep_hmaps),
         "transitive_plugin_vfs_overlays": list(dep_vfs_overlays),
         "transitive_plugin_archives": _unique([plugin_archive] + dep_archives),
@@ -3702,10 +3710,13 @@ _APPLE_MACRO_MODULE_KEYS = [
     "module_dirs",
     "modulemaps",
     "header_dirs",
+    "framework_search_dirs",
+    "framework_files",
     "hmaps",
     "vfs_overlays",
     "archives",
     "module_inputs",
+    "resource_bundles",
 ]
 
 def _apple_collect_macro_module_inputs(deps):
@@ -4103,6 +4114,7 @@ def _apple_mixed_framework_impl(ctx):
         "transitive_linkopts": [],
         "transitive_plugin_dylibs": library.get("transitive_plugin_dylibs") or [],
         "transitive_plugin_executables": library.get("transitive_plugin_executables") or [],
+        "transitive_plugin_resource_inputs": library.get("transitive_plugin_resource_inputs") or [],
         "transitive_resource_bundles": library.get("transitive_resource_bundles") or [],
     }
 
@@ -4132,7 +4144,7 @@ def _apple_framework_impl(ctx):
         absolute_header_dir = resolved_header_dir if resolved_header_dir.startswith("/") else workspace_root() + "/" + resolved_header_dir
         if resolved_header_dir and host_path_exists(absolute_header_dir) and resolved_header_dir not in private_header_dirs:
             private_header_dirs.append(resolved_header_dir)
-    private_header_files = _unique((ctx["attr"].get("private_headers") or []) + _apple_header_inputs(ctx, private_header_dirs))
+    private_header_files = _unique((attrs.get("private_headers") or []) + _apple_header_inputs(ctx, private_header_dirs))
 
     generated_srcs = _apple_run_prebuild_actions(ctx, attrs)
     all_srcs = _unique(glob(ctx["srcs"]) + _apple_declared_source_paths(ctx) + generated_srcs)
@@ -4374,6 +4386,7 @@ def _apple_framework_impl(ctx):
         "transitive_linkopts": transitive_linkopts,
         "transitive_plugin_dylibs": transitive_plugin_dylibs,
         "transitive_plugin_executables": transitive_plugin_executables,
+        "transitive_plugin_resource_inputs": _collect_transitive(deps, "transitive_plugin_resource_inputs", []),
     }
 
 def _apple_embed_framework_bundles(ctx, deps, bundle_dir, frameworks_dir, codesign, identifier_prefix):
@@ -4710,12 +4723,13 @@ def _apple_run_build_actions(ctx, actions, identifier_prefix, product_inputs = [
 def _apple_declared_source_paths(ctx):
     # `glob` cannot return a source that a preceding build phase creates. Keep
     # exact source paths so declared generators can materialize them first.
-    out = []
+    out = _apple_build_tool_files(ctx)["sources"]
     for path in ctx["srcs"]:
         if "*" in path or "?" in path or "[" in path:
             continue
         if _filter_swift_sources([path]) or _filter_objc_sources([path]) or _filter_c_sources([path]) or _filter_cxx_sources([path]) or _filter_assembly_sources([path]):
-            out.append(_apple_script_output_path(ctx, path))
+            matches = glob([path])
+            out.extend(matches if matches else [_apple_script_output_path(ctx, _package_relative(ctx, path))])
     return _unique(out)
 
 def _apple_swift_emits_single_object(flags):
@@ -4780,7 +4794,7 @@ def _apple_application_impl(ctx):
         absolute_header_dir = resolved_header_dir if resolved_header_dir.startswith("/") else workspace_root() + "/" + resolved_header_dir
         if resolved_header_dir and host_path_exists(absolute_header_dir) and resolved_header_dir not in private_header_dirs:
             private_header_dirs.append(resolved_header_dir)
-    private_header_files = _unique((ctx["attr"].get("private_headers") or []) + _apple_header_inputs(ctx, private_header_dirs))
+    private_header_files = _unique((attrs.get("private_headers") or []) + _apple_header_inputs(ctx, private_header_dirs))
     application_extension = attrs.get("application_extension") or False
     enable_testing = attrs.get("enable_testing") or False
     if enable_testing:
@@ -5730,7 +5744,7 @@ def _apple_test_bundle_impl(ctx):
         absolute_header_dir = resolved_header_dir if resolved_header_dir.startswith("/") else workspace_root() + "/" + resolved_header_dir
         if resolved_header_dir and host_path_exists(absolute_header_dir) and resolved_header_dir not in private_header_dirs:
             private_header_dirs.append(resolved_header_dir)
-    private_header_files = _apple_header_inputs(ctx, private_header_dirs)
+    private_header_files = _unique((attrs.get("private_headers") or []) + _apple_header_inputs(ctx, private_header_dirs))
     swift_testing = attrs.get("swift_testing") or False
     ui_testing = attrs.get("ui_testing") or False
     test_env = attrs.get("test_env") or {}
@@ -5846,6 +5860,8 @@ def _apple_test_bundle_impl(ctx):
         (compile_swiftmodule_dirs, "module_dirs"),
         (dep_modulemaps, "modulemaps"),
         (compile_header_dirs, "header_dirs"),
+        (framework_search_dirs, "framework_search_dirs"),
+        (dep_framework_files, "framework_files"),
         (dep_hmaps, "hmaps"),
         (dep_vfs_overlays, "vfs_overlays"),
         (compile_swiftmodule_inputs, "module_inputs"),
@@ -6218,7 +6234,7 @@ def _apple_test_bundle_impl(ctx):
     )
     embedded_resource_bundles = _apple_embed_resource_bundles(
         ctx,
-        deps,
+        deps + [{"transitive_resource_bundles": macro_modules["resource_bundles"]}],
         resource_destination,
         codesign,
         "apple_test_bundle_embed_resource",
@@ -6991,7 +7007,7 @@ swift_macro = target_kind(
         attr("xcode_developer_dir", "string", docs = "Pin a specific Xcode by overriding `DEVELOPER_DIR`. Folded into the action cache key"),
     ],
     deps = [
-        dep("deps", ["apple_linkable"], "Libraries the plugin links against (typically a swift-syntax checkout)"),
+        dep("deps", ["apple_linkable", "apple_generated_files"], "Libraries and generated sources used to compile the plugin"),
     ],
     providers = ["apple_swift_plugin"],
     capabilities = [
@@ -7192,7 +7208,7 @@ apple_library = target_kind(
         attr("auxiliary_modulemaps", "list<string>", default = "[]", docs = "Additional Clang module maps referenced by this module's public Swift interface"),
     ],
     deps = [
-        dep("deps", ["apple_linkable", "apple_resource", "apple_swift_plugin", "native_linkable"], "Libraries, frameworks, resources, native linkables, or Swift compiler plugins consumed by this library"),
+        dep("deps", ["apple_linkable", "apple_resource", "apple_swift_plugin", "native_linkable", "apple_generated_files"], "Libraries, frameworks, resources, native linkables, Swift compiler plugins, or generated package files consumed by this library"),
     ],
     providers = ["apple_linkable", "apple_module"],
     capabilities = [
@@ -7368,7 +7384,7 @@ def _apple_executable_impl(ctx):
         absolute_header_dir = resolved_header_dir if resolved_header_dir.startswith("/") else workspace_root() + "/" + resolved_header_dir
         if resolved_header_dir and host_path_exists(absolute_header_dir) and resolved_header_dir not in own_header_dirs:
             own_header_dirs.append(resolved_header_dir)
-    own_header_files = _unique((ctx["attr"].get("private_headers") or []) + _apple_header_inputs(ctx, own_header_dirs))
+    own_header_files = _unique((attrs.get("private_headers") or []) + _apple_header_inputs(ctx, own_header_dirs))
 
     generated_srcs = _apple_run_prebuild_actions(ctx, attrs)
     all_srcs = _unique(glob(ctx["srcs"]) + _apple_declared_source_paths(ctx) + generated_srcs)
@@ -7727,7 +7743,7 @@ apple_application = target_kind(
         attr("enable_testing", "bool", default = "false", docs = "Compile Swift with testability enabled so hosted test bundles can `@testable import` the application module"),
     ],
     deps = [
-        dep("deps", ["apple_linkable", "apple_framework", "apple_resource", "apple_application", "apple_swift_plugin", "native_linkable"], "Libraries, frameworks, resources, application extensions, native linkables, and Swift compiler plugins embedded in the app"),
+        dep("deps", ["apple_linkable", "apple_framework", "apple_resource", "apple_application", "apple_swift_plugin", "native_linkable", "apple_generated_files"], "Libraries, frameworks, resources, application extensions, native linkables, Swift compiler plugins, and generated package files embedded in the app"),
     ],
     providers = ["apple_application", "apple_bundle", "once_artifact_info"],
     capabilities = [
@@ -7860,7 +7876,7 @@ apple_test_bundle = target_kind(
         attr("labels", "list<string>", default = "[]", docs = "Agent-readable labels used for filtering or policy"),
     ],
     deps = [
-        dep("deps", ["apple_linkable", "apple_application", "apple_swift_plugin", "native_linkable"], "Code under test, optional host application, native linkables, and Swift compiler plugins"),
+        dep("deps", ["apple_linkable", "apple_application", "apple_swift_plugin", "native_linkable", "apple_generated_files"], "Code under test, optional host application, native linkables, Swift compiler plugins, and generated package files"),
     ],
     providers = ["apple_test_bundle", "apple_bundle", "once_test_info"],
     capabilities = [
@@ -7901,4 +7917,29 @@ shellspec_test = target_kind(
         ),
     ],
     impl = _shellspec_test_impl,
+)
+
+swift_package_build_tools = target_kind(
+    docs = "Plans Swift package build-tool plugins with the selected Swift toolchain, runs their declared commands, and provides generated sources, headers, and resources to native Apple targets.",
+    impl = _apple_build_tools_impl,
+    attrs = [
+        attr("package_path", "string", required = True, docs = "Absolute path of the package declaring the target.", configurable = False),
+        attr("target_name", "string", required = True, docs = "Native package target whose build-tool plugins run.", configurable = False),
+        attr("build_role", "string", default = "destination", docs = "Plugin output role, tools for host consumers or destination for application consumers.", configurable = False, allowed_values = ["tools", "destination"]),
+        attr("dependencies", "map<string,string>", default = "{}", docs = "Resolver-owned JSON dependency records keyed by package identity, containing path, authoritative pin, and manifest locations for isolated planning.", configurable = False),
+        attr("per_language_clang_flags", "map<string,string>", default = "{}", docs = "Resolver-owned JSON flag arrays keyed by c or cxx, applied to generated native sources.", configurable = False),
+        attr("traits", "list<string>", default = "[]", docs = "Enabled package traits.", configurable = False),
+        attr("declares_traits", "bool", default = "false", docs = "Whether the consuming package declares traits, including when its resolved selection is empty.", configurable = False),
+        attr("platform", "string", default = "macos", docs = "Destination platform used when planning the consuming target.", configurable = False),
+        attr("minimum_os", "string", default = "13.0", docs = "Minimum destination operating system version.", configurable = False),
+        attr("sdk_variant", "string", default = "simulator", docs = "Destination SDK variant, simulator or device.", configurable = False),
+        attr("configuration", "string", default = "Debug", docs = "Package configuration; names containing debug or development select debug, other names select release.", configurable = False),
+        attr("xcode_developer_dir", "string", docs = "Xcode Developer directory used to select the host Swift toolchain.", configurable = False),
+    ],
+    providers = ["apple_generated_files"],
+    capabilities = [capability("build", ["default"])],
+    source_references = [
+        source_reference("swift-build", "CustomTaskProducer", "https://github.com/swiftlang/swift-build/blob/main/Sources/SWBTaskConstruction/TaskProducers/OtherTaskProducers/CustomTaskProducer.swift", "Models build-tool commands with explicit inputs, outputs, environment, and working directory."),
+    ],
+    examples = [example("swift-package-build-tools", name = "Swift package source generator", use_when = "A package target uses a build-tool plugin to generate Swift sources.", platforms = ["macos"])],
 )

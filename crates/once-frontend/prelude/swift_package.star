@@ -16,6 +16,7 @@ def _swift_package_workspace_resolver(ctx):
     # directory is often visited more than once during resolution. Threading
     # this dict through every info call collapses duplicates to one subprocess.
     swift_info_cache = {}
+    host_environment_sha256()
     info = json_decode(host_command([swift, "package", "dump-package", "--package-path", absolute_package_path], env = swiftc["env"]))
     swift_info_cache[absolute_package_path] = {"info": info}
     package = {"identity": _basename(package_path) or info.get("name") or ctx["label"]["name"], "path": package_path, "info": info}
@@ -107,6 +108,9 @@ def _swift_package_remote_infos(ctx, package_info, swift, env, absolute_package_
             if not host_file_exists(absolute + "/Package.swift"):
                 fail("registry package `" + (pin.get("raw_identity") or pin["identity"]) + "@" + (pin.get("version") or "") + "` is not present at `" + package_dir + "`; run `swift package resolve` in " + absolute_package_path)
             info = _xcode_swift_package_info(ctx, package_dir, pin.get("raw_identity") or pin["identity"], cache = cache)
+            if info:
+                info = dict(info)
+                info["pin"] = {"identity": pin.get("raw_identity") or pin["identity"], "kind": "registry", "state": {"version": pin["version"]}}
         else:
             fail("native Swift package integration supports source-control and registry dependencies, but `" + (pin.get("raw_identity") or pin["identity"]) + "` has source kind `" + (kind or "unknown") + "`")
         if info:

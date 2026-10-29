@@ -22,6 +22,69 @@ SH
     cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/swift-package-workspace-native-project/." "$WORKSPACE/"
   }
 
+  test_manifest_build_settings() {
+    mkdir -p "$WORKSPACE/Sources/Native/include" "$WORKSPACE/Sources/Probe"
+    cat > "$WORKSPACE/Package.swift" <<'SWIFT'
+// swift-tools-version: 6.2
+import Foundation
+import PackageDescription
+let environment = ProcessInfo.processInfo.environment
+let package = Package(name: "Probe", products: [.executable(name: "Probe", targets: ["Probe"])], targets: [
+    .target(name: "Native", cSettings: [.treatAllWarnings(as: .error)],
+            cxxSettings: [.treatAllWarnings(as: .warning)],
+            linkerSettings: [.linkedLibrary("sqlite3"), .linkedLibrary("z"), .linkedLibrary("c++"),
+                             .linkedFramework("Security"), .linkedFramework("Foundation")]),
+    .executableTarget(name: "Probe", dependencies: ["Native"], swiftSettings: [
+        .define(environment["ONCE_PROBE_VALUE"] == "second" ? "SECOND" : "FIRST"),
+        .treatAllWarnings(as: environment["ONCE_PROBE_ALLOW_WARNING"] == "1" ? .warning : .error),
+    ]),
+])
+SWIFT
+    cat > "$WORKSPACE/Sources/Native/include/Native.h" <<'C'
+#ifdef __cplusplus
+extern "C" {
+#endif
+int nativeValue(void);
+#ifdef __cplusplus
+}
+#endif
+C
+    cat > "$WORKSPACE/Sources/Native/value.cpp" <<'CXX'
+#include "Native.h"
+#include <sqlite3.h>
+#include <zlib.h>
+#include <string>
+#warning C++ warning must remain nonfatal despite the C warning policy
+int nativeValue(void) {
+    return sqlite3_libversion_number() > 0 && std::string(zlibVersion()).size() > 0 ? 23 : 0;
+}
+CXX
+    cat > "$WORKSPACE/Sources/Probe/main.swift" <<'SWIFT'
+import Native
+#warning("Swift warning policy probe")
+#if SECOND
+print("second:\(nativeValue())")
+#else
+print("first:\(nativeValue())")
+#endif
+SWIFT
+    if ONCE_PROBE_ALLOW_WARNING=0 once --memory-limit 2GiB build --quiet > "$WORKSPACE/fatal.out" 2> "$WORKSPACE/fatal.err"; then
+      return 1
+    fi
+    grep -q 'error: Swift warning policy probe' "$WORKSPACE/fatal.err" || return
+    ONCE_PROBE_ALLOW_WARNING=1 ONCE_PROBE_VALUE=first once --memory-limit 2GiB build --quiet > "$WORKSPACE/first.out" 2> "$WORKSPACE/first.err" || {
+      cat "$WORKSPACE/first.err"
+      return 1
+    }
+    binary="$WORKSPACE/.once/out/SwiftPackage_Probe_Probe/Probe.app/Contents/MacOS/Probe"
+    [ "$("$binary")" = first:23 ] || return 1
+    ONCE_PROBE_ALLOW_WARNING=1 ONCE_PROBE_VALUE=second once --memory-limit 2GiB build --quiet > "$WORKSPACE/second.out" 2> "$WORKSPACE/second.err" || {
+      cat "$WORKSPACE/second.err"
+      return 1
+    }
+    [ "$("$binary")" = second:23 ]
+  }
+
   test_dependency_resources() {
     mkdir -p "$WORKSPACE/Sources/Data" "$WORKSPACE/Tests/DataTests" \
       "$WORKSPACE/Sources/CValue/include" "$WORKSPACE/Sources/CValue/Private/nested"
@@ -197,6 +260,14 @@ SWIFT
     The status should be success
     The output should equal ''
     The path "$WORKSPACE/.once/out/SwiftPackage_ResourcePackage_DataTests/DataTests.xctest/Contents/Resources/ResourcePackage_Data.bundle/value.txt" should be file
+  End
+
+  It 'honors package linking and warning policies and invalidates inherited manifest switches'
+    Skip if 'Apple Swift toolchain unavailable on this host' swift_package_tools_unavailable
+
+    When call test_manifest_build_settings
+    The status should be success
+    The output should equal ''
   End
 
   It 'builds and tests a discovered Swift package without a Once manifest'

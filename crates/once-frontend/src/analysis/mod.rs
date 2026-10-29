@@ -15,7 +15,7 @@ mod engine;
 mod globals;
 mod presentation;
 
-pub use globals::flush_host_tree_digest_caches;
+pub use globals::{flush_host_tree_digest_caches, inherited_environment_sha256};
 mod store;
 mod values;
 

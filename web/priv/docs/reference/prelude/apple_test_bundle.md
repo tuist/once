@@ -123,7 +123,7 @@ for mapped build settings and file-list variables.
 
 | Edge | Accepts | Description |
 | --- | --- | --- |
-| `deps` | `apple_linkable`, `apple_application`, `apple_swift_plugin`, `native_linkable` | Code under test, optional host application, native linkables, and Swift compiler plugins |
+| `deps` | `apple_linkable`, `apple_application`, `apple_swift_plugin`, `native_linkable`, `apple_generated_files` | Code under test, optional host application, native linkables, compiler plugins, and generated package files |
 
 ## Providers
 

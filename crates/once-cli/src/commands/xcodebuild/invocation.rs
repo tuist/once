@@ -8,6 +8,7 @@ pub(super) struct Invocation {
     pub(super) quiet: bool,
     scheme: String,
     project: Option<String>,
+    configuration: String,
 }
 
 impl Invocation {
@@ -19,16 +20,16 @@ impl Invocation {
                 "-project" => {
                     parser.project = Some(parser.value(argv, &mut index, ProjectKind::Project)?);
                 }
+                "-workspace" => {
+                    parser.project =
+                        Some(parser.value(argv, &mut index, ProjectKind::Workspace)?);
+                }
                 "-scheme" => {
                     parser.scheme = Some(parser.value(argv, &mut index, ProjectKind::Scheme)?);
                 }
-                "-configuration" if !parser.debug_configuration => {
-                    let configuration =
-                        parser.value(argv, &mut index, ProjectKind::Configuration)?;
-                    if configuration != "Debug" {
-                        return None;
-                    }
-                    parser.debug_configuration = true;
+                "-configuration" if parser.configuration.is_none() => {
+                    parser.configuration =
+                        Some(parser.value(argv, &mut index, ProjectKind::Configuration)?);
                 }
                 "-quiet" if !parser.quiet => parser.quiet = true,
                 "build" if !parser.build => parser.build = true,
@@ -53,7 +54,12 @@ impl Invocation {
         let [workspace] = workspaces.as_slice() else {
             return None;
         };
-        if !workspace_uses_debug_configuration(workspace)
+        if workspace
+            .attrs
+            .get("configuration")
+            .and_then(once_frontend::AttrValue::as_str)
+            .unwrap_or("Debug")
+            != self.configuration
             || !project_matches_workspace(self.project.as_ref(), workspace)
         {
             return None;
@@ -82,7 +88,7 @@ impl Invocation {
 struct Parser {
     quiet: bool,
     build: bool,
-    debug_configuration: bool,
+    configuration: Option<String>,
     project: Option<String>,
     project_kind: Option<ProjectKind>,
     scheme: Option<String>,
@@ -91,6 +97,7 @@ struct Parser {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ProjectKind {
     Project,
+    Workspace,
     Scheme,
     Configuration,
 }
@@ -102,8 +109,16 @@ impl Parser {
             return None;
         }
         match kind {
-            ProjectKind::Project => {
+            ProjectKind::Project | ProjectKind::Workspace => {
                 if self.project_kind.replace(kind).is_some() {
+                    return None;
+                }
+                let extension = if kind == ProjectKind::Project {
+                    "xcodeproj"
+                } else {
+                    "xcworkspace"
+                };
+                if Path::new(&value).extension()?.to_str()? != extension {
                     return None;
                 }
             }
@@ -119,23 +134,13 @@ impl Parser {
     }
 
     fn finish(self) -> Option<Invocation> {
-        if !self.debug_configuration {
-            return None;
-        }
         Some(Invocation {
             quiet: self.quiet,
             scheme: self.scheme?,
             project: self.project,
+            configuration: self.configuration?,
         })
     }
-}
-
-fn workspace_uses_debug_configuration(workspace: &GraphTarget) -> bool {
-    workspace
-        .attrs
-        .get("configuration")
-        .and_then(once_frontend::AttrValue::as_str)
-        .is_none_or(|configuration| configuration == "Debug")
 }
 
 fn project_matches_workspace(project: Option<&String>, workspace: &GraphTarget) -> bool {
@@ -155,7 +160,9 @@ fn configured_project(workspace: &GraphTarget) -> Option<PathBuf> {
         .attrs
         .get("project")
         .and_then(once_frontend::AttrValue::as_str)
-        .and_then(normalized_project_path)
+        .and_then(|project| {
+            normalized_project_path(Path::new(&workspace.label.package).join(project).to_str()?)
+        })
 }
 
 fn project_from_sources(sources: &[String]) -> Option<PathBuf> {
@@ -194,7 +201,7 @@ fn normalized_project_path(project: &str) -> Option<PathBuf> {
         normalized
             .extension()
             .and_then(|extension| extension.to_str()),
-        Some("xcodeproj")
+        Some("xcodeproj" | "xcworkspace")
     )
     .then_some(normalized)
 }
@@ -296,7 +303,15 @@ mod tests {
         for invalid in [
             ["-scheme", "Client", "test"].as_slice(),
             ["-scheme", "Client"].as_slice(),
-            ["-scheme", "Client", "-configuration", "Release"].as_slice(),
+            [
+                "-scheme",
+                "Client",
+                "-configuration",
+                "Debug",
+                "-configuration",
+                "Release",
+            ]
+            .as_slice(),
             ["-workspace", "Client.xcworkspace", "-scheme", "Client"].as_slice(),
             [
                 "-scheme",
@@ -331,6 +346,33 @@ mod tests {
     }
 
     #[test]
+    fn routes_custom_configurations_only_when_the_seed_matches() {
+        let mut workspace = target("xcode", "xcode_workspace", &["Client"], &["build"]);
+        workspace.attrs.insert(
+            "configuration".into(),
+            once_frontend::AttrValue::String("Development".into()),
+        );
+        let graph = vec![
+            workspace,
+            target("Client", "apple_application", &[], &["build"]),
+        ];
+
+        for configuration in ["Development", "Debug", "Release"] {
+            let invocation = Invocation::parse(&arguments(&[
+                "-scheme",
+                "Client",
+                "-configuration",
+                configuration,
+            ]))
+            .unwrap();
+            assert_eq!(
+                invocation.target(&graph).as_deref(),
+                (configuration == "Development").then_some("Client")
+            );
+        }
+    }
+
+    #[test]
     fn selects_a_project_only_when_it_matches_the_workspace_seed() {
         let mut workspace = target("xcode", "xcode_workspace", &["Client"], &["build"]);
         workspace.srcs = vec!["Client.xcodeproj/project.pbxproj".to_string()];
@@ -360,6 +402,49 @@ mod tests {
 
         assert_eq!(matching.target(&graph).as_deref(), Some("Client"));
         assert_eq!(other.target(&graph), None);
+    }
+
+    #[test]
+    fn routes_a_nested_workspace_with_its_configured_container() {
+        let mut workspace = target("Apps/seed", "xcode_workspace", &["Apps/Client"], &["build"]);
+        workspace.label.package = "Apps".into();
+        workspace.attrs.insert(
+            "project".into(),
+            once_frontend::AttrValue::String("Client.xcworkspace".into()),
+        );
+        let mut client = target("Apps/Client", "apple_application", &[], &["build"]);
+        client.label.name = "Client".into();
+        let graph = vec![workspace, client];
+
+        for container in [
+            "./Apps/Client.xcworkspace",
+            "Client.xcworkspace",
+            "Apps/Other.xcworkspace",
+        ] {
+            let invocation = Invocation::parse(&arguments(&[
+                "-workspace",
+                container,
+                "-scheme",
+                "Client",
+                "-configuration",
+                "Debug",
+                "build",
+            ]))
+            .unwrap();
+            assert_eq!(
+                invocation.target(&graph).as_deref(),
+                (container == "./Apps/Client.xcworkspace").then_some("Apps/Client")
+            );
+        }
+        assert!(Invocation::parse(&arguments(&[
+            "-project",
+            "Apps/Client.xcworkspace",
+            "-scheme",
+            "Client",
+            "-configuration",
+            "Debug",
+        ]))
+        .is_none());
     }
 
     #[test]

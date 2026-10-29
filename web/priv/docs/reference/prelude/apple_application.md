@@ -119,7 +119,7 @@ for mapped build settings and file-list variables.
 
 | Edge | Accepts | Description |
 | --- | --- | --- |
-| `deps` | `apple_linkable`, `apple_framework`, `apple_resource`, `apple_swift_plugin`, `native_linkable` | Libraries, frameworks, resources, native linkables, and Swift compiler plugins embedded in the app |
+| `deps` | `apple_linkable`, `apple_framework`, `apple_resource`, `apple_swift_plugin`, `native_linkable`, `apple_generated_files` | Libraries, frameworks, resources, native linkables, compiler plugins, or generated package files consumed by the app |
 
 Transitive library resource bundles are embedded at the application root on
 iOS and in `Contents/Resources` on macOS.

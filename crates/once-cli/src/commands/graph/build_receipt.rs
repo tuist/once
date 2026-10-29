@@ -25,6 +25,8 @@ pub(super) struct BuildReceipt {
     #[serde(default)]
     configuration: String,
     environment: BTreeMap<String, Option<String>>,
+    #[serde(default)]
+    inherited_environment_sha256: String,
     host_paths: BTreeMap<String, Option<PathFingerprint>>,
     source_digests: BTreeMap<String, Digest>,
     /// What this build produced, by content.
@@ -106,7 +108,10 @@ pub(super) async fn load(
         )
     {
         Some("output change")
-    } else if !changed_environment.is_empty() {
+    } else if !changed_environment.is_empty()
+        || receipt.inherited_environment_sha256
+            != once_frontend::analysis::inherited_environment_sha256()
+    {
         Some("environment")
     } else if !changed_host_paths.is_empty() {
         Some("host path")
@@ -180,6 +185,7 @@ pub(super) async fn store(
         sandbox: sandbox_key(sandbox),
         configuration: configuration_digest.to_hex(),
         environment: observations.environment.clone(),
+        inherited_environment_sha256: once_frontend::analysis::inherited_environment_sha256(),
         host_paths: path_fingerprint::capture(observations.host_paths),
         source_digests: observations.source_digests.clone(),
         produced: observations.produced.clone(),
@@ -515,6 +521,26 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(loaded.cache, "hit");
+
+        let mut changed_environment = read(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+        )
+        .await
+        .unwrap();
+        changed_environment.inherited_environment_sha256 = "previous environment".to_owned();
+        assert!(load(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+            Some(&snapshot),
+            Some(changed_environment),
+        )
+        .await
+        .is_none());
 
         let changed = ChangeSnapshot {
             position: ChangePosition {

@@ -26,6 +26,10 @@ both `once.toml` manifests and native project markers such as `Cargo.toml` and
 discovered manifest and native project is included unless `exclude` removes
 it.
 
+A directory exclusion also excludes its descendants: `exclude = ["Demos"]`
+prunes the entire `Demos` subtree, without excluding a sibling named
+`DemosOther`.
+
 ## Root-only Tables
 
 These tables are read only from the root manifest:
@@ -134,7 +138,7 @@ Every target accepts these common fields:
 | --- | --- | --- |
 | `name` | yes | Name unique within the package. |
 | `kind` | yes | Target kind that defines attributes, dependencies, providers, and capabilities. |
-| `srcs` | no | Package-relative source paths or glob patterns. |
+| `srcs` | no | Package-relative source paths or glob patterns. Paths starting with `.once/` refer to runtime state at the workspace root. |
 | `deps` | no | Target identifiers consumed by this target. |
 | `dependencies` | no | Named dependency roles declared by the target kind. Each role contains target identifiers and validates its own provider contract. |
 | `visibility` | no | Consumers allowed to depend on this target. An empty list is public. |

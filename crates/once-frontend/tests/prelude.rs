@@ -142,11 +142,12 @@ fn fake_android_ndk_for_mobile_test(workspace: &Path) -> std::path::PathBuf {
 
 fn apple_prelude_source() -> String {
     format!(
-        "{}\n{}\n{}\n{}\n{}\ndef host_os():\n    return \"macos\"\n",
+        "{}\n{}\n{}\n{}\n{}\n{}\ndef host_os():\n    return \"macos\"\n",
         include_str!("../prelude/common.star"),
         include_str!("../prelude/apple_modules.star"),
         include_str!("../prelude/apple_linux.star"),
         include_str!("../prelude/apple_artifacts.star"),
+        include_str!("../prelude/apple_build_tools.star"),
         include_str!("../prelude/apple.star")
     )
 }
@@ -15370,7 +15371,7 @@ def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True
     fail("unexpected host command: " + str(argv))
 
 info = _xcode_swift_package_info({{}}, "Packages/SystemPath", "system-path")
-graph = _xcode_local_swift_package_specs({{}}, [info], "macos", "13.0", "simulator")
+graph = _xcode_local_swift_package_specs({{"label": {{"package": ""}}}}, [info], "macos", "13.0", "simulator")
 spec = graph["specs"][0]
 result = repr([
     info["info"]["targets"][0]["path"],
@@ -15637,8 +15638,7 @@ fn prelude_xcode_lowers_swift_macros_as_transitive_host_tools() {
     let prelude = xcode_prelude_source();
     let source = format!(
         r#"{prelude}
-def glob(patterns):
-    pattern = patterns[0]
+def _xcode_package_files(pattern):
     if "AppMacros" in pattern:
         return ["Packages/AppMacros/Sources/AppMacros/Plugin.swift"]
     if "SyntaxSupport" in pattern:
@@ -18052,12 +18052,13 @@ fn prelude_xcode_parse_workspace_data_resolves_nested_project_paths() {
     // generated workspace lists its dependency projects under `.build`.
     let data = r#"<?xml version="1.0" encoding="UTF-8"?>
 <Workspace version = "1.0">
-   <FileRef location = "group:Tuist.xcodeproj"></FileRef>
+   <FileRef location="group:Tuist.xcodeproj"/>
    <Group location = "group:.build" name = ".build">
       <Group location = "group:registry" name = "registry">
          <Group location = "group:kolos65" name = "kolos65">
             <Group location = "group:Mockable" name = "Mockable">
-               <FileRef location = "group:0.6.2/Mockable.xcodeproj"></FileRef>
+               <FileRef
+                   location = 'group:0.6.2/Mockable.xcodeproj'></FileRef>
             </Group>
          </Group>
       </Group>

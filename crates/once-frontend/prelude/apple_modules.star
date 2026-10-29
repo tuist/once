@@ -56,6 +56,7 @@ def _apple_module_toolchain_identity(swiftc):
     return "once.apple.modules.v1\x00" + content_sha256(_json_encode(identities))
 
 def _apple_swift_action(ctx, attrs, swiftc, deps, **action):
+    action["inputs"] = _unique(action["inputs"] + _collect_transitive(deps, "transitive_plugin_resource_inputs", []))
     if attrs.get("dependency_check") not in [None, "off", "error"]:
         fail("dependency_check must be off or error")
     if attrs.get("dependency_check") == "error" and not attrs.get("explicit_modules"):

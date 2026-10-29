@@ -265,6 +265,9 @@ pub enum Observation {
         name: String,
         value: Option<String>,
     },
+    EnvironmentDigest {
+        sha256: String,
+    },
     Which {
         name: String,
         resolved: Option<String>,

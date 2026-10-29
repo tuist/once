@@ -28,6 +28,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -176,6 +177,13 @@ pub(super) struct PerActionOutcome {
     pub exit_code: i32,
 }
 
+fn has_uncached_actions(cache_state: EvidenceCacheState, actions: &[PerActionOutcome]) -> bool {
+    cache_state == EvidenceCacheState::Bypass
+        || actions
+            .iter()
+            .any(|action| action.cache_state == EvidenceCacheState::Bypass)
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub(super) struct AvailableInput {
     pub blob_digest: Digest,
@@ -221,6 +229,7 @@ pub(super) struct BuildSession {
     /// paths themselves rather than a question about patterns.
     changes: Arc<KnownChanges>,
     target_outcomes: Arc<TargetOutcomes>,
+    uncached_work: AtomicBool,
     sandbox: SandboxMode,
     output_observer: Option<Arc<dyn ActionOutputObserver>>,
     /// Optional per-run event bus so the scheduler can publish
@@ -384,6 +393,7 @@ impl BuildSession {
                 "",
                 recorded_digest_position(workspace).as_ref(),
             )),
+            uncached_work: AtomicBool::new(false),
             sandbox,
             output_observer: None,
             event_bus: None,
@@ -473,6 +483,10 @@ impl BuildSession {
     /// describes, so the next invocation can skip the targets nothing touched.
     pub(super) fn record_target_outcomes(&self, position: Option<&ChangePosition>) {
         self.target_outcomes.save(position);
+    }
+
+    pub(super) fn performed_uncached_work(&self) -> bool {
+        self.uncached_work.load(Ordering::Relaxed)
     }
 
     /// The digests recorded for a build's outputs, so a receipt can name what
@@ -832,6 +846,7 @@ impl BuildSession {
             &self.targets,
             reachable,
             retained,
+            &self.uncached_work,
         )
         .run()
         .await

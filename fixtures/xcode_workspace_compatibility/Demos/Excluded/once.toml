@@ -1,0 +1,3 @@
+[[target]]
+name = "must_not_discover"
+kind = "does_not_exist"

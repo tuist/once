@@ -51,6 +51,14 @@ pub fn globals_for_prelude() -> Globals {
 #[starlark_module]
 fn prelude_globals(builder: &mut GlobalsBuilder) {
     #[allow(clippy::unnecessary_wraps)]
+    fn analysis_warning(message: &str) -> anyhow::Result<NoneType> {
+        if analysis_active() {
+            eprintln!("warning: {message}");
+        }
+        Ok(NoneType)
+    }
+
+    #[allow(clippy::unnecessary_wraps)]
     fn action_history_key<'v>(
         namespace: Value<'v>,
         components: Value<'v>,
@@ -97,6 +105,18 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             value: value.clone(),
         });
         Ok(value.unwrap_or_default())
+    }
+
+    #[allow(clippy::unnecessary_wraps)]
+    fn host_environment_sha256() -> anyhow::Result<String> {
+        if !analysis_active() {
+            return Ok(String::new());
+        }
+        let sha256 = inherited_environment_sha256();
+        observe(Observation::EnvironmentDigest {
+            sha256: sha256.clone(),
+        });
+        Ok(sha256)
     }
 
     /// Active workspace root as an absolute path. Schema parsing
@@ -2172,6 +2192,7 @@ fn observation_holds(
     match observation {
         Observation::Platform { arch, os } => arch == host_arch_str() && os == host_os_str(),
         Observation::Env { name, value } => &host_cache.env(name) == value,
+        Observation::EnvironmentDigest { sha256 } => &inherited_environment_sha256() == sha256,
         Observation::Which { name, resolved } => {
             host_cache.which(name).ok().as_ref() == Some(resolved)
         }
@@ -2267,6 +2288,19 @@ fn path_expansion_kind(kind: &str) -> &'static str {
 pub(super) fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = sha2::Sha256::new();
     hasher.update(bytes);
+    hex_lower(&hasher.finalize())
+}
+
+#[must_use]
+pub fn inherited_environment_sha256() -> String {
+    let mut hasher = sha2::Sha256::new();
+    for (name, value) in std::env::vars_os().collect::<BTreeMap<_, _>>() {
+        for part in [name, value] {
+            let bytes = part.as_encoded_bytes();
+            hasher.update((bytes.len() as u64).to_le_bytes());
+            hasher.update(bytes);
+        }
+    }
     hex_lower(&hasher.finalize())
 }
 
@@ -2390,6 +2424,7 @@ mod observation_completeness_tests {
     /// the same call with the same arguments cannot produce a different answer.
     const PURE: &[&str] = &[
         "action_history_key",
+        "analysis_warning",
         "cmd_args",
         "content_sha256",
         "copy_path",
@@ -2414,6 +2449,7 @@ mod observation_completeness_tests {
         "host_arch",
         "host_command",
         "host_env",
+        "host_environment_sha256",
         "host_file_contains",
         "host_file_exists",
         "host_file_read",

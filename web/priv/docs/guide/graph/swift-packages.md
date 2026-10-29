@@ -95,6 +95,42 @@ Once adds the semantic package name only for tools version 5.9 or newer, where
 package-scoped access is part of the manifest contract. Older manifests remain
 isolated by module.
 
+Native package lowering preserves `linkerSettings` for linked libraries,
+frameworks, and unsafe linker flags, together with platform, configuration, and
+trait conditions. It also honors `.treatAllWarnings(as:)` independently for
+Swift, C, and C++ settings.
+
+Manifest evaluation observes a hash of the inherited environment, so toggling
+variables that select targets or plugins invalidates cached resolution. The
+hash does not store environment names or values. This is conservative: even
+unrelated environment changes invalidate resolution. Build receipt fast paths
+also require an unchanged inherited environment.
+
+Xcode's discovery-only scan for local package products skips unreadable
+manifests with a warning, for example templates containing placeholders.
+Manifests referenced by the graph must still load successfully.
+
+Build-tool plugins execute before native compilation. Swift Package Manager
+compiles the plugins and their host tools, evaluates the commands, and runs
+prebuild commands to discover their outputs. Once then schedules the declared
+build commands with their argument vectors, inputs, outputs, environment, and
+working directory. Generated sources, headers, and resources become inputs to
+the consuming target. Commands without outputs still run when the package uses
+Swift tools version 6 or newer, including validation tools that fail the build.
+
+Plugin planning uses only the consuming package as a workspace root, with local
+mirrors and authoritative pins for its source-control dependencies. Missing pins
+fail planning instead of selecting new versions. It does not build the
+application's ordinary package products. Planning and plugin commands inherit
+the host environment, run locally without sandboxing, and bypass the action
+cache. Native compilation and packaging retain their normal content-addressed
+caching. SwiftPM may also evaluate plugins on other targets in the consuming
+package while planning, including test targets. This integration is tested
+against Apple Swift 6.3.3 and uses SwiftPM's unsupported multi-root and native
+planning interfaces, whose formats may change between toolchains. See
+[`swift_package_build_tools`](/reference/prelude/swift_package_build_tools)
+for its contract and compatibility limits.
+
 ## Prerequisites
 
 Install Xcode and its command-line tools, then verify the selected Swift
@@ -148,6 +184,10 @@ once build SwiftPackage_MyPackage_MyLibrary
 There is no Once initialization step. A first build can access the network when
 Swift Package Manager must create `Package.resolved` or Once must materialize a
 pinned source dependency.
+
+Once reuses a checkout that already contains the pinned commit. Otherwise it
+tries a shallow fetch and retries without a depth limit when the server does
+not support shallow clients.
 
 Once preserves package traits requested by dependencies, including traits that
 enable other traits and conditional requests. Code guarded by a dependency's
