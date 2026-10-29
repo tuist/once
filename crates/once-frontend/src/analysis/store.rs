@@ -257,6 +257,9 @@ fn is_false(value: &bool) -> bool {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Observation {
+    EnvironmentDigest {
+        sha256: String,
+    },
     Platform {
         arch: String,
         os: String,
@@ -1058,7 +1061,7 @@ impl HostCache {
     }
 }
 
-fn capture_host_command_output(
+pub(super) fn capture_host_command_output(
     command: &mut Command,
     max_output_bytes: u64,
 ) -> Result<(ExitStatus, Vec<u8>, Vec<u8>)> {

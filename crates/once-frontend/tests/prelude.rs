@@ -15299,6 +15299,9 @@ def host_file_exists(path):
 def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     return '{{"name":"Shared","targets":[]}}'
 
+def _swift_package_dump(swift, absolute, env = {{}}):
+    return host_command([swift, "package", "dump-package", "--package-path", absolute], env = env)
+
 refs = {{
     "shared": {{"kind": "local", "path": "../Packages/Shared"}},
     "tool": {{"kind": "local", "path": "../tools/GraphTool"}},
@@ -15369,6 +15372,9 @@ def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True
         return {described:?}
     fail("unexpected host command: " + str(argv))
 
+def _swift_package_dump(swift, absolute, env = {{}}):
+    return host_command([swift, "package", "dump-package", "--package-path", absolute], env = env)
+
 info = _xcode_swift_package_info({{}}, "Packages/SystemPath", "system-path")
 graph = _xcode_local_swift_package_specs({{}}, [info], "macos", "13.0", "simulator")
 spec = graph["specs"][0]
@@ -15406,6 +15412,9 @@ def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True
         return "swift"
     return '{{"name":"WMFComponents","platforms":[],"products":[{{"name":"WMFComponents","targets":["WMFComponents"]}}],"targets":[]}}'
 
+def _swift_package_dump(swift, absolute, env = {{}}):
+    return host_command([swift, "package", "dump-package", "--package-path", absolute], env = env)
+
 products = _xcode_local_package_products({{}}, ["WMFComponents"])
 result = repr(products["WMFComponents"])
 "#,
@@ -15434,6 +15443,9 @@ def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True
     if argv == ["xcrun", "--find", "swift"]:
         return "swift"
     return '{{"name":"WMFData","dependencies":[],"products":[],"targets":[]}}'
+
+def _swift_package_dump(swift, absolute, env = {{}}):
+    return host_command([swift, "package", "dump-package", "--package-path", absolute], env = env)
 
 infos = _xcode_expand_swift_package_infos({{}}, [{{
     "identity": "WMFComponents",

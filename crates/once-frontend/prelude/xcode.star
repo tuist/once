@@ -2395,7 +2395,7 @@ def _xcode_target_spm_products(objects, target, package_refs):
         })
     return products
 
-def _xcode_local_package_products(ctx, wanted, cache = None):
+def _xcode_local_package_products(ctx, wanted, cache = None, packages = []):
     # Some products are consumed without a package reference in the project;
     # Xcode resolves them from `Package.swift` folders in the workspace. Discover
     # those local packages and map each wanted product to its Swift Package
@@ -2409,14 +2409,36 @@ def _xcode_local_package_products(ctx, wanted, cache = None):
     for name in wanted:
         remaining[name] = True
     resolved = {}
+    for package in packages:
+        for product in package["info"].get("products") or []:
+            name = product.get("name") or ""
+            if name not in remaining:
+                continue
+            previous = resolved.get(name)
+            if previous and previous["path"] != package["path"]:
+                fail("Swift package product `" + name + "` is ambiguous between `" + previous["path"] + "` and `" + package["path"] + "`; set the product's package reference explicitly")
+            resolved[name] = package
+    for name in resolved:
+        remaining.pop(name)
+    if not remaining:
+        return resolved
+    discovered = []
+    explicit_paths = {}
     for manifest in glob(["**/Package.swift"]):
-        if not remaining:
-            break
         if _xcode_is_excluded_source_path(manifest) or _xcode_is_dependency_tree_path(manifest):
             continue
         package_dir = _parent_dir(manifest)
         package = _xcode_swift_package_info(ctx, package_dir, cache = cache)
+        discovered.append(package)
+        for dependency in package["info"].get("dependencies") or []:
+            for local in dependency.get("fileSystem") or []:
+                path = _xcode_workspace_input_path(local.get("path") or "")
+                if path:
+                    explicit_paths[_xcode_normalize_path(path)] = True
+    candidates = {}
+    for package in discovered:
         info = package["info"]
+        package_dir = package["path"]
         package_identity = package["identity"]
         platforms = {}
         for entry in info.get("platforms") or []:
@@ -2427,9 +2449,26 @@ def _xcode_local_package_products(ctx, wanted, cache = None):
         for product in info.get("products") or []:
             product_name = product.get("name") or ""
             if product_name in remaining:
-                resolved[product_name] = {"identity": package_identity, "path": package_dir, "platforms": platforms, "info": info}
-                remaining.pop(product_name)
+                if product_name not in candidates:
+                    candidates[product_name] = []
+                candidates[product_name].append({"identity": package_identity, "path": package_dir, "platforms": platforms, "info": info})
+    for name, matches in candidates.items():
+        explicit = [package for package in matches if explicit_paths.get(_xcode_normalize_path(package["path"]))]
+        selected = explicit or matches
+        if len(selected) > 1:
+            fail("Swift package product `" + name + "` is ambiguous between " + ", ".join(["`" + package["path"] + "`" for package in selected]) + "; add an explicit local package reference or .package(path:) dependency to select its source")
+        resolved[name] = selected[0]
     return resolved
+
+def _swift_package_dump(swift, absolute, env = {}):
+    if absolute != workspace_root() and not absolute.startswith(_xcode_workspace_root()):
+        return host_command([swift, "package", "dump-package", "--package-path", absolute], env = env)
+    inputs = [
+        _xcode_abs(path)
+        for path in walk_workspace_files(_xcode_workspace_input_path(absolute), excluded_names = [".git", ".build", ".once"])
+        if host_file_exists(_xcode_abs(path))
+    ]
+    return host_cached_command([swift, "package", "dump-package", "--package-path", absolute], inputs = inputs, env = env)
 
 def _xcode_swift_package_info(ctx, package_dir, identity = "", cache = None):
     # `swift package dump-package` starts Swift and reparses the whole
@@ -2454,7 +2493,7 @@ def _xcode_swift_package_info(ctx, package_dir, identity = "", cache = None):
             }
     xcrun = host_which("xcrun")
     swift = host_command([xcrun, "--find", "swift"]).strip()
-    info = json_decode(host_command([swift, "package", "dump-package", "--package-path", absolute]))
+    info = json_decode(_swift_package_dump(swift, absolute))
     unresolved = [
         target
         for target in info.get("targets") or []
@@ -2671,21 +2710,10 @@ def _xcode_remote_swift_package_info(ctx, identity, pin, url = "", checkout_root
     revision = state.get("revision") or ""
     if not revision:
         return None
-    git = host_which("git")
     package_dir = checkout_root + "/" + _xcode_sanitized_target_name(identity)
     absolute = _xcode_abs(package_dir)
-    manifest = absolute + "/Package.swift"
-    if not host_file_exists(manifest):
-        if not _xcode_host_directory_exists(absolute):
-            host_command([host_which("mkdir"), "-p", _parent_dir(absolute)])
-            host_command([git, "clone", "--no-checkout", url or pin.get("location") or "", absolute])
-        host_command([git, "-C", absolute, "fetch", "--depth", "1", "origin", revision])
-        host_command([git, "-C", absolute, "checkout", "--detach", revision])
-    else:
-        current = host_command([git, "-C", absolute, "rev-parse", "HEAD"]).strip()
-        if current != revision:
-            host_command([git, "-C", absolute, "fetch", "--depth", "1", "origin", revision])
-            host_command([git, "-C", absolute, "checkout", "--detach", revision])
+    cache_root = host_env("XDG_CACHE_HOME") or host_env("HOME") + "/.cache"
+    host_git_checkout(url or pin.get("location") or "", revision, absolute, cache_root = cache_root + "/once/repositories")
     info = _xcode_swift_package_info(ctx, package_dir, identity, cache = cache)
     return info
 
@@ -2698,7 +2726,11 @@ def _xcode_expand_swift_package_infos(ctx, initial_infos, cache = None, follow_r
     infos = list(initial_infos)
     known = {}
     for info in infos:
-        known[(info.get("identity") or "").lower()] = True
+        key = (info.get("identity") or "").lower()
+        path = _xcode_normalize_path(info["path"])
+        if key in known and known[key] != path:
+            fail("Swift package identity `" + key + "` refers to both `" + known[key] + "` and `" + path + "`; remove the stale package reference or give the dependencies distinct identities")
+        known[key] = path
     pending = list(infos)
     resolve_state = {"attempted": False}
     # Swift package dependency graphs are shallow in practice, but the bound
@@ -2711,12 +2743,15 @@ def _xcode_expand_swift_package_infos(ctx, initial_infos, cache = None, follow_r
                     path = _xcode_workspace_input_path(local.get("path") or "")
                     identity = local.get("nameForTargetDependencyResolutionOnly") or local.get("identity") or _basename(path)
                     key = identity.lower()
+                    path = _xcode_normalize_path(path)
+                    if path and key in known and known[key] != path:
+                        fail("Swift package identity `" + key + "` refers to both `" + known[key] + "` and explicit .package(path: \"" + path + "\"); remove the stale package reference or give the dependencies distinct identities")
                     if not path or key in known or not host_file_exists(_xcode_abs(path + "/Package.swift")):
                         continue
                     info = _xcode_swift_package_info(ctx, path, identity, cache = cache)
                     discovered.append(info)
                     infos.append(info)
-                    known[key] = True
+                    known[key] = path
             pins = _xcode_package_resolved_pins_at(package.get("path") or "") if follow_resolved else {}
             for identity, pin in pins.items():
                 kind = pin.get("kind")
@@ -2729,7 +2764,7 @@ def _xcode_expand_swift_package_infos(ctx, initial_infos, cache = None, follow_r
                 if info:
                     discovered.append(info)
                     infos.append(info)
-                    known[identity] = True
+                    known[identity] = _xcode_normalize_path(info["path"])
         if not discovered:
             break
         pending = discovered
@@ -4782,7 +4817,8 @@ def _xcode_workspace_resolver(ctx):
             for product in products:
                 if not product.get("package_identity"):
                     unresolved_product_names[product["name"]] = True
-        local_products = _xcode_local_package_products(ctx, unresolved_product_names.keys(), cache = swift_info_cache)
+        local_package_infos = _xcode_expand_swift_package_infos(ctx, _xcode_local_swift_package_infos(ctx, project_dir, package_refs, cache = swift_info_cache), cache = swift_info_cache, follow_resolved = False)
+        local_products = _xcode_local_package_products(ctx, unresolved_product_names.keys(), cache = swift_info_cache, packages = local_package_infos)
         for products in per_target_products.values():
             for product in products:
                 local = local_products.get(product["name"])
@@ -4791,7 +4827,6 @@ def _xcode_workspace_resolver(ctx):
         # `swift_info_cache` is hoisted to the workspace level (above this
         # loop) so a package shared by more than one project only gets parsed
         # once.
-        local_package_infos = _xcode_local_swift_package_infos(ctx, project_dir, package_refs, cache = swift_info_cache)
         known_local_package_paths = {info["path"]: True for info in local_package_infos}
         for name in sorted(local_products.keys()):
             local = local_products[name]
