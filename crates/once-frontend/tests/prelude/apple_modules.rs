@@ -300,18 +300,26 @@ fn development_kit_imports_are_exempt_from_strict_dependency_checks() {
     let mut scan = scan_fixture();
     scan["modules"][5]["details"]["clang"]["moduleMapPath"] =
         serde_json::json!("/DevelopmentKit/Native/module.modulemap");
+    scan["modules"][5]["sourceFiles"] = serde_json::json!([
+        "/DevelopmentKit/Accelerate.framework/Headers/../Frameworks/vecLib.framework/Headers/vecLib.h"
+    ]);
     let (_, result) = plan(&scan, "error", "{}");
     assert_eq!(result.unwrap(), "None");
 }
 
 #[test]
 fn arbitrary_host_modules_are_rejected_instead_of_silently_cached() {
-    let mut scan = scan_fixture();
-    scan["modules"][5]["details"]["clang"]["moduleMapPath"] =
-        serde_json::json!("/untracked/Native/module.modulemap");
-    let (store, result) = plan(&scan, "off", "{}");
-    assert!(result.unwrap().contains("untracked_host_module_input"));
-    assert!(store.actions.is_empty());
+    for path in [
+        "/untracked/Native/module.modulemap",
+        "/DevelopmentKit/../untracked/module.modulemap",
+        "/workspace/../untracked/module.modulemap",
+    ] {
+        let mut scan = scan_fixture();
+        scan["modules"][5]["details"]["clang"]["moduleMapPath"] = serde_json::json!(path);
+        let (store, result) = plan(&scan, "off", "{}");
+        assert!(result.unwrap().contains("untracked_host_module_input"));
+        assert!(store.actions.is_empty());
+    }
 }
 
 #[cfg(unix)]
@@ -363,13 +371,24 @@ fn bridging_header_module_metadata_is_preserved() {
 
 #[test]
 fn absolute_workspace_imports_are_not_exempt_from_dependency_checks() {
+    for path in [
+        "/workspace/include/module.modulemap",
+        "/workspace/include/../include/module.modulemap",
+    ] {
+        let mut scan = scan_fixture();
+        scan["modules"][5]["details"]["clang"]["moduleMapPath"] = serde_json::json!(path);
+        assert!(plan(&scan, "error", "{}")
+            .1
+            .unwrap()
+            .contains("undeclared_module_dependency"));
+    }
     let mut scan = scan_fixture();
-    scan["modules"][5]["details"]["clang"]["moduleMapPath"] =
-        serde_json::json!("/workspace/include/module.modulemap");
-    assert!(plan(&scan, "error", "{}")
+    scan["modules"][5]["sourceFiles"] = serde_json::json!(["include/../Native.h"]);
+    assert!(plan(&scan, "off", "{}")
         .1
-        .unwrap()
-        .contains("undeclared_module_dependency"));
+        .unwrap_err()
+        .to_string()
+        .contains("escaped the workspace"));
 }
 
 #[test]

@@ -18455,3 +18455,19 @@ fn prelude_apple_asset_catalog_root_finds_the_enclosing_catalog() {
     );
     assert_eq!(root("Pkg/Resources/strings.json"), r#""""#);
 }
+
+#[test]
+fn prelude_apple_module_input_accepts_sdk_paths_with_parent_segments() {
+    let prelude = apple_prelude_source();
+    let out = eval_prelude_function_in(
+        &prelude,
+        "_apple_normalize_absolute_path",
+        r#"("/SDK/System/Library/Frameworks/Accelerate.framework/Headers/../Frameworks/vecLib.framework/Headers/vecLib.h")"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        out,
+        r#""/SDK/System/Library/Frameworks/Accelerate.framework/Frameworks/vecLib.framework/Headers/vecLib.h""#
+    );
+}
