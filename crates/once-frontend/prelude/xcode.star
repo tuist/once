@@ -2006,6 +2006,10 @@ def _xcode_script_path(value, subs):
     path = _xcode_resolve_vars(value or "", subs)
     if not path or path.startswith("$("):
         return ""
+    # Xcode resolves relative script input and output paths against `SRCROOT`.
+    source_root = str(subs.get("SRCROOT") or "")
+    if not path.startswith("/") and source_root.startswith("/"):
+        path = source_root + "/" + path
     return _xcode_workspace_relative(_xcode_normalize_path(path))
 
 def _xcode_shell_phase_paths(phase, paths_key, file_lists_key, subs):

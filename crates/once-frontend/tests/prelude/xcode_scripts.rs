@@ -76,19 +76,19 @@ fn file_lists_remain_inputs_and_have_separate_environment_counts() {
 def workspace_root():
     return "/workspace"
 def host_file_exists(path):
-    return True
+    return path in ["/workspace/App/inputs.xcfilelist", "/workspace/App/outputs.xcfilelist"]
 def host_file_read(path):
-    return "$(SRCROOT)/Nested/../input.txt\n" if path.endswith("inputs.xcfilelist") else "$(TARGET_BUILD_DIR)/result.txt\n"
-phase = {{"isa": "PBXShellScriptBuildPhase", "shellScript": "generate", "inputPaths": ["$(SRCROOT)/Scripts/../script.sh"], "inputFileListPaths": ["$(SRCROOT)/inputs.xcfilelist"], "outputFileListPaths": ["$(SRCROOT)/outputs.xcfilelist"]}}
-phases = _xcode_shell_script_phases({{"label": {{"package": "", "id": "Seed"}}, "attr": {{"project": "App.xcodeproj"}}}}, {{"phase": phase}}, {{"buildPhases": ["phase"]}}, {{}}, "", "App")
+    return "Nested/../input.txt\n$(SRCROOT)/absolute.txt\n" if path.endswith("inputs.xcfilelist") else "$(TARGET_BUILD_DIR)/result.txt\n"
+phase = {{"isa": "PBXShellScriptBuildPhase", "shellScript": "generate", "inputPaths": ["Scripts/../script.sh"], "outputPaths": ["Vendor/Plugin.app"], "inputFileListPaths": ["inputs.xcfilelist"], "outputFileListPaths": ["$(SRCROOT)/outputs.xcfilelist"]}}
+phases = _xcode_shell_script_phases({{"label": {{"package": "", "id": "Seed"}}, "attr": {{"project": "App.xcodeproj"}}}}, {{"phase": phase}}, {{"buildPhases": ["phase"]}}, {{}}, "App", "App")
 action = json_decode(phases["actions"][0])
-result = repr([action["inputs"], action["outputs"], action["env"]["SCRIPT_INPUT_FILE_COUNT"], action["env"]["SCRIPT_INPUT_FILE_LIST_COUNT"], action["env"]["SCRIPT_OUTPUT_FILE_COUNT"], action["env"]["SCRIPT_OUTPUT_FILE_LIST_0"], action["cacheable"]])
+result = repr([action["inputs"], action["outputs"], action["env"]["SCRIPT_INPUT_FILE_COUNT"], action["env"]["SCRIPT_INPUT_FILE_LIST_COUNT"], action["env"]["SCRIPT_OUTPUT_FILE_COUNT"], action["env"]["SCRIPT_OUTPUT_FILE_LIST_0"], action["env"]["SCRIPT_OUTPUT_FILE_0"], action["cwd"], action["cacheable"]])
 "#,
         xcode_prelude_source()
     );
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
-        r#"[["script.sh", "input.txt", "inputs.xcfilelist", "outputs.xcfilelist"], [".once/out/App/result.txt"], "1", "1", "0", "/workspace/outputs.xcfilelist", True]"#
+        r#"[["App/script.sh", "App/input.txt", "App/absolute.txt", "App/inputs.xcfilelist", "App/outputs.xcfilelist"], ["App/Vendor/Plugin.app", ".once/out/App/result.txt"], "1", "1", "1", "/workspace/App/outputs.xcfilelist", "/workspace/App/Vendor/Plugin.app", "App", True]"#
     );
 }
 
