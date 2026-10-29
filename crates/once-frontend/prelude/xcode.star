@@ -2854,10 +2854,16 @@ def _xcode_is_documentation_path(path):
     # `.swift` snippets. They are resources for DocC, never target sources.
     return ".docc/" in path.lower()
 
+def _xcode_swift_package_public_headers_path(target):
+    # An explicit empty `publicHeadersPath` makes the target directory itself the
+    # public headers directory, so only a missing key falls back to `include`.
+    path = target.get("publicHeadersPath")
+    return "include" if path == None else path
+
 def _xcode_swift_package_target_headers(package_path, target):
     target_path = _xcode_swift_package_target_path(target)
     root = package_path + "/" if package_path else ""
-    public_headers_path = _xcode_join(root + target_path, target.get("publicHeadersPath") or "include")
+    public_headers_path = _xcode_join(root + target_path, _xcode_swift_package_public_headers_path(target))
     excluded = target.get("exclude") or []
     if package_path.startswith(".once/"):
         absolute = _xcode_abs(root + target_path)
@@ -2873,7 +2879,7 @@ def _xcode_swift_package_target_headers(package_path, target):
 def _xcode_swift_package_target_modulemap(package_path, target):
     target_path = _xcode_swift_package_target_path(target)
     root = package_path + "/" if package_path else ""
-    public_headers_path = _xcode_join(root + target_path, target.get("publicHeadersPath") or "include")
+    public_headers_path = _xcode_join(root + target_path, _xcode_swift_package_public_headers_path(target))
     candidate = public_headers_path + "/module.modulemap"
     return candidate if host_file_exists(_xcode_abs(candidate)) else ""
 
@@ -2912,7 +2918,7 @@ def _xcode_swift_package_system_module_libraries(modulemap):
 
 def _xcode_swift_package_include_dirs(package_path, target):
     target_path = _xcode_swift_package_target_path(target)
-    include_dir = _xcode_join(package_path + "/" + target_path, target.get("publicHeadersPath") or "include")
+    include_dir = _xcode_join(package_path + "/" + target_path, _xcode_swift_package_public_headers_path(target))
     if package_path.startswith(".once/"):
         include_absolute = _xcode_abs(include_dir)
         if _xcode_host_directory_exists(include_absolute) and host_command([host_which("find"), "-L", include_absolute, "-name", "*.h", "-type", "f"]).strip():
