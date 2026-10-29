@@ -1,0 +1,5 @@
+// swift-interface-format-version: 1.0
+// swift-module-flags: -target arm64-apple-ios16.0-simulator -enable-library-evolution -module-name Legacy
+import Swift
+import ProbeC
+public typealias Value = ProbeC.ProbeInt

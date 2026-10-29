@@ -25,6 +25,8 @@ result = _apple_module_scan_argv([
     "-Xcc", "-DHEADER_FEATURE", "-import-objc-header", "Bridge.h",
     "-o", "Example.o", "-output-file-map", "objects.json",
     "-module-cache-path", "old-cache", "Example.swift", "Library.a",
+    "Kit.framework/Kit", "Library.dylib", "Library.tbd", "Library.o",
+    "Kit.framework/Other.swift",
     "-Xlinker", "-dead_strip",
 ], ".once/out/modules/toolchain")
 "#,
@@ -38,6 +40,11 @@ result = _apple_module_scan_argv([
     assert!(!result.contains("Example.o"));
     assert!(!result.contains("objects.json"));
     assert!(!result.contains("Library.a"));
+    assert!(!result.contains("Kit.framework/Kit"));
+    assert!(!result.contains("Library.dylib"));
+    assert!(!result.contains("Library.tbd"));
+    assert!(!result.contains("Library.o"));
+    assert!(result.contains("Kit.framework/Other.swift"));
     assert!(!result.contains("old-cache"));
 }
 
@@ -60,7 +67,9 @@ _apple_swift_action(
     {"deps": [], "label": {"id": "test/Main"}},
     {"explicit_modules": True},
     {"identity": "compiler", "swiftc_path": "swiftc", "env": {}},
-    [], argv = ["swiftc", "-c", "Main.swift", "-o", "Main.o"],
+    [], argv = ["swiftc", "-c", "Main.swift", "-o", "Main.o",
+                "-target", "arm64-apple-ios18.0-macabi",
+                "-target-variant", "arm64-apple-macosx15.0"],
     inputs = ["Main.swift"], outputs = ["Main.o"], identifier = "main",
 )
 result = True
@@ -73,10 +82,58 @@ result = True
     assert_eq!(scan.argv.last(), scan.outputs.first());
     assert_eq!(scan.argv[scan.argv.len() - 2], "-o");
     assert_eq!(store.actions[1].inputs, scan.outputs);
-    assert!(matches!(
-        store.actions[1].operation,
-        Some(DeclaredActionOperation::ExpandActions { .. })
-    ));
+    let Some(DeclaredActionOperation::ExpandActions { args, .. }) = &store.actions[1].operation
+    else {
+        panic!("missing expansion")
+    };
+    for (flag, triple) in [
+        ("-clang-target", "arm64-apple-ios18.0-macabi"),
+        ("-clang-target-variant", "arm64-apple-macosx15.0"),
+    ] {
+        let forwarded = ["-Xfrontend", flag, "-Xfrontend", triple];
+        assert!(scan.argv.windows(4).any(|args| args == forwarded));
+        let compile: Vec<_> = args["action"]["argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|arg| arg.as_str().unwrap())
+            .collect();
+        assert!(compile.windows(4).any(|args| args == forwarded));
+    }
+}
+
+#[test]
+fn explicit_compilation_preserves_frontend_clang_target_overrides() {
+    let (store, result) = evaluate(
+        r#"
+def _apple_module_toolchain_identity(swiftc):
+    return "toolchain"
+_apple_swift_action(
+    {"label": {"id": "Main"}}, {"explicit_modules": True},
+    {"swiftc_path": "swiftc", "env": {}}, [],
+    argv = ["swiftc", "Main.swift", "-target", "arm64-apple-ios18.0-simulator",
+            "-Xfrontend", "-clang-target", "-Xfrontend", "arm64-apple-ios26.5-simulator"],
+    inputs = ["Main.swift"], outputs = ["Main.o"], identifier = "main",
+)
+result = True
+"#,
+    );
+    result.unwrap();
+    let scan = &store.actions[0];
+    assert_eq!(
+        scan.argv
+            .iter()
+            .filter(|arg| *arg == "-clang-target")
+            .count(),
+        1
+    );
+    assert!(scan.argv.windows(4).any(|args| args
+        == [
+            "-Xfrontend",
+            "-clang-target",
+            "-Xfrontend",
+            "arm64-apple-ios26.5-simulator"
+        ]));
 }
 
 #[test]

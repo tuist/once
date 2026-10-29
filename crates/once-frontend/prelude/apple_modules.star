@@ -14,11 +14,19 @@ def _apple_module_scan_argv(argv, cache_path):
             skip = True
         elif arg in remove_flags:
             pass
-        elif not arg.startswith("-") and (arg.endswith(".a") or arg.endswith(".o")):
+        elif not arg.startswith("-") and _apple_module_scan_skips_link_input(arg):
             pass
         else:
             result.append(arg)
     return result + ["-disable-bridging-pch", "-module-cache-path", cache_path]
+
+def _apple_module_scan_skips_link_input(path):
+    # The scanner rejects link inputs; a static framework binary has no extension.
+    for suffix in [".a", ".o", ".dylib", ".tbd"]:
+        if path.endswith(suffix):
+            return True
+    framework = _parent_dir(path)
+    return framework.endswith(".framework") and _basename(framework) == _basename(path) + ".framework"
 
 def _apple_module_host_roots(swiftc):
     if not swiftc.get("sdk_path"):
@@ -64,6 +72,15 @@ def _apple_swift_action(ctx, attrs, swiftc, deps, **action):
     if not attrs.get("explicit_modules"):
         run_action(**action)
         return
+    # Textual interfaces retain their own Swift deployment target, but must
+    # import the same Clang modules as the main compilation.
+    for target_flag, clang_flag in [("-target", "-clang-target"), ("-target-variant", "-clang-target-variant")]:
+        target = ""
+        for index in range(len(action["argv"]) - 1):
+            if action["argv"][index] == target_flag:
+                target = action["argv"][index + 1]
+        if target and clang_flag not in action["argv"]:
+            action["argv"] = action["argv"] + ["-Xfrontend", clang_flag, "-Xfrontend", target]
     identity = _apple_module_toolchain_identity(swiftc)
     cache_path = ".once/out/modules/" + content_sha256(identity)
     scan = declare_output("ModuleScans/" + action["identifier"] + ".json")

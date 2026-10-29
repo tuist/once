@@ -1,0 +1,22 @@
+[[target]]
+name = "ProbeC"
+kind = "apple_system_module"
+srcs = ["C/*"]
+
+[target.attrs]
+modulemap = "C/module.modulemap"
+headers = ["C/Probe.h"]
+
+[[target]]
+name = "MixedDeployment"
+kind = "apple_library"
+srcs = ["Main.swift", "Legacy.swiftinterface"]
+deps = ["ProbeC"]
+
+[target.attrs]
+platform = "ios"
+sdk_variant = "simulator"
+archs = ["arm64"]
+minimum_os = "18.0"
+explicit_modules = true
+swift_flags = ["-I", "."]
