@@ -5,8 +5,10 @@ Cargo dependency graph consumed by Rust targets.
 ## Description
 
 During graph loading, Once reads a checked-in Cargo metadata snapshot or runs
-`cargo metadata --locked --offline` against the configured Cargo manifest.
-Every resolved registry or Git package becomes a synthetic
+`cargo metadata --locked` against the configured Cargo manifest. Cargo fetches
+missing locked registry or Git sources into its local cache. No separate
+`cargo vendor` or dependency-preparation command is required.
+Every resolved registry, Git, or nonmember path package becomes a synthetic
 `rust_crate` or `rust_proc_macro` target. Normal dependencies remain `deps`,
 while packages needed by Cargo build scripts use the `build_deps` role.
 
@@ -20,7 +22,8 @@ locked and fails when the lockfile does not match the manifest. Every external
 package in checked-in metadata is cross-checked against an exact lock entry.
 The snapshot must also carry `once_snapshot` provenance that binds every other
 resolver input, the selected features and target, and the compiler host triple.
-Graph loading rejects any provenance mismatch. First-party Rust targets
+Graph loading rejects any provenance mismatch. Checked snapshots require an
+explicit `vendor_dir`; Once never compiles snapshot host paths for this target. First-party Rust targets
 depend on this aggregate target and identify their Cargo package via
 `CARGO_PKG_NAME` or the `cargo_package` attribute. Once then exposes only the
 direct external dependencies Cargo reported for that workspace package.
@@ -28,8 +31,10 @@ A `rust_test` for that package also links the package's direct external
 dev-dependencies, and a first-party target that declares a `build_script`
 links the package's direct external build-dependencies into that script, so
 authored test and build-script targets resolve the same crates Cargo would.
-The configured manifest and lockfile must both be covered by `resolver_inputs`,
-together with any workspace member manifests Cargo needs to inspect. When
+The configured manifest and an existing lockfile must both be covered by
+`resolver_inputs`, together with any workspace member manifests Cargo needs to
+inspect. A missing or undeclared lockfile fails before Cargo runs. Unlike native
+`cargo_workspace` discovery, this dependency target does not create a lockfile. When
 `resolver_inputs` is empty or omitted, `srcs` supplies those files instead.
 When the declared inputs include `.cargo/config.toml` or `.cargo/config`, Once
 passes that file to Cargo explicitly. Vendored source replacement therefore
@@ -48,7 +53,7 @@ package without synthetic target collisions.
 | `resolver_inputs` | list&lt;string&gt; | no | `srcs` | Package-relative text globs supplied to the resolver |
 | `metadata_file` | string | no |  | Checked-in [JavaScript Object Notation](https://www.json.org/json-en.html) output from Cargo metadata with `once_snapshot` input and selection provenance |
 | `host_metadata_file` | string | no |  | Cargo metadata snapshot with host selection provenance for the execution host. Required when `metadata_file` is combined with an explicit `target` |
-| `vendor_dir` | string | no | `third_party/rust/vendor` | Package-relative directory containing vendored crate sources |
+| `vendor_dir` | string | with `metadata_file` |  | Package-relative directory containing pre-vendored crate sources. For live resolution, omit or leave empty to snapshot locked sources from Cargo's local cache into target outputs |
 | `packages` | list&lt;string&gt; | no | `[]` | Optional package names to expose from this dependency set. Defaults to all resolved external packages |
 | `features` | list&lt;string&gt; | no | `[]` | Cargo features passed to `cargo metadata --features` |
 | `all_features` | bool | no | `false` | Pass `--all-features` to Cargo metadata |
@@ -83,11 +88,45 @@ The target emits `rust_dependency_set`.
 | --- | --- |
 | `build` | none |
 
-## Checked Snapshot Example
+## Examples
 
-The portable bundled starter omits `metadata_file` and resolves live in locked,
-offline mode. This variant shows how to opt into a compiler-host-specific
-checked snapshot:
+### Live Resolution
+
+For live resolution without vendoring, declare the manifests and lockfile and
+omit `vendor_dir`:
+
+```toml
+[[target]]
+name = "cargo_dependencies"
+kind = "cargo_dependencies"
+srcs = ["Cargo.toml", "Cargo.lock", "apps/*/Cargo.toml"]
+
+[target.attrs]
+manifest = "Cargo.toml"
+lockfile = "Cargo.lock"
+```
+
+Once materializes each package's complete source tree through a cacheable action.
+Independent crates remain separate graph targets, with separate compilation
+cache keys. Cargo reuses its local source cache on subsequent graph loads.
+Normal Cargo configuration applies, including registry mirrors, source
+replacement, and offline mode configured with `[net] offline = true`.
+
+Once snapshots complete package directories, including build or version-control
+state stored inside nonmember path and Git packages. Keep local build outputs
+outside those package directories, for example with Cargo's `target-dir`, and do
+not store secrets there.
+
+The previous implicit `vendor_dir = "third_party/rust/vendor"` default no longer
+applies. Set that attribute explicitly to retain pre-vendored resolution. A
+checked snapshot without `vendor_dir` now reports a repair instead of silently
+using absolute paths from the machine that generated the snapshot.
+
+### Checked Snapshot
+
+The portable bundled starter uses live locked resolution with explicit vendored
+sources so it can run without network access. This variant shows how to opt into
+a compiler-host-specific checked snapshot:
 
 ```toml
 [[target]]
@@ -136,7 +175,7 @@ remain ordinary generated graph edges of the selected package.
 
 Regenerate the snapshot with the same features and target selection used by
 the Once target whenever `Cargo.toml` or `Cargo.lock` changes. Without
-`metadata_file`, graph loading runs Cargo in locked, offline mode. When a
+`metadata_file`, graph loading runs Cargo in locked mode. When a
 snapshot target sets `target`, also provide `host_metadata_file` so procedural
 macros and build dependencies use the execution-host graph.
 
@@ -173,7 +212,7 @@ every host metadata snapshot. Use an empty string for destination metadata when
 compiler host change fail during graph loading instead of silently reusing stale
 metadata.
 
-Every generated package declares its complete vendored source tree as an input.
+Every generated package declares its complete source tree as an input.
 This covers files read through Rust source inclusion macros as well as Rust
 sources, manifests, build scripts, licenses, and package data.
 
