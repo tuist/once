@@ -18,6 +18,7 @@ def _swift_package_workspace_resolver(ctx):
     swift_info_cache = {}
     host_environment_sha256()
     info = json_decode(host_command([swift, "package", "dump-package", "--package-path", absolute_package_path], env = swiftc["env"]))
+    info = _xcode_swift_package_with_implicit_resources(package_path, absolute_package_path, info)
     swift_info_cache[absolute_package_path] = {"info": info}
     package = {"identity": _basename(package_path) or info.get("name") or ctx["label"]["name"], "path": package_path, "info": info}
     local_packages = _xcode_expand_swift_package_infos(ctx, [package], cache = swift_info_cache, follow_resolved = False)
