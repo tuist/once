@@ -29,6 +29,9 @@ def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True
         return {describe:?}
     fail("unexpected host command: " + str(argv))
 
+def _swift_package_dump(swift, absolute, env = {{}}):
+    return host_command([swift, "package", "dump-package", "--package-path", absolute], env = env)
+
 info = _xcode_swift_package_info({{}}, "Packages/Layout", "layout")
 result = repr([calls, [target.get("path") for target in info["info"]["targets"]]])
 "#
@@ -148,4 +151,140 @@ result = _json_encode([attrs["exported_headers"], attrs["exported_header_dirs"],
             );
         }
     }
+}
+
+#[test]
+fn swift_package_explicit_dependency_path_wins_over_duplicate_discovered_product() {
+    let source = format!(
+        r#"{}
+def workspace_root():
+    return "/workspace"
+def host_file_exists(path):
+    return path == "/workspace/current/Same/Package.swift"
+def _xcode_swift_package_info(ctx, path, identity = "", cache = None, discovery = False):
+    return {{"identity": identity, "path": path, "info": {{"name": "Same", "products": [{{"name": "Shared"}}]}}}}
+def glob(patterns):
+    fail("an explicit dependency must not inspect stale discovery candidates")
+infos = _xcode_expand_swift_package_infos({{}}, [{{"identity": "root", "path": "Root", "info": {{"dependencies": [{{"fileSystem": [{{"identity": "same", "path": "/workspace/current/Same"}}]}}]}}}}], follow_resolved = False)
+products = _xcode_local_package_products({{}}, ["Shared"], packages = infos)
+result = products["Shared"]["path"]
+"#,
+        xcode_prelude_source()
+    );
+    assert_eq!(eval_prelude_source_to_repr(source).unwrap(), "current/Same");
+}
+
+#[test]
+fn swift_package_discovery_follows_explicit_paths_instead_of_first_duplicate_name() {
+    let source = format!(
+        r#"{}
+def workspace_root():
+    return "/workspace"
+def _xcode_swift_package_info(ctx, path, identity = "", cache = None, discovery = False):
+    dependencies = [{{"fileSystem": [{{"identity": "same", "path": "/workspace/current/Same"}}]}}] if path == "Root" else []
+    products = [] if path == "Root" else [{{"name": "Shared"}}]
+    return {{"identity": identity or "same", "path": path, "info": {{"name": "Same", "products": products, "dependencies": dependencies}}}}
+def glob(patterns):
+    return ["stale/Same/Package.swift", "current/Same/Package.swift", "Root/Package.swift"]
+products = _xcode_local_package_products({{}}, ["Shared"])
+result = products["Shared"]["path"]
+"#,
+        xcode_prelude_source()
+    );
+    assert_eq!(eval_prelude_source_to_repr(source).unwrap(), "current/Same");
+}
+
+#[test]
+fn swift_package_ambiguous_discovery_and_conflicting_explicit_identity_report_both_paths() {
+    let prelude = format!(
+        r#"{}
+def workspace_root():
+    return "/workspace"
+def _xcode_swift_package_info(ctx, path, identity = "", cache = None, discovery = False):
+    return {{"identity": identity, "path": path, "info": {{"name": "Same", "products": [{{"name": "Shared"}}]}}}}
+def glob(patterns):
+    return ["stale/Same/Package.swift", "current/Same/Package.swift"]
+"#,
+        xcode_prelude_source()
+    );
+    let error = eval_prelude_source_to_repr(format!(
+        "{prelude}\n_xcode_local_package_products({{}}, [\"Shared\"])\n"
+    ))
+    .unwrap_err();
+    assert!(
+        error.contains("stale/Same")
+            && error.contains("current/Same")
+            && error.contains(".package(path:)"),
+        "{error}"
+    );
+    let error = eval_prelude_source_to_repr(format!(r#"{prelude}
+_xcode_expand_swift_package_infos({{}}, [{{"identity": "same", "path": "stale/Same", "info": {{"dependencies": [{{"fileSystem": [{{"identity": "same", "path": "/workspace/current/Same"}}]}}]}}}}], follow_resolved = False)
+"#)).unwrap_err();
+    assert!(
+        error.contains("stale/Same")
+            && error.contains("current/Same")
+            && error.contains("explicit .package(path:"),
+        "{error}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn swift_package_warm_manifest_dump_invalidates_manifest_source_additions_and_removals() {
+    use std::os::unix::fs::PermissionsExt;
+    let workspace = TempDir::new().unwrap();
+    let package = workspace.path().join("Package");
+    std::fs::create_dir(&package).unwrap();
+    std::fs::write(
+        package.join("Package.swift"),
+        r#"{"name":"first","targets":[]}"#,
+    )
+    .unwrap();
+    let tool = workspace.path().join("swift");
+    std::fs::write(
+        &tool,
+        "#!/bin/sh\nprintf x >> \"$4/../count\"\ncat \"$4/Package.swift\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let xcrun = workspace.path().join("xcrun");
+    std::fs::write(
+        &xcrun,
+        format!("#!/bin/sh\nprintf '%s' '{}'\n", tool.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&xcrun, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let invoke = || {
+        let source = format!(
+            "{}\ndef host_which(name):\n    return {:?}\nresult = _xcode_swift_package_info({{}}, \"Package\")[\"info\"][\"name\"]\n",
+            xcode_prelude_source(),
+            xcrun.display().to_string()
+        );
+        let (_, result) = with_active_store(store_for(workspace.path(), ""), || {
+            eval_prelude_source_to_repr(source)
+        });
+        result.unwrap()
+    };
+    assert_eq!(invoke(), "first");
+    assert_eq!(invoke(), "first");
+    assert_eq!(
+        std::fs::read_to_string(workspace.path().join("count")).unwrap(),
+        "x"
+    );
+    std::fs::write(
+        package.join("Package.swift"),
+        r#"{"name":"second","targets":[]}"#,
+    )
+    .unwrap();
+    assert_eq!(invoke(), "second");
+    std::fs::write(package.join("File.swift"), "source").unwrap();
+    invoke();
+    std::fs::write(package.join("File.swift"), "edited").unwrap();
+    invoke();
+    std::fs::remove_file(package.join("File.swift")).unwrap();
+    invoke();
+    assert_eq!(
+        std::fs::read_to_string(workspace.path().join("count")).unwrap(),
+        "xxxxx"
+    );
 }

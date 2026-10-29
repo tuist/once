@@ -661,6 +661,34 @@ separate update workflow.
   the bound applies while capturing each stream and to the merged result,
   and is recorded with the observation so later validation re-runs the
   command under the same limit.
+- `host_cached_command(argv, inputs, env = {}, cwd = None)` persists successful
+  discovery output across graph loads. `inputs` is the complete list of absolute
+  input file paths; use a recorded walk or glob to track added and removed files.
+  The executable contents, input contents, effective working directory, explicit
+  environment and a digest of the inherited environment select the answer. The
+  working directory defaults to the workspace root; explicit paths must be absolute.
+  Environment values are not written to the cache. The caller must declare every
+  file the command reads and must not use this primitive for commands with side
+  effects. Output is bounded to 16 mebibytes. Failures are never persisted.
+  Records are replaced atomically and there is one slot per command configuration,
+  rather than one slot per source edit.
+- `host_git_checkout(url, revision, path, cache_root)` acquires a pinned Git
+  commit using a shared bare repository under an absolute cache root. `revision`
+  must be a full hexadecimal commit ID. `path` is an absolute workspace-local
+  checkout path; its directory name and repository origin remain unchanged by
+  reuse. Locks serialize updates to each shared repository and destination,
+  while staging directories prevent failed initial acquisitions from publishing
+  partial repositories or checkouts. Initial acquisition is a full mirror, so
+  servers need not support shallow clients. Missing commits use a depth-one
+  fetch, then an ordinary fetch if needed. Existing commits require no fetch.
+  Each selected commit is retained by a cache ref so other worktrees cannot
+  discard its objects. Checkout objects reference the shared repository, which
+  must remain available while those checkouts are in use. A checkout belonging
+  to a different URL fails with repair guidance rather than changing repositories
+  silently. Git arguments and stderr are omitted from failures to avoid exposing
+  URL credentials. This primitive returns `None` and records the detached HEAD.
+  Inherited Git repository-location variables are cleared so they cannot redirect
+  an acquisition into the caller's own checkout.
 - `host_symlink_target(path)` returns where a host symbolic link points, as
   written, or an empty string when the path is not a link. A planner uses it to
   declare the files a linked input depends on. Non-UTF-8 link targets are

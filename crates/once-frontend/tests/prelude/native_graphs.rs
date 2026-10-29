@@ -18,6 +18,8 @@ def _swiftpm_absolute_package_path(ctx, path):
     return "/workspace"
 def host_command(argv, env = None):
     return '{"name": "Root", "dependencies": [], "products": [], "targets": []}'
+def _swift_package_dump(swift, absolute, env = {}):
+    return host_command([swift, "package", "dump-package", "--package-path", absolute], env = env)
 def _xcode_local_swift_package_specs(ctx, packages, platform, minimum_os, variant, root_identities = None):
     return {"specs": [{"kind": "apple_library", "attrs": {}, "deps": ["./Declared"]}, {"kind": "archive_download", "attrs": {}}], "products": {}, "modules": {}}
 graph = _swift_package_workspace_resolver({
@@ -189,6 +191,8 @@ def host_command(argv, check = True):
             fail("explicit invalid manifest must fail")
         return ""
     return '{"name":"Core","products":[{"name":"Core","targets":["Core"]}],"targets":[]}'
+def _swift_package_dump(swift, absolute, env = {}):
+    return host_command([swift, "package", "dump-package", "--package-path", absolute])
 result = repr(_xcode_local_package_products({}, ["Core"])["Core"]["path"])
 "#,
     );
@@ -203,84 +207,6 @@ result = repr(_xcode_local_package_products({}, ["Core"])["Core"]["path"])
     assert!(result
         .unwrap_err()
         .contains("explicit invalid manifest must fail"));
-}
-
-#[cfg(unix)]
-#[test]
-fn pinned_packages_reuse_local_commits_and_fall_back_for_non_shallow_servers() {
-    use std::os::unix::fs::PermissionsExt;
-    for already_present in [true, false] {
-        let workspace = TempDir::new().unwrap();
-        let root = workspace.path();
-        let origin = root.join("origin");
-        std::fs::create_dir(&origin).unwrap();
-        let git = |directory: &Path, args: &[&str]| {
-            let output = Command::new("git")
-                .arg("-C")
-                .arg(directory)
-                .args(args)
-                .env("GIT_CONFIG_NOSYSTEM", "1")
-                .env("GIT_CONFIG_GLOBAL", "/dev/null")
-                .env("GIT_AUTHOR_NAME", "Once")
-                .env("GIT_AUTHOR_EMAIL", "once@example.invalid")
-                .env("GIT_COMMITTER_NAME", "Once")
-                .env("GIT_COMMITTER_EMAIL", "once@example.invalid")
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            String::from_utf8(output.stdout).unwrap().trim().to_string()
-        };
-        git(&origin, &["init"]);
-        std::fs::write(origin.join("Package.swift"), "first").unwrap();
-        git(&origin, &["add", "Package.swift"]);
-        git(&origin, &["commit", "-m", "first"]);
-        let checkout = root.join(".once/xcode-packages/dep");
-        std::fs::create_dir_all(checkout.parent().unwrap()).unwrap();
-        git(
-            root,
-            &[
-                "clone",
-                "--no-checkout",
-                origin.to_str().unwrap(),
-                checkout.to_str().unwrap(),
-            ],
-        );
-        if !already_present {
-            std::fs::write(origin.join("Package.swift"), "second").unwrap();
-            git(&origin, &["commit", "-am", "second"]);
-        }
-        let revision = git(&origin, &["rev-parse", "HEAD"]);
-        let wrapper = root.join("git-wrapper");
-        let real_git = Command::new("/usr/bin/which").arg("git").output().unwrap();
-        let real_git = String::from_utf8(real_git.stdout).unwrap();
-        std::fs::write(&wrapper, format!("#!/bin/sh\nfor arg do\n  if [ \"$arg\" = --depth ] || {{ [ \"$arg\" = fetch ] && [ '{}' = true ]; }}; then\n    echo 'Server does not support shallow clients' >&2\n    exit 1\n  fi\ndone\nexec '{}' \"$@\"\n", already_present, real_git.trim())).unwrap();
-        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let source = package_source(&format!(
-            r#"
-def host_which(name):
-    return {wrapper:?} if name == "git" else name
-def _xcode_swift_package_info(ctx, path, identity = "", cache = None):
-    return {{"info": host_file_read(_xcode_abs(path + "/Package.swift"))}}
-result = repr(_xcode_remote_swift_package_info({{}}, "dep", {{"state": {{"revision": {revision:?}}}}})["info"])
-"#,
-            wrapper = wrapper.to_str().unwrap()
-        ));
-        let (_, result) =
-            with_active_store(store_for(root, ""), || eval_prelude_source_to_repr(source));
-        assert_eq!(
-            result.unwrap(),
-            if already_present {
-                r#""first""#
-            } else {
-                r#""second""#
-            }
-        );
-        assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), revision);
-    }
 }
 
 #[test]

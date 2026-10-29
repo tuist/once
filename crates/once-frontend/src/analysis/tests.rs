@@ -18,6 +18,9 @@ mod action_history;
 mod expansion;
 #[path = "tests/metadata.rs"]
 mod metadata;
+#[cfg(unix)]
+#[path = "tests/package_reuse.rs"]
+mod package_reuse;
 #[path = "tests/producer_history.rs"]
 mod producer_history;
 

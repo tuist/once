@@ -304,6 +304,8 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
                 "host_command(argv, env = {}, cwd = None, merge_stderr = False, check = True)",
                 "Run a trusted discovery command whose arguments, environment, and working directory participate in analysis caching. It may write scratch state only under .once/tmp. With check = False a non-zero exit returns the captured output instead of failing, for idempotent setup that a later probe verifies.",
             ),
+            entry("host_cached_command(argv, inputs, env = {}, cwd = None)", "Persist successful bounded discovery output against complete absolute file inputs, executable contents, effective working directory, explicit environment and a digest of inherited environment. Use a recorded walk to invalidate additions and removals. Do not use for commands with side effects or undeclared inputs. Failures are not persisted."),
+            entry("host_git_checkout(url, revision, path, cache_root)", "Acquire a full hexadecimal Git commit using a locked shared bare repository at an absolute cache root and a workspace-local absolute checkout. Initial acquisition uses a full mirror; missing commits try shallow then ordinary fetch. Preserve origin and destination identity, retain selected commits, publish initial state atomically, reject URL mismatches and record detached HEAD. Shared repository objects must remain available while checkouts use them. Returns None."),
             entry("host_file_exists(path)", "Test whether a host file exists."),
             entry("host_path_exists(path)", "Test whether a host file or directory exists."),
             entry("host_path_is_within(path, root)", "Test canonical host-path containment, resolving symbolic links."),

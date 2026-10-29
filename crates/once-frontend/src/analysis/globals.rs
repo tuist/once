@@ -260,6 +260,98 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         Ok(output)
     }
 
+    fn host_git_checkout(
+        url: &str,
+        revision: &str,
+        path: &str,
+        cache_root: &str,
+    ) -> anyhow::Result<NoneType> {
+        if !analysis_active() {
+            return Ok(NoneType);
+        }
+        let git = observed_which("git", "host_git_checkout")?
+            .context("host_git_checkout requires git on PATH")?;
+        let workspace = with_store(|store| store.unwrap().workspace_root.clone());
+        if !Path::new(path).starts_with(workspace)
+            || Path::new(path)
+                .components()
+                .any(|part| part == Component::ParentDir)
+        {
+            anyhow::bail!("host_git_checkout path must stay inside the workspace");
+        }
+        super::repository::checkout(&git, url, revision, Path::new(path), Path::new(cache_root))?;
+        let head = Path::new(path).join(".git/HEAD");
+        observe(Observation::FileDigest {
+            path: head.to_string_lossy().into_owned(),
+            sha256: file_sha256_hex(&head)?,
+        });
+        Ok(NoneType)
+    }
+
+    fn host_cached_command<'v>(
+        argv: Value<'v>,
+        inputs: Value<'v>,
+        env: Option<Value<'v>>,
+        cwd: Option<&str>,
+    ) -> anyhow::Result<String> {
+        if !analysis_active() {
+            return Ok(String::new());
+        }
+        let argv = unpack_string_list(argv, "argv")?;
+        let inputs = unpack_string_list(inputs, "inputs")?;
+        let env = env
+            .map(|value| unpack_string_dict(value, "env"))
+            .transpose()?
+            .unwrap_or_default();
+        if cwd.is_some_and(|path| !Path::new(path).is_absolute()) {
+            anyhow::bail!("host_cached_command cwd must be absolute");
+        }
+        let cwd = cwd.map_or_else(
+            || with_store(|store| store.unwrap().workspace_root.clone()),
+            PathBuf::from,
+        );
+        let program = argv
+            .first()
+            .context("host_cached_command requires a non-empty argv")?;
+        let resolved = observed_which(program, "host_cached_command")?
+            .context("host_cached_command executable not found")?;
+        let environment = inherited_environment_sha256();
+        observe(Observation::EnvironmentDigest {
+            sha256: environment.clone(),
+        });
+        let (output, digests) = with_store(|store| -> Result<_> {
+            let store = store.context("host_cached_command called outside analysis")?;
+            let mut digests = Vec::new();
+            for path in std::iter::once(&resolved).chain(inputs.iter()) {
+                if !Path::new(path).is_absolute() {
+                    anyhow::bail!("host_cached_command inputs must be absolute file paths");
+                }
+                store.host_cache.observe_path(Path::new(path));
+                let digest = store
+                    .host_cache
+                    .host_file_digest(Path::new(path), || file_sha256_hex(Path::new(path)))?;
+                digests.push((path.clone(), digest));
+            }
+            let slot = sha256_hex(&serde_json::to_vec(&(&argv, &env, &cwd))?);
+            let key = sha256_hex(&serde_json::to_vec(&(&digests, &environment))?);
+            let output = super::metadata::command(&store.workspace_root, &slot, &key, || {
+                store.host_cache.command_checked(
+                    &argv,
+                    &env,
+                    Some(&cwd),
+                    false,
+                    true,
+                    HOST_COMMAND_OUTPUT_LIMIT,
+                )
+            })?;
+            Ok((output, digests))
+        })?;
+        for (path, sha256) in digests {
+            observe(Observation::FileDigest { path, sha256 });
+        }
+        Ok(output)
+    }
+
     /// Return the SHA-256 digest of one host file as lowercase hex.
     /// This is for host-specific tool or signing inputs that cannot be
     /// declared as workspace action inputs.
@@ -2326,7 +2418,7 @@ pub(super) fn hex_digest(bytes: &[u8]) -> String {
     hex_lower(bytes)
 }
 
-fn hex_lower(bytes: &[u8]) -> String {
+pub(super) fn hex_lower(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -2447,7 +2539,9 @@ mod observation_completeness_tests {
     /// observation ledger, so a replay can ask again and compare.
     const RECORDED: &[&str] = &[
         "host_arch",
+        "host_cached_command",
         "host_command",
+        "host_git_checkout",
         "host_env",
         "host_environment_sha256",
         "host_file_contains",

@@ -1061,7 +1061,7 @@ impl HostCache {
     }
 }
 
-fn capture_host_command_output(
+pub(super) fn capture_host_command_output(
     command: &mut Command,
     max_output_bytes: u64,
 ) -> Result<(ExitStatus, Vec<u8>, Vec<u8>)> {

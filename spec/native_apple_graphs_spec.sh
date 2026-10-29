@@ -130,7 +130,6 @@ Describe 'real-world native graph shapes'
     mkdir -p "$WORKSPACE/App/Fetch.xcworkspace/xcshareddata/swiftpm"
     jq -n --arg revision "$revision" --arg url "file://$origin" '{version: 2, pins: [{identity: "generatorsupport", kind: "remoteSourceControl", location: $url, state: {revision: $revision, version: "1.0.0"}}]}' > "$WORKSPACE/App/Fetch.xcworkspace/xcshareddata/swiftpm/Package.resolved"
     graph_snapshot 2> "$WORKSPACE/query.err" || return
-    grep -q 'skipping unreadable Swift package manifest' "$WORKSPACE/query.err" || return
     jq -e '[.[] | select(.kind == "swift_package_build_tools") | .attrs.build_role] | sort == ["destination", "destination", "tools", "tools"]' "$WORKSPACE/graph.json" >/dev/null || return
     [ ! -d "$WORKSPACE/.once/out" ] || return 1
     [ "$(git -C "$WORKSPACE/.once/xcode-packages/generatorsupport" rev-parse HEAD)" = "$revision" ] || return 1

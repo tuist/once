@@ -262,7 +262,8 @@ defmodule OnceSiteWeb.Docs.Sidebar do
                 "Apple",
                 ~w(apple_library apple_system_module swift_macro apple_framework apple_application
                 apple_executable apple_resource_bundle apple_thinned_package apple_test_bundle
-                apple_xcframework_import swift_package_workspace swift_package_dependencies swift_package_pin)
+                apple_xcframework_import swift_package_workspace swift_package_dependencies swift_package_pin
+                swift_package_build_tools)
               ),
               target_group("Core", ~w(archive_download artifact script)),
               target_group("Containers", ~w(dockerfile_image oci_layer oci_image oci_index
