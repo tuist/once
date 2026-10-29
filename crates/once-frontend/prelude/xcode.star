@@ -3129,10 +3129,7 @@ extension Bundle {
         "outputs": [output],
     })
 
-def _xcode_package_condition_allows(condition, platform, enabled_traits = [], configuration = "Debug"):
-    config = (condition or {}).get("config") or ""
-    if config and config.lower() != _apple_package_configuration(configuration):
-        return False
+def _xcode_package_condition_allows(condition, platform, enabled_traits = []):
     names = (condition or {}).get("platformNames") or []
     if names:
         wanted = "macos" if platform == "macosx" else platform
@@ -3243,7 +3240,7 @@ def _xcode_swift_package_name_flags(package):
         return []
     return ["-package-name", package["info"].get("name") or package["identity"]]
 
-def _xcode_swift_package_target_flags(target, platform, default_language_mode, enabled_traits = [], configuration = "Debug"):
+def _xcode_swift_package_target_flags(target, platform, default_language_mode, enabled_traits = [], configuration = "debug"):
     swift_flags = []
     clang_flags = []
     clang_warnings = {"c": [], "cxx": []}
@@ -3251,7 +3248,10 @@ def _xcode_swift_package_target_flags(target, platform, default_language_mode, e
     header_search_paths = []
     swift_language_mode = default_language_mode
     for setting in target.get("settings") or []:
-        if not _xcode_package_condition_allows(setting.get("condition") or {}, platform, enabled_traits, configuration):
+        condition = setting.get("condition") or {}
+        if condition.get("config") and condition["config"] != configuration:
+            continue
+        if not _xcode_package_condition_allows(condition, platform, enabled_traits):
             continue
         kind = setting.get("kind") or {}
         flags = (kind.get("unsafeFlags") or {}).get("_0") or []
@@ -3442,7 +3442,8 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
                 host_product_ids[product_name] = host_product_id
 
     specs = []
-    debug_defines = ["DEBUG"] if _apple_package_configuration(configuration) == "debug" else []
+    package_configuration = _xcode_swift_package_configuration(configuration)
+    debug_defines = ["DEBUG"] if package_configuration == "debug" else []
     for package in package_infos:
         identity = package["identity"]
         package_path = package["path"]
@@ -3513,7 +3514,7 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
             uses_swift_testing = any(["import Testing" in host_file_read(_xcode_abs(source)) for source in sources if source.endswith(".swift")])
             uses_xctest = any(["import XCTest" in host_file_read(_xcode_abs(source)) for source in sources if source.endswith(".swift")])
             if target_type == "macro":
-                flags = _xcode_swift_package_target_flags(target, "macos", default_language_mode, package_traits, configuration)
+                flags = _xcode_swift_package_target_flags(target, "macos", default_language_mode, package_traits, package_configuration)
                 build_tools = []
                 if has_build_tools:
                     spec = _xcode_swift_package_build_tools_spec(ctx, package, package_infos, name, target_id, package_traits, "tools", "macos", package_host_minimum_os, "simulator", configuration, flags["clang_warnings"])
@@ -3572,7 +3573,7 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
             for variant in variants:
                 variant_id = variant["id"]
                 variant_platform = variant["platform"]
-                flags = _xcode_swift_package_target_flags(target, variant_platform, default_language_mode, package_traits, configuration)
+                flags = _xcode_swift_package_target_flags(target, variant_platform, default_language_mode, package_traits, package_configuration)
                 build_tools = []
                 if has_build_tools:
                     spec = _xcode_swift_package_build_tools_spec(ctx, package, package_infos, name, variant_id, package_traits, variant["role"], variant_platform, variant["minimum_os"], variant["sdk_variant"], configuration, flags["clang_warnings"])

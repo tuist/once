@@ -15705,6 +15705,72 @@ result = repr([
 }
 
 #[test]
+fn prelude_xcode_package_configuration_matches_defines_and_conditional_settings() {
+    let prelude = xcode_prelude_source();
+    for (configuration, debug) in [
+        ("Debug", true),
+        ("dEbUg", true),
+        ("Development", true),
+        ("App-DEBUG-Staging", true),
+        ("Release-dEvElOpMeNt", true),
+        ("Release", false),
+        ("Staging", false),
+        ("Develop", false),
+        ("App Store", false),
+    ] {
+        let source = format!(
+            r#"{prelude}
+def glob(patterns):
+    return ["Sources/Support.swift"]
+
+def host_file_read(path):
+    return ""
+
+settings = [
+    {{"tool": tool, "kind": {{"define": {{"_0": name}}}}, "condition": {{"config": config}}}}
+    for tool, name, config in [
+        ("swift", "DEBUG_SETTING", "debug"),
+        ("swift", "RELEASE_SETTING", "release"),
+        ("c", "C_DEBUG_SETTING", "debug"),
+        ("cxx", "C_RELEASE_SETTING", "release"),
+    ]
+]
+settings.extend([
+    {{"tool": "swift", "kind": {{"define": {{"_0": "IOS_DEBUG"}}}}, "condition": {{"config": "debug", "platformNames": ["ios"]}}}},
+    {{"tool": "swift", "kind": {{"define": {{"_0": "INACTIVE_TRAIT"}}}}, "condition": {{"config": "debug", "traits": ["Disabled"]}}}},
+])
+info = {{"identity": "Example", "path": ".", "info": {{"targets": [
+    {{"name": "Support", "type": "regular", "settings": settings}},
+    {{"name": "Macro", "type": "macro", "settings": settings}},
+]}}}}
+graph = _xcode_local_swift_package_specs({{"label": {{"package": ""}}}}, [info], "ios", "17.0", "simulator", configuration = "{configuration}")
+result = repr([
+    [
+        "DEBUG" in (spec["attrs"].get("defines") or spec["attrs"]["swift_flags"]),
+        "DEBUG_SETTING" in spec["attrs"]["swift_flags"],
+        "RELEASE_SETTING" in spec["attrs"]["swift_flags"],
+        "-DC_DEBUG_SETTING" in spec["attrs"].get("clang_flags", []),
+        "-DC_RELEASE_SETTING" in spec["attrs"].get("clang_flags", []),
+        "IOS_DEBUG" in spec["attrs"]["swift_flags"],
+        "INACTIVE_TRAIT" in spec["attrs"]["swift_flags"],
+    ] for spec in graph["specs"]
+])
+"#
+        );
+        let expected = if debug {
+            "[[True, True, False, True, False, True, False], [True, True, False, True, False, False, False], [True, True, False, False, False, False, False]]"
+        } else {
+            "[[False, False, True, False, True, False, False], [False, False, True, False, True, False, False], [False, False, True, False, False, False, False]]"
+        };
+        assert_eq!(
+            eval_prelude_source_to_repr(source).unwrap(),
+            expected,
+            "configuration {configuration}"
+        );
+    }
+}
+
+#[test]
 fn prelude_xcode_reconciles_cross_package_product_dependencies() {
     let prelude = xcode_prelude_source();
     let source = format!(

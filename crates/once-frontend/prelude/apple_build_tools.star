@@ -1,4 +1,4 @@
-def _apple_package_configuration(configuration):
+def _xcode_swift_package_configuration(configuration):
     name = configuration.lower()
     return "debug" if "debug" in name or "development" in name else "release"
 
@@ -108,7 +108,7 @@ def _apple_build_tools_impl(ctx):
         package_identity = package_identity[:-4]
     plugin_outputs = scratch + "/plugins/outputs"
     output_root = plugin_outputs + "/" + package_identity + "/" + attrs["target_name"] + "/" + build_role
-    configuration = _apple_package_configuration(attrs.get("configuration") or "Debug")
+    configuration = _xcode_swift_package_configuration(attrs.get("configuration") or "Debug")
     manifest = scratch + "/" + configuration + ".yaml"
     write_path(roots, '<Workspace version="1.0"><FileRef location="absolute:' + _xml_escape(attrs["package_path"]) + '"/></Workspace>')
     pins = []
