@@ -66,7 +66,7 @@ walkdir = "2"
 zstd = "0.13"
 tar = "0.4"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [workspace.lints.rust]
 # `deny` rather than `forbid` so the C ABI layer can carve out a single
