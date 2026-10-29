@@ -4728,6 +4728,8 @@ def _xcode_application_attrs(ctx, target, settings, subs, platform, files):
         # error and fails the build.
         if app_icon and _xcode_app_icon_exists(files["asset_catalogs"], app_icon):
             attrs["app_icon"] = app_icon
+        if _xcode_scalar(settings.get("ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS")) == "NO":
+            attrs["asset_symbols"] = False
     if files["resources"]:
         attrs["resources"] = files["resources"]
     if files["structured_resources"]:

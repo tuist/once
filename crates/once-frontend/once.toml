@@ -74,7 +74,7 @@ deps = [
   "crates/once-host-tree/once_host_tree",
   "cargo_dependencies",
 ]
-srcs = ["tests/examples.rs"]
+srcs = ["tests/examples.rs", "../../fixtures/xcode_asset_symbols/**"]
 
 [target.attrs]
 crate_name = "examples"

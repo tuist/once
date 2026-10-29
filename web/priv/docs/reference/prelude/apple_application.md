@@ -100,6 +100,7 @@ import inference and should not be authored manually.
 | `prebuild_actions` | list&lt;string&gt; | no | `[]` | Adapter-owned serialized build preparation actions that run before compilation. Records may opt into caching when they declare complete inputs and outputs; always-run records remain uncached |
 | `application_extension` | bool | no | `false` | Build as an app extension: entered through `NSExtensionMain` and compiled against the app-extension-safe interface |
 | `app_icon` | string | no |  | Asset catalog app-icon set name compiled into the application icon |
+| `asset_symbols` | bool | no | `true` | Generate Swift asset symbols for the application's asset catalogs |
 | `enable_testing` | bool | no | `false` | Compile Swift with testability enabled so hosted test bundles can use `@testable import` |
 
 For simulator applications, processed platform entitlements are embedded in the executable's `__TEXT,__entitlements` and `__TEXT,__ents_der` sections. When `development_team` is set, Once also derives the `application-identifier` entitlement from the team and bundle identifiers so application-group containers work in the simulator. The bundle is then signed without those platform entitlements, matching Swift Build and the Apple Bazel rules. Device applications pass the processed entitlement file to code signing instead.
