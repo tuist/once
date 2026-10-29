@@ -3066,7 +3066,7 @@ def _xcode_package_condition_allows(condition, platform, enabled_traits = [], co
     traits = (condition or {}).get("traits") or []
     return not traits or any([trait in enabled_traits for trait in traits])
 
-def _xcode_swift_package_dependencies(target, identity, target_ids, product_ids, platform, enabled_traits = [], lazy_products = {}, lazy_dependency = ""):
+def _xcode_swift_package_dependencies(target, identity, target_ids, product_ids, platform, enabled_traits = [], lazy_products = {}, lazy_dependency = "", package_aliases = {}):
     deps = []
     for dependency in target.get("dependencies") or []:
         for key in ["byName", "product", "target"]:
@@ -3084,6 +3084,10 @@ def _xcode_swift_package_dependencies(target, identity, target_ids, product_ids,
                 package_identity = values[1]
             name = values[0]
             product_targets = product_ids.get(package_identity + "\x1f" + name) or product_ids.get(package_identity.lower() + "\x1f" + name)
+            alias = package_aliases.get(package_identity.lower()) if key == "product" else None
+            if not product_targets and alias:
+                package_identity = alias
+                product_targets = product_ids.get(alias + "\x1f" + name) or product_ids.get(alias.lower() + "\x1f" + name)
             if key == "product":
                 dependency_ids = product_targets
                 if len(values) < 2 or not values[1]:
@@ -3102,8 +3106,21 @@ def _xcode_swift_package_dependencies(target, identity, target_ids, product_ids,
                 deps.append("./" + lazy_dependency)
     return deps
 
-def _xcode_swift_package_depends_on_macro(target, identity, target_ids, product_ids, platform, macro_target_ids, enabled_traits = [], lazy_products = {}, lazy_dependency = ""):
-    for dependency in _xcode_swift_package_dependencies(target, identity, target_ids, product_ids, platform, enabled_traits, lazy_products, lazy_dependency):
+def _xcode_swift_package_dependency_aliases(info):
+    # `.package(name:url:)` lets a target name a remote dependency by something
+    # other than its identity, as in `.product(name: "AppAuth", package: "AppAuth")`
+    # for `AppAuth-iOS`.
+    aliases = {}
+    for dependency in info.get("dependencies") or []:
+        for entry in dependency.get("sourceControl") or []:
+            name = entry.get("nameForTargetDependencyResolutionOnly") or ""
+            identity = entry.get("identity") or ""
+            if name and identity and name.lower() != identity.lower():
+                aliases[name.lower()] = identity
+    return aliases
+
+def _xcode_swift_package_depends_on_macro(target, identity, target_ids, product_ids, platform, macro_target_ids, enabled_traits = [], lazy_products = {}, lazy_dependency = "", package_aliases = {}):
+    for dependency in _xcode_swift_package_dependencies(target, identity, target_ids, product_ids, platform, enabled_traits, lazy_products, lazy_dependency, package_aliases):
         if macro_target_ids.get(dependency[2:]):
             return True
     return False
@@ -3355,6 +3372,7 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
         identity = package["identity"]
         package_path = package["path"]
         package_traits = resolved_traits[identity.lower()]
+        package_aliases = _xcode_swift_package_dependency_aliases(package["info"])
         package_minimum_os = _xcode_swift_package_minimum_os(package, platform, minimum_os)
         package_host_minimum_os = _xcode_swift_package_minimum_os(package, "macos", "13.0")
         for target in package["info"].get("targets") or []:
@@ -3368,7 +3386,7 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
                 modulemap = _xcode_swift_package_system_modulemap(package_path, target)
                 if not modulemap:
                     fail("Swift package system target `" + identity + "/" + name + "` has no module.modulemap")
-                dependencies = _xcode_swift_package_dependencies(target, identity, target_ids, product_ids, platform, package_traits, lazy_products, lazy_dependency)
+                dependencies = _xcode_swift_package_dependencies(target, identity, target_ids, product_ids, platform, package_traits, lazy_products, lazy_dependency, package_aliases)
                 headers = _xcode_swift_package_system_module_headers(package_path, target)
                 specs.append({
                     "name": target_id,
@@ -3426,7 +3444,7 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
                     spec = _xcode_swift_package_build_tools_spec(ctx, package, package_infos, name, target_id, package_traits, "tools", "macos", package_host_minimum_os, "simulator", configuration, flags["clang_warnings"])
                     specs.append(spec)
                     build_tools = ["./" + spec["name"]]
-                dependencies = _xcode_swift_package_dependencies(target, identity, host_target_ids, host_product_ids, "macos", package_traits, lazy_products, lazy_dependency) + build_tools
+                dependencies = _xcode_swift_package_dependencies(target, identity, host_target_ids, host_product_ids, "macos", package_traits, lazy_products, lazy_dependency, package_aliases) + build_tools
                 specs.append({
                     "name": target_id,
                     "kind": "swift_macro",
@@ -3455,6 +3473,7 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
                 package_traits,
                 lazy_products,
                 lazy_dependency,
+                package_aliases,
             )
             variants = [{
                 "id": target_id,
@@ -3490,7 +3509,7 @@ def _xcode_local_swift_package_specs(ctx, package_infos, platform, minimum_os, s
                 resource_accessor = _xcode_swift_package_resource_accessor(package, target, variant_id, any([source.endswith(".swift") for source in sources]) or (not sources and bool(build_tools)), target_type in ["test", "executable"])
                 if resource_accessor:
                     prebuild_actions.append(resource_accessor)
-                dependencies = _xcode_swift_package_dependencies(target, identity, variant["target_ids"], variant["product_ids"], variant_platform, package_traits, lazy_products, lazy_dependency) + build_tools
+                dependencies = _xcode_swift_package_dependencies(target, identity, variant["target_ids"], variant["product_ids"], variant_platform, package_traits, lazy_products, lazy_dependency, package_aliases) + build_tools
                 resource_paths = _xcode_swift_package_resource_paths(package_path, target)
                 structured_resource_paths = _xcode_swift_package_structured_resource_paths(package_path, target)
                 resource_bundle_name = _xcode_swift_package_resource_bundle_name(package, target) if resource_paths or build_tools else ""
