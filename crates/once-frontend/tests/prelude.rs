@@ -44,6 +44,9 @@ mod apple_modules;
 #[path = "prelude/apple_linux.rs"]
 mod apple_linux;
 
+#[path = "prelude/apple_resources.rs"]
+mod apple_resources;
+
 #[path = "prelude/native_graphs.rs"]
 mod native_graphs;
 
@@ -8437,7 +8440,7 @@ result = repr(provider["test_bundle_path"])
             action
                 .outputs
                 .iter()
-                .any(|output| output.ends_with("Contents/Resources/Fixtures/Nested/fixture.json"))
+                .any(|output| output.ends_with("Contents/Resources/Fixtures"))
         })
         .unwrap_or_else(|| {
             panic!(
@@ -8449,17 +8452,15 @@ result = repr(provider["test_bundle_path"])
                     .collect::<Vec<_>>()
             )
         });
-    assert_eq!(resource.inputs, ["tests/Fixtures/Nested/fixture.json"]);
+    assert_eq!(resource.inputs, ["tests/Fixtures"]);
     assert_eq!(
         resource.outputs,
-        [
-            ".once/out/tests/PluginTests/PluginTests.xctest/Contents/Resources/Fixtures/Nested/fixture.json"
-        ]
+        [".once/out/tests/PluginTests/PluginTests.xctest/Contents/Resources/Fixtures"]
     );
     assert!(codesign
         .inputs
         .iter()
-        .any(|input| input.ends_with("Contents/Resources/Fixtures/Nested/fixture.json")));
+        .any(|input| input.ends_with("Contents/Resources/Fixtures")));
     assert!(action_has_input_suffix(
         codesign,
         "Contents/Frameworks/Support.framework"
@@ -8479,7 +8480,7 @@ result = repr(provider["test_bundle_path"])
     ));
     assert!(action_has_input_suffix(
         runner,
-        "Contents/Resources/Fixtures/Nested/fixture.json"
+        "Contents/Resources/Fixtures"
     ));
     // The XCTest runner is deliberately non-cacheable: a passing test's
     // outcome depends on simulator state, network, and other runtime
@@ -18467,6 +18468,69 @@ result = repr([
         eval_prelude_source_to_repr(explicit).unwrap(),
         r#"[True, ["./Feature"]]"#
     );
+}
+
+#[test]
+fn prelude_xcode_swift_package_info_adds_undeclared_resource_types() {
+    let source = format!(
+        r#"{}
+def host_which(name):
+    return name
+
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = None, max_output_bytes = None):
+    return "\n".join([
+        "/ws/.once/pkg/Sources/Feature/Assets.xcassets",
+        "/ws/.once/pkg/Sources/Feature/Declared/Icons.xcassets",
+        "/ws/.once/pkg/Sources/Feature/Old/Legacy.xib",
+    ])
+
+def glob(patterns):
+    return [
+        "Local/Sources/Feature/Model.xcdatamodeld/Model.xcdatamodel/contents",
+        "Local/Sources/Feature/Views/Card.xib",
+        "Local/Sources/Feature/Feature.swift",
+    ]
+
+def info():
+    return {{"targets": [
+        {{"name": "Feature", "type": "regular", "resources": [{{"path": "Declared", "rule": {{"process": {{}}}}}}], "exclude": ["Old"]}},
+        {{"name": "Macros", "type": "macro"}},
+    ]}}
+
+remote = _xcode_swift_package_with_implicit_resources(".once/pkg", "/ws/.once/pkg", info())
+local = _xcode_swift_package_with_implicit_resources("Local", "/ws/Local", info())
+result = repr([[target.get("resources") for target in package["targets"]] for package in [remote, local]])
+"#,
+        xcode_prelude_source()
+    );
+
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[[[{"path": "Declared", "rule": {"process": {}}}, {"path": "Assets.xcassets", "rule": {"process": {}}}], None], [[{"path": "Declared", "rule": {"process": {}}}, {"path": "Model.xcdatamodeld", "rule": {"process": {}}}, {"path": "Views/Card.xib", "rule": {"process": {}}}], None]]"#
+    );
+}
+
+#[test]
+fn prelude_apple_asset_catalog_root_finds_the_enclosing_catalog() {
+    let prelude = apple_prelude_source();
+    let root = |path: &str| {
+        eval_prelude_function_in(
+            &prelude,
+            "_apple_asset_catalog_root",
+            &format!(r#"("{path}")"#),
+        )
+        .unwrap()
+    };
+
+    assert_eq!(
+        root("Pkg/Resources/Images.xcassets/Logo.imageset/Contents.json"),
+        r#""Pkg/Resources/Images.xcassets""#
+    );
+    assert_eq!(
+        root("Pkg/Resources/Images.xcassets"),
+        r#""Pkg/Resources/Images.xcassets""#
+    );
+    assert_eq!(root("Pkg/Resources/strings.json"), r#""""#);
 }
 
 #[test]

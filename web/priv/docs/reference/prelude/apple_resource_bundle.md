@@ -9,6 +9,11 @@ through Apple dependency edges to the final application. Localized resources,
 interface files, asset catalogs, and managed object models use the same
 resource processing pipeline as application and framework resources.
 
+Processed asset catalogs are compiled together into `Assets.car`, rather than
+copied as raw catalog files. Empty catalogs do not produce a compiled output.
+Structured resource directories are copied intact without processing their
+contents, preserving explicit Swift Package Manager `copy` rules.
+
 ## Attributes
 
 | Attribute | Type | Required | Default | Description |
