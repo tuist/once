@@ -10,6 +10,14 @@ tests into the existing Apple target kinds. The package manifest remains
 authoritative for products, target dependencies, source layout, compiler
 settings, resources, and platform constraints.
 
+Asset catalogs, interface files, and Core Data models are discovered without
+explicit resource declarations for Swift tools 5.3 and later. String catalogs
+are discovered for Swift tools 5.9 and later. These resources generate
+`Bundle.module` accessors and are processed into the package resource bundle.
+Explicit resource rules, source declarations, and exclusions take precedence.
+Asset catalogs under `process` rules compile into `Assets.car`; directories
+under `copy` rules retain their original contents.
+
 The resolved package name becomes the display label in generic run reporting.
 The reporting layer reads resolver metadata and does not identify this target
 kind by name.
