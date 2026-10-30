@@ -1,25 +1,10 @@
-use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 
 use super::store::HOST_COMMAND_OUTPUT_LIMIT;
-
-pub(super) fn environment_digest() -> String {
-    let environment = std::env::vars_os().collect::<BTreeMap<_, _>>();
-    let mut digest = Sha256::new();
-    for (name, value) in environment {
-        for part in [name, value] {
-            let bytes = part.as_encoded_bytes();
-            digest.update((bytes.len() as u64).to_le_bytes());
-            digest.update(bytes);
-        }
-    }
-    super::globals::hex_lower(&digest.finalize())
-}
 
 #[derive(Deserialize, Serialize)]
 struct Stored {

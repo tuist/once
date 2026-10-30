@@ -73,9 +73,11 @@ def host_env(name):
     return {cache:?}
 
 def _xcode_swift_package_info(ctx, package_dir, identity, cache = None):
-    return package_dir
+    return {{"path": package_dir}}
 
-result = repr(_xcode_remote_swift_package_info({{}}, "pkg", {{"state": {{"revision": {revision:?}}}}}, url = {remote:?}))
+pin = {{"state": {{"revision": {revision:?}, "branch": "stable"}}}}
+info = _xcode_remote_swift_package_info({{}}, "pkg", pin, url = {remote:?})
+result = repr([info["path"], info["pin"] == pin])
 "#,
             xcode_prelude_source(),
             cache = workspace.path().join("cache").to_str().unwrap(),
@@ -88,7 +90,7 @@ result = repr(_xcode_remote_swift_package_info({{}}, "pkg", {{"state": {{"revisi
                 .unwrap_err()
                 .contains("repository acquisition failed"));
         } else {
-            assert_eq!(result.unwrap(), r#"".once/xcode-packages/pkg""#);
+            assert_eq!(result.unwrap(), r#"[".once/xcode-packages/pkg", True]"#);
             assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), revision);
             assert_eq!(
                 std::fs::read_to_string(checkout.join("Package.swift")).unwrap(),

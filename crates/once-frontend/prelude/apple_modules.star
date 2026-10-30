@@ -68,6 +68,7 @@ def _apple_swift_action(ctx, attrs, swiftc, deps, **action):
         fail("dependency_check must be off or error")
     if attrs.get("dependency_check") == "error" and not attrs.get("explicit_modules"):
         fail("dependency_check = error requires explicit_modules = true")
+    action["inputs"] = _unique(action["inputs"] + _collect_transitive(deps, "transitive_plugin_resource_inputs", []))
     if not attrs.get("explicit_modules"):
         run_action(**action)
         return

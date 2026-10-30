@@ -193,9 +193,11 @@ The wrapper preserves the original arguments. The separator belongs to Once and
 is not passed to Xcode. Once uses the graph for a build
 when it can prove the request is equivalent: one resolved Once Xcode workspace
 seed for a discovered project, a scheme that exactly matches one reachable Once
-build target, an explicit `-configuration Debug` argument, and the default or
-explicit `build` action. An explicit `-project` value must name that discovered
-project. For example:
+build target, an explicit `-configuration` matching the seed's `configuration`
+attribute (default `Debug`), and the default or explicit `build` action. Custom
+names such as `Development` work when the seed selects that same configuration.
+An explicit `-project` or `-workspace` value must name the selected project or
+workspace, relative to the Once workspace root. For example:
 
 ```sh
 xcodebuild -project Client.xcodeproj -scheme Client -configuration Debug build
@@ -210,7 +212,7 @@ once xcodebuild -- -project Client.xcodeproj -scheme Client -configuration Debug
 
 Every other request invokes the system `xcodebuild` with the same arguments and
 exit status. This includes tests, archives, exports, destinations, package
-resolution, custom build settings, workspaces, missing or other configurations,
+resolution, custom build settings, missing or mismatched configurations,
 help, and version queries. The fallback lets editors, continuous integration,
 and coding agents keep their existing command vocabulary while Once takes over
 only the forms it can model accurately.

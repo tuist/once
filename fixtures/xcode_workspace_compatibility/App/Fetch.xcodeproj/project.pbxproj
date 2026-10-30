@@ -1,0 +1,24 @@
+// !$*UTF8*$!
+{
+ archiveVersion = 1;
+ objectVersion = 56;
+ objects = {
+  100000000000000000000001 = {isa = PBXProject; mainGroup = 100000000000000000000002; buildConfigurationList = 100000000000000000000003; targets = (100000000000000000000010, 100000000000000000000020); packageReferences = (100000000000000000000030); };
+  100000000000000000000002 = {isa = PBXGroup; sourceTree = "<group>"; children = (100000000000000000000005, 100000000000000000000006); };
+  100000000000000000000003 = {isa = XCConfigurationList; buildConfigurations = (100000000000000000000004); defaultConfigurationName = Development; };
+  100000000000000000000004 = {isa = XCBuildConfiguration; name = Development; buildSettings = {SDKROOT = macosx; MACOSX_DEPLOYMENT_TARGET = 13.0; SWIFT_VERSION = 6.0; PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = "dev.once.$(TARGET_NAME)"; GENERATE_INFOPLIST_FILE = YES; ALWAYS_SEARCH_USER_PATHS = NO; CODE_SIGNING_ALLOWED = NO; }; };
+  100000000000000000000005 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/main.swift; sourceTree = "<group>"; };
+  100000000000000000000006 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/FetchTests.swift; sourceTree = "<group>"; };
+  100000000000000000000010 = {isa = PBXNativeTarget; name = Fetch; productName = Fetch; productType = "com.apple.product-type.application"; buildConfigurationList = 100000000000000000000003; buildPhases = (100000000000000000000011, 100000000000000000000013); packageProductDependencies = (100000000000000000000031); };
+  100000000000000000000011 = {isa = PBXSourcesBuildPhase; files = (100000000000000000000012); };
+  100000000000000000000012 = {isa = PBXBuildFile; fileRef = 100000000000000000000005; };
+  100000000000000000000013 = {isa = PBXFrameworksBuildPhase; files = (100000000000000000000014); };
+  100000000000000000000014 = {isa = PBXBuildFile; productRef = 100000000000000000000031; };
+  100000000000000000000020 = {isa = PBXNativeTarget; name = FetchTests; productName = FetchTests; productType = "com.apple.product-type.bundle.unit-test"; buildConfigurationList = 100000000000000000000003; buildPhases = (100000000000000000000021); packageProductDependencies = (100000000000000000000031); };
+  100000000000000000000021 = {isa = PBXSourcesBuildPhase; files = (100000000000000000000022); };
+  100000000000000000000022 = {isa = PBXBuildFile; fileRef = 100000000000000000000006; };
+  100000000000000000000030 = {isa = XCLocalSwiftPackageReference; relativePath = Packages/Generated; };
+  100000000000000000000031 = {isa = XCSwiftPackageProductDependency; productName = Generated; };
+ };
+ rootObject = 100000000000000000000001;
+}

@@ -32,6 +32,10 @@ pub enum QueryCmd {
     },
 
     /// List declared graph targets.
+    ///
+    /// Resolver failures return a non-zero exit status and a structured
+    /// diagnostic instead of listing an incomplete graph. Use query
+    /// validate-workspace to inspect all graph diagnostics.
     Targets {
         /// Only include targets with this target kind.
         #[usage(long)]

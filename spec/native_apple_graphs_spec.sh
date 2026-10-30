@@ -111,6 +111,112 @@ Describe 'real-world native graph shapes'
     graph_validate
   }
 
+  exercise_xcode_build_tools() {
+    cp -R "$REPO_ROOT/fixtures/xcode_workspace_compatibility/." "$WORKSPACE/"
+    origin="$SPEC_ROOT/GeneratorSupport"
+    mv "$WORKSPACE/App/Packages/GeneratorSupport" "$origin"
+    git -C "$origin" init -q || return
+    git -C "$origin" config user.name Once || return
+    git -C "$origin" config user.email once@example.invalid || return
+    git -C "$origin" add . || return
+    git -C "$origin" commit -qm pinned || return
+    revision="$(git -C "$origin" rev-parse HEAD)"
+    git -C "$origin" tag 1.0.0 || return
+    perl -pi -e 's/Value = 40/Value = 90/' "$origin/Sources/GeneratorSupport/Value.swift"
+    git -C "$origin" commit -qam newer || return
+    git -C "$origin" tag 1.1.0 || return
+    sed "s|path: \"../GeneratorSupport\"|url: \"file://$origin\", from: \"1.0.0\"|" "$WORKSPACE/App/Packages/Generated/Package.swift" > "$WORKSPACE/manifest.tmp"
+    mv "$WORKSPACE/manifest.tmp" "$WORKSPACE/App/Packages/Generated/Package.swift"
+    mkdir -p "$WORKSPACE/App/Fetch.xcworkspace/xcshareddata/swiftpm"
+    jq -n --arg revision "$revision" --arg url "file://$origin" '{version: 2, pins: [{identity: "generatorsupport", kind: "remoteSourceControl", location: $url, state: {revision: $revision, version: "1.0.0"}}]}' > "$WORKSPACE/App/Fetch.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+    graph_snapshot 2> "$WORKSPACE/query.err" || return
+    jq -e '[.[] | select(.kind == "swift_package_build_tools") | .attrs.build_role] | sort == ["destination", "destination", "tools", "tools"]' "$WORKSPACE/graph.json" >/dev/null || return
+    [ ! -d "$WORKSPACE/.once/out" ] || return 1
+    [ "$(git -C "$WORKSPACE/.once/xcode-packages/generatorsupport" rev-parse HEAD)" = "$revision" ] || return 1
+    graph_validate 2> "$WORKSPACE/validation.err" || return
+
+    ONCE_CHANGE_TRACKER=0 once --memory-limit 2GiB xcodebuild -- -workspace App/Fetch.xcworkspace -scheme Fetch -configuration Development -quiet build > "$WORKSPACE/build.out" 2> "$WORKSPACE/build.err" || {
+      cat "$WORKSPACE/build.out" "$WORKSPACE/build.err"
+      return 1
+    }
+    binary="$WORKSPACE/.once/out/App/Fetch/Fetch.app/Contents/MacOS/Fetch"
+    [ "$("$binary")" = '42:payload' ] || return 1
+    [ "$(find "$WORKSPACE/.once/out" -name lint.txt -exec cat {} \;)" = validated ] || return 1
+    graph_build App/Fetch || return
+    find "$WORKSPACE/.once/out" -name lint.txt -delete
+    graph_build App/Fetch || return
+    [ "$(find "$WORKSPACE/.once/out" -name lint.txt -exec cat {} \;)" = validated ] || return 1
+    graph_once test App/FetchTests > "$WORKSPACE/test.json" 2> "$WORKSPACE/test.err" || {
+      cat "$WORKSPACE/test.err"
+      return 1
+    }
+    jq -e '.summary.total == 1 and .summary.passed == 1' "$WORKSPACE/.once/out/App/FetchTests/test/test_results.json" >/dev/null || return
+
+    host_probe="$(jq -r 'to_entries[] | select(.value.kind == "swift_macro") | .key' "$WORKSPACE/graph.json")"
+    graph_build "$host_probe" || return
+    "$WORKSPACE/.once/out/$host_probe/HostProbe-tool" || return
+    macro_test="$(jq -r 'to_entries[] | select(.value.kind == "apple_test_bundle" and .value.attrs.product_name == "HostProbeTests") | .key' "$WORKSPACE/graph.json")"
+    graph_once test "$macro_test" > "$WORKSPACE/macro-test.json" 2> "$WORKSPACE/macro-test.err" || { cat "$WORKSPACE/macro-test.err"; return 1; }
+    jq -e '.summary.total == 1 and .summary.passed == 1' "$WORKSPACE/.once/out/$macro_test/test/test_results.json" >/dev/null || return
+    ONCE_GENERATED_CXX=1 graph_build App/Fetch || return
+    [ "$("$binary")" = '42:payload' ] || return 1
+    if ONCE_GENERATED_WARNING=1 graph_once build App/Fetch > "$WORKSPACE/generated-warning.json" 2> "$WORKSPACE/generated-warning.err"; then
+      return 1
+    fi
+    grep -q 'error:.*Generated warning must be fatal' "$WORKSPACE/generated-warning.err" || return
+    ONCE_HEADER_VALUE=8 graph_build App/Fetch || return
+    [ "$("$binary")" = '43:payload' ] || return 1
+    graph_build App/Fetch || return
+    [ "$("$binary")" = '42:payload' ] || return 1
+
+    jq -r '.[] | select(.kind == "swift_package_build_tools" and .attrs.target_name == "Generated" and .attrs.build_role == "destination") | .attrs |
+      "\n[[target]]\nname = \"NoTraits\"\nkind = \"swift_package_build_tools\"\n[target.attrs]\npackage_path = \(.package_path | @json)\ntarget_name = \"Generated\"\ndeclares_traits = true\n[target.attrs.dependencies]\n" +
+      (.dependencies | to_entries | map("\(.key | @json) = \(.value | @json)") | join("\n"))' "$WORKSPACE/graph.json" >> "$WORKSPACE/once.toml"
+    graph_build NoTraits || return
+    grep -q 'buildToolValue = 140' "$(find "$WORKSPACE/.once/out/NoTraits" -path '*/Generated/destination/*/Build.swift')" || return
+
+    sed '/.macro(name: "HostProbe"/d; /.testTarget(name: "HostProbeTests"/d' "$WORKSPACE/App/Packages/Generated/Package.swift" > "$WORKSPACE/manifest.tmp"
+    mv "$WORKSPACE/manifest.tmp" "$WORKSPACE/App/Packages/Generated/Package.swift"
+    host_library="$(jq -r 'to_entries[] | select(.value.kind == "apple_library" and .value.attrs.module_name == "Generated" and (.key | endswith("_MacroHost"))) | .key' "$WORKSPACE/graph.json")"
+    graph_build "$host_library" || return
+    [ -s "$WORKSPACE/.once/out/$host_library/Generated.a" ] || return 1
+
+    printf '\n#warning "Nested warning must be fatal"\n' >> "$WORKSPACE/App/Packages/Generated/Sources/CGenerated/Nested/Value.c"
+    if graph_once build App/Fetch > "$WORKSPACE/warning.json" 2> "$WORKSPACE/warning.err"; then
+      return 1
+    fi
+    grep -q 'error:.*Nested warning must be fatal' "$WORKSPACE/warning.err" || return
+    sed '/#warning/d' "$WORKSPACE/App/Packages/Generated/Sources/CGenerated/Nested/Value.c" > "$WORKSPACE/source.tmp"
+    mv "$WORKSPACE/source.tmp" "$WORKSPACE/App/Packages/Generated/Sources/CGenerated/Nested/Value.c"
+
+    FETCH_TUIST_BUILD=1 graph_build App/Fetch || return
+    [ "$("$binary")" = '43:payload' ] || return 1
+    perl -pi -e 's/fixtureGeneratorValue \+ traitAdjustment/fixtureGeneratorValue + traitAdjustment + 1/' "$WORKSPACE/App/Packages/Generated/Sources/Generator/main.swift"
+    graph_build App/Fetch || return
+    [ "$("$binary")" = '43:payload' ] || return 1
+    perl -pi -e 's/prebuildValue = 2/prebuildValue = 3/' "$WORKSPACE/App/Packages/Generated/Tools/prebuild.swift"
+    graph_build App/Fetch || return
+    [ "$("$binary")" = '44:payload' ] || return 1
+    perl -pi -e 's/Development/InternalBeta/' "$WORKSPACE/App/once.toml"
+    graph_build App/Fetch || return
+    [ "$("$binary")" = '44:payload' ] || return 1
+
+    rm -rf "$WORKSPACE/.once/out"
+    graph_build App/Fetch || return
+    [ "$("$binary")" = '44:payload' ] || return 1
+    if ONCE_PLUGIN_FAIL=1 graph_once build App/Fetch > "$WORKSPACE/failure.json" 2> "$WORKSPACE/failure.err"; then
+      return 1
+    fi
+    grep -q 'Requested lint failure' "$WORKSPACE/failure.err"
+  }
+
+  It 'builds and tests an Xcode workspace with source-built tools, prebuild discovery, resources, and output-free commands'
+    Skip if 'requires Xcode' native_graph_toolchain_unavailable
+    When call exercise_xcode_build_tools
+    The status should be success
+    The output should equal ''
+  End
+
   It 'parses a Vapor-shaped package graph and executes only the requested dependency closure'
     Skip if 'requires an Apple Swift compiler' native_graph_toolchain_unavailable
     When call exercise_vapor_graph

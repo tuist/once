@@ -108,6 +108,9 @@ def _swift_package_remote_infos(ctx, package_info, swift, env, absolute_package_
             if not host_file_exists(absolute + "/Package.swift"):
                 fail("registry package `" + (pin.get("raw_identity") or pin["identity"]) + "@" + (pin.get("version") or "") + "` is not present at `" + package_dir + "`; run `swift package resolve` in " + absolute_package_path)
             info = _xcode_swift_package_info(ctx, package_dir, pin.get("raw_identity") or pin["identity"], cache = cache)
+            if info:
+                info = dict(info)
+                info["pin"] = {"identity": pin.get("raw_identity") or pin["identity"], "kind": "registry", "state": {"version": pin["version"]}}
         else:
             fail("native Swift package integration supports source-control and registry dependencies, but `" + (pin.get("raw_identity") or pin["identity"]) + "` has source kind `" + (kind or "unknown") + "`")
         if info:

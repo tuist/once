@@ -275,6 +275,56 @@ fn an_uncacheable_outcome_is_never_recorded() {
     assert!(reopened.reuse(&target, "key", &changed(&[], &[])).is_none());
 }
 
+#[test]
+fn mandatory_uncached_actions_cannot_be_recorded_or_replayed_as_hits() {
+    let workspace = TempDir::new().unwrap();
+    let target = target("apps/tool", "tool");
+    let mut built = outcome(&[]);
+    built.per_action_outcomes = vec![super::super::PerActionOutcome {
+        action_digest: Digest::of_bytes(b"check"),
+        identifier: Some("check".into()),
+        display_name: None,
+        source_files: Vec::new(),
+        presentation: None,
+        history: None,
+        index: 0,
+        cache_state: EvidenceCacheState::Hit,
+        duration_ms: 0,
+        exit_code: 0,
+    }];
+    for aggregate_bypass in [false, true] {
+        let mut reopened = round_trip(&workspace, |outcomes| {
+            outcomes.record(
+                &target,
+                "key".to_string(),
+                &AnalysisObservations::default(),
+                &inputs(&[]),
+                &built,
+            );
+        });
+        let record = reopened.stored.get_mut(&target.label.id).unwrap();
+        if aggregate_bypass {
+            record.cache_state = EvidenceCacheState::Bypass;
+        } else {
+            record.per_action_outcomes[0].cache_state = EvidenceCacheState::Bypass;
+        }
+        assert!(reopened.reuse(&target, "key", &changed(&[], &[])).is_none());
+    }
+
+    let workspace = TempDir::new().unwrap();
+    built.per_action_outcomes[0].cache_state = EvidenceCacheState::Bypass;
+    let reopened = round_trip(&workspace, |outcomes| {
+        outcomes.record(
+            &target,
+            "key".to_string(),
+            &AnalysisObservations::default(),
+            &inputs(&[]),
+            &built,
+        );
+    });
+    assert!(reopened.reuse(&target, "key", &changed(&[], &[])).is_none());
+}
+
 /// With no watcher there is nothing to say what moved, so nothing is reused.
 /// Records describe one moment. When the caller's account of the window is
 /// relative to a different one, nothing can be said about what moved since,

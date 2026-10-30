@@ -130,6 +130,39 @@ Describe 'workspace custom module CLI surface'
   BeforeEach 'setup_workspace'
   AfterEach 'cleanup_workspace'
 
+  seed_failed_resolution() {
+    seed_custom_module_workspace
+    cat >> "$WORKSPACE/once.toml" <<'EOF'
+[[target]]
+name = "Broken"
+kind = "broken_resolver"
+EOF
+    cat >> "$WORKSPACE/modules/demo.star" <<'EOF'
+def _resolve(ctx):
+    _diagnostic_fail("fixture_resolution_failed", "srcs", "The resolver could not load the package", "Repair the package manifest")
+
+broken_resolver = target_kind(resolver = _resolve)
+EOF
+  }
+
+  It 'fails target listing instead of presenting an unresolved seed as a complete graph'
+    seed_failed_resolution
+    When call "$ONCE_BIN" -C "$WORKSPACE" --format json query targets
+    The status should be failure
+    The stdout should be blank
+    The stderr should include '"code":"fixture_resolution_failed"'
+    The stderr should include 'Repair the package manifest'
+  End
+
+  It 'reports the same resolution failure through MCP target listing'
+    seed_failed_resolution
+    mcp_request='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"once_query_targets","arguments":{}}}'
+    When call /bin/sh -c 'printf "%s\n" "$1" | "$2" -C "$3" mcp' sh "$mcp_request" "$ONCE_BIN" "$WORKSPACE"
+    The status should be success
+    The stdout should include 'fixture_resolution_failed'
+    The stdout should include '"isError":true'
+  End
+
   It 'includes custom target kinds in query target-kinds'
     seed_custom_module_workspace
     When call "$ONCE_BIN" -C "$WORKSPACE" --format json query target-kinds

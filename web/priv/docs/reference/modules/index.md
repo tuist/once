@@ -284,7 +284,8 @@ The resolver receives a restricted context:
   spelling for resolver compatibility.
 - `ctx["configuration"]`: normalized target operating system, architecture,
   and ordered selection tokens.
-- `ctx["srcs"]`: declared build source patterns.
+- `ctx["srcs"]`: declared build source patterns, relative to the owner package
+  except for `.once/` paths, which refer to runtime state at the workspace root.
 - `ctx["files"]`: resolver input files decoded as text, keyed by path relative
   to the owner package. Non-empty `resolver_inputs` patterns define this map.
   When the list is empty or omitted, `srcs` is used for compatibility.
@@ -637,6 +638,13 @@ separate update workflow.
 - `host_arch()` and `host_os()` return normalized host identifiers.
 - `host_env(name)` returns one host environment variable, or an empty
   string when it is unset.
+- `host_environment_sha256()` returns and observes a digest of the complete
+  inherited environment without persisting its names or values. Call it before
+  discovery commands whose answers depend on undeclared inherited variables.
+  Any environment change invalidates that observation, including changes to
+  variables the command does not use. Outside active analysis it returns `""`.
+- `analysis_warning(message)` emits a non-fatal warning to standard error during
+  active analysis. Warnings are not replayed from cached analysis.
 - `workspace_root()` returns the absolute workspace root.
 - `host_which(name)` resolves an executable on `PATH`.
 - `host_command(argv, env = {}, cwd = None, merge_stderr = False, check = True, max_output_bytes = None)`
@@ -1091,6 +1099,52 @@ separators use the portable forward-slash spelling.
 Together with `host_file_sha256(path)`, these primitives
 let target kinds include host tools and development kits in action identity.
 They identify host inputs; they do not make those inputs remotely available.
+
+## Apple Generated Files
+
+`swift_package_build_tools` exposes the `apple_generated_files` provider to
+`apple_library`, `apple_application`, `apple_test_bundle`, and `swift_macro`.
+The provider contains `label_id`, `generated_files_root`,
+`generated_target_name`, `generated_build_role`, `generated_clang_flags`, and `build_tool_manifest`.
+The root and manifest are workspace-relative paths; the role is `tools` or
+`destination`. Consumers read the completed planning manifest
+after the dependency finishes. They include declared command outputs and
+discovered prebuild outputs, not arbitrary plugin scratch files. Sources enter
+compilation, headers enter the compiler's search paths and declared inputs, and
+resources enter the consumer's resource bundle. Directory resources retain their
+basename and contents, even when they contain source-like files.
+
+Macros stage dependency resource bundles beside their host executable.
+`transitive_plugin_resource_inputs` carries these paths through library and
+framework providers. Swift compilation and dependency scans include them as
+inputs because a macro can read its resources while expanding client code.
+`transitive_plugin_resource_bundles` supplies dependency bundle descriptors only
+to macro implementation tests, without embedding host resources in applications.
+`transitive_plugin_framework_search_dirs` and `transitive_plugin_framework_files`
+make the macro's dependency frameworks available when compiling those tests.
+
+The synthetic target takes `package_path`, `target_name`, optional
+`dependencies`, `per_language_clang_flags`, `traits`, `declares_traits`, `build_role`, `platform`,
+`minimum_os`, `sdk_variant`, `configuration`, and `xcode_developer_dir`.
+Dependency records are JSON strings keyed by package identity, with an absolute
+checkout `path`, the authoritative `pin` record, and exact manifest `locations`.
+Only the consuming package becomes a planning root. Local source-control mirrors
+and strict lockfile resolution preserve pins without applying root traits to
+dependencies. Explicitly empty trait selections disable defaults only for
+packages that declare traits. Destination metadata selects the planning SDK and
+triple. Names containing `debug` or `development`, case-insensitively, select debug
+planning; other configuration names select release.
+Host consumers have separate host-platform plans. If SwiftPM emits only its
+destination role for a package with no internal macro, consumers use that role
+within the isolated host plan. Generated C and C++ sources retain their language's
+warning policy, and generated C++ sources add the C++ runtime link dependency.
+SwiftPM compiles host tools and evaluates
+plugins during a budgeted local action, without building ordinary application
+products. Deferred actions preserve each build command's argument vector,
+environment, working directory, inputs, and outputs. Planning and command
+execution inherit the environment and bypass caching. Native consumers retain
+their usual content-addressed actions. The implementation follows
+[swift-build's custom task model](https://github.com/swiftlang/swift-build/blob/main/Sources/SWBTaskConstruction/TaskProducers/OtherTaskProducers/CustomTaskProducer.swift).
 
 ## Executable And Container Providers
 

@@ -149,11 +149,12 @@ fn fake_android_ndk_for_mobile_test(workspace: &Path) -> std::path::PathBuf {
 
 fn apple_prelude_source() -> String {
     format!(
-        "{}\n{}\n{}\n{}\n{}\ndef host_os():\n    return \"macos\"\n",
+        "{}\n{}\n{}\n{}\n{}\n{}\ndef host_os():\n    return \"macos\"\n",
         include_str!("../prelude/common.star"),
         include_str!("../prelude/apple_modules.star"),
         include_str!("../prelude/apple_linux.star"),
         include_str!("../prelude/apple_artifacts.star"),
+        include_str!("../prelude/apple_build_tools.star"),
         include_str!("../prelude/apple.star")
     )
 }
@@ -15381,7 +15382,7 @@ def _swift_package_dump(swift, absolute, env = {{}}):
     return host_command([swift, "package", "dump-package", "--package-path", absolute], env = env)
 
 info = _xcode_swift_package_info({{}}, "Packages/SystemPath", "system-path")
-graph = _xcode_local_swift_package_specs({{}}, [info], "macos", "13.0", "simulator")
+graph = _xcode_local_swift_package_specs({{"label": {{"package": ""}}}}, [info], "macos", "13.0", "simulator")
 spec = graph["specs"][0]
 result = repr([
     info["info"]["targets"][0]["path"],
@@ -15654,8 +15655,7 @@ fn prelude_xcode_lowers_swift_macros_as_transitive_host_tools() {
     let prelude = xcode_prelude_source();
     let source = format!(
         r#"{prelude}
-def glob(patterns):
-    pattern = patterns[0]
+def _xcode_package_files(pattern):
     if "AppMacros" in pattern:
         return ["Packages/AppMacros/Sources/AppMacros/Plugin.swift"]
     if "SyntaxSupport" in pattern:
@@ -15732,8 +15732,8 @@ fn prelude_xcode_package_configuration_matches_defines_and_conditional_settings(
     ] {
         let source = format!(
             r#"{prelude}
-def glob(patterns):
-    return ["Sources/Support.swift"]
+def _xcode_swift_package_target_sources(package_path, target):
+    return ["Sources/" + target["name"] + ".swift"]
 
 def host_file_read(path):
     return ""
@@ -18135,12 +18135,13 @@ fn prelude_xcode_parse_workspace_data_resolves_nested_project_paths() {
     // generated workspace lists its dependency projects under `.build`.
     let data = r#"<?xml version="1.0" encoding="UTF-8"?>
 <Workspace version = "1.0">
-   <FileRef location = "group:Tuist.xcodeproj"></FileRef>
+   <FileRef location="group:Tuist.xcodeproj"/>
    <Group location = "group:.build" name = ".build">
       <Group location = "group:registry" name = "registry">
          <Group location = "group:kolos65" name = "kolos65">
             <Group location = "group:Mockable" name = "Mockable">
-               <FileRef location = "group:0.6.2/Mockable.xcodeproj"></FileRef>
+               <FileRef
+                   location = 'group:0.6.2/Mockable.xcodeproj'></FileRef>
             </Group>
          </Group>
       </Group>
@@ -18534,6 +18535,38 @@ fn prelude_apple_asset_catalog_root_finds_the_enclosing_catalog() {
 }
 
 #[test]
+fn prelude_apple_module_input_accepts_sdk_paths_with_parent_segments() {
+    let prelude = apple_prelude_source();
+    let out = eval_prelude_function_in(
+        &prelude,
+        "_apple_normalize_absolute_path",
+        r#"("/SDK/System/Library/Frameworks/Accelerate.framework/Headers/../Frameworks/vecLib.framework/Headers/vecLib.h")"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        out,
+        r#""/SDK/System/Library/Frameworks/Accelerate.framework/Frameworks/vecLib.framework/Headers/vecLib.h""#
+    );
+}
+
+#[test]
+fn prelude_apple_module_scan_argv_drops_static_framework_binaries() {
+    let prelude = apple_prelude_source();
+    let out = eval_prelude_function_in(
+        &prelude,
+        "_apple_module_scan_argv",
+        r#"(["swiftc", "-emit-executable", "-F", "out/Kit.xcframework/ios-arm64-simulator", "App.swift", "out/Kit.xcframework/ios-arm64-simulator/Kit.framework/Kit", "out/libCore.a"], "cache")"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        out,
+        r#"["swiftc", "-scan-dependencies", "-wmo", "-F", "out/Kit.xcframework/ios-arm64-simulator", "App.swift", "-disable-bridging-pch", "-module-cache-path", "cache"]"#
+    );
+}
+
+#[test]
 fn prelude_xcode_script_path_resolves_relative_paths_against_srcroot() {
     let prelude = format!(
         "{}\ndef _xcode_workspace_root():\n    return \"/ws/\"\n",
@@ -18557,36 +18590,4 @@ fn prelude_xcode_script_path_resolves_relative_paths_against_srcroot() {
         r#""App/Generated/Flags.swift""#
     );
     assert_eq!(path("Vendor/Plugin.app", "App"), r#""Vendor/Plugin.app""#);
-}
-
-#[test]
-fn prelude_apple_module_scan_argv_drops_static_framework_binaries() {
-    let prelude = apple_prelude_source();
-    let out = eval_prelude_function_in(
-        &prelude,
-        "_apple_module_scan_argv",
-        r#"(["swiftc", "-emit-executable", "-F", "out/Kit.xcframework/ios-arm64-simulator", "App.swift", "out/Kit.xcframework/ios-arm64-simulator/Kit.framework/Kit", "out/libCore.a"], "cache")"#,
-    )
-    .unwrap();
-
-    assert_eq!(
-        out,
-        r#"["swiftc", "-scan-dependencies", "-wmo", "-F", "out/Kit.xcframework/ios-arm64-simulator", "App.swift", "-disable-bridging-pch", "-module-cache-path", "cache"]"#
-    );
-}
-
-#[test]
-fn prelude_apple_module_input_accepts_sdk_paths_with_parent_segments() {
-    let prelude = apple_prelude_source();
-    let out = eval_prelude_function_in(
-        &prelude,
-        "_apple_normalize_absolute_path",
-        r#"("/SDK/System/Library/Frameworks/Accelerate.framework/Headers/../Frameworks/vecLib.framework/Headers/vecLib.h")"#,
-    )
-    .unwrap();
-
-    assert_eq!(
-        out,
-        r#""/SDK/System/Library/Frameworks/Accelerate.framework/Frameworks/vecLib.framework/Headers/vecLib.h""#
-    );
 }

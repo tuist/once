@@ -257,9 +257,6 @@ fn is_false(value: &bool) -> bool {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Observation {
-    EnvironmentDigest {
-        sha256: String,
-    },
     Platform {
         arch: String,
         os: String,
@@ -267,6 +264,9 @@ pub enum Observation {
     Env {
         name: String,
         value: Option<String>,
+    },
+    EnvironmentDigest {
+        sha256: String,
     },
     Which {
         name: String,

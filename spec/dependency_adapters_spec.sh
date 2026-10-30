@@ -90,7 +90,7 @@ metadata_file = "cargo-metadata.json"' "$WORKSPACE/once.toml"
   resolve_build_and_run_swift_consumer() {
     once --format json query targets > "$WORKSPACE/targets.json" || return
     once --format json build Consumer > "$WORKSPACE/build.json" || return
-    "$WORKSPACE/.once/out/Consumer/Consumer.app/Consumer"
+    "$WORKSPACE/.once/out/Consumer/Consumer.app/Contents/MacOS/Consumer"
   }
 
   replace_swift_vendor_scratch() {

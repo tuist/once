@@ -88,8 +88,19 @@ struct ModuleDiagnostic {
 
 pub async fn targets(workspace: &Path, output: Output, kind: Option<&str>) -> Result<()> {
     let (_, graph) = crate::native_invocation::query_graph(workspace).context("loading graph")?;
+    ensure_graph_resolved(&graph)?;
     let records = target_records(graph, kind);
     write_body(output, || render_targets_human(&records), &records).await
+}
+
+pub(crate) fn ensure_graph_resolved(graph: &[once_frontend::GraphTarget]) -> Result<()> {
+    if let Some(diagnostic) = graph.iter().flat_map(|target| &target.diagnostics).next() {
+        return Err(once_frontend::analysis::AnalysisFailure {
+            diagnostic: diagnostic.clone(),
+        }
+        .into());
+    }
+    Ok(())
 }
 
 pub async fn workspace(workspace: &Path, output: Output) -> Result<()> {

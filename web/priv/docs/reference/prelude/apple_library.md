@@ -83,7 +83,7 @@ for mapped build settings and file-list variables.
 
 | Edge | Accepts | Description |
 | --- | --- | --- |
-| `deps` | `apple_linkable`, `apple_resource`, `apple_swift_plugin`, `native_linkable` | Libraries, frameworks, resources, native linkables, or Swift compiler plugins consumed by this library |
+| `deps` | `apple_linkable`, `apple_resource`, `apple_swift_plugin`, `native_linkable`, `apple_generated_files` | Libraries, resources, native linkables, compiler plugins, or generated package files consumed by this library |
 
 A dependency that exposes a compiler-plugin executable (see
 [`swift_macro`](/reference/prelude/swift_macro)) is auto-detected and loaded

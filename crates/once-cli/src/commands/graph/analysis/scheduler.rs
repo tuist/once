@@ -1,5 +1,6 @@
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -20,6 +21,7 @@ pub(super) struct BuildScheduler<'a> {
     targets: &'a HashMap<String, Arc<GraphTarget>>,
     reachable: &'a HashSet<String>,
     retained: &'a HashSet<String>,
+    uncached_work: &'a AtomicBool,
     /// Ready targets beyond this window wait without allocating task state.
     /// Action admission separately bounds processes, memory, and named slots.
     max_in_flight: usize,
@@ -32,6 +34,7 @@ impl<'a> BuildScheduler<'a> {
         targets: &'a HashMap<String, Arc<GraphTarget>>,
         reachable: &'a HashSet<String>,
         retained: &'a HashSet<String>,
+        uncached_work: &'a AtomicBool,
     ) -> Self {
         let max_in_flight = context.resources.max_parallel_actions();
         Self {
@@ -40,6 +43,7 @@ impl<'a> BuildScheduler<'a> {
             targets,
             reachable,
             retained,
+            uncached_work,
             max_in_flight,
         }
     }
@@ -70,6 +74,9 @@ impl<'a> BuildScheduler<'a> {
                 total = self.reachable.len(),
                 "completed graph target build task"
             );
+            if super::has_uncached_actions(outcome.cache_state, &outcome.per_action_outcomes) {
+                self.uncached_work.store(true, Ordering::Relaxed);
+            }
             state.record_completion(&target_id, outcome)?;
             self.spawn_ready(&mut state, &mut running)?;
         }

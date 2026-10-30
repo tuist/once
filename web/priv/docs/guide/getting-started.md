@@ -18,6 +18,22 @@ pin its own Once version in `mise.toml`.
 The remaining examples assume that mise is active in your shell. If it is
 not, prefix each `once` command with `mise exec --`.
 
+### Build From Source
+
+Building the CLI only needs the pinned Rust toolchain, not every ecosystem tool
+used by Once's development and test suite. Clone Once, then run from the parent
+directory, outside the checkout so mise does not load its full tool list:
+
+```sh
+git clone https://github.com/tuist/once.git
+mise exec rust@1.96.0 -- cargo build --release -p once-cli --manifest-path "$PWD/once/Cargo.toml"
+./once/target/release/once --version
+```
+
+On macOS, install Xcode's command-line tools first. On Linux, install the native
+development libraries `libcap-ng-dev` and `libasound2-dev`; the resulting binary
+also needs `libasound2` at runtime.
+
 ## Try an Existing Project
 
 If you already have a working Cargo, Swift Package Manager, Xcode, or Bazel

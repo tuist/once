@@ -426,6 +426,7 @@ impl Server {
         let kind = args.get("kind").and_then(Value::as_str).map(str::to_string);
         let graph =
             once_frontend::load_graph_workspace(&self.workspace).context("loading graph")?;
+        crate::commands::query::ensure_graph_resolved(&graph)?;
         let records: Vec<TargetView> = graph
             .into_iter()
             .filter(|target| kind.as_deref().is_none_or(|k| target.kind == k))

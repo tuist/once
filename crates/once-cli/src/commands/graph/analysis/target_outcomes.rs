@@ -169,6 +169,10 @@ impl TargetOutcomes {
             tracing::trace!(target = %target.label.id, "no recorded outcome for this target");
             return None;
         };
+        if super::has_uncached_actions(record.cache_state, &record.per_action_outcomes) {
+            tracing::trace!(target = %target.label.id, "recorded outcome contains mandatory uncached work");
+            return None;
+        }
         if record.key != key {
             tracing::trace!(target = %target.label.id, "target or a dependency of it moved");
             return None;
@@ -249,7 +253,9 @@ impl TargetOutcomes {
         declared_inputs: &BTreeSet<String>,
         outcome: &BuildOutcome,
     ) {
-        if !self.enabled || outcome.cache_state == EvidenceCacheState::Bypass {
+        if !self.enabled
+            || super::has_uncached_actions(outcome.cache_state, &outcome.per_action_outcomes)
+        {
             return;
         }
         let out_prefix = ".once/out/";

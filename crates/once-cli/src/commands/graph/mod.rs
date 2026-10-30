@@ -233,11 +233,9 @@ pub async fn build(
             }
         };
     record_capability_run(workspace, &record).await;
-    // An uncacheable build (any declared action with `cacheable = false`, which
-    // several target kinds such as Dockerfile, Go, and Android use) must run on
-    // every invocation. Never persist a receipt for it, and drop any stale one,
-    // so the fast path can never skip its mandatory work.
-    if record.cache_state == EvidenceCacheState::Bypass {
+    // Dependencies can perform mandatory uncached work even when the root's
+    // own actions are cache hits. A receipt must never skip that work.
+    if record.cache_state == EvidenceCacheState::Bypass || session.performed_uncached_work() {
         build_receipt::clear(workspace, target_id, sandbox, &resolved.path_suffix).await;
         let duration_ms: u64 = started_at
             .elapsed()

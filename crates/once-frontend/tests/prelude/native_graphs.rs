@@ -173,6 +173,43 @@ result = repr(_xcode_local_package_products({}, ["Core"], cache = cache)["Core"]
 }
 
 #[test]
+fn product_discovery_skips_invalid_manifests_without_weakening_explicit_loading() {
+    let workspace = TempDir::new().unwrap();
+    let source = package_source(
+        r#"
+def workspace_root():
+    return "/workspace"
+def glob(patterns):
+    return ["bin/template/Package.swift", "Modules/Core/Package.swift"]
+def host_which(name):
+    return name
+def host_command(argv, check = True):
+    if argv == ["xcrun", "--find", "swift"]:
+        return "swift"
+    if "template" in argv[-1]:
+        if check:
+            fail("explicit invalid manifest must fail")
+        return ""
+    return '{"name":"Core","products":[{"name":"Core","targets":["Core"]}],"targets":[]}'
+def _swift_package_dump(swift, absolute, env = {}):
+    return host_command([swift, "package", "dump-package", "--package-path", absolute])
+result = repr(_xcode_local_package_products({}, ["Core"])["Core"]["path"])
+"#,
+    );
+    let (_, result) = with_active_store(store_for(workspace.path(), ""), || {
+        eval_prelude_source_to_repr(source.clone())
+    });
+    assert_eq!(result.unwrap(), r#""Modules/Core""#);
+    let source = format!("{source}\n_xcode_swift_package_info({{}}, \"bin/template\")");
+    let (_, result) = with_active_store(store_for(workspace.path(), ""), || {
+        eval_prelude_source_to_repr(source)
+    });
+    assert!(result
+        .unwrap_err()
+        .contains("explicit invalid manifest must fail"));
+}
+
+#[test]
 fn package_destinations_include_target_overrides_and_ignore_non_native_products() {
     let source = package_source(
         r#"
@@ -221,5 +258,21 @@ result = repr([[platform, graph["specs"][0]["attrs"]["platform"], graph["modules
     assert_eq!(
         eval_prelude_source_to_repr(source).unwrap(),
         r#"[["ios", "ios", "Vendor_ios", "Vendor_ios"], ["macos", "macos", "Vendor_macos", "Vendor_macos"]]"#
+    );
+}
+
+#[test]
+fn generated_only_package_targets_keep_their_build_tool_dependency() {
+    let source = package_source(
+        r#"
+graph = _xcode_local_swift_package_specs({"label": {"package": ""}}, [{"identity": "app", "path": "", "info": {"targets": [
+    {"name": "App", "type": "regular", "pluginUsages": [{"plugin": ["Generator", None]}]},
+]}}], "macos", "13.0", "simulator")
+result = repr([[spec["kind"], spec["deps"]] for spec in graph["specs"]])
+"#,
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["swift_package_build_tools", []], ["apple_library", ["./SwiftPackage_app_App_BuildTools"]], ["swift_package_build_tools", []], ["apple_library", ["./SwiftPackage_app_App_MacroHost_BuildTools"]]]"#
     );
 }

@@ -66,6 +66,94 @@ fn swift_package_description_failure_keeps_dumped_manifest() {
 }
 
 #[test]
+fn prelude_xcode_swift_package_public_headers_path_keeps_an_explicit_empty_path() {
+    let prelude = xcode_prelude_source();
+    let empty = eval_prelude_function_in(
+        &prelude,
+        "_xcode_swift_package_public_headers_path",
+        r#"({"publicHeadersPath": ""})"#,
+    )
+    .unwrap();
+    let missing =
+        eval_prelude_function_in(&prelude, "_xcode_swift_package_public_headers_path", "({})")
+            .unwrap();
+    let custom = eval_prelude_function_in(
+        &prelude,
+        "_xcode_swift_package_public_headers_path",
+        r#"({"publicHeadersPath": "Sources/include"})"#,
+    )
+    .unwrap();
+
+    assert_eq!(empty, r#""""#);
+    assert_eq!(missing, r#""include""#);
+    assert_eq!(custom, r#""Sources/include""#);
+}
+
+#[test]
+fn swift_package_graph_preserves_public_header_paths() {
+    for package_path in ["Packages/Layout", ".once/xcode-packages/layout"] {
+        for header_path in ["missing", "null", "", "public"] {
+            let workspace = TempDir::new().unwrap();
+            let target_path = format!("{package_path}/Sources/Lib");
+            let public_dir = match header_path {
+                "missing" | "null" => format!("{target_path}/include"),
+                "" => target_path.clone(),
+                _ => format!("{target_path}/public"),
+            };
+            std::fs::create_dir_all(workspace.path().join(&public_dir)).unwrap();
+            for (path, contents) in [
+                (
+                    format!("{target_path}/lib.c"),
+                    "int api(void) { return 1; }",
+                ),
+                (format!("{target_path}/Private.h"), "// excluded"),
+                (format!("{public_dir}/Api.h"), "int api(void);"),
+                (
+                    format!("{public_dir}/module.modulemap"),
+                    "module Lib { header \"Api.h\" export * }",
+                ),
+            ] {
+                std::fs::write(workspace.path().join(path), contents).unwrap();
+            }
+            let mut target = serde_json::json!({
+                "name": "Lib", "type": "regular", "path": "Sources/Lib",
+                "exclude": ["Private.h"],
+            });
+            match header_path {
+                "missing" => {}
+                "null" => target["publicHeadersPath"] = serde_json::Value::Null,
+                value => target["publicHeadersPath"] = value.into(),
+            }
+            let packages = serde_json::json!([{
+                "identity": "layout", "path": package_path,
+                "info": {"targets": [target]},
+            }])
+            .to_string();
+            let source = format!(
+                r#"{}
+graph = _xcode_local_swift_package_specs({{"label": {{"package": ""}}, "attr": {{}}}}, json_decode({packages:?}), "macos", "13.0", "simulator")
+attrs = graph["specs"][0]["attrs"]
+result = _json_encode([attrs["exported_headers"], attrs["exported_header_dirs"], attrs["modulemap"]])
+"#,
+                xcode_prelude_source(),
+            );
+            let (_, result) = with_active_store(store_for(workspace.path(), ""), || {
+                eval_prelude_source_to_repr(source)
+            });
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&result.unwrap()).unwrap(),
+                serde_json::json!([
+                    [format!("{public_dir}/Api.h")],
+                    [public_dir],
+                    format!("{public_dir}/module.modulemap"),
+                ]),
+                "{package_path}: {header_path:?}",
+            );
+        }
+    }
+}
+
+#[test]
 fn swift_package_explicit_dependency_path_wins_over_duplicate_discovered_product() {
     let source = format!(
         r#"{}
@@ -73,7 +161,7 @@ def workspace_root():
     return "/workspace"
 def host_file_exists(path):
     return path == "/workspace/current/Same/Package.swift"
-def _xcode_swift_package_info(ctx, path, identity = "", cache = None):
+def _xcode_swift_package_info(ctx, path, identity = "", cache = None, discovery = False):
     return {{"identity": identity, "path": path, "info": {{"name": "Same", "products": [{{"name": "Shared"}}]}}}}
 def glob(patterns):
     fail("an explicit dependency must not inspect stale discovery candidates")
@@ -92,7 +180,7 @@ fn swift_package_discovery_follows_explicit_paths_instead_of_first_duplicate_nam
         r#"{}
 def workspace_root():
     return "/workspace"
-def _xcode_swift_package_info(ctx, path, identity = "", cache = None):
+def _xcode_swift_package_info(ctx, path, identity = "", cache = None, discovery = False):
     dependencies = [{{"fileSystem": [{{"identity": "same", "path": "/workspace/current/Same"}}]}}] if path == "Root" else []
     products = [] if path == "Root" else [{{"name": "Shared"}}]
     return {{"identity": identity or "same", "path": path, "info": {{"name": "Same", "products": products, "dependencies": dependencies}}}}
@@ -112,7 +200,7 @@ fn swift_package_ambiguous_discovery_and_conflicting_explicit_identity_report_bo
         r#"{}
 def workspace_root():
     return "/workspace"
-def _xcode_swift_package_info(ctx, path, identity = "", cache = None):
+def _xcode_swift_package_info(ctx, path, identity = "", cache = None, discovery = False):
     return {{"identity": identity, "path": path, "info": {{"name": "Same", "products": [{{"name": "Shared"}}]}}}}
 def glob(patterns):
     return ["stale/Same/Package.swift", "current/Same/Package.swift"]
@@ -199,92 +287,4 @@ fn swift_package_warm_manifest_dump_invalidates_manifest_source_additions_and_re
         std::fs::read_to_string(workspace.path().join("count")).unwrap(),
         "xxxxx"
     );
-}
-
-#[test]
-fn prelude_xcode_swift_package_public_headers_path_keeps_an_explicit_empty_path() {
-    let prelude = xcode_prelude_source();
-    let empty = eval_prelude_function_in(
-        &prelude,
-        "_xcode_swift_package_public_headers_path",
-        r#"({"publicHeadersPath": ""})"#,
-    )
-    .unwrap();
-    let missing =
-        eval_prelude_function_in(&prelude, "_xcode_swift_package_public_headers_path", "({})")
-            .unwrap();
-    let custom = eval_prelude_function_in(
-        &prelude,
-        "_xcode_swift_package_public_headers_path",
-        r#"({"publicHeadersPath": "Sources/include"})"#,
-    )
-    .unwrap();
-
-    assert_eq!(empty, r#""""#);
-    assert_eq!(missing, r#""include""#);
-    assert_eq!(custom, r#""Sources/include""#);
-}
-
-#[test]
-fn swift_package_graph_preserves_public_header_paths() {
-    for package_path in ["Packages/Layout", ".once/xcode-packages/layout"] {
-        for header_path in ["missing", "null", "", "public"] {
-            let workspace = TempDir::new().unwrap();
-            let target_path = format!("{package_path}/Sources/Lib");
-            let public_dir = match header_path {
-                "missing" | "null" => format!("{target_path}/include"),
-                "" => target_path.clone(),
-                _ => format!("{target_path}/public"),
-            };
-            std::fs::create_dir_all(workspace.path().join(&public_dir)).unwrap();
-            for (path, contents) in [
-                (
-                    format!("{target_path}/lib.c"),
-                    "int api(void) { return 1; }",
-                ),
-                (format!("{target_path}/Private.h"), "// excluded"),
-                (format!("{public_dir}/Api.h"), "int api(void);"),
-                (
-                    format!("{public_dir}/module.modulemap"),
-                    "module Lib { header \"Api.h\" export * }",
-                ),
-            ] {
-                std::fs::write(workspace.path().join(path), contents).unwrap();
-            }
-            let mut target = serde_json::json!({
-                "name": "Lib", "type": "regular", "path": "Sources/Lib",
-                "exclude": ["Private.h"],
-            });
-            match header_path {
-                "missing" => {}
-                "null" => target["publicHeadersPath"] = serde_json::Value::Null,
-                value => target["publicHeadersPath"] = value.into(),
-            }
-            let packages = serde_json::json!([{
-                "identity": "layout", "path": package_path,
-                "info": {"targets": [target]},
-            }])
-            .to_string();
-            let source = format!(
-                r#"{}
-graph = _xcode_local_swift_package_specs({{"label": {{"package": ""}}, "attr": {{}}}}, json_decode({packages:?}), "macos", "13.0", "simulator")
-attrs = graph["specs"][0]["attrs"]
-result = _json_encode([attrs["exported_headers"], attrs["exported_header_dirs"], attrs["modulemap"]])
-"#,
-                xcode_prelude_source(),
-            );
-            let (_, result) = with_active_store(store_for(workspace.path(), ""), || {
-                eval_prelude_source_to_repr(source)
-            });
-            assert_eq!(
-                serde_json::from_str::<serde_json::Value>(&result.unwrap()).unwrap(),
-                serde_json::json!([
-                    [format!("{public_dir}/Api.h")],
-                    [public_dir],
-                    format!("{public_dir}/module.modulemap"),
-                ]),
-                "{package_path}: {header_path:?}",
-            );
-        }
-    }
 }

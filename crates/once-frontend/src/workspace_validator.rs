@@ -446,7 +446,12 @@ fn validate_sources(workspace: &Path, graph: &[GraphTarget], diagnostics: &mut V
     for target in graph {
         let package = workspace.join(&target.label.package);
         for source in &target.srcs {
-            let pattern = package.join(source);
+            let root = if source.starts_with(".once/") {
+                workspace
+            } else {
+                &package
+            };
+            let pattern = root.join(source);
             let Some(pattern) = pattern.to_str() else {
                 diagnostics.push(source_diagnostic(
                     target,
@@ -648,6 +653,37 @@ application_id = "dev.once.app"
         assert!(diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code == "missing_source"));
+    }
+
+    #[test]
+    fn nested_targets_validate_runtime_sources_from_the_workspace_root() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("Demos/App")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".once/packages/Library")).unwrap();
+        std::fs::write(tmp.path().join(".once/packages/Library/Source.swift"), "").unwrap();
+        std::fs::write(tmp.path().join("Demos/App/Local.swift"), "").unwrap();
+        std::fs::write(tmp.path().join("RootOnly.swift"), "").unwrap();
+        std::fs::write(tmp.path().join("Demos/App/once.toml"), r#"[[target]]
+name = "Library"
+kind = "apple_library"
+srcs = [".once/packages/Library/Source.swift", "Local.swift", "RootOnly.swift", ".once/packages/Missing.swift"]
+
+[target.attrs]
+platform = "macos"
+"#).unwrap();
+
+        let diagnostics = validate_workspace(tmp.path()).unwrap();
+        let missing = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "missing_source")
+            .collect::<Vec<_>>();
+        assert_eq!(missing.len(), 2, "{diagnostics:?}");
+        assert!(missing
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("RootOnly.swift")));
+        assert!(missing
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains(".once/packages/Missing.swift")));
     }
 
     #[test]

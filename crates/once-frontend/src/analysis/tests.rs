@@ -129,6 +129,68 @@ fn host_env_reads_active_analysis_environment_only() {
 }
 
 #[test]
+fn inherited_environment_invalidates_observations() {
+    if let Some(path) = std::env::var_os("ONCE_ENV_OBSERVATION_PATH") {
+        let path = std::path::PathBuf::from(path);
+        if path.exists() {
+            let observations = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let matches = AnalysisEngine::new().unwrap().observations_hold(
+                path.parent().unwrap(),
+                &observations,
+                CommandPolicy::TrustDeclaredInputs,
+                &UnchangedWorkspace::Unknown,
+            );
+            println!("environment_matches:{matches}");
+        } else {
+            let (store, ()) = with_active_store(store_for(path.parent().unwrap(), ""), || {
+                run("host_environment_sha256()").unwrap();
+            });
+            std::fs::write(path, serde_json::to_vec(&store.observations).unwrap()).unwrap();
+        }
+        return;
+    }
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("observations.json");
+    for (value, expected) in [
+        (Some("private-original"), None),
+        (Some("private-original"), Some(true)),
+        (Some("private-changed"), Some(false)),
+        (None, Some(false)),
+    ] {
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "analysis::tests::inherited_environment_invalidates_observations",
+                "--nocapture",
+            ])
+            .env("ONCE_ENV_OBSERVATION_PATH", &path);
+        if let Some(value) = value {
+            command.env("ONCE_ENV_VALUE", value);
+        } else {
+            command.env_remove("ONCE_ENV_VALUE");
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if let Some(expected) = expected {
+            assert!(
+                String::from_utf8_lossy(&output.stdout)
+                    .contains(&format!("environment_matches:{expected}")),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+        }
+    }
+    let recorded = std::fs::read_to_string(path).unwrap();
+    assert!(!recorded.contains("private-original"));
+    assert!(!recorded.contains("ONCE_ENV_VALUE"));
+}
+
+#[test]
 fn host_file_contains_matches_binary_host_files() {
     let tmp = TempDir::new().unwrap();
     let blob = tmp.path().join("blob.bin");

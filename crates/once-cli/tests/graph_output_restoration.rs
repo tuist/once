@@ -58,6 +58,34 @@ recovering = target_kind(
     capabilities = [capability("build", ["default"])],
     impl = _recovering_impl,
 )
+
+def _receipt_root_impl(ctx):
+    out = declare_output("app")
+    run_action(
+        argv = ["/bin/sh", "-c", "printf app > \"$1\"", "sh", out],
+        outputs = [out],
+    )
+    return {}
+
+def _mandatory_check_impl(ctx):
+    run_action(
+        argv = ["/bin/sh", "-c", "printf check >> \"$1\"", "sh", host_env("HOME") + "/checks"],
+        cacheable = ctx["attr"]["cacheable"],
+    )
+    return {}
+
+receipt_root = target_kind(
+    deps = [dep("plugins", ["check"])],
+    capabilities = [capability("build", ["default"])],
+    impl = _receipt_root_impl,
+)
+
+mandatory_check = target_kind(
+    attrs = [attr("cacheable", "bool", required = True)],
+    providers = ["check"],
+    capabilities = [capability("build", ["default"])],
+    impl = _mandatory_check_impl,
+)
 "#;
 
 struct Workspace {
@@ -128,6 +156,22 @@ impl Workspace {
 
     fn runs(&self) -> String {
         std::fs::read_to_string(self.path().join("runs.log")).unwrap_or_default()
+    }
+
+    fn tracked_build(&self) -> Output {
+        let output = self
+            .command()
+            .env("ONCE_CHANGE_TRACKER", "1")
+            .env("RUST_LOG", "once::commands::graph=trace")
+            .args(["build", "app"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "tracked build failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
     }
 
     fn output(&self, name: &str) -> PathBuf {
@@ -253,4 +297,91 @@ fn a_corrupt_cached_output_fails_instead_of_rerunning_its_producer() {
 
     assert!(!output.status.success());
     assert_eq!(workspace.runs(), "produce", "corruption is not absence");
+}
+
+fn receipt_workspace(cacheable: bool) -> Workspace {
+    let workspace = Workspace::new("receipt_root");
+    std::fs::write(
+        workspace.path().join("once.toml"),
+        format!(
+            r#"[modules]
+paths = ["modules/*.star"]
+
+[[target]]
+name = "app"
+kind = "receipt_root"
+
+[target.dependencies]
+plugins = ["./check"]
+
+[[target]]
+name = "check"
+kind = "mandatory_check"
+
+[target.attrs]
+cacheable = {cacheable}
+"#
+        ),
+    )
+    .unwrap();
+    workspace
+}
+
+#[test]
+fn tracked_build_receipts_do_not_skip_mandatory_dependency_actions() {
+    let workspace = receipt_workspace(false);
+    for invocation in 1..=4 {
+        let output = workspace.tracked_build();
+        assert_eq!(
+            std::fs::read_to_string(workspace.home.path().join("checks")).unwrap(),
+            "check".repeat(invocation),
+            "mandatory dependency action must run on invocation {invocation}"
+        );
+        if invocation > 1 {
+            let record: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(record["cache"], "hit", "the root action stays cached");
+        }
+    }
+}
+
+#[test]
+fn tracked_cacheable_builds_still_reuse_whole_build_receipts() {
+    let workspace = receipt_workspace(true);
+    let mut reused_receipt = false;
+    for _ in 0..4 {
+        let output = workspace.tracked_build();
+        reused_receipt |=
+            String::from_utf8_lossy(&output.stderr).contains("reused unchanged build receipt");
+    }
+    assert_eq!(
+        std::fs::read_to_string(workspace.home.path().join("checks")).unwrap(),
+        "check"
+    );
+    assert!(reused_receipt, "the cacheable control must reuse a receipt");
+}
+
+#[test]
+fn tracked_builds_clear_existing_receipts_when_a_dependency_becomes_uncacheable() {
+    let workspace = receipt_workspace(true);
+    for _ in 0..4 {
+        workspace.tracked_build();
+    }
+    let receipts = workspace.path().join(".once/build-receipts");
+    assert!(!walk(&receipts).is_empty());
+
+    let manifest = workspace.path().join("once.toml");
+    let content = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(
+        &manifest,
+        content.replace("cacheable = true", "cacheable = false"),
+    )
+    .unwrap();
+    for checks in 2..=3 {
+        workspace.tracked_build();
+        assert_eq!(
+            std::fs::read_to_string(workspace.home.path().join("checks")).unwrap(),
+            "check".repeat(checks)
+        );
+        assert!(walk(&receipts).is_empty(), "the stale receipt was cleared");
+    }
 }

@@ -58,8 +58,14 @@ pub fn load_workspace_with_configuration(
                 .is_none_or(|name| !name.starts_with('.'));
             visible
                 && (!entry.file_type().is_dir()
-                    || entry.depth() != 1
-                    || scan.includes_top_level_dir(entry.file_name()))
+                    || scan.includes_native_project_dir(
+                        &entry
+                            .path()
+                            .strip_prefix(root)
+                            .unwrap_or(entry.path())
+                            .to_string_lossy(),
+                        entry.depth(),
+                    ))
         });
     let mut entries: Vec<(String, PathBuf)> = Vec::new();
     for entry in walker {
@@ -174,19 +180,22 @@ pub(crate) struct WorkspaceScan {
 }
 
 impl WorkspaceScan {
+    fn excludes(&self, path: &str) -> bool {
+        Path::new(path)
+            .ancestors()
+            .filter_map(Path::to_str)
+            .any(|ancestor| self.exclude.iter().any(|pattern| pattern.matches(ancestor)))
+    }
+
     fn includes(&self, path: &str) -> bool {
-        if self.exclude.iter().any(|pattern| pattern.matches(path)) {
+        if self.excludes(path) {
             return false;
         }
         self.include.is_empty() || self.include.iter().any(|pattern| pattern.matches(path))
     }
 
     pub(crate) fn includes_native_project(&self, manifest_path: &str, marker_path: &str) -> bool {
-        if self
-            .exclude
-            .iter()
-            .any(|pattern| pattern.matches(manifest_path) || pattern.matches(marker_path))
-        {
+        if self.excludes(manifest_path) || self.excludes(marker_path) {
             return false;
         }
         self.include.is_empty()
@@ -207,10 +216,7 @@ impl WorkspaceScan {
             return false;
         }
         let descendant = format!("{path}/__once_native_project_descendant__");
-        !self
-            .exclude
-            .iter()
-            .any(|pattern| pattern.matches(&descendant))
+        !self.excludes(&descendant)
     }
 }
 
@@ -413,6 +419,25 @@ kind = "custom_library"
         assert_eq!(
             literal_include_roots(&["crates*/once.toml".to_string()]),
             None
+        );
+    }
+
+    #[test]
+    fn literal_directory_exclusions_prune_manifests_and_native_projects() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            &tmp.path().join("once.toml"),
+            "[workspace]\nexclude = [\"Demos\"]\n",
+        );
+        write(&tmp.path().join("Demos/once.toml"), "invalid TOML");
+        write(&tmp.path().join("Demos/nested/mix.exs"), "native");
+        write(&tmp.path().join("DemosOther/mix.exs"), "native");
+
+        let targets = load_workspace(tmp.path()).unwrap();
+
+        assert_eq!(
+            targets.iter().map(Target::id).collect::<Vec<_>>(),
+            ["DemosOther/mix"]
         );
     }
 

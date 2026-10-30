@@ -13,6 +13,6 @@ their source checkout workspace-local. Pinned commits remain available to other
 worktrees, and failed acquisitions do not publish partial checkouts. Servers that
 reject shallow fetches still work through an ordinary-fetch fallback.
 
-Warm graph loads reuse successful package manifest dumps. Manifest edits, source
-changes, added or removed package files, tool changes and environment changes
-invalidate the saved metadata.
+Warm graph loads reuse successful manifest dumps for referenced packages.
+Manifest edits, source changes, added or removed package files, tool changes and
+environment changes invalidate the saved metadata.
