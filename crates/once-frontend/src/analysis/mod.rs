@@ -13,7 +13,9 @@
 mod action_history;
 mod engine;
 mod globals;
+mod metadata;
 mod presentation;
+mod repository;
 
 pub use globals::flush_host_tree_digest_caches;
 mod store;

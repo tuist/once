@@ -18,6 +18,8 @@ def _swiftpm_absolute_package_path(ctx, path):
     return "/workspace"
 def host_command(argv, env = None):
     return '{"name": "Root", "dependencies": [], "products": [], "targets": []}'
+def _swift_package_dump(swift, absolute, env = {}):
+    return host_command([swift, "package", "dump-package", "--package-path", absolute], env = env)
 def _xcode_local_swift_package_specs(ctx, packages, platform, minimum_os, variant, root_identities = None):
     return {"specs": [{"kind": "apple_library", "attrs": {}, "deps": ["./Declared"]}, {"kind": "archive_download", "attrs": {}}], "products": {}, "modules": {}}
 graph = _swift_package_workspace_resolver({

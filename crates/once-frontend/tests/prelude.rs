@@ -15304,6 +15304,9 @@ def host_file_exists(path):
 def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     return '{{"name":"Shared","targets":[]}}'
 
+def _swift_package_dump(swift, absolute, env = {{}}):
+    return host_command([swift, "package", "dump-package", "--package-path", absolute], env = env)
+
 refs = {{
     "shared": {{"kind": "local", "path": "../Packages/Shared"}},
     "tool": {{"kind": "local", "path": "../tools/GraphTool"}},
@@ -15374,6 +15377,9 @@ def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True
         return {described:?}
     fail("unexpected host command: " + str(argv))
 
+def _swift_package_dump(swift, absolute, env = {{}}):
+    return host_command([swift, "package", "dump-package", "--package-path", absolute], env = env)
+
 info = _xcode_swift_package_info({{}}, "Packages/SystemPath", "system-path")
 graph = _xcode_local_swift_package_specs({{}}, [info], "macos", "13.0", "simulator")
 spec = graph["specs"][0]
@@ -15411,6 +15417,9 @@ def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True
         return "swift"
     return '{{"name":"WMFComponents","platforms":[],"products":[{{"name":"WMFComponents","targets":["WMFComponents"]}}],"targets":[]}}'
 
+def _swift_package_dump(swift, absolute, env = {{}}):
+    return host_command([swift, "package", "dump-package", "--package-path", absolute], env = env)
+
 products = _xcode_local_package_products({{}}, ["WMFComponents"])
 result = repr(products["WMFComponents"])
 "#,
@@ -15439,6 +15448,9 @@ def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True
     if argv == ["xcrun", "--find", "swift"]:
         return "swift"
     return '{{"name":"WMFData","dependencies":[],"products":[],"targets":[]}}'
+
+def _swift_package_dump(swift, absolute, env = {{}}):
+    return host_command([swift, "package", "dump-package", "--package-path", absolute], env = env)
 
 infos = _xcode_expand_swift_package_infos({{}}, [{{
     "identity": "WMFComponents",
@@ -18522,33 +18534,6 @@ fn prelude_apple_asset_catalog_root_finds_the_enclosing_catalog() {
 }
 
 #[test]
-fn prelude_xcode_git_ensure_revision_falls_back_when_shallow_fetch_is_rejected() {
-    let source = format!(
-        r#"{}
-calls = []
-
-def host_which(name):
-    return name
-
-def host_command(argv, env = None, cwd = None, merge_stderr = None, check = None, max_output_bytes = None):
-    calls.append(" ".join(argv[3:]))
-    if "--depth" in argv:
-        return "fatal: Server does not support shallow clients"
-    return ""
-
-_xcode_git_ensure_revision("git", "/pkg", "abc123")
-result = repr(calls)
-"#,
-        xcode_prelude_source()
-    );
-
-    assert_eq!(
-        eval_prelude_source_to_repr(source).unwrap(),
-        r#"["cat-file -t abc123^{commit}", "fetch --depth 1 origin abc123", "rev-parse --verify --quiet abc123^{commit}", "fetch origin abc123"]"#
-    );
-}
-
-#[test]
 fn prelude_xcode_script_path_resolves_relative_paths_against_srcroot() {
     let prelude = format!(
         "{}\ndef _xcode_workspace_root():\n    return \"/ws/\"\n",
@@ -18587,31 +18572,6 @@ fn prelude_apple_module_scan_argv_drops_static_framework_binaries() {
     assert_eq!(
         out,
         r#"["swiftc", "-scan-dependencies", "-wmo", "-F", "out/Kit.xcframework/ios-arm64-simulator", "App.swift", "-disable-bridging-pch", "-module-cache-path", "cache"]"#
-    );
-}
-
-#[test]
-fn prelude_xcode_git_ensure_revision_skips_fetching_a_cloned_revision() {
-    let source = format!(
-        r#"{}
-calls = []
-
-def host_which(name):
-    return name
-
-def host_command(argv, env = None, cwd = None, merge_stderr = None, check = None, max_output_bytes = None):
-    calls.append(" ".join(argv[3:]))
-    return "commit" if "cat-file" in argv else ""
-
-_xcode_git_ensure_revision("git", "/pkg", "abc123")
-result = repr(calls)
-"#,
-        xcode_prelude_source()
-    );
-
-    assert_eq!(
-        eval_prelude_source_to_repr(source).unwrap(),
-        r#"["cat-file -t abc123^{commit}"]"#
     );
 }
 
