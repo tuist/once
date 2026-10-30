@@ -232,59 +232,82 @@ _xcode_expand_swift_package_infos({{}}, [{{"identity": "same", "path": "stale/Sa
 #[test]
 fn swift_package_warm_manifest_dump_invalidates_manifest_source_additions_and_removals() {
     use std::os::unix::fs::PermissionsExt;
-    let workspace = TempDir::new().unwrap();
-    let package = workspace.path().join("Package");
-    std::fs::create_dir(&package).unwrap();
-    std::fs::write(
-        package.join("Package.swift"),
-        r#"{"name":"first","targets":[]}"#,
-    )
-    .unwrap();
-    let tool = workspace.path().join("swift");
-    std::fs::write(
-        &tool,
-        "#!/bin/sh\nprintf x >> \"$4/../count\"\ncat \"$4/Package.swift\"\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let xcrun = workspace.path().join("xcrun");
-    std::fs::write(
-        &xcrun,
-        format!("#!/bin/sh\nprintf '%s' '{}'\n", tool.display()),
-    )
-    .unwrap();
-    std::fs::set_permissions(&xcrun, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let invoke = || {
-        let source = format!(
-            "{}\ndef host_which(name):\n    return {:?}\nresult = _xcode_swift_package_info({{}}, \"Package\")[\"info\"][\"name\"]\n",
-            xcode_prelude_source(),
-            xcrun.display().to_string()
+    for discovery in [false, true] {
+        let workspace = TempDir::new().unwrap();
+        let package = workspace.path().join("Package");
+        std::fs::create_dir(&package).unwrap();
+        std::fs::write(
+            package.join("Package.swift"),
+            r#"{"name":"first","targets":[]}"#,
+        )
+        .unwrap();
+        let tool = workspace.path().join("swift");
+        std::fs::write(
+            &tool,
+            "#!/bin/sh\nprintf x >> \"$4/../count\"\ngrep -q invalid \"$4/Package.swift\" && exit 17\ncat \"$4/Package.swift\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let xcrun = workspace.path().join("xcrun");
+        std::fs::write(
+            &xcrun,
+            format!("#!/bin/sh\nprintf '%s' '{}'\n", tool.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&xcrun, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let invoke = || {
+            let source = format!(
+                "{}\ndef host_which(name):\n    return {:?}\ninfo = _xcode_swift_package_info({{}}, \"Package\", discovery = {})\nresult = info[\"info\"][\"name\"] if info != None else \"skipped\"\n",
+                xcode_prelude_source(),
+                xcrun.display().to_string(),
+                if discovery { "True" } else { "False" },
+            );
+            let (_, result) = with_active_store(store_for(workspace.path(), ""), || {
+                eval_prelude_source_to_repr(source)
+            });
+            result.unwrap()
+        };
+        assert_eq!(invoke(), "first");
+        assert_eq!(invoke(), "first");
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("count")).unwrap(),
+            "x"
         );
-        let (_, result) = with_active_store(store_for(workspace.path(), ""), || {
-            eval_prelude_source_to_repr(source)
-        });
-        result.unwrap()
-    };
-    assert_eq!(invoke(), "first");
-    assert_eq!(invoke(), "first");
-    assert_eq!(
-        std::fs::read_to_string(workspace.path().join("count")).unwrap(),
-        "x"
-    );
-    std::fs::write(
-        package.join("Package.swift"),
-        r#"{"name":"second","targets":[]}"#,
-    )
-    .unwrap();
-    assert_eq!(invoke(), "second");
-    std::fs::write(package.join("File.swift"), "source").unwrap();
-    invoke();
-    std::fs::write(package.join("File.swift"), "edited").unwrap();
-    invoke();
-    std::fs::remove_file(package.join("File.swift")).unwrap();
-    invoke();
-    assert_eq!(
-        std::fs::read_to_string(workspace.path().join("count")).unwrap(),
-        "xxxxx"
-    );
+        std::fs::write(
+            package.join("Package.swift"),
+            r#"{"name":"second","targets":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(invoke(), "second");
+        std::fs::write(package.join("File.swift"), "source").unwrap();
+        invoke();
+        std::fs::write(package.join("File.swift"), "edited").unwrap();
+        invoke();
+        std::fs::remove_file(package.join("File.swift")).unwrap();
+        invoke();
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("count")).unwrap(),
+            "xxxxx"
+        );
+        if discovery {
+            std::fs::write(package.join("Package.swift"), "invalid template").unwrap();
+            assert_eq!(invoke(), "skipped");
+            assert_eq!(invoke(), "skipped");
+            assert_eq!(
+                std::fs::read_to_string(workspace.path().join("count")).unwrap(),
+                "xxxxxxx"
+            );
+            std::fs::write(
+                package.join("Package.swift"),
+                r#"{"name":"repaired","targets":[]}"#,
+            )
+            .unwrap();
+            assert_eq!(invoke(), "repaired");
+            assert_eq!(invoke(), "repaired");
+            assert_eq!(
+                std::fs::read_to_string(workspace.path().join("count")).unwrap(),
+                "xxxxxxxx"
+            );
+        }
+    }
 }

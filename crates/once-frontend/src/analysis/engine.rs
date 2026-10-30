@@ -247,8 +247,13 @@ impl AnalysisEngine {
     }
 
     pub fn load_graph_workspace(&self, root: &Path) -> Result<Vec<GraphTarget>> {
-        crate::graph::load_graph_workspace_with_compiled_schemas(root, &self.target_kind_schemas)
+        super::with_analysis_resources_blocking(Arc::clone(&self.host_cache.resources), || {
+            crate::graph::load_graph_workspace_with_compiled_schemas(
+                root,
+                &self.target_kind_schemas,
+            )
             .map_err(anyhow::Error::new)
+        })
     }
 
     pub fn load_graph_workspace_from_targets(
@@ -270,17 +275,27 @@ impl AnalysisEngine {
         root: &Path,
         targets: Vec<Target>,
     ) -> Result<(Vec<GraphTarget>, crate::ResolutionRecord)> {
-        crate::graph::load_graph_workspace_with_compiled_schemas_and_targets_recorded(
-            root,
-            &self.target_kind_schemas,
-            targets,
-        )
-        .map_err(anyhow::Error::new)
+        super::with_analysis_resources_blocking(Arc::clone(&self.host_cache.resources), || {
+            crate::graph::load_graph_workspace_with_compiled_schemas_and_targets_recorded(
+                root,
+                &self.target_kind_schemas,
+                targets,
+            )
+            .map_err(anyhow::Error::new)
+        })
+    }
+
+    #[must_use]
+    pub fn with_resource_pool(mut self, resources: Arc<once_core::ResourcePool>) -> Self {
+        self.host_cache.resources = resources;
+        self
     }
 
     #[must_use]
     pub fn with_tool_paths(mut self, tool_paths: BTreeMap<String, String>) -> Self {
+        let resources = Arc::clone(&self.host_cache.resources);
         self.host_cache = HostCache::with_tool_paths(tool_paths);
+        self.host_cache.resources = resources;
         self
     }
 
@@ -307,7 +322,9 @@ impl AnalysisEngine {
         tool_paths: BTreeMap<String, String>,
         commands: Vec<CachedToolCommand>,
     ) -> Self {
+        let resources = Arc::clone(&self.host_cache.resources);
         self.host_cache = HostCache::with_tool_cache(tool_paths, commands);
+        self.host_cache.resources = resources;
         self
     }
 

@@ -380,7 +380,7 @@ impl BuildSession {
             tool_paths: Arc::new(BTreeMap::new()),
             tool_cache_fingerprint: None,
             cached_tool_commands: Arc::from([]),
-            resources: Arc::new(ResourcePool::new(ResourceLimits::default())),
+            resources: once_frontend::analysis::analysis_resource_pool(),
             source_digest_cache: SourceDigestCache::open(workspace),
             analysis_memo: AnalysisMemo::open(workspace),
             resolution: None,
@@ -416,10 +416,14 @@ impl BuildSession {
         }
     }
 
-    pub(super) fn with_resource_limits(mut self, limits: ResourceLimits) -> Self {
-        self.resources = Arc::new(ResourcePool::new(limits));
-        self.producers = Producers::default();
-        self
+    pub(super) fn with_resource_limits(self, limits: ResourceLimits) -> Self {
+        let shared = once_frontend::analysis::analysis_resource_pool();
+        let resources = if shared.limits() == limits {
+            shared
+        } else {
+            Arc::new(ResourcePool::new(limits))
+        };
+        self.with_resource_pool(resources)
     }
 
     pub(super) fn log_paths(&self) -> Vec<String> {
@@ -427,6 +431,7 @@ impl BuildSession {
     }
 
     pub(super) fn with_resource_pool(mut self, resources: Arc<ResourcePool>) -> Self {
+        self.analyzer = self.analyzer.with_resource_pool(Arc::clone(&resources));
         self.resources = resources;
         self.producers = Producers::default();
         self

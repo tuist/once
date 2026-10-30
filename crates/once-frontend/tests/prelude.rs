@@ -15418,8 +15418,8 @@ def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True
         return "swift"
     return '{{"name":"WMFComponents","platforms":[],"products":[{{"name":"WMFComponents","targets":["WMFComponents"]}}],"targets":[]}}'
 
-def _swift_package_dump(swift, absolute, env = {{}}):
-    return host_command([swift, "package", "dump-package", "--package-path", absolute], env = env)
+def _swift_package_dump(swift, absolute, env = {{}}, check = True):
+    return host_command([swift, "package", "dump-package", "--package-path", absolute], env = env, check = check)
 
 products = _xcode_local_package_products({{}}, ["WMFComponents"])
 result = repr(products["WMFComponents"])

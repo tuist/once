@@ -191,8 +191,8 @@ def host_command(argv, check = True):
             fail("explicit invalid manifest must fail")
         return ""
     return '{"name":"Core","products":[{"name":"Core","targets":["Core"]}],"targets":[]}'
-def _swift_package_dump(swift, absolute, env = {}):
-    return host_command([swift, "package", "dump-package", "--package-path", absolute])
+def _swift_package_dump(swift, absolute, env = {}, check = True):
+    return host_command([swift, "package", "dump-package", "--package-path", absolute], check = check)
 result = repr(_xcode_local_package_products({}, ["Core"])["Core"]["path"])
 "#,
     );

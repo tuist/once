@@ -3,10 +3,11 @@ mod cache_budget;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use once_cas::CacheProvider;
-use once_core::{RemoteExecution, ResourceLimits, SandboxMode, Xdg};
+use once_core::{RemoteExecution, ResourceLimits, ResourcePool, SandboxMode, Xdg};
 
 use crate::cli::{self, Cli, Cmd, Output};
 use crate::commands;
@@ -28,10 +29,6 @@ pub(crate) async fn dispatch(cli: Cli) -> Result<ExitCode> {
 
     crate::termination::install_forwarding();
     let directory = resolve_workspace(cli.directory)?;
-    let native = crate::native_invocation::prepare(&directory, &mut command)?;
-    let workspace = native
-        .as_ref()
-        .map_or(&directory, |invocation| &invocation.workspace);
     let xdg = Xdg::from_env();
     let mut resource_limits = cli
         .memory_limit
@@ -41,6 +38,13 @@ pub(crate) async fn dispatch(cli: Cli) -> Result<ExitCode> {
     if let Some(cpu_limit) = cli.cpu_limit {
         resource_limits.cpu_slots = cpu_limit.get();
     }
+    let native = once_frontend::analysis::with_analysis_resources_blocking(
+        Arc::new(ResourcePool::new(resource_limits.clone())),
+        || crate::native_invocation::prepare(&directory, &mut command),
+    )?;
+    let workspace = native
+        .as_ref()
+        .map_or(&directory, |invocation| &invocation.workspace);
     let total_memory_bytes = resource_limits.memory_bytes;
     let uses_remote_cache = matches!(
         crate::cache_provider::resolve_config(workspace, &xdg),
@@ -56,14 +60,17 @@ pub(crate) async fn dispatch(cli: Cli) -> Result<ExitCode> {
         cpu_slots = resource_limits.cpu_slots,
         "resolved local resource limits"
     );
-    Box::pin(run_command(
-        workspace,
-        &xdg,
-        output,
-        &resource_limits,
-        command,
-        native.as_ref(),
-    ))
+    once_frontend::analysis::with_analysis_resources(
+        Arc::new(ResourcePool::new(resource_limits.clone())),
+        Box::pin(run_command(
+            workspace,
+            &xdg,
+            output,
+            &resource_limits,
+            command,
+            native.as_ref(),
+        )),
+    )
     .await
 }
 

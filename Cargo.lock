@@ -3820,8 +3820,10 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
+ "futures",
  "glob",
  "include_dir",
+ "once-core",
  "once-host-tree",
  "once-presentation",
  "serde",
@@ -3830,6 +3832,7 @@ dependencies = [
  "starlark",
  "tempfile",
  "thiserror 2.0.21",
+ "tokio",
  "toml",
  "toml_edit",
  "walkdir",

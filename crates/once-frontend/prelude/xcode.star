@@ -2547,15 +2547,15 @@ def _xcode_swift_package_with_implicit_resources(package_dir, absolute, info):
     info["targets"] = targets
     return info
 
-def _swift_package_dump(swift, absolute, env = {}):
+def _swift_package_dump(swift, absolute, env = {}, check = True):
     if absolute != workspace_root() and not absolute.startswith(_xcode_workspace_root()):
-        return host_command([swift, "package", "dump-package", "--package-path", absolute], env = env)
+        return host_command([swift, "package", "dump-package", "--package-path", absolute], env = env, check = check)
     inputs = [
         _xcode_abs(path)
         for path in walk_workspace_files(_xcode_workspace_input_path(absolute), excluded_names = [".git", ".build", ".once"])
         if host_file_exists(_xcode_abs(path))
     ]
-    return host_cached_command([swift, "package", "dump-package", "--package-path", absolute], inputs = inputs, env = env)
+    return host_cached_command([swift, "package", "dump-package", "--package-path", absolute], inputs = inputs, env = env, check = check)
 
 def _xcode_swift_package_info(ctx, package_dir, identity = "", cache = None, discovery = False):
     # `swift package dump-package` starts Swift and reparses the whole
@@ -2581,7 +2581,7 @@ def _xcode_swift_package_info(ctx, package_dir, identity = "", cache = None, dis
     host_environment_sha256()
     xcrun = host_which("xcrun")
     swift = host_command([xcrun, "--find", "swift"]).strip()
-    output = host_command([swift, "package", "dump-package", "--package-path", absolute], check = False) if discovery else _swift_package_dump(swift, absolute)
+    output = _swift_package_dump(swift, absolute, check = False) if discovery else _swift_package_dump(swift, absolute)
     if discovery and not output.strip().startswith("{"):
         analysis_warning("skipping unreadable Swift package manifest `" + package_dir + "/Package.swift` during product discovery; run `swift package dump-package --package-path " + absolute + "` to diagnose it")
         return None
@@ -2725,10 +2725,9 @@ def _xcode_remote_swift_package_infos(ctx, entry_path, project_path, package_ref
     # source acquisition only; package manifests are then lowered to Once Apple
     # targets and compiled by Once rather than by Swift Package Manager.
     pins = _xcode_package_resolved_pins(ctx, entry_path, project_path, package_refs)
-    git = host_which("git")
-    root = _xcode_workspace_root() + ".once/xcode-packages"
     infos = []
     seen = {}
+    packages = []
     refs_by_identity = {}
     for ref in package_refs.values():
         if ref.get("kind") == "remote" and ref.get("identity"):
@@ -2746,10 +2745,16 @@ def _xcode_remote_swift_package_infos(ctx, entry_path, project_path, package_ref
         if not identity or key in seen:
             continue
         seen[key] = True
+        packages.append({"identity": identity, "pin": pin, "url": ref.get("url") or ""})
+    _xcode_acquire_remote_swift_packages(packages)
+    for package in packages:
+        pin = package["pin"]
+        identity = package["identity"]
+        kind = pin.get("kind")
         if kind == "registry":
             info = _xcode_registry_swift_package_info(ctx, pin.get("identity") or identity, pin, resolve_state, cache = cache)
         else:
-            info = _xcode_remote_swift_package_info(ctx, identity, pin, ref.get("url") or "", cache = cache)
+            info = _xcode_remote_swift_package_info(ctx, identity, pin, package["url"], cache = cache, acquired = True)
         if info:
             infos.append(info)
     return infos
@@ -2801,15 +2806,30 @@ def _xcode_resolve_registry_downloads_once(resolve_state):
     swift = host_command([xcrun, "--find", "swift"]).strip()
     host_command([swift, "package", "resolve", "--package-path", absolute_root])
 
-def _xcode_remote_swift_package_info(ctx, identity, pin, url = "", checkout_root = ".once/xcode-packages", cache = None):
+def _xcode_acquire_remote_swift_packages(packages, checkout_root = ".once/xcode-packages"):
+    repositories = []
+    for package in packages:
+        pin = package["pin"]
+        revision = (pin.get("state") or {}).get("revision") or ""
+        if pin.get("kind") == "registry" or not revision:
+            continue
+        repositories.append({
+            "url": package.get("url") or pin.get("location") or "",
+            "revision": revision,
+            "path": _xcode_abs(checkout_root + "/" + _xcode_sanitized_target_name(package["identity"])),
+        })
+    if repositories:
+        cache_root = host_env("XDG_CACHE_HOME") or host_env("HOME") + "/.cache"
+        host_git_checkouts(repositories, cache_root = cache_root + "/once/repositories")
+
+def _xcode_remote_swift_package_info(ctx, identity, pin, url = "", checkout_root = ".once/xcode-packages", cache = None, acquired = False):
     state = pin.get("state") or {}
     revision = state.get("revision") or ""
     if not revision:
         return None
     package_dir = checkout_root + "/" + _xcode_sanitized_target_name(identity)
-    absolute = _xcode_abs(package_dir)
-    cache_root = host_env("XDG_CACHE_HOME") or host_env("HOME") + "/.cache"
-    host_git_checkout(url or pin.get("location") or "", revision, absolute, cache_root = cache_root + "/once/repositories")
+    if not acquired:
+        _xcode_acquire_remote_swift_packages([{"identity": identity, "pin": pin, "url": url}], checkout_root)
     info = _xcode_swift_package_info(ctx, package_dir, identity, cache = cache)
     if info:
         info = dict(info)
@@ -2836,6 +2856,7 @@ def _xcode_expand_swift_package_infos(ctx, initial_infos, cache = None, follow_r
     # prevents a malformed lockfile from making analysis unbounded.
     for _ in range(32):
         discovered = []
+        remote = []
         for package in pending:
             for dependency in package["info"].get("dependencies") or []:
                 for local in dependency.get("fileSystem") or []:
@@ -2849,7 +2870,6 @@ def _xcode_expand_swift_package_infos(ctx, initial_infos, cache = None, follow_r
                         continue
                     info = _xcode_swift_package_info(ctx, path, identity, cache = cache)
                     discovered.append(info)
-                    infos.append(info)
                     known[key] = path
             pins = _xcode_package_resolved_pins_at(package.get("path") or "") if follow_resolved else {}
             for identity, pin in pins.items():
@@ -2858,14 +2878,23 @@ def _xcode_expand_swift_package_infos(ctx, initial_infos, cache = None, follow_r
                     continue
                 if kind == "registry":
                     info = _xcode_registry_swift_package_info(ctx, pin.get("identity") or identity, pin, resolve_state, cache = cache)
+                elif (pin.get("state") or {}).get("revision"):
+                    remote_identity = pin.get("identity") or identity
+                    remote.append({"identity": remote_identity, "pin": pin, "index": len(discovered)})
+                    known[identity] = ".once/xcode-packages/" + _xcode_sanitized_target_name(remote_identity)
+                    discovered.append(None)
+                    continue
                 else:
-                    info = _xcode_remote_swift_package_info(ctx, pin.get("identity") or identity, pin, cache = cache)
+                    continue
                 if info:
                     discovered.append(info)
-                    infos.append(info)
                     known[identity] = _xcode_normalize_path(info["path"])
+        _xcode_acquire_remote_swift_packages(remote)
+        for package in remote:
+            discovered[package["index"]] = _xcode_remote_swift_package_info(ctx, package["identity"], package["pin"], cache = cache, acquired = True)
         if not discovered:
             break
+        infos.extend(discovered)
         pending = discovered
     return infos
 

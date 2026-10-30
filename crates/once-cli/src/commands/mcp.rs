@@ -83,9 +83,14 @@ pub async fn serve(
     allow_run: bool,
     resource_limits: ResourceLimits,
 ) -> Result<()> {
-    tokio::task::spawn_blocking(move || serve_blocking(workspace, allow_run, resource_limits))
-        .await
-        .context("joining MCP server thread")?
+    let resources = once_frontend::analysis::analysis_resource_pool();
+    tokio::task::spawn_blocking(move || {
+        once_frontend::analysis::with_analysis_resources_blocking(resources, || {
+            serve_blocking(workspace, allow_run, resource_limits)
+        })
+    })
+    .await
+    .context("joining MCP server thread")?
 }
 
 /// Largest single newline-delimited JSON-RPC request the server will

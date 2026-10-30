@@ -16,6 +16,11 @@ mod globals;
 mod metadata;
 mod presentation;
 mod repository;
+mod resources;
+
+pub use resources::{
+    analysis_resource_pool, with_analysis_resources, with_analysis_resources_blocking,
+};
 
 pub use globals::{flush_host_tree_digest_caches, inherited_environment_sha256};
 mod store;

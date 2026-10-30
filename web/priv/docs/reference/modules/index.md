@@ -661,7 +661,7 @@ separate update workflow.
   the bound applies while capturing each stream and to the merged result,
   and is recorded with the observation so later validation re-runs the
   command under the same limit.
-- `host_cached_command(argv, inputs, env = {}, cwd = None)` persists successful
+- `host_cached_command(argv, inputs, env = {}, cwd = None, check = True)` persists successful
   discovery output across graph loads. `inputs` is the complete list of absolute
   input file paths; use a recorded walk or glob to track added and removed files.
   The executable contents, input contents, effective working directory, explicit
@@ -670,6 +670,9 @@ separate update workflow.
   Environment values are not written to the cache. The caller must declare every
   file the command reads and must not use this primitive for commands with side
   effects. Output is bounded to 16 mebibytes. Failures are never persisted.
+  With `check = False`, a non-zero exit returns standard output without saving it.
+  That analysis is also ineligible for graph replay, so a temporary failure
+  cannot freeze an incomplete graph in the resolution cache.
   Records are replaced atomically and there is one slot per command configuration,
   rather than one slot per source edit.
 - `host_git_checkout(url, revision, path, cache_root)` acquires a pinned Git
@@ -689,6 +692,15 @@ separate update workflow.
   URL credentials. This primitive returns `None` and records the detached HEAD.
   Inherited Git repository-location variables are cleared so they cannot redirect
   an acquisition into the caller's own checkout.
+- `host_git_checkouts(repositories, cache_root)` acquires a list of
+  `{"url": ..., "revision": ..., "path": ...}` records using the same contract
+  as `host_git_checkout`. Destinations must be distinct and non-overlapping.
+  Independent repositories run concurrently, with each acquisition reserving the
+  default CPU and memory estimate from the command's shared resource pool.
+  `--memory-limit` and `--cpu-limit` bound acquisition as well as execution.
+  Updates to a shared repository still serialize under its lock. All workers
+  finish before the call returns, including on failure; errors are reported in
+  input order. The call returns `None` and records every detached HEAD on success.
 - `host_symlink_target(path)` returns where a host symbolic link points, as
   written, or an empty string when the path is not a link. A planner uses it to
   declare the files a linked input depends on. Non-UTF-8 link targets are

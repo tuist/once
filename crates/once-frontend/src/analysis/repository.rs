@@ -2,11 +2,74 @@ use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::path::Path;
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
+use once_core::{ResourcePool, ResourceRequest};
+use serde::Deserialize;
 
 use super::globals::sha256_hex;
 use super::store::{capture_host_command_output, HOST_COMMAND_OUTPUT_LIMIT};
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Checkout {
+    pub url: String,
+    pub revision: String,
+    pub path: std::path::PathBuf,
+}
+
+pub(super) fn checkout_many(
+    git: &str,
+    repositories: &[Checkout],
+    cache: &Path,
+    resources: &Arc<ResourcePool>,
+) -> Result<()> {
+    let pending = Mutex::new(repositories.iter().enumerate());
+    let mut results = std::thread::scope(|scope| -> Result<Vec<_>> {
+        let workers: Vec<_> = (0..repositories.len().min(resources.max_parallel_actions()))
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut completed = Vec::new();
+                    loop {
+                        let next = pending.lock().unwrap().next();
+                        let Some((index, repository)) = next else {
+                            break;
+                        };
+                        let _permit = futures::executor::block_on(
+                            resources.acquire(ResourceRequest::default()),
+                        );
+                        completed.push((
+                            index,
+                            checkout(
+                                git,
+                                &repository.url,
+                                &repository.revision,
+                                &repository.path,
+                                cache,
+                            ),
+                        ));
+                    }
+                    completed
+                })
+            })
+            .collect();
+        let mut completed = Vec::new();
+        for worker in workers {
+            completed.extend(
+                worker
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("repository acquisition worker panicked"))?,
+            );
+        }
+        Ok(completed)
+    })?;
+    results.sort_by_key(|(index, _)| *index);
+    for (_, result) in results {
+        result?;
+    }
+    Ok(())
+}
 
 pub(super) fn checkout(
     git: &str,

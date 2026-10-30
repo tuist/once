@@ -16,13 +16,15 @@ use starlark::values::Value;
 use super::action_history::{make_history, unpack_history};
 use super::presentation::{record_action, unpack_presentation, unpack_source_files};
 use super::store::{
-    analysis_active, observe, with_store, with_store_mut, AnalysisObservations, CommandPolicy,
-    DeclaredAction, DeclaredActionOperation, DeclaredArchiveEntry, DeclaredArchiveEntryKind,
-    DeclaredArchiveFormat, DeclaredArgFile, DeclaredArgFileFormat, DeclaredCopyPathMode,
-    DeclaredPreparePathMode, HostCache, Observation, HOST_COMMAND_OUTPUT_LIMIT,
+    analysis_active, observe, observe_unrecordable, with_store, with_store_mut,
+    AnalysisObservations, CommandPolicy, DeclaredAction, DeclaredActionOperation,
+    DeclaredArchiveEntry, DeclaredArchiveEntryKind, DeclaredArchiveFormat, DeclaredArgFile,
+    DeclaredArgFileFormat, DeclaredCopyPathMode, DeclaredPreparePathMode, HostCache, Observation,
+    HOST_COMMAND_OUTPUT_LIMIT,
 };
 use super::values::{
-    json_to_value, toml_value_to_starlark, unpack_byte_list, unpack_string_dict, unpack_string_list,
+    json_to_value, toml_value_to_starlark, unpack_byte_list, unpack_string_dict,
+    unpack_string_list, value_to_json,
 };
 
 mod expansion;
@@ -269,22 +271,25 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         if !analysis_active() {
             return Ok(NoneType);
         }
-        let git = observed_which("git", "host_git_checkout")?
-            .context("host_git_checkout requires git on PATH")?;
-        let workspace = with_store(|store| store.unwrap().workspace_root.clone());
-        if !Path::new(path).starts_with(workspace)
-            || Path::new(path)
-                .components()
-                .any(|part| part == Component::ParentDir)
-        {
-            anyhow::bail!("host_git_checkout path must stay inside the workspace");
+        git_checkouts(
+            &[super::repository::Checkout {
+                url: url.into(),
+                revision: revision.into(),
+                path: path.into(),
+            }],
+            cache_root,
+        )?;
+        Ok(NoneType)
+    }
+
+    fn host_git_checkouts(repositories: Value<'_>, cache_root: &str) -> anyhow::Result<NoneType> {
+        if !analysis_active() {
+            return Ok(NoneType);
         }
-        super::repository::checkout(&git, url, revision, Path::new(path), Path::new(cache_root))?;
-        let head = Path::new(path).join(".git/HEAD");
-        observe(Observation::FileDigest {
-            path: head.to_string_lossy().into_owned(),
-            sha256: file_sha256_hex(&head)?,
-        });
+        let repositories: Vec<super::repository::Checkout> =
+            serde_json::from_value(value_to_json(repositories))
+                .context("host_git_checkouts expects a list of {url, revision, path} records")?;
+        git_checkouts(&repositories, cache_root)?;
         Ok(NoneType)
     }
 
@@ -293,6 +298,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         inputs: Value<'v>,
         env: Option<Value<'v>>,
         cwd: Option<&str>,
+        check: Option<bool>,
     ) -> anyhow::Result<String> {
         if !analysis_active() {
             return Ok(String::new());
@@ -319,7 +325,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         observe(Observation::EnvironmentDigest {
             sha256: environment.clone(),
         });
-        let (output, digests) = with_store(|store| -> Result<_> {
+        let ((output, success), digests) = with_store(|store| -> Result<_> {
             let store = store.context("host_cached_command called outside analysis")?;
             let mut digests = Vec::new();
             for path in std::iter::once(&resolved).chain(inputs.iter()) {
@@ -335,12 +341,12 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             let slot = sha256_hex(&serde_json::to_vec(&(&argv, &env, &cwd))?);
             let key = sha256_hex(&serde_json::to_vec(&(&digests, &environment))?);
             let output = super::metadata::command(&store.workspace_root, &slot, &key, || {
-                store.host_cache.command_checked(
+                store.host_cache.run_command(
                     &argv,
                     &env,
                     Some(&cwd),
                     false,
-                    true,
+                    check.unwrap_or(true),
                     HOST_COMMAND_OUTPUT_LIMIT,
                 )
             })?;
@@ -348,6 +354,9 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         })?;
         for (path, sha256) in digests {
             observe(Observation::FileDigest { path, sha256 });
+        }
+        if !success {
+            observe_unrecordable();
         }
         Ok(output)
     }
@@ -1555,6 +1564,45 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     }
 }
 
+fn git_checkouts(repositories: &[super::repository::Checkout], cache_root: &str) -> Result<()> {
+    if repositories.is_empty() {
+        return Ok(());
+    }
+    let (workspace, resources) = with_store(|store| {
+        let store = store.unwrap();
+        (
+            store.workspace_root.clone(),
+            Arc::clone(&store.host_cache.resources),
+        )
+    });
+    for (index, repository) in repositories.iter().enumerate() {
+        let path = &repository.path;
+        if !path.is_absolute()
+            || !path.starts_with(&workspace)
+            || path.components().any(|part| part == Component::ParentDir)
+        {
+            anyhow::bail!("host_git_checkout path must stay inside the workspace");
+        }
+        if repositories[..index]
+            .iter()
+            .any(|other| path.starts_with(&other.path) || other.path.starts_with(path))
+        {
+            anyhow::bail!("host_git_checkouts requires distinct, non-overlapping checkout paths");
+        }
+    }
+    let git = observed_which("git", "host_git_checkout")?
+        .context("host_git_checkout requires git on PATH")?;
+    super::repository::checkout_many(&git, repositories, Path::new(cache_root), &resources)?;
+    for repository in repositories {
+        let head = repository.path.join(".git/HEAD");
+        observe(Observation::FileDigest {
+            path: head.to_string_lossy().into_owned(),
+            sha256: file_sha256_hex(&head)?,
+        });
+    }
+    Ok(())
+}
+
 fn read_bounded_host_file(path: &str) -> Result<Vec<u8>> {
     let metadata =
         std::fs::metadata(path).with_context(|| format!("reading host file `{path}`"))?;
@@ -2542,6 +2590,7 @@ mod observation_completeness_tests {
         "host_cached_command",
         "host_command",
         "host_git_checkout",
+        "host_git_checkouts",
         "host_env",
         "host_environment_sha256",
         "host_file_contains",

@@ -475,13 +475,8 @@ pub(super) fn observe(observation: Observation) {
 }
 
 /// Mark the analysis in progress as one that cannot be replayed, for a global
-/// whose answer the ledger has no way to describe.
-///
-/// Nothing calls this today, because every global that can return host state
-/// records it. It exists so that adding such a global is a one-line change
-/// rather than a silent hole, and `every_global_is_classified` fails until the
-/// author has decided which of the two it is.
-#[allow(dead_code)]
+/// whose answer cannot be settled from its declared inputs, such as a temporary
+/// discovery failure.
 pub(super) fn observe_unrecordable() {
     with_store_mut(|store| {
         if let Some(store) = store {
@@ -638,6 +633,7 @@ impl HostToolFailure {
 
 pub(super) struct HostCache {
     pub(super) source_files: Arc<super::presentation::SourceFileCache>,
+    pub(super) resources: Arc<once_core::ResourcePool>,
     which: Arc<SingleFlight<String, Option<String>>>,
     /// The most recent command that exited non-zero. Read only on the error
     /// path, to describe a failure the traceback would otherwise obscure.
@@ -662,6 +658,7 @@ impl Clone for HostCache {
     fn clone(&self) -> Self {
         Self {
             source_files: Arc::clone(&self.source_files),
+            resources: Arc::clone(&self.resources),
             which: Arc::clone(&self.which),
             last_tool_failure: Arc::clone(&self.last_tool_failure),
             commands: Arc::clone(&self.commands),
@@ -686,6 +683,7 @@ impl HostCache {
     fn with_env_lookup(host_env: impl Fn(&str) -> Option<String> + Send + Sync + 'static) -> Self {
         Self {
             source_files: Arc::new(super::presentation::SourceFileCache::default()),
+            resources: super::resources::analysis_resource_pool(),
             which: Arc::new(SingleFlight::new()),
             last_tool_failure: Arc::new(Mutex::new(None)),
             commands: Arc::new(SingleFlight::new()),
@@ -916,6 +914,7 @@ impl HostCache {
         };
         let output = self.commands.get_or_compute(key, || {
             self.run_command(argv, env, cwd, merge_stderr, check, max_output_bytes)
+                .map(|(output, _)| output)
         })?;
         // Merging can exceed the bound even when each stream fits separately.
         if output.len() as u64 > max_output_bytes {
@@ -925,7 +924,7 @@ impl HostCache {
     }
 
     /// Spawn one host command and return its captured output.
-    fn run_command(
+    pub(super) fn run_command(
         &self,
         argv: &[String],
         env: &BTreeMap<String, String>,
@@ -933,7 +932,7 @@ impl HostCache {
         merge_stderr: bool,
         check: bool,
         max_output_bytes: u64,
-    ) -> Result<String> {
+    ) -> Result<(String, bool)> {
         let mut iter = argv.iter();
         let program = iter
             .next()
@@ -979,7 +978,7 @@ impl HostCache {
                 String::from_utf8(stderr).map_err(|error| anyhow!("non-utf8 stderr: {error}"))?;
             combined.push_str(&stderr);
         }
-        Ok(combined)
+        Ok((combined, status.success()))
     }
 
     /// A cheap description of the program a command name resolves to.

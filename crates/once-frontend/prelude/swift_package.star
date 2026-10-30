@@ -63,7 +63,16 @@ def _swift_package_remote_infos(ctx, package_info, swift, env, absolute_package_
         return []
     infos = []
     registry_resolve_attempted = False
-    for pin in _swiftpm_resolved_pins(json_decode(resolved)):
+    pins = _swiftpm_resolved_pins(json_decode(resolved))
+    _xcode_acquire_remote_swift_packages([
+        {
+            "identity": pin["identity"],
+            "pin": {"location": pin.get("location") or "", "state": {"revision": pin.get("revision") or ""}},
+        }
+        for pin in pins
+        if pin.get("kind") == "remoteSourceControl" and _swiftpm_pin_requires_network(pin)
+    ], checkout_root = ".once/swift-package-packages")
+    for pin in pins:
         if not _swiftpm_pin_requires_network(pin):
             continue
         kind = pin.get("kind") or ""
@@ -84,6 +93,7 @@ def _swift_package_remote_infos(ctx, package_info, swift, env, absolute_package_
                 raw_pin,
                 checkout_root = ".once/swift-package-packages",
                 cache = cache,
+                acquired = True,
             )
         elif _swiftpm_pin_is_registry(pin):
             registry_relative = _swiftpm_registry_relative_dir(pin)
