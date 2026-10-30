@@ -53,6 +53,10 @@ mod cargo_paths;
 #[path = "prelude/swift_package_paths.rs"]
 mod swift_package_paths;
 
+#[cfg(unix)]
+#[path = "prelude/swift_package_git.rs"]
+mod swift_package_git;
+
 #[path = "prelude/xcode_scripts.rs"]
 mod xcode_scripts;
 
@@ -15712,6 +15716,72 @@ result = repr([
 }
 
 #[test]
+fn prelude_xcode_package_configuration_matches_defines_and_conditional_settings() {
+    let prelude = xcode_prelude_source();
+    for (configuration, debug) in [
+        ("Debug", true),
+        ("dEbUg", true),
+        ("Development", true),
+        ("App-DEBUG-Staging", true),
+        ("Release-dEvElOpMeNt", true),
+        ("Release", false),
+        ("Staging", false),
+        ("Develop", false),
+        ("App Store", false),
+    ] {
+        let source = format!(
+            r#"{prelude}
+def glob(patterns):
+    return ["Sources/Support.swift"]
+
+def host_file_read(path):
+    return ""
+
+settings = [
+    {{"tool": tool, "kind": {{"define": {{"_0": name}}}}, "condition": {{"config": config}}}}
+    for tool, name, config in [
+        ("swift", "DEBUG_SETTING", "debug"),
+        ("swift", "RELEASE_SETTING", "release"),
+        ("c", "C_DEBUG_SETTING", "debug"),
+        ("cxx", "C_RELEASE_SETTING", "release"),
+    ]
+]
+settings.extend([
+    {{"tool": "swift", "kind": {{"define": {{"_0": "IOS_DEBUG"}}}}, "condition": {{"config": "debug", "platformNames": ["ios"]}}}},
+    {{"tool": "swift", "kind": {{"define": {{"_0": "INACTIVE_TRAIT"}}}}, "condition": {{"config": "debug", "traits": ["Disabled"]}}}},
+])
+info = {{"identity": "Example", "path": ".", "info": {{"targets": [
+    {{"name": "Support", "type": "regular", "settings": settings}},
+    {{"name": "Macro", "type": "macro", "settings": settings}},
+]}}}}
+graph = _xcode_local_swift_package_specs({{"label": {{"package": ""}}}}, [info], "ios", "17.0", "simulator", configuration = "{configuration}")
+result = repr([
+    [
+        "DEBUG" in (spec["attrs"].get("defines") or spec["attrs"]["swift_flags"]),
+        "DEBUG_SETTING" in spec["attrs"]["swift_flags"],
+        "RELEASE_SETTING" in spec["attrs"]["swift_flags"],
+        "-DC_DEBUG_SETTING" in spec["attrs"].get("clang_flags", []),
+        "-DC_RELEASE_SETTING" in spec["attrs"].get("clang_flags", []),
+        "IOS_DEBUG" in spec["attrs"]["swift_flags"],
+        "INACTIVE_TRAIT" in spec["attrs"]["swift_flags"],
+    ] for spec in graph["specs"]
+])
+"#
+        );
+        let expected = if debug {
+            "[[True, True, False, True, False, True, False], [True, True, False, True, False, False, False], [True, True, False, False, False, False, False]]"
+        } else {
+            "[[False, False, True, False, True, False, False], [False, False, True, False, True, False, False], [False, False, True, False, False, False, False]]"
+        };
+        assert_eq!(
+            eval_prelude_source_to_repr(source).unwrap(),
+            expected,
+            "configuration {configuration}"
+        );
+    }
+}
+
+#[test]
 fn prelude_xcode_reconciles_cross_package_product_dependencies() {
     let prelude = xcode_prelude_source();
     let source = format!(
@@ -18396,5 +18466,63 @@ result = repr([
     assert_eq!(
         eval_prelude_source_to_repr(explicit).unwrap(),
         r#"[True, ["./Feature"]]"#
+    );
+}
+
+#[test]
+fn prelude_xcode_script_path_resolves_relative_paths_against_srcroot() {
+    let prelude = format!(
+        "{}\ndef _xcode_workspace_root():\n    return \"/ws/\"\n",
+        xcode_prelude_source()
+    );
+    let path = |value: &str, srcroot: &str| {
+        eval_prelude_function_in(
+            &prelude,
+            "_xcode_script_path",
+            &format!(r#"("{value}", {{"SRCROOT": "{srcroot}"}})"#),
+        )
+        .unwrap()
+    };
+
+    assert_eq!(
+        path("Vendor/Plugin.app", "/ws/App"),
+        r#""App/Vendor/Plugin.app""#
+    );
+    assert_eq!(
+        path("$(SRCROOT)/Generated/Flags.swift", "/ws/App"),
+        r#""App/Generated/Flags.swift""#
+    );
+    assert_eq!(path("Vendor/Plugin.app", "App"), r#""Vendor/Plugin.app""#);
+}
+
+#[test]
+fn prelude_apple_module_scan_argv_drops_static_framework_binaries() {
+    let prelude = apple_prelude_source();
+    let out = eval_prelude_function_in(
+        &prelude,
+        "_apple_module_scan_argv",
+        r#"(["swiftc", "-emit-executable", "-F", "out/Kit.xcframework/ios-arm64-simulator", "App.swift", "out/Kit.xcframework/ios-arm64-simulator/Kit.framework/Kit", "out/libCore.a"], "cache")"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        out,
+        r#"["swiftc", "-scan-dependencies", "-wmo", "-F", "out/Kit.xcframework/ios-arm64-simulator", "App.swift", "-disable-bridging-pch", "-module-cache-path", "cache"]"#
+    );
+}
+
+#[test]
+fn prelude_apple_module_input_accepts_sdk_paths_with_parent_segments() {
+    let prelude = apple_prelude_source();
+    let out = eval_prelude_function_in(
+        &prelude,
+        "_apple_normalize_absolute_path",
+        r#"("/SDK/System/Library/Frameworks/Accelerate.framework/Headers/../Frameworks/vecLib.framework/Headers/vecLib.h")"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        out,
+        r#""/SDK/System/Library/Frameworks/Accelerate.framework/Frameworks/vecLib.framework/Headers/vecLib.h""#
     );
 }

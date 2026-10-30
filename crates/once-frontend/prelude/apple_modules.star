@@ -14,11 +14,19 @@ def _apple_module_scan_argv(argv, cache_path):
             skip = True
         elif arg in remove_flags:
             pass
-        elif not arg.startswith("-") and (arg.endswith(".a") or arg.endswith(".o")):
+        elif not arg.startswith("-") and _apple_module_scan_skips_link_input(arg):
             pass
         else:
             result.append(arg)
     return result + ["-disable-bridging-pch", "-module-cache-path", cache_path]
+
+def _apple_module_scan_skips_link_input(path):
+    # The scanner rejects link inputs; a static framework binary has no extension.
+    for suffix in [".a", ".o", ".dylib", ".tbd"]:
+        if path.endswith(suffix):
+            return True
+    framework = _parent_dir(path)
+    return framework.endswith(".framework") and _basename(framework) == _basename(path) + ".framework"
 
 def _apple_module_host_roots(swiftc):
     if not swiftc.get("sdk_path"):
@@ -63,6 +71,15 @@ def _apple_swift_action(ctx, attrs, swiftc, deps, **action):
     if not attrs.get("explicit_modules"):
         run_action(**action)
         return
+    # Textual interfaces retain their own Swift deployment target, but must
+    # import the same Clang modules as the main compilation.
+    for target_flag, clang_flag in [("-target", "-clang-target"), ("-target-variant", "-clang-target-variant")]:
+        target = ""
+        for index in range(len(action["argv"]) - 1):
+            if action["argv"][index] == target_flag:
+                target = action["argv"][index + 1]
+        if target and clang_flag not in action["argv"]:
+            action["argv"] = action["argv"] + ["-Xfrontend", clang_flag, "-Xfrontend", target]
     identity = _apple_module_toolchain_identity(swiftc)
     cache_path = ".once/out/modules/" + content_sha256(identity)
     scan = declare_output("ModuleScans/" + action["identifier"] + ".json")
@@ -131,6 +148,8 @@ def _apple_scan_records(scan):
     return records
 
 def _apple_module_input(path):
+    if path.startswith("/"):
+        path = _apple_normalize_absolute_path(path)
     if ".." in path.split("/"):
         fail("compiler module path escaped the workspace: " + path)
     root = workspace_root() + "/"
@@ -139,6 +158,19 @@ def _apple_module_input(path):
     if path.startswith("/"):
         return ""
     return path
+
+def _apple_normalize_absolute_path(path):
+    # SDK module maps reference headers as `Headers/../Frameworks/...`.
+    parts = []
+    for part in path.split("/"):
+        if part == "" or part == ".":
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(part)
+    return "/" + "/".join(parts)
 
 def _apple_module_record_details(entry):
     kind = _apple_scan_key(entry["reference"]).split(":")[0]
@@ -187,6 +219,8 @@ def _apple_check_module_inputs(ctx, records):
         if record.get("modulePath"):
             paths.append(record["modulePath"])
         for path in paths:
+            if path.startswith("/"):
+                path = _apple_normalize_absolute_path(path)
             if not _apple_module_input(path) and path.startswith("/"):
                 if not any([path.startswith(root + "/") or (host_path_exists(path) and host_path_exists(root) and host_path_is_within(path, root)) for root in ctx["args"].get("host_roots") or []]):
                     return {

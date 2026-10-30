@@ -4822,34 +4822,35 @@ def _apple_application_impl(ctx):
     if asset_catalogs:
         actool = _resolve_actool(xcode_developer_dir)
         actool_platform = _apple_actool_platform(platform, sdk_variant)
-        asset_symbols = declare_output("GeneratedAssetSymbols.swift")
-        # `actool` only writes the Swift symbols when a compile pass runs, so a
-        # throwaway compile directory is supplied; it is not a declared output.
-        symbol_argv = [actool["actool_path"]] + asset_catalogs + [
-            "--compile",
-            ctx["build_dir"] + "/AssetSymbolsCompile",
-            "--generate-swift-asset-symbols",
-            asset_symbols,
-            "--platform",
-            actool_platform,
-            "--minimum-deployment-target",
-            minimum_os,
-            "--bundle-identifier",
-            bundle_id,
-        ]
-        run_action(
-            display_name = "Generate asset symbols · " + ctx["label"]["name"],
-            source_files = _action_source_files(asset_catalogs),
-            argv = symbol_argv,
-            inputs = asset_catalogs,
-            outputs = [asset_symbols],
-            create_dirs = [ctx["build_dir"] + "/AssetSymbolsCompile"],
-            clean_paths = [ctx["build_dir"] + "/AssetSymbolsCompile"],
-            env = actool["env"],
-            toolchain_identity = actool["identity"],
-            identifier = "apple_application_asset_symbols_" + product_name,
-        )
-        swift_srcs = swift_srcs + [asset_symbols]
+        if attrs.get("asset_symbols") != False:
+            asset_symbols = declare_output("GeneratedAssetSymbols.swift")
+            # `actool` only writes the Swift symbols when a compile pass runs, so a
+            # throwaway compile directory is supplied; it is not a declared output.
+            symbol_argv = [actool["actool_path"]] + asset_catalogs + [
+                "--compile",
+                ctx["build_dir"] + "/AssetSymbolsCompile",
+                "--generate-swift-asset-symbols",
+                asset_symbols,
+                "--platform",
+                actool_platform,
+                "--minimum-deployment-target",
+                minimum_os,
+                "--bundle-identifier",
+                bundle_id,
+            ]
+            run_action(
+                display_name = "Generate asset symbols · " + ctx["label"]["name"],
+                source_files = _action_source_files(asset_catalogs),
+                argv = symbol_argv,
+                inputs = asset_catalogs,
+                outputs = [asset_symbols],
+                create_dirs = [ctx["build_dir"] + "/AssetSymbolsCompile"],
+                clean_paths = [ctx["build_dir"] + "/AssetSymbolsCompile"],
+                env = actool["env"],
+                toolchain_identity = actool["identity"],
+                identifier = "apple_application_asset_symbols_" + product_name,
+            )
+            swift_srcs = swift_srcs + [asset_symbols]
 
         asset_car = declare_output(resources_dir + "/Assets.car")
         car_partial_plist = declare_output("assets-partial.plist")
@@ -7724,6 +7725,7 @@ apple_application = target_kind(
         attr("application_extension", "bool", default = "false", docs = "Build as an app extension: entered through `NSExtensionMain` and compiled against the app-extension-safe API surface"),
         attr("asset_catalogs", "list<string>", default = "[]", docs = "Asset catalogs (`.xcassets`) compiled into the bundle's `Assets.car` and used to generate type-safe `ImageResource`/`ColorResource` accessors"),
         attr("app_icon", "string", docs = "Asset catalog app-icon set name (`ASSETCATALOG_COMPILER_APPICON_NAME`) compiled into the app icon"),
+        attr("asset_symbols", "bool", default = "true", docs = "Generate Swift asset symbols from `asset_catalogs` (`ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS`)"),
         attr("enable_testing", "bool", default = "false", docs = "Compile Swift with testability enabled so hosted test bundles can `@testable import` the application module"),
     ],
     deps = [

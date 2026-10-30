@@ -59,6 +59,14 @@ Swift package targets use single-worker batch compilation unless they request
 whole-module optimization. Explicit package compiler flags follow the defaults,
 so a package can still disable batching.
 
+Packages imported from Xcode use the Debug package configuration when the
+selected Xcode configuration name contains `debug` or `development`, ignoring
+case, and Release otherwise. This matches Swift Build, independently of native
+project optimization settings or compilation conditions. The mapped package
+configuration controls both the automatic `DEBUG` definition and conditional
+Swift and C-family settings declared in the package manifest, including macro
+targets and their host dependencies.
+
 Xcode imports preserve Swift language settings, including bare-slash regular
 expressions, strict concurrency, and approachable concurrency defaults. Explicit
 feature overrides take precedence over defaults. On macOS, string catalogs

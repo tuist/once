@@ -1,0 +1,19 @@
+// !$*UTF8*$!
+{
+ archiveVersion = 1;
+ objectVersion = 56;
+ objects = {
+  ROOT = {isa = PBXProject; mainGroup = GROUP; buildConfigurationList = CONFIGS; targets = (APP); };
+  GROUP = {isa = PBXGroup; sourceTree = "<group>"; children = (MAIN, CATALOG); };
+  MAIN = {isa = PBXFileReference; path = main.swift; sourceTree = "<group>"; };
+  CATALOG = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+  SOURCE = {isa = PBXBuildFile; fileRef = MAIN; };
+  RESOURCE = {isa = PBXBuildFile; fileRef = CATALOG; };
+  SOURCES = {isa = PBXSourcesBuildPhase; files = (SOURCE); };
+  RESOURCES = {isa = PBXResourcesBuildPhase; files = (RESOURCE); };
+  CONFIGS = {isa = XCConfigurationList; buildConfigurations = (DEBUG); defaultConfigurationName = Debug; };
+  DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {SDKROOT = macosx; MACOSX_DEPLOYMENT_TARGET = 14.0; SWIFT_VERSION = 5.0; PRODUCT_NAME = Assets; PRODUCT_BUNDLE_IDENTIFIER = dev.once.assets; ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS = NO; }; };
+  APP = {isa = PBXNativeTarget; name = Assets; productType = "com.apple.product-type.application"; buildConfigurationList = CONFIGS; buildPhases = (SOURCES, RESOURCES); dependencies = (); };
+ };
+ rootObject = ROOT;
+}

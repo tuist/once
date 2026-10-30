@@ -234,6 +234,75 @@ fn cargo_native_project_loads_without_a_once_manifest() {
 
 #[cfg(target_os = "macos")]
 #[test]
+fn xcode_asset_symbols_setting_preserves_catalog_compilation() {
+    let project = "Assets.xcodeproj/project.pbxproj";
+    for enabled in [false, true] {
+        let tmp = TempDir::new().unwrap();
+        for (path, contents) in [
+            (project, include_str!("../../../fixtures/xcode_asset_symbols/Assets.xcodeproj/project.pbxproj")),
+            ("main.swift", include_str!("../../../fixtures/xcode_asset_symbols/main.swift")),
+            ("Assets.xcassets/Contents.json", include_str!("../../../fixtures/xcode_asset_symbols/Assets.xcassets/Contents.json")),
+            ("Assets.xcassets/brandPrimary.colorset/Contents.json", include_str!("../../../fixtures/xcode_asset_symbols/Assets.xcassets/brandPrimary.colorset/Contents.json")),
+        ] {
+            let destination = tmp.path().join(path);
+            fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            fs::write(destination, contents).unwrap();
+        }
+        if enabled {
+            let path = tmp.path().join(project);
+            let source = fs::read_to_string(&path).unwrap();
+            fs::write(
+                path,
+                source.replace(
+                    "GENERATE_ASSET_SYMBOLS = NO",
+                    "GENERATE_ASSET_SYMBOLS = YES",
+                ),
+            )
+            .unwrap();
+        }
+        let graph = once_frontend::load_graph_workspace(tmp.path()).unwrap();
+        let app = graph
+            .iter()
+            .find(|target| target.kind == "apple_application")
+            .unwrap();
+        assert!(app.diagnostics.is_empty(), "{:?}", app.diagnostics);
+        if !enabled {
+            assert_eq!(
+                app.attrs.get("asset_symbols"),
+                Some(&AttrValue::Bool(false))
+            );
+        }
+        let result = AnalysisEngine::for_workspace(tmp.path())
+            .unwrap()
+            .analyze_target(app, tmp.path(), &[])
+            .unwrap();
+        assert!(result.actions.iter().any(|action| action
+            .outputs
+            .iter()
+            .any(|output| output.ends_with("/Assets.car"))));
+        assert_eq!(
+            result.actions.iter().any(|action| action
+                .argv
+                .iter()
+                .any(|arg| arg == "--generate-swift-asset-symbols")),
+            enabled
+        );
+        assert_eq!(
+            result.actions.iter().any(|action| action
+                .argv
+                .iter()
+                .any(|arg| arg.ends_with("/GeneratedAssetSymbols.swift"))
+                && !action
+                    .argv
+                    .iter()
+                    .any(|arg| arg == "--generate-swift-asset-symbols")),
+            enabled
+        );
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn swift_package_native_project_loads_without_a_once_manifest() {
     let schemas = built_in_target_kind_schemas_result().expect("built-in target kind schemas load");
     let schema = schemas

@@ -63,6 +63,15 @@ Describe 'explicit Apple modules'
     jq -e '.cache == "hit"' "$WORKSPACE/build.json" >/dev/null
   }
 
+  exercise_mixed_deployment_interface() {
+    cp -R "$REPO_ROOT/fixtures/apple_explicit_modules/MixedDeployment/." "$WORKSPACE/"
+    build_explicit MixedDeployment || return
+    once query evidence MixedDeployment:build --format json > "$WORKSPACE/evidence.json" || return
+    jq -e 'any(.[]; .outputs | keys | any(endswith("/Legacy.swiftmodule")))' "$WORKSPACE/evidence.json" >/dev/null || return
+    build_explicit MixedDeployment || return
+    jq -e '.cache == "hit"' "$WORKSPACE/build.json" >/dev/null
+  }
+
   It 'shares module actions, restores clean builds, invalidates headers, and rejects undeclared native imports'
     Skip if 'requires an Apple Swift compiler' explicit_module_toolchain_unavailable
     When call exercise_explicit_cache
@@ -73,6 +82,13 @@ Describe 'explicit Apple modules'
   It 'honors native Xcode explicit-module settings and restores a framework from cache'
     Skip if 'requires Xcode' explicit_module_toolchain_unavailable
     When call exercise_native_xcode
+    The status should be success
+    The output should equal ''
+  End
+
+  It 'builds an older Swift interface with the main compilation Clang module target'
+    Skip if 'requires an Apple Swift compiler' explicit_module_toolchain_unavailable
+    When call exercise_mixed_deployment_interface
     The status should be success
     The output should equal ''
   End
