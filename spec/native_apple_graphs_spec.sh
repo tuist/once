@@ -51,12 +51,14 @@ Describe 'real-world native graph shapes'
   exercise_warm_package_graph() {
     local ONCE_ACTUAL_SWIFT ONCE_MANIFEST_PROBES actual_swift
     cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/xcode-generated-source-e2e/." "$WORKSPACE/"
+    mv "$WORKSPACE/Packages/Shared/Sources" "$WORKSPACE/Packages/Shared/Source"
     mkdir -p "$SPEC_ROOT/tools"
     actual_swift="$(xcrun --find swift)" || return
     cat > "$SPEC_ROOT/tools/swift" <<'SH'
 #!/bin/sh
 case " $* " in
   *' dump-package '*) printf 'dump\n' >> "$ONCE_MANIFEST_PROBES" ;;
+  *' describe '*) printf 'describe\n' >> "$ONCE_MANIFEST_PROBES" ;;
 esac
 exec "$ONCE_ACTUAL_SWIFT" "$@"
 SH
@@ -73,17 +75,23 @@ SH
     PATH="$SPEC_ROOT/tools:$PATH" graph_snapshot || return
     cp "$WORKSPACE/graph.json" "$SPEC_ROOT/cold-graph.json"
     [ -s "$ONCE_MANIFEST_PROBES" ] || return 1
+    [ "$(grep -c '^describe$' "$ONCE_MANIFEST_PROBES")" -eq 1 ] || return 1
+    jq -e 'any(.[]; .attrs.module_name == "Shared" and .srcs == ["Packages/Shared/Source/Shared/Shared.swift"])' "$WORKSPACE/graph.json" >/dev/null || return
     cp "$ONCE_MANIFEST_PROBES" "$SPEC_ROOT/cold-probes"
     PATH="$SPEC_ROOT/tools:$PATH" graph_snapshot || return
     cmp -s "$WORKSPACE/graph.json" "$SPEC_ROOT/cold-graph.json" || return
-    cmp -s "$ONCE_MANIFEST_PROBES" "$SPEC_ROOT/cold-probes" || return
+    cmp -s "$ONCE_MANIFEST_PROBES" "$SPEC_ROOT/cold-probes" || {
+      diff -u "$SPEC_ROOT/cold-probes" "$ONCE_MANIFEST_PROBES"
+      return 1
+    }
 
-    mkdir -p "$WORKSPACE/Packages/Shared/Sources/Added"
-    printf 'public let added = 1\n' > "$WORKSPACE/Packages/Shared/Sources/Added/Added.swift"
+    mkdir -p "$WORKSPACE/Packages/Shared/Source/Added"
+    printf 'public let added = 1\n' > "$WORKSPACE/Packages/Shared/Source/Added/Added.swift"
     perl -pi -e 's/targets: \[.target\(name: "Shared"\)\]/targets: [.target(name: "Shared"), .target(name: "Added")]/' "$WORKSPACE/Packages/Shared/Package.swift"
     PATH="$SPEC_ROOT/tools:$PATH" graph_snapshot || return
     jq -e 'to_entries | any(.key | endswith("_Added"))' "$WORKSPACE/graph.json" >/dev/null || return
-    [ "$(wc -l < "$ONCE_MANIFEST_PROBES")" -gt "$(wc -l < "$SPEC_ROOT/cold-probes")" ]
+    [ "$(grep -c '^dump$' "$ONCE_MANIFEST_PROBES")" -eq 2 ] || return 1
+    [ "$(grep -c '^describe$' "$ONCE_MANIFEST_PROBES")" -eq 2 ]
   }
 
   exercise_package_path_alias() {

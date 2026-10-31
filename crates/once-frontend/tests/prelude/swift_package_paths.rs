@@ -29,8 +29,8 @@ def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True
         return {describe:?}
     fail("unexpected host command: " + str(argv))
 
-def _swift_package_dump(swift, absolute, env = {{}}):
-    return host_command([swift, "package", "dump-package", "--package-path", absolute], env = env)
+def _swift_package_metadata(argv, absolute, env = {{}}, check = True):
+    return host_command(argv, env = env, check = check)
 
 info = _xcode_swift_package_info({{}}, "Packages/Layout", "layout")
 result = repr([calls, [target.get("path") for target in info["info"]["targets"]]])

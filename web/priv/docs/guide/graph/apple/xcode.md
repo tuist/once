@@ -288,6 +288,11 @@ framework slices. Once shares manifest parsing across destinations. Local
 products that Xcode references without a package reference are discovered from
 the repository's package manifests, including their transitive local dependencies.
 
+Successful manifest and package-layout queries are reused across graph loads,
+including packages using SwiftPM's `Source/` layout. Package file changes,
+compiler changes, and environment changes invalidate the saved metadata.
+Failed queries are retried rather than cached.
+
 ## Script Build Phases
 
 Once runs imported scripts using their declared shell and selected build

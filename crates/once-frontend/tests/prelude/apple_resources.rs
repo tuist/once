@@ -38,8 +38,8 @@ def _swiftpm_absolute_package_path(ctx, path):
     return workspace_root()
 def host_command(argv, env = None):
     return '{{"name":"Resources","targets":[{{"name":"Lib","type":"regular"}}]}}'
-def _swift_package_dump(swift, absolute, env = {{}}):
-    return host_command([swift, "package", "dump-package", "--package-path", absolute], env = env)
+def _swift_package_metadata(argv, absolute, env = {{}}, check = True):
+    return host_command(argv, env = env)
 graph = _swift_package_workspace_resolver({{
     "attrs": {{}}, "files": {{"Package.swift": "manifest"}},
     "label": {{"package": "", "name": "root", "id": "root"}},

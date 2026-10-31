@@ -18,8 +18,8 @@ def _swiftpm_absolute_package_path(ctx, path):
     return "/workspace"
 def host_command(argv, env = None):
     return '{"name": "Root", "dependencies": [], "products": [], "targets": []}'
-def _swift_package_dump(swift, absolute, env = {}):
-    return host_command([swift, "package", "dump-package", "--package-path", absolute], env = env)
+def _swift_package_metadata(argv, absolute, env = {}, check = True):
+    return host_command(argv, env = env)
 def _xcode_local_swift_package_specs(ctx, packages, platform, minimum_os, variant, root_identities = None):
     return {"specs": [{"kind": "apple_library", "attrs": {}, "deps": ["./Declared"]}, {"kind": "archive_download", "attrs": {}}], "products": {}, "modules": {}}
 graph = _swift_package_workspace_resolver({
@@ -191,8 +191,8 @@ def host_command(argv, check = True):
             fail("explicit invalid manifest must fail")
         return ""
     return '{"name":"Core","products":[{"name":"Core","targets":["Core"]}],"targets":[]}'
-def _swift_package_dump(swift, absolute, env = {}, check = True):
-    return host_command([swift, "package", "dump-package", "--package-path", absolute], check = check)
+def _swift_package_metadata(argv, absolute, env = {}, check = True):
+    return host_command(argv, check = check)
 result = repr(_xcode_local_package_products({}, ["Core"])["Core"]["path"])
 "#,
     );

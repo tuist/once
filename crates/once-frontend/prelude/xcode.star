@@ -2551,15 +2551,15 @@ def _xcode_swift_package_with_implicit_resources(package_dir, absolute, info):
     info["targets"] = targets
     return info
 
-def _swift_package_dump(swift, absolute, env = {}, check = True):
+def _swift_package_metadata(argv, absolute, env = {}, check = True):
     if absolute != workspace_root() and not absolute.startswith(_xcode_workspace_root()):
-        return host_command([swift, "package", "dump-package", "--package-path", absolute], env = env, check = check)
+        return host_command(argv, env = env, check = check)
     inputs = [
         _xcode_abs(path)
         for path in walk_workspace_files(_xcode_workspace_input_path(absolute), excluded_names = [".git", ".build", ".once"])
         if host_file_exists(_xcode_abs(path))
     ]
-    return host_cached_command([swift, "package", "dump-package", "--package-path", absolute], inputs = inputs, env = env, check = check)
+    return host_cached_command(argv, inputs = inputs, env = env, check = check)
 
 def _xcode_swift_package_info(ctx, package_dir, identity = "", cache = None, discovery = False):
     # `swift package dump-package` starts Swift and reparses the whole
@@ -2585,7 +2585,7 @@ def _xcode_swift_package_info(ctx, package_dir, identity = "", cache = None, dis
     host_environment_sha256()
     xcrun = host_which("xcrun")
     swift = host_command([xcrun, "--find", "swift"]).strip()
-    output = _swift_package_dump(swift, absolute, check = False) if discovery else _swift_package_dump(swift, absolute)
+    output = _swift_package_metadata([swift, "package", "dump-package", "--package-path", absolute], absolute, check = not discovery)
     if discovery and not output.strip().startswith("{"):
         analysis_warning("skipping unreadable Swift package manifest `" + package_dir + "/Package.swift` during product discovery; run `swift package dump-package --package-path " + absolute + "` to diagnose it")
         return None
@@ -2602,7 +2602,7 @@ def _xcode_swift_package_info(ctx, package_dir, identity = "", cache = None, dis
         # `describe` also validates the package layout and local binary artifacts,
         # which `dump-package` does not, so a failure keeps the dumped manifest
         # instead of failing analysis.
-        output = host_command([
+        output = _swift_package_metadata([
             swift,
             "package",
             "--package-path",
@@ -2611,7 +2611,7 @@ def _xcode_swift_package_info(ctx, package_dir, identity = "", cache = None, dis
             "describe",
             "--type",
             "json",
-        ], check = False).strip()
+        ], absolute, check = False).strip()
         description = json_decode(output) if output.startswith("{") else {}
         paths = {}
         for target in description.get("targets") or []:

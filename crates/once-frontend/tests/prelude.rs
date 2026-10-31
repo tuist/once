@@ -15344,8 +15344,8 @@ def host_file_exists(path):
 def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
     return '{{"name":"Shared","targets":[]}}'
 
-def _swift_package_dump(swift, absolute, env = {{}}):
-    return host_command([swift, "package", "dump-package", "--package-path", absolute], env = env)
+def _swift_package_metadata(argv, absolute, env = {{}}, check = True):
+    return host_command(argv, env = env, check = check)
 
 refs = {{
     "shared": {{"kind": "local", "path": "../Packages/Shared"}},
@@ -15417,8 +15417,8 @@ def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True
         return {described:?}
     fail("unexpected host command: " + str(argv))
 
-def _swift_package_dump(swift, absolute, env = {{}}):
-    return host_command([swift, "package", "dump-package", "--package-path", absolute], env = env)
+def _swift_package_metadata(argv, absolute, env = {{}}, check = True):
+    return host_command(argv, env = env, check = check)
 
 info = _xcode_swift_package_info({{}}, "Packages/SystemPath", "system-path")
 graph = _xcode_local_swift_package_specs({{"label": {{"package": ""}}}}, [info], "macos", "13.0", "simulator")
@@ -15457,8 +15457,8 @@ def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True
         return "swift"
     return '{{"name":"WMFComponents","platforms":[],"products":[{{"name":"WMFComponents","targets":["WMFComponents"]}}],"targets":[]}}'
 
-def _swift_package_dump(swift, absolute, env = {{}}, check = True):
-    return host_command([swift, "package", "dump-package", "--package-path", absolute], env = env, check = check)
+def _swift_package_metadata(argv, absolute, env = {{}}, check = True):
+    return host_command(argv, env = env, check = check)
 
 products = _xcode_local_package_products({{}}, ["WMFComponents"])
 result = repr(products["WMFComponents"])
@@ -15489,8 +15489,8 @@ def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True
         return "swift"
     return '{{"name":"WMFData","dependencies":[],"products":[],"targets":[]}}'
 
-def _swift_package_dump(swift, absolute, env = {{}}):
-    return host_command([swift, "package", "dump-package", "--package-path", absolute], env = env)
+def _swift_package_metadata(argv, absolute, env = {{}}, check = True):
+    return host_command(argv, env = env, check = check)
 
 infos = _xcode_expand_swift_package_infos({{}}, [{{
     "identity": "WMFComponents",

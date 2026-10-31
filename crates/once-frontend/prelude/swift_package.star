@@ -16,7 +16,7 @@ def _swift_package_workspace_resolver(ctx):
     # directory is often visited more than once during resolution. Threading
     # this dict through every info call collapses duplicates to one subprocess.
     swift_info_cache = {}
-    info = json_decode(_swift_package_dump(swift, absolute_package_path, env = swiftc["env"]))
+    info = json_decode(_swift_package_metadata([swift, "package", "dump-package", "--package-path", absolute_package_path], absolute_package_path, env = swiftc["env"]))
     info = _xcode_swift_package_with_implicit_resources(package_path, absolute_package_path, info)
     swift_info_cache[absolute_package_path] = {"info": info}
     package = {"identity": _basename(package_path) or info.get("name") or ctx["label"]["name"], "path": package_path, "info": info}
