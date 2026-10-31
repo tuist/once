@@ -484,6 +484,9 @@ pub struct RemoteExecution {
     /// Project the remote work is scoped to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+    /// Selected execution capabilities interpreted by target kinds.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub properties: BTreeMap<String, serde_json::Value>,
 }
 
 impl RemoteExecution {
@@ -495,6 +498,7 @@ impl RemoteExecution {
             environment: None,
             account: None,
             project: None,
+            properties: BTreeMap::new(),
         }
     }
 }
@@ -657,6 +661,7 @@ mod tests {
                 environment: Some("node:22.18.0-alpine".to_string()),
                 account: None,
                 project: None,
+                properties: BTreeMap::new(),
             }));
         }
         if let Action::RunCommand { remote, .. } = &mut second {
@@ -666,9 +671,39 @@ mod tests {
                 environment: Some("node:24.4.1-alpine".to_string()),
                 account: None,
                 project: None,
+                properties: BTreeMap::new(),
             }));
         }
 
         assert_ne!(first.digest(), second.digest());
+    }
+
+    #[test]
+    fn remote_properties_are_legacy_defaulted_and_partition_command_identity() {
+        let binding: RemoteExecution = serde_json::from_str(r#"{"provider":"workers"}"#).unwrap();
+        assert!(binding.properties.is_empty());
+        assert_eq!(
+            serde_json::to_value(&binding).unwrap(),
+            serde_json::json!({"provider": "workers"})
+        );
+        let mut first = action(OutputSymlinkMode::default());
+        if let Action::RunCommand { remote, .. } = &mut first {
+            *remote = Some(Box::new(binding));
+        }
+        let mut second = first.clone();
+        if let Action::RunCommand {
+            remote: Some(binding),
+            ..
+        } = &mut second
+        {
+            binding.properties.insert(
+                "tools".into(),
+                serde_json::json!({"compiler": "/worker/tool", "version": 2}),
+            );
+        }
+        assert_ne!(first.digest(), second.digest());
+        let decoded: Action =
+            serde_json::from_value(serde_json::to_value(&second).unwrap()).unwrap();
+        assert_eq!(decoded.digest(), second.digest());
     }
 }

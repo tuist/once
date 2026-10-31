@@ -1354,6 +1354,7 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
     _rust_add_windows_proc_macro_path(build_script_compile_env, deps)
     run_action(
         display_name = "Compile Rust build script · " + ctx["label"]["name"],
+        resources = {"memory_bytes": 2 * 1024 * 1024 * 1024},
         history = _rust_action_history(ctx, "build-script.compile", target or host_triple),
         presentation = _rust_action_metadata(ctx, host_triple, "build-tool"),
         source_files = _action_source_files([script_path]),
@@ -1381,6 +1382,7 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
     # produced them, the whole package stays the dependency.
     run_action(
         display_name = "Run Rust build script · " + ctx["label"]["name"],
+        resources = {"memory_bytes": 2 * 1024 * 1024 * 1024},
         history = _rust_action_history(ctx, "build-script.run", target or host_triple),
         presentation = _action_metadata(package = _rust_action_metadata(ctx, "")["package"], context = [_action_context("cargo.build_target", target or host_triple)]),
         source_files = _action_source_files(_unique([runner] + metadata_inputs + source_inputs + build_script_inputs + _rust_extra_inputs(ctx))),
@@ -1802,6 +1804,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name, test = False, prov
         compile_cwd = _rust_manifest_dir(ctx, crate_manifest_dir)
     run_action(
         display_name = "Compile Rust crate · " + ctx["label"]["name"],
+        resources = {"memory_bytes": 2 * 1024 * 1024 * 1024},
         history = _rust_action_history(ctx, "test.compile" if test else "crate.compile." + crate_type, target or host_triple),
         presentation = _rust_action_metadata(ctx, target or host_triple, _rust_platform_usage(ctx, target, host_triple, crate_type), crate_type),
         source_files = _action_source_files(srcs),
@@ -2601,6 +2604,7 @@ def _rust_test_impl(ctx):
     _rust_add_windows_rustc_runtime_path(runner_env, runner_rustc, runner_host_triple)
     run_action(
         display_name = "Compile Rust test runner · " + ctx["label"]["name"],
+        resources = {"memory_bytes": 2 * 1024 * 1024 * 1024},
         history = _rust_action_history(ctx, "test-runner.compile", runner_host_triple),
         presentation = _action_metadata(platforms = [_action_platform("rust", runner_host_triple, usage = "build-tool")]),
         source_files = _action_source_files([runner_source]),

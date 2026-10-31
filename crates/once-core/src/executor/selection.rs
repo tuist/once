@@ -17,6 +17,7 @@ pub enum Executor {
     Microsandbox,
     E2b,
     Daytona,
+    Docker,
 }
 
 impl Executor {
@@ -64,12 +65,25 @@ impl Executor {
             "microsandbox" => Ok(Self::Microsandbox),
             "e2b" => Ok(Self::E2b),
             "daytona" => Ok(Self::Daytona),
+            "docker" => Ok(Self::Docker),
             adapter => Err(Error::UnsupportedRemoteProvider {
                 provider: adapter.to_string(),
             }),
         }?;
         if binding.account.is_some() || binding.project.is_some() {
             return Err(executor.unsupported("explicit account/project execution scoping"));
+        }
+        if executor == Self::Docker
+            && !binding.environment.as_deref().is_some_and(|image| {
+                image.strip_prefix("sha256:").is_some_and(|digest| {
+                    digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+                })
+            })
+        {
+            return Err(Error::RemoteProviderConfig {
+                provider: binding.provider.clone(),
+                message: "Docker requires an explicit immutable sha256:<64 hex digits> image ID in environment; warm the image first, then resolve it with: docker image inspect --format '{{.Id}}' IMAGE".into(),
+            });
         }
         Self::validate_default_environment(binding, executor, |name| {
             std::env::var_os(name).is_some_and(|value| !value.is_empty())
@@ -85,7 +99,7 @@ impl Executor {
         let variable = match executor {
             Self::E2b => Some("ONCE_E2B_TEMPLATE"),
             Self::Microsandbox => Some("ONCE_MICROSANDBOX_IMAGE"),
-            Self::Local | Self::Daytona => None,
+            Self::Local | Self::Daytona | Self::Docker => None,
         };
         if binding.environment.is_none() && variable.is_some_and(overridden) {
             return Err(Error::RemoteProviderConfig {
@@ -98,7 +112,7 @@ impl Executor {
 
     pub fn resource_domain(self) -> ResourceDomain {
         match self {
-            Self::Local | Self::Microsandbox => ResourceDomain::Host,
+            Self::Local | Self::Microsandbox | Self::Docker => ResourceDomain::Host,
             Self::E2b | Self::Daytona => ResourceDomain::Remote,
         }
     }
@@ -109,6 +123,7 @@ impl Executor {
             Self::Microsandbox => "microsandbox",
             Self::E2b => "e2b",
             Self::Daytona => "daytona",
+            Self::Docker => "docker",
         }
     }
 }

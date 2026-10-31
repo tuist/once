@@ -95,6 +95,8 @@ def apple_build_tool_plan(ctx):
         )
 
 def _apple_build_tools_impl(ctx):
+    if _apple_execution_toolchain():
+        fail(ctx["label"]["id"] + ": SwiftPM build-tool plugins are not yet supported with the Linux execution toolchain; provide generated sources instead")
     attrs = ctx["attr"]
     platform = attrs.get("platform") or "macos"
     sdk_variant = attrs.get("sdk_variant") or "simulator"

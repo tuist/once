@@ -293,12 +293,7 @@ fn shell_word(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use futures::poll;
-
-    use super::super::phase::testing;
     use super::*;
-    use crate::remote::test_server::{self, Response};
-    use crate::{ExecutionPermit, Executor, ResourceRequest};
 
     #[test]
     fn command_quotes_argv() {
@@ -316,6 +311,16 @@ mod tests {
         let command = pack_outputs_command(&[WorkspacePath::try_from("-danger").unwrap()]);
         assert!(command.ends_with("'./-danger'"));
     }
+}
+
+#[cfg(all(test, any(target_os = "linux", target_vendor = "apple")))]
+mod lifecycle_tests {
+    use futures::poll;
+
+    use super::super::phase::testing;
+    use super::*;
+    use crate::remote::test_server::{self, Response};
+    use crate::{ExecutionPermit, Executor, ResourceRequest};
 
     #[tokio::test]
     async fn deletes_the_sandbox_after_success() {

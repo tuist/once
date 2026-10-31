@@ -400,7 +400,10 @@ fn bundled_source_links_are_repository_relative_and_exclude_generated_files() {
         std::fs::create_dir_all(workspace.join(".once/out")).unwrap();
         std::fs::write(workspace.join("src/main.c"), "source").unwrap();
         std::fs::write(workspace.join(".once/out/main.o"), "generated").unwrap();
-        let source = format!("{}\nrun_action(argv = [\"tool\"], source_files = _action_source_files([\"src/main.c\", \"./src/main.c\", \".once/out/main.o\", \"missing.c\", \"src\", \"../outside.c\", \"/host/file\"]))", include_str!("../../prelude/common.star"));
+        let source = format!(
+            "{}\nrun_action(argv = [\"tool\"], source_files = _action_source_files([\"src/main.c\", \"./src/main.c\", \".once/out/main.o\", \"missing.c\", \"src\", \"../outside.c\", \"/host/file\"]))",
+            include_str!("../../prelude/common.star")
+        );
         let (store, ()) = with_active_store(store_for(&workspace, ""), || run(&source).unwrap());
         assert_eq!(store.actions[0].source_files, ["projects/app/src/main.c"]);
         assert!(store.observations.entries().is_empty());
@@ -411,7 +414,10 @@ fn bundled_source_links_are_repository_relative_and_exclude_generated_files() {
 #[test]
 fn bundled_source_descriptors_reject_nested_lists() {
     let tmp = TempDir::new().unwrap();
-    let source = format!("{}\nrun_action(argv = [\"tool\"], source_files = _action_source_files([[\"src/main.c\"]]))", include_str!("../../prelude/common.star"));
+    let source = format!(
+        "{}\nrun_action(argv = [\"tool\"], source_files = _action_source_files([[\"src/main.c\"]]))",
+        include_str!("../../prelude/common.star")
+    );
     let (_, error) = with_active_store(store_for(tmp.path(), ""), || run(&source));
     assert!(error.unwrap_err().to_string().contains("source_files"));
 }
@@ -1884,7 +1890,10 @@ fn glob_observes_canonical_target_when_symlinked_ancestor_escapes_workspace() {
 
     let canonical_external = std::fs::canonicalize(&external_file).unwrap();
     assert!(
-        store.host_cache.observed_paths().contains(&canonical_external),
+        store
+            .host_cache
+            .observed_paths()
+            .contains(&canonical_external),
         "canonical path outside the workspace should be observed for change tracking; observed = {:?}",
         store.host_cache.observed_paths()
     );
@@ -2541,4 +2550,108 @@ fn walk_symlinks_lists_each_link_with_its_target() {
         )
     });
     assert_eq!(listed.unwrap(), "ctx/link->real|ctx/sub/up->../real");
+}
+
+#[test]
+fn selected_execution_context_is_absent_outside_analysis() {
+    assert!(eval_bool("value = execution_context() == None").unwrap());
+}
+
+#[test]
+fn selected_execution_context_reaches_analysis_and_deferred_planners() {
+    let workspace = TempDir::new().unwrap();
+    let source = r#"
+def plan(ctx):
+    if ctx["execution"] != execution_context():
+        fail("planner execution context differs")
+    binding = execution_context()
+    run_action([binding["properties"]["program"] if binding else "local"], outputs = ctx["outputs"])
+def impl(ctx):
+    if ctx["execution"] != execution_context():
+        fail("analysis execution context differs")
+    expand_actions(implementation = "plan", inputs = [], outputs = ["result"], args = {})
+    return {"execution": ctx["execution"], "host_os": host_os()}
+custom = {"_once_target_kind": True, "kind": "custom", "impl": impl}
+"#;
+    let target = target("custom");
+    let mut binding = once_core::RemoteExecution::provider("workers");
+    binding.environment = Some("immutable-environment".into());
+    binding
+        .properties
+        .insert("program".into(), serde_json::json!("/worker/bin/tool"));
+    binding.properties.insert(
+        "metadata".into(),
+        serde_json::json!({"enabled": true, "versions": [1, 2], "unset": null}),
+    );
+    let mut keys = BTreeSet::new();
+    let mut coordinator_os = None;
+    for execution in [None, Some(binding.clone())] {
+        let engine = AnalysisEngine::from_source_with_options(
+            source,
+            AnalysisOptions {
+                execution: execution.clone(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let result = engine
+            .analyze_target(&target, workspace.path(), &[])
+            .unwrap();
+        assert_eq!(
+            result.provider["execution"],
+            serde_json::to_value(&execution).unwrap()
+        );
+        if let Some(expected) = &coordinator_os {
+            assert_eq!(&result.provider["host_os"], expected);
+        } else {
+            coordinator_os = Some(result.provider["host_os"].clone());
+        }
+        let expanded = engine
+            .expand_actions(&target, workspace.path(), &result.actions[0])
+            .unwrap();
+        assert_eq!(
+            expanded.actions[0].argv,
+            [if execution.is_some() {
+                "/worker/bin/tool"
+            } else {
+                "local"
+            }]
+        );
+        keys.insert(
+            engine
+                .analysis_key(
+                    &target,
+                    workspace.path(),
+                    &[],
+                    &BTreeMap::new(),
+                    "build",
+                    "executable",
+                )
+                .unwrap(),
+        );
+    }
+    binding
+        .properties
+        .insert("program".into(), serde_json::json!("/worker/bin/other"));
+    let engine = AnalysisEngine::from_source_with_options(
+        source,
+        AnalysisOptions {
+            execution: Some(binding),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    keys.insert(
+        engine
+            .analysis_key(
+                &target,
+                workspace.path(),
+                &[],
+                &BTreeMap::new(),
+                "build",
+                "executable",
+            )
+            .unwrap(),
+    );
+    assert_eq!(keys.len(), 3);
 }

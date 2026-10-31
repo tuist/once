@@ -34,6 +34,20 @@ passes these values to an execution adapter:
 - **`lease`:** owned admission permit. Keep it alive while execution,
   staging, capture, or cleanup still consumes resources.
 
+Graph callers can also pass explicit `clean_paths` and `create_dirs` through
+the admitted command runner. Docker applies this setup inside its worker after
+staging ordinary inputs, then restores explicitly selected post-setup inputs,
+such as response files inside reset scratch directories. This does not import
+coordinator scratch contents implicitly. Other remote adapters currently reject
+nonempty setup. Setup must participate in the graph caller's command/cache
+identity; passing it separately does not key it
+automatically. Portable graph filesystem operations still run on the coordinator.
+
+Race-safe archive transfer currently supports Linux and Apple coordinators.
+Other coordinator platforms return an unsupported-platform error rather than
+falling back to unsafe path traversal. This applies to all archive-backed
+remote adapters, not only Docker.
+
 The resolved [`RemoteExecution`](https://github.com/tuist/once/blob/main/crates/once-core/src/action.rs)
 separately identifies the named provider, executor adapter, environment
 reference, and optional account/project requirements. Those requirements must
@@ -134,6 +148,10 @@ resource domain, not just adding an HTTP client.
 ## Resource and Transfer Budgets
 
 Local processes and local virtual machines consume the host resource domain.
+Docker additionally reserves against the actual daemon's CPU capacity and two
+thirds of its reported memory, shared across aliases within the process.
+Container limits follow that worker reservation, which survives cancellation
+until physical cleanup completes or uncertain ownership is reconciled.
 Hosted providers consume the remote request domain and still reserve bounded
 host memory for packaging, transfers, capture, and validation. Aliases share
 the scheduler's remote request quota; another name does not create more
@@ -149,6 +167,15 @@ bounds response/frame bytes, archives, entries, metadata, capture, staging,
 and transfer progress. Stream large data through bounded buffers and temporary
 files. These client limits are not guest memory enforcement or a bound on the
 whole client's resident memory.
+
+Output publication shares pinned directory handles across files with the same
+parent. At most 128 output-parent handles are retained across installations in
+one process. Exceeding that budget fails with a resource-limit error and rolls
+back published outputs rather than exhausting file descriptors. Declaring a
+directory output instead of many independently rooted files reduces this cost.
+Archive extraction charges implicit ancestor directories against entry and
+metadata limits before creating them. Archived output paths are limited to 64
+components to bound validation and cleanup depth.
 
 A quiet command is not a stalled transfer. Transfer inactivity defaults to
 30 seconds; after an upload's body ends, acknowledgment has a separate

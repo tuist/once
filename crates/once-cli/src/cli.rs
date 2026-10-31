@@ -76,8 +76,8 @@ pub struct Output {
     pub color: ColorChoice,
     pub terminal_controls: TerminalControls,
     /// Repeat count of the `-v/--verbose` flag. In human mode the
-    /// terminal reporter treats `>=1` as "surface a short tail of
-    /// captured output on every target" and `>=2` as "stream all
+    /// terminal reporter treats `>=1` as "show completed actions and a
+    /// short tail of captured output on every target" and `>=2` as "stream all
     /// captured output live". Values `>=1` also raise the tracing
     /// stderr filter (see `logging::init`), which is unchanged.
     pub verbose: u8,
@@ -271,6 +271,15 @@ pub enum Cmd {
         /// Local filesystem sandbox policy for command actions.
         #[usage(long, default = "off")]
         sandbox: SandboxMode,
+
+        /// Execute graph commands in the configured provider environment.
+        /// Analysis must use tools compatible with that environment.
+        #[usage(long, conflicts = "verify_reproducible")]
+        remote: bool,
+
+        /// Compute provider used with --remote.
+        #[usage(long, value_name = "PROVIDER", requires = "remote")]
+        compute: Option<String>,
 
         /// Run two private workspace trials with fresh local Once caches,
         /// compare artifacts and logs, and retain an inspectable report.

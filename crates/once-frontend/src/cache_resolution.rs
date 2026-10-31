@@ -152,6 +152,7 @@ fn resolve_named_workspace_provider(
         InfrastructureProviderConfig::Local => Ok(ResolvedCacheProviderConfig::Local),
         InfrastructureProviderConfig::Microsandbox(_)
         | InfrastructureProviderConfig::E2b(_)
+        | InfrastructureProviderConfig::Docker(_)
         | InfrastructureProviderConfig::Daytona(_) => Err(Error::CacheProvider {
             path: name.clone(),
             kind: CacheProviderError::ExecutionProviderNotCacheable { name: name.clone() },

@@ -241,6 +241,10 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
                 "Files selected by non-empty resolver_inputs, or srcs when resolver_inputs is empty or omitted, decoded as text and keyed relative to the owner package.",
             ),
             entry(
+                "ctx[\"execution\"]",
+                "Selected execution binding dictionary or None, matching execution_context() during the resolver callback.",
+            ),
+            entry(
                 "[{name, kind, deps, dependencies, srcs, visibility, attrs}]",
                 "Compact resolver return form containing synthetic targets.",
             ),
@@ -253,19 +257,35 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
             entry("ctx[\"label\"]", "Package, name, and stable target id."),
             entry("ctx[\"attr\"]", "Typed target attributes."),
             entry("ctx[\"srcs\"]", "Declared source patterns."),
-            entry("ctx[\"deps\"]", "Provider records returned by dependencies."),
+            entry(
+                "ctx[\"deps\"]",
+                "Provider records returned by dependencies.",
+            ),
             entry(
                 "ctx[\"deps_by_role\"]",
                 "Provider records grouped by target-kind-defined dependency role, including deps.",
             ),
-            entry("ctx[\"build_dir\"]", "Workspace-relative durable output directory."),
-            entry("ctx[\"scratch_dir\"]", "Workspace-relative action-private directory."),
+            entry(
+                "ctx[\"build_dir\"]",
+                "Workspace-relative durable output directory.",
+            ),
+            entry(
+                "ctx[\"scratch_dir\"]",
+                "Workspace-relative action-private directory.",
+            ),
             entry("ctx[\"capability\"]", "Capability being analyzed."),
+            entry(
+                "ctx[\"execution\"]",
+                "Selected execution binding dictionary or None, also present in deferred action planners. Matches execution_context(); it does not change the coordinator host platform.",
+            ),
             entry(
                 "ctx[\"configuration\"]",
                 "Target operating system, architecture, and ordered select tokens configured by the workspace.",
             ),
-            entry("ctx[\"run\"][\"visible\"]", "Whether a visible runtime was requested."),
+            entry(
+                "ctx[\"run\"][\"visible\"]",
+                "Whether a visible runtime was requested.",
+            ),
             entry(
                 "ctx[\"run\"][\"args\"]",
                 "Arguments supplied after `--` for the active run request. Interpretation is target-kind-specific. The list is empty for other capabilities.",
@@ -281,6 +301,10 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
         ],
         analysis_primitives: vec![
             entry(
+                "execution_context()",
+                "Selected execution binding dictionary or None outside analysis or without a binding. Contains provider and optional executor, environment, account, project, and generic properties. Properties are target-kind-owned JSON data and participate in analysis and action identity. Available during deferred action expansion; host_os() and host_arch() still describe the coordinator.",
+            ),
+            entry(
                 "glob(patterns, exclude = [])",
                 "Expand package source patterns into sorted workspace paths, omitting matches selected by package-relative exclude patterns.",
             ),
@@ -295,48 +319,123 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
             entry("host_arch()", "Read the normalized host architecture."),
             entry("host_os()", "Read the normalized host operating system."),
             entry("host_env(name)", "Read one host environment variable."),
-            entry("host_environment_sha256()", "Record a digest of the complete inherited host environment without storing its names or values. Use before discovery commands whose results depend on arbitrary environment variables; any environment change invalidates reuse."),
-            entry("analysis_warning(message)", "Emit a user-facing warning to standard error during analysis without failing the target. Warnings do not appear in graph validation diagnostics or replay when a graph is reused."),
+            entry(
+                "host_environment_sha256()",
+                "Record a digest of the complete inherited host environment without storing its names or values. Use before discovery commands whose results depend on arbitrary environment variables; any environment change invalidates reuse.",
+            ),
+            entry(
+                "analysis_warning(message)",
+                "Emit a user-facing warning to standard error during analysis without failing the target. Warnings do not appear in graph validation diagnostics or replay when a graph is reused.",
+            ),
             entry("workspace_root()", "Read the absolute workspace root."),
             entry("host_which(name)", "Resolve a required executable."),
-            entry("host_which_optional(name)", "Resolve an optional executable."),
+            entry(
+                "host_which_optional(name)",
+                "Resolve an optional executable.",
+            ),
             entry(
                 "host_command(argv, env = {}, cwd = None, merge_stderr = False, check = True)",
                 "Run a trusted discovery command whose arguments, environment, and working directory participate in analysis caching. It may write scratch state only under .once/tmp. With check = False a non-zero exit returns the captured output instead of failing, for idempotent setup that a later probe verifies.",
             ),
-            entry("host_cached_command(argv, inputs, env = {}, cwd = None, check = True)", "Persist successful bounded discovery output against complete absolute file inputs, executable contents, effective working directory, explicit environment and a digest of inherited environment. Use a recorded walk to invalidate additions and removals. Do not use for commands with side effects or undeclared inputs. With check = False, non-zero exits return stdout without persisting it and make the analysis ineligible for graph replay, so temporary failures are retried."),
-            entry("host_git_checkout(url, revision, path, cache_root)", "Acquire a full hexadecimal Git commit using a locked shared bare repository at an absolute cache root and a workspace-local absolute checkout. Initial acquisition uses a full mirror; missing commits try shallow then ordinary fetch. Preserve origin and destination identity, retain selected commits, publish initial state atomically, reject URL mismatches and record detached HEAD. Shared repository objects must remain available while checkouts use them. Returns None."),
-            entry("host_git_checkouts(repositories, cache_root)", "Acquire a list of {url, revision, path} records with the same contract as host_git_checkout. Destinations must be distinct and non-overlapping. Each acquisition reserves default CPU and memory resources from the shared command pool; CLI memory-limit and cpu-limit apply. Independent repositories run concurrently; shared repositories retain their locks. Join all workers before returning, report the first error in input order, and record every HEAD on success. Returns None."),
+            entry(
+                "host_cached_command(argv, inputs, env = {}, cwd = None, check = True)",
+                "Persist successful bounded discovery output against complete absolute file inputs, executable contents, effective working directory, explicit environment and a digest of inherited environment. Use a recorded walk to invalidate additions and removals. Do not use for commands with side effects or undeclared inputs. With check = False, non-zero exits return stdout without persisting it and make the analysis ineligible for graph replay, so temporary failures are retried.",
+            ),
+            entry(
+                "host_git_checkout(url, revision, path, cache_root)",
+                "Acquire a full hexadecimal Git commit using a locked shared bare repository at an absolute cache root and a workspace-local absolute checkout. Initial acquisition uses a full mirror; missing commits try shallow then ordinary fetch. Preserve origin and destination identity, retain selected commits, publish initial state atomically, reject URL mismatches and record detached HEAD. Shared repository objects must remain available while checkouts use them. Returns None.",
+            ),
+            entry(
+                "host_git_checkouts(repositories, cache_root)",
+                "Acquire a list of {url, revision, path} records with the same contract as host_git_checkout. Destinations must be distinct and non-overlapping. Each acquisition reserves default CPU and memory resources from the shared command pool; CLI memory-limit and cpu-limit apply. Independent repositories run concurrently; shared repositories retain their locks. Join all workers before returning, report the first error in input order, and record every HEAD on success. Returns None.",
+            ),
             entry("host_file_exists(path)", "Test whether a host file exists."),
-            entry("host_path_exists(path)", "Test whether a host file or directory exists."),
-            entry("host_path_is_within(path, root)", "Test canonical host-path containment, resolving symbolic links."),
-            entry("host_file_read(path)", "Read a host text file during analysis."),
-            entry("host_file_sha256(path)", "Digest a host file used during analysis."),
-            entry("host_symlink_target(path)", "Read where a host symbolic link points, or an empty string when the path is not a link."),
-            entry("host_file_size(path)", "Read the size in bytes of a host file, for deferred planners that describe produced artifacts."),
-            entry("host_tree_sha256(path)", "Digest an absolute host directory, including file contents and tree structure. Reuses metadata-validated digests and records the tree as an analysis observation."),
-            entry("content_sha256(text)", "Digest text deterministically without reading the filesystem."),
-            entry("host_file_contains(path, needle)", "Search a host text file."),
-            entry("host_read_dir(path)", "List sorted names in a host directory."),
+            entry(
+                "host_path_exists(path)",
+                "Test whether a host file or directory exists.",
+            ),
+            entry(
+                "host_path_is_within(path, root)",
+                "Test canonical host-path containment, resolving symbolic links.",
+            ),
+            entry(
+                "host_file_read(path)",
+                "Read a host text file during analysis.",
+            ),
+            entry(
+                "host_file_sha256(path)",
+                "Digest a host file used during analysis.",
+            ),
+            entry(
+                "host_symlink_target(path)",
+                "Read where a host symbolic link points, or an empty string when the path is not a link.",
+            ),
+            entry(
+                "host_file_size(path)",
+                "Read the size in bytes of a host file, for deferred planners that describe produced artifacts.",
+            ),
+            entry(
+                "host_tree_sha256(path)",
+                "Digest an absolute host directory, including file contents and tree structure. Reuses metadata-validated digests and records the tree as an analysis observation.",
+            ),
+            entry(
+                "content_sha256(text)",
+                "Digest text deterministically without reading the filesystem.",
+            ),
+            entry(
+                "host_file_contains(path, needle)",
+                "Search a host text file.",
+            ),
+            entry(
+                "host_read_dir(path)",
+                "List sorted names in a host directory.",
+            ),
             entry(
                 "walk_workspace_files(root, excluded_paths = [], excluded_names = [])",
                 "Walk one workspace-relative directory without following symbolic links.",
             ),
-            entry("json_decode(source)", "Decode structured JSON data for a resolver."),
-            entry("toml_decode(source)", "Decode structured TOML data for a resolver."),
+            entry(
+                "json_decode(source)",
+                "Decode structured JSON data for a resolver.",
+            ),
+            entry(
+                "toml_decode(source)",
+                "Decode structured TOML data for a resolver.",
+            ),
         ],
         action_primitives: vec![
-            entry("declare_output(name)", "Reserve a durable target output path."),
-            entry("_action_source_files(paths)", "Return a workspace-source presentation descriptor for source_files, not a list for execution. When collecting action metadata, Once memoizes existing file selection and repository-relative mapping outside execution observations. Exclude generated .once paths, host paths, directories, and nonportable repository prefixes. Honor GIT_WORK_TREE when explicitly configured. Without a Git checkout or worktree, retain workspace-relative paths. Entries must be strings."),
-            entry("presentation = {package: {ecosystem, name, version, revision, digest, origin}, platforms: [{scheme, id, label, usage}], context: [{key, value, label}]}", "Optional bounded cosmetic data, not identity or cache inputs. All fields default; omit irrelevant concepts. Stable IDs and context values are separate from labels; usage is product or build-tool, never execution placement. No raw environment, credentials, host paths or authenticated URLs. Invalid optional metadata is omitted. At most eight platforms and contexts, 2048 bytes of string data; oversized IDs are dropped, never truncated. Deferred actions inherit platforms and context, not package ownership. Helpers _action_metadata, _action_package, _action_platform, and _action_context construct these records."),
-            entry("action_history_key(namespace, components)", "Return a producer-owned cross-run history descriptor for run_action(history = ...), never an execution/cache identity. Namespaces are ASCII tokens of 1–64 bytes with a derivation version. Hash 1–8 canonical JSON string components with SHA-256; at most 2048 component bytes and no controls. Include stable logical owner, native step and structural output variant, never run IDs, indices, cache digests, private paths, credentials or content revisions. Invalid keys become absent. Deferred children do not inherit keys; cached outcomes retain them. Legacy actions remain ungrouped. Bump the namespace when changing derivation."),
-            entry("action presentation", "All executable action primitives accept keyword-only display_name and source_files. These are presentation metadata, not cache inputs or action identity. Source files are repository-relative paths using forward slashes, without absolute paths, dot segments, empty segments, backslashes, drive prefixes, or control characters. Omission preserves legacy behavior; portable file primitives provide readable default names. Keep names free of secrets; control characters are normalized to spaces. Bundled kinds select existing workspace source files through the shared _action_source_files helper, excluding generated .once paths and host files. Source links may be reduced and oversized names omitted to fit server event-size limits without dropping the action outcome."),
+            entry(
+                "declare_output(name)",
+                "Reserve a durable target output path.",
+            ),
+            entry(
+                "_action_source_files(paths)",
+                "Return a workspace-source presentation descriptor for source_files, not a list for execution. When collecting action metadata, Once memoizes existing file selection and repository-relative mapping outside execution observations. Exclude generated .once paths, host paths, directories, and nonportable repository prefixes. Honor GIT_WORK_TREE when explicitly configured. Without a Git checkout or worktree, retain workspace-relative paths. Entries must be strings.",
+            ),
+            entry(
+                "presentation = {package: {ecosystem, name, version, revision, digest, origin}, platforms: [{scheme, id, label, usage}], context: [{key, value, label}]}",
+                "Optional bounded cosmetic data, not identity or cache inputs. All fields default; omit irrelevant concepts. Stable IDs and context values are separate from labels; usage is product or build-tool, never execution placement. No raw environment, credentials, host paths or authenticated URLs. Invalid optional metadata is omitted. At most eight platforms and contexts, 2048 bytes of string data; oversized IDs are dropped, never truncated. Deferred actions inherit platforms and context, not package ownership. Helpers _action_metadata, _action_package, _action_platform, and _action_context construct these records.",
+            ),
+            entry(
+                "action_history_key(namespace, components)",
+                "Return a producer-owned cross-run history descriptor for run_action(history = ...), never an execution/cache identity. Namespaces are ASCII tokens of 1–64 bytes with a derivation version. Hash 1–8 canonical JSON string components with SHA-256; at most 2048 component bytes and no controls. Include stable logical owner, native step and structural output variant, never run IDs, indices, cache digests, private paths, credentials or content revisions. Invalid keys become absent. Deferred children do not inherit keys; cached outcomes retain them. Legacy actions remain ungrouped. Bump the namespace when changing derivation.",
+            ),
+            entry(
+                "action presentation",
+                "All executable action primitives accept keyword-only display_name and source_files. These are presentation metadata, not cache inputs or action identity. Source files are repository-relative paths using forward slashes, without absolute paths, dot segments, empty segments, backslashes, drive prefixes, or control characters. Omission preserves legacy behavior; portable file primitives provide readable default names. Keep names free of secrets; control characters are normalized to spaces. Bundled kinds select existing workspace source files through the shared _action_source_files helper, excluding generated .once paths and host files. Source links may be reduced and oversized names omitted to fit server event-size limits without dropping the action outcome.",
+            ),
             entry(
                 "execution_path(path)",
                 "Resolve a workspace-relative path against the local, sandbox, or remote execution root immediately before process launch.",
             ),
-            entry("write_path(path, content, *, display_name = None, source_files = [], presentation = None)", "Declare a portable file-writing action."),
-            entry("expand_actions(implementation, inputs, outputs, args, *, presentation = None)", "After prior actions finish, materialize inputs and invoke an exported Starlark planner with ctx.args, ctx.inputs, ctx.outputs, ctx.build_dir and ctx.label. The planner declares actions producing every promised output and returns None or a structured diagnostic. Recursive expansion is rejected."),
+            entry(
+                "write_path(path, content, *, display_name = None, source_files = [], presentation = None)",
+                "Declare a portable file-writing action.",
+            ),
+            entry(
+                "expand_actions(implementation, inputs, outputs, args, *, presentation = None)",
+                "After prior actions finish, materialize inputs and invoke an exported Starlark planner with ctx.args, ctx.inputs, ctx.outputs, ctx.build_dir and ctx.label. The planner declares actions producing every promised output and returns None or a structured diagnostic. Recursive expansion is rejected.",
+            ),
             entry(
                 "copy_path(source, destination, kind = \"file\", inputs = [], toolchain_identity = None, identifier = None, cacheable = True, *, display_name = None, source_files = [], presentation = None)",
                 "Copy one workspace path by value, automatically hashing each source, materializing a directory symlink at the destination, or merge directory contents while preserving their symlink layout.",
@@ -374,8 +473,8 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
                 "Build a structured argument list, optionally backed by an argument file.",
             ),
             entry(
-                "run_action(argv, inputs = [], outputs = [], clean_paths = [], create_dirs = [], cwd = None, env = {}, toolchain_identity = None, identifier = None, cacheable = True, inherit_parent_env = False, depends_on_prior_actions = True, stdout = None, stderr = None, sandbox = None, network = None, success_exit_codes = [0], *, display_name = None, source_files = [], presentation = None, history = None)",
-                "Declare a direct executable invocation with explicit inputs, outputs, setup, caching, sandbox policy, and exit codes that indicate valid outputs. `inherit_parent_env` is available only to uncached local run actions. Explicit `env` values take precedence. Use `once query validate-actions` to investigate filesystem contract drift without changing the sandbox policy.",
+                "run_action(argv, inputs = [], outputs = [], clean_paths = [], create_dirs = [], cwd = None, env = {}, toolchain_identity = None, identifier = None, cacheable = True, inherit_parent_env = False, depends_on_prior_actions = True, stdout = None, stderr = None, sandbox = None, network = None, success_exit_codes = [0], *, display_name = None, source_files = [], presentation = None, history = None, resources = None)",
+                "Declare a direct executable invocation with explicit inputs, outputs, setup, caching, sandbox policy, and exit codes that indicate valid outputs. Optional resources is a dictionary containing only cpu_slots (positive integer, default 1), memory_bytes (nonnegative integer, default 0 for the pool's undeclared estimate, normally 250 MiB), and slots (string-to-nonnegative-integer dictionary; zero removes a slot). Estimates are clamped to available pool capacity, not guaranteed minimums. Unknown keys and invalid values fail analysis. `inherit_parent_env` is available only to uncached local run actions. Explicit `env` values take precedence. Use `once query validate-actions` to investigate filesystem contract drift without changing the sandbox policy.",
             ),
         ],
         lint_contract: vec![

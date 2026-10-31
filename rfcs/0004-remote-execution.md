@@ -95,6 +95,102 @@ environment should be able to share a result. The current implementation keeps
 the provider binding in the action key as a conservative safety boundary until
 environment and platform identity are mandatory and transport-independent.
 
+## Worker Pools And Placement
+
+Provisioning and execution have different ownership. A provider adapter creates
+or claims capacity, checks readiness, renews leases, drains obsolete images, and
+destroys resources. A prepared-command adapter stages inputs, starts a process,
+observes it, cancels it, and retrieves verified outputs. A REAPI service owns
+its fleet internally; Once should not require it to expose individual VMs.
+
+Filter candidates for correctness before ranking them: execution OS and
+architecture, ABI, immutable tools/SDKs, isolation and network requirements,
+trust scope, resource capacity, and authorized artifact reachability. Rank only
+eligible candidates by estimated finish time, including queue delay, startup,
+missing-input transfer, and execution. Prefer locality for a bounded interval,
+not forever. Each fallback or speculative attempt must pass the same predicate.
+
+Warmth is not a single state. Retain immutable images, verified CAS contents,
+host page caches, and explicitly namespaced compiler caches independently.
+Every action receives a fresh writable workspace, temporary directory, and
+home. Mutable caches must accelerate a correct cold execution, not supply
+hidden dependencies. Persistent compiler processes need an explicit protocol,
+compatibility key, reset boundary, and invalidation tests.
+
+Pool capacity counts creating, idle, running, stopping, and uncertain workers.
+Prewarming reserves resources before provisioning and keeps that reservation
+while idle. A spare target is not a maximum pool size. Use exclusive worker
+leases, bounded idle and total lifetimes, readiness probes, image rotation,
+and crash reconciliation. Unknown cancellation or deletion outcomes remain
+capacity and cost debt until termination is confirmed. A disconnected observer
+must not cause blind resubmission or release a still-running worker's budget.
+
+Keep output metadata, verified artifact availability, and local materialization
+separate. Publish verified blobs before result metadata; successors should
+eventually consume digests without downloading intermediates through the
+coordinator. Missing-blob negotiation avoids repeat uploads. Across providers,
+use authorized shared CAS access or bounded replication, accounting for egress,
+region policy, retention, and provenance. A digest proves byte equality, not
+authorization or an honest producer. Repair only after confirmed absence;
+outages and corruption are not cache misses.
+
+## Dagger And Stateful Macs
+
+[Dagger's persistent engines](https://docs.dagger.io/self-hosting/) demonstrate
+the value of engine affinity, persistent disks, incremental input transfer,
+and explicit mutable cache volumes. That is not evidence that arbitrary
+fine-grained actions can already be sharded across independent sandbox
+providers. A compiler invocation remains opaque unless the graph decomposes
+it into independently executable commands.
+
+Reddit's [Mac RBE account](https://www.reddit.com/r/RedditEng/comments/1onkfoa/leveraging_bazel_multiplatform_rbe_for_reddits)
+describes preserved Swift runner/module-cache state and controlled recycling.
+This explains the reported statefulness without making a dirty checkout a
+valid build input. Native macOS workers need pinned macOS, Xcode, SDK, and
+architecture identities, clean action roots, and separate signing credentials.
+Tart/Orchard or Anka can supply clean-image Macs; Docker cannot run a native
+macOS guest. Apple cross-compilation inside Linux is a different capability.
+
+## Research Constraints And Evaluation
+
+The design borrows established results, not a claim of being faster than Bazel:
+
+- [Build Systems à la Carte](https://www.microsoft.com/en-us/research/wp-content/uploads/2020/04/build-systems-jfp.pdf)
+  separates dependency scheduling from rebuilding and cache validity.
+- [Delay Scheduling](https://www.databricks.com/sites/default/files/2018/12/eurosys_delay_scheduling.pdf)
+  motivates bounded locality waiting, but its Hadoop workload is not a compiler
+  graph or a tiny heterogeneous Mac fleet.
+- [Sparrow](https://people.eecs.berkeley.edu/~matei/papers/2013/sosp_sparrow.pdf)
+  motivates readiness and late binding rather than trusting stale queues.
+- [Omega](https://storage.googleapis.com/gweb-research2023-media/pubtools/3295.pdf)
+  distinguishes placement observations from authoritative reservations.
+- [Firecracker](https://www.usenix.org/system/files/nsdi20-paper-agache.pdf) and
+  [REAP](https://doi.org/10.1145/3445814.3446714) distinguish fast provisioning,
+  snapshot restoration, and working-set residency. Their serverless results
+  do not establish compiler or macOS speedups.
+
+Known failures supply acceptance cases: Buck2 fixed
+[shared missing-blob cancellation](https://github.com/facebook/buck2/pull/1121),
+and Bazel tracked a
+[multiplex-worker cancellation leak](https://github.com/bazelbuild/bazel/issues/26292).
+Cancellation, retention, and shared ownership need independent tests rather
+than being inferred from successful builds.
+
+Start with Docker for a free local per-action experiment, then compare a
+prepared E2B template and Daytona's managed warm pools with exact resource
+matching. For sustained fine-grained execution, evaluate a CAS-capable REAPI
+backend such as BuildBarn, BuildBuddy, or EngFlow before inventing another
+distributed artifact service. Modal is a possible later sandbox adapter;
+Tart/Orchard and Anka address native Mac capacity. Tuist execution would be a
+future adapter, not an existing consequence of its cache integration.
+
+Measure uncached execution separately from result-cache hits. Record queueing,
+provisioning, input bytes, execution, output transfer, cleanup, peak resources,
+and total cost including idle capacity. Compare cold and warm outputs, evict
+acceleration state, change inputs and environments, restart workers, and inject
+lost responses, cancellation, and cleanup failures. Only measured workload
+results can justify a claim of improvement over an existing backend.
+
 ## Node.js And Vitest Example
 
 A [Vitest](https://vitest.dev/) workflow has two different dependency classes:
@@ -191,5 +287,14 @@ it with a real local Microsandbox:
 - provider-level tests that verify deletion after both successful execution
   and transfer failure.
 
-The Bazel Remote Execution protocol remains a future adapter over the same
-prepared command contract.
+The graph extension adds opt-in `once build --remote --compute <provider>` and
+a Docker adapter with immutable local image IDs, caller-owned CPU/memory
+admission, fresh per-command containers, declared filesystem setup, bounded
+archive transfers, validated output installation, and journaled cleanup. Graph
+analysis remains on a compatible coordinator, and provider binding partitions
+configuration, outputs, and cache identity. File operations remain local.
+
+This is not a running-worker pool or a remote CAS implementation. Intermediates
+still return through the coordinator. Worker pooling, multi-provider placement,
+native Mac workers, and the Bazel Remote Execution protocol remain future work
+over the same prepared-command boundary.

@@ -36,6 +36,40 @@ fn successful_and_cached_builds_emit_status_and_balanced_frames() {
 }
 
 #[test]
+fn verbose_builds_show_real_action_outcomes_without_changing_normal_output() {
+    let workspace = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    graph_workspace(workspace.path(), false);
+    let module = workspace.path().join("modules/task.star");
+    let source = std::fs::read_to_string(&module).unwrap();
+    std::fs::write(
+        &module,
+        source.replace(
+            "    write_path(out, \"built\")",
+            "    write_path(out, \"built\")\n    run_action(argv = [host_which(\"true\")], outputs = [], identifier = \"check\", display_name = \"Check artifact\")",
+        ),
+    )
+    .unwrap();
+    for (verbose, expected) in [(true, "executed"), (true, "cached"), (false, "")] {
+        let mut cmd = command(workspace.path(), home.path());
+        if verbose {
+            cmd.arg("-v");
+        }
+        cmd.args(["--color", "never", "build", "Task"]);
+        let (status, output) = PtyProcess::spawn(cmd).finish();
+        assert!(status.success(), "{output}");
+        if verbose {
+            assert!(
+                output.contains(&format!("Check artifact · Task · {expected}")),
+                "{output}"
+            );
+        } else {
+            assert!(!output.contains("Check artifact"), "{output}");
+        }
+    }
+}
+
+#[test]
 fn early_failure_is_reported_and_quiet_keeps_only_invisible_status() {
     let workspace = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();

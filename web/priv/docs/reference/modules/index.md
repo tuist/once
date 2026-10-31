@@ -600,6 +600,29 @@ The implementation returns a dictionary of provider fields. Downstream
 target kinds should read provider fields from `ctx["deps"]` or
 `ctx["deps_by_role"]` instead of inspecting target identities.
 
+### Selected execution context
+
+`ctx["execution"]` and `execution_context()` expose the same selected
+execution binding dictionary, or `None` when no binding is selected.
+The global also returns `None` outside active analysis, including schema
+evaluation. Both surfaces are available in resolver callbacks and deferred
+action planners.
+
+The dictionary contains `provider` and, when configured, `executor`,
+`environment`, `account`, `project`, and `properties`. Empty properties and
+unset optional fields are omitted. Properties are generic JSON data owned
+and validated by target kinds, not interpreted by Once. Configure them in
+`[infrastructure.execution.properties]`. An explicit compute selection
+receives those properties only if its provider matches the configured
+execution provider. Execution properties participate in analysis,
+configuration, and command identities as part of the selected binding.
+
+The selected execution context describes where declared commands will run,
+not the coordinator. `host_os()` and `host_arch()` still describe the real
+coordinator, and `host_*` discovery still runs there. A target kind declaring
+commands for another environment should use its execution properties rather
+than coordinator tool paths.
+
 Rust target kinds declare every file matched by `srcs` as a compiler action
 input, including non-Rust files embedded at compile time. `compile_data` adds
 compile-time files outside those source patterns. Source-file presentation
@@ -887,10 +910,29 @@ and includes its identity in the action's cache key.
   command execution. Cache hits restore outputs without running the
   command.
 - `create_dirs`: workspace-relative directories to create before a fresh
-  command execution.
+  command execution. With Docker provider execution, directory setup applies
+  inside the worker after input staging. It does not copy coordinator scratch
+  contents as implicit inputs or mutate coordinator-only setup paths. Other
+  remote adapters currently reject nonempty command directory setup.
 - `cwd`: workspace-relative directory to run the command in. Defaults to
   the workspace root when omitted or `None`.
 - `env`: string environment variables.
+- `resources`: optional keyword-only dictionary of per-action resource estimates.
+  Omitted, `None`, and `{}` keep the defaults: one CPU slot, the pool's
+  undeclared memory estimate (normally 250 MiB), and no named slots. The only
+  accepted keys are `cpu_slots` (positive integer), `memory_bytes` (nonnegative
+  integer bytes, with `0` selecting the undeclared estimate), and `slots`
+  (dictionary of string names to nonnegative integer counts). A zero named-slot
+  count removes that requirement. CPU and named-slot counts must fit the host's
+  unsigned pointer width; memory bytes must fit an unsigned 64-bit integer.
+  Booleans, floats, strings, negative values, unknown keys, and invalid dictionary
+  shapes fail analysis. For example,
+  `resources = {"cpu_slots": 1, "memory_bytes": 2 * 1024 * 1024 * 1024, "slots": {"device": 1}}`.
+  These are admission estimates, not guaranteed minimums: Once clamps requests
+  to the available host pool budget. Built-in compiler target kinds declare
+  their own estimates, including 4 GiB for Swift compilation, 2 GiB for Rust
+  compilation and build scripts, 1 GiB for C-family compilation, and 512 MiB
+  for native archiving. Larger projects may need target-kind-specific estimates.
 - `sandbox`: local filesystem sandbox policy. `off` uses the current
   workspace view. `inputs` runs in an action-private workspace view
   populated from declared inputs and copies declared outputs back after
@@ -1115,6 +1157,32 @@ separators use the portable forward-slash spelling.
 Together with `host_file_sha256(path)`, these primitives
 let target kinds include host tools and development kits in action identity.
 They identify host inputs; they do not make those inputs remotely available.
+
+## Apple Worker Toolchains
+
+Apple target kinds consume `execution_context().properties.apple` when remote
+execution is selected. The versioned description binds compiler and SDK paths
+to the selected immutable environment. It must declare `schema_version = 1`,
+matching `environment`, `os = "linux"`, `arch` (`arm64` or `x86_64`), absolute
+worker `bin`, `developer_dir`, `tools`, and an `sdks` dictionary keyed by SDK
+name, such as `iphonesimulator`. Each SDK declares `sdk_path` and `resource_dir`;
+optional `plugins` and `plugin_server` must be supplied together. Optional
+`programs` paths select tools such as `rcodesign`, `libtool`, or `lipo`.
+Optional `env` contains explicit worker environment variables. Optional SDK
+`profile_runtimes` maps platform suffixes to installed profiling archives.
+
+The image and complete description contribute to toolchain and analysis
+identity. Worker paths are not inspected or executed on the coordinator, and
+coordinator environment variables are not inherited. The native Xcode resolver
+still reads the original project and resolves package sources on macOS;
+declared inputs and dependency outputs transfer through normal action staging.
+Missing or mismatched descriptions fail rather than selecting coordinator
+compilers. Local analysis retains existing host tool discovery.
+
+This cross-host path supports ordinary C/Swift compilation and ad-hoc signing,
+not arbitrary Xcode builds. Explicit modules, Swift macro compilation, SwiftPM
+build-tool plugins, Catalyst, and Apple test/run runtimes are rejected. See
+[Docker execution](/guide/infrastructure/docker) for configuration and limits.
 
 ## Apple Generated Files
 

@@ -143,6 +143,11 @@ pub struct DeclaredAction {
     pub presentation: Option<once_presentation::ActionPresentation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history: Option<once_presentation::ActionHistoryKey>,
+    #[serde(
+        default,
+        skip_serializing_if = "once_core::ResourceRequest::is_default"
+    )]
+    pub resources: once_core::ResourceRequest,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation: Option<DeclaredActionOperation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -430,6 +435,7 @@ pub struct AnalysisStore {
     pub workspace_root: PathBuf,
     pub package: String,
     pub build_dir: String,
+    pub execution: Option<once_core::RemoteExecution>,
     pub declared_outputs: Vec<String>,
     pub actions: Vec<DeclaredAction>,
     /// This target's own observations. The host cache below is shared with
@@ -457,6 +463,7 @@ impl AnalysisStore {
             workspace_root,
             package,
             build_dir,
+            execution: None,
             declared_outputs: Vec::new(),
             actions: Vec::new(),
             observations: AnalysisObservations::default(),

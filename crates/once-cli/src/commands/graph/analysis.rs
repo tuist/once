@@ -265,9 +265,15 @@ impl BuildSession {
             .iter()
             .map(|target| target.kind.clone())
             .collect::<BTreeSet<_>>();
-        let analyzer =
-            AnalysisEngine::for_target_kinds(workspace, AnalysisOptions::default(), &target_kinds)?
-                .with_configuration(resolved.configuration.clone(), resolved.path_suffix.clone());
+        let analyzer = AnalysisEngine::for_target_kinds(
+            workspace,
+            AnalysisOptions {
+                execution: resolved.execution.clone(),
+                ..AnalysisOptions::default()
+            },
+            &target_kinds,
+        )?
+        .with_configuration(resolved.configuration.clone(), resolved.path_suffix.clone());
         let resolution_cache = ResolutionCache::open(workspace);
         let memo = AnalysisMemo::open(workspace);
         let resolution_key = memo.executable_identity().and_then(|identity| {
@@ -296,6 +302,9 @@ impl BuildSession {
             resolved_tools.commands.clone(),
         );
         let mut session = Self::new_with_analyzer(workspace, cache, graph, analyzer, sandbox);
+        if let Some(execution) = &resolved.execution {
+            session.producers.set_execution(execution.clone());
+        }
         session.tool_paths = Arc::new(resolved_tools.paths);
         session.tool_cache_fingerprint = resolved_tools.fingerprint;
         session.cached_tool_commands = resolved_tools.commands.into();
@@ -344,6 +353,10 @@ impl BuildSession {
             .iter()
             .map(|target| target.kind.clone())
             .collect::<BTreeSet<_>>();
+        let options = AnalysisOptions {
+            execution: resolved.execution.clone(),
+            ..options
+        };
         let analyzer = AnalysisEngine::for_target_kinds(workspace, options, &target_kinds)?
             .with_configuration(resolved.configuration.clone(), resolved.path_suffix.clone())
             .with_tool_cache(
@@ -351,6 +364,9 @@ impl BuildSession {
                 resolved_tools.commands.clone(),
             );
         let mut session = Self::new_with_analyzer(workspace, cache, graph, analyzer, sandbox);
+        if let Some(execution) = &resolved.execution {
+            session.producers.set_execution(execution.clone());
+        }
         session.tool_paths = Arc::new(resolved_tools.paths);
         session.tool_cache_fingerprint = resolved_tools.fingerprint;
         session.cached_tool_commands = resolved_tools.commands.into();
@@ -433,7 +449,11 @@ impl BuildSession {
     pub(super) fn with_resource_pool(mut self, resources: Arc<ResourcePool>) -> Self {
         self.analyzer = self.analyzer.with_resource_pool(Arc::clone(&resources));
         self.resources = resources;
+        let execution = self.producers.execution().cloned();
         self.producers = Producers::default();
+        if let Some(execution) = execution {
+            self.producers.set_execution(execution);
+        }
         self
     }
 
@@ -554,6 +574,11 @@ impl BuildSession {
         target: &GraphTarget,
     ) -> Result<Option<BuildOutcome>> {
         if !self.analyzer.target_kind_has_impl(&target.kind) {
+            anyhow::ensure!(
+                self.producers.execution().is_none(),
+                "provider execution requires declared actions; target `{}` has no implementation",
+                target.label.id,
+            );
             tracing::debug!(
                 target = %target.label.id,
                 kind = %target.kind,

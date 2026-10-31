@@ -12,8 +12,8 @@ top-to-bottom cache integration guide.
   are local storage and a local tier backed by Tuist's REAPI cache.
 - **[Execution](/reference/infrastructure/execution):** run a prepared command
   in an isolated environment and return declared outputs, streams, and exit
-  status. Current implementations are native local execution, Microsandbox,
-  E2B, and Daytona.
+  status. Current implementations are native local execution, Docker,
+  Microsandbox, E2B, and Daytona.
 - **[Artifacts](/guide/infrastructure/artifacts):** retain immutable build
   products for distribution. Local publication accepts arbitrary payloads;
   see each provider's guide for supported formats and publication limits.

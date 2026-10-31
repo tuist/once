@@ -70,6 +70,30 @@ pub(crate) async fn run_admitted(
     observer: Option<&dyn ActionOutputObserver>,
     lease: Option<ExecutionPermit>,
 ) -> Result<ActionResult> {
+    run_admitted_with_setup(
+        action,
+        workspace_root,
+        cache,
+        stream_to_parent,
+        validate_contract,
+        observer,
+        lease,
+        remote::CommandFilesystemSetup::default(),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_admitted_with_setup(
+    action: &Action,
+    workspace_root: &Path,
+    cache: &CacheProvider,
+    stream_to_parent: bool,
+    validate_contract: bool,
+    observer: Option<&dyn ActionOutputObserver>,
+    lease: Option<ExecutionPermit>,
+    setup: remote::CommandFilesystemSetup<'_>,
+) -> Result<ActionResult> {
     let work = Box::pin(run_scoped(
         action,
         workspace_root,
@@ -78,6 +102,7 @@ pub(crate) async fn run_admitted(
         validate_contract,
         observer,
         lease.clone(),
+        setup,
     ));
     match lease {
         Some(lease) => crate::with_execution_permit(lease, work).await,
@@ -85,6 +110,7 @@ pub(crate) async fn run_admitted(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_scoped(
     action: &Action,
     workspace_root: &Path,
@@ -93,6 +119,7 @@ async fn run_scoped(
     validate_contract: bool,
     observer: Option<&dyn ActionOutputObserver>,
     lease: Option<ExecutionPermit>,
+    setup: remote::CommandFilesystemSetup<'_>,
 ) -> Result<ActionResult> {
     if let Action::RunCommand {
         outputs,
@@ -108,6 +135,7 @@ async fn run_scoped(
             validate_contract,
             observer,
             lease.clone(),
+            setup,
         ))
         .await?;
         action.normalize_result(&mut result)?;
@@ -837,6 +865,7 @@ fn extract_zip_symlink(
     }
 }
 
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn execute_command(
     action: &Action,
     workspace_root: &Path,
@@ -845,6 +874,7 @@ async fn execute_command(
     validate_contract: bool,
     observer: Option<&dyn ActionOutputObserver>,
     lease: Option<ExecutionPermit>,
+    setup: remote::CommandFilesystemSetup<'_>,
 ) -> Result<(ActionResult, bool)> {
     let Action::RunCommand {
         argv,
@@ -880,6 +910,26 @@ async fn execute_command(
     };
 
     let executor = Executor::resolve(action)?;
+    if executor == Executor::Local {
+        for (paths, mode) in [
+            (setup.clean_paths, PreparePathMode::Remove),
+            (setup.create_dirs, PreparePathMode::Directory),
+        ] {
+            for path in paths {
+                execute_portable_action(
+                    &Action::PreparePath {
+                        path: path.clone(),
+                        mode,
+                        input_digest: None,
+                    },
+                    workspace_root,
+                    cache,
+                    lease.as_ref(),
+                )
+                .await?;
+            }
+        }
+    }
     if executor != Executor::Local && validate_contract {
         return Err(executor.unsupported("filesystem contract auditing"));
     }
@@ -887,7 +937,7 @@ async fn execute_command(
         return Err(executor.unsupported("live output observers"));
     }
     let result = match (executor, stream_to_parent, sandbox) {
-        (Executor::Microsandbox | Executor::E2b | Executor::Daytona, _, _) => {
+        (Executor::Microsandbox | Executor::E2b | Executor::Daytona | Executor::Docker, _, _) => {
             Box::pin(remote::execute_command(
                 executor,
                 remote.as_deref().expect("remote executor has a binding"),
@@ -905,6 +955,7 @@ async fn execute_command(
                 workspace_root,
                 cache,
                 stream_to_parent,
+                setup,
             ))
             .await
         }

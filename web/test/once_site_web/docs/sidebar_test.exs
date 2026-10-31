@@ -56,6 +56,7 @@ defmodule OnceSiteWeb.Docs.SidebarTest do
              "Buildkite" => nil,
              "Connect A Project" => nil,
              "Daytona" => "daytona",
+             "Docker" => nil,
              "E2B" => "e2b",
              "Microsandbox" => "microsandbox",
              "Overview" => nil,

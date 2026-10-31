@@ -193,8 +193,17 @@ async fn run_command(
             verify_reproducible,
             config,
             all,
+            remote,
+            compute,
         } => {
-            let resolved = resolve_configuration(&config)?;
+            let mut resolved = resolve_configuration(&config)?;
+            if remote {
+                resolved = resolved.with_execution(crate::cache_provider::resolve_execution(
+                    workspace,
+                    xdg,
+                    compute.as_deref(),
+                )?)?;
+            }
             if verify_reproducible {
                 let targets = resolve_build_targets(workspace, target, all)?;
                 for target in targets {

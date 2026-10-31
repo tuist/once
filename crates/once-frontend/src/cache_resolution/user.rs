@@ -18,7 +18,7 @@ pub(super) struct UserConfig {
 #[serde(default, deny_unknown_fields)]
 pub(super) struct UserInfrastructureConfig {
     pub(super) cache: Option<UserCacheProviderBinding>,
-    execution: Option<UserCacheProviderBinding>,
+    execution: Option<crate::cache_provider::ExecutionProviderToml>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -93,8 +93,10 @@ pub(super) fn maybe_load_user_config(path: &Path) -> Result<Option<UserConfig>> 
         if let Some(binding) = infrastructure.cache.as_mut() {
             normalize_binding(binding, path)?;
         }
-        if let Some(binding) = infrastructure.execution.as_mut() {
-            normalize_binding(binding, path)?;
+        if let Some(binding) = infrastructure.execution.as_ref() {
+            binding
+                .clone()
+                .into_config(&path.display().to_string(), "infrastructure.execution")?;
         }
     }
     Ok(Some(config))

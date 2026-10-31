@@ -19,8 +19,8 @@
 //! surfaces:
 //!
 //! - `Normal` prints captured stderr only for failed targets.
-//! - `Verbose` also prints a short tail of captured output for every
-//!   completed target.
+//! - `Verbose` also prints completed actions and a short tail of captured
+//!   output for every completed target.
 //! - `ExtraVerbose` prints the full captured stdout+stderr for every
 //!   target, prefixed by target id.
 
@@ -266,6 +266,34 @@ impl RenderState {
                 target_id, phase, ..
             } => {
                 self.on_target_phase(&target_id, phase);
+                false
+            }
+            RunEvent::ActionCompleted {
+                target_id,
+                display_name,
+                identifier,
+                action_index,
+                result,
+                was_cached,
+                duration_ms,
+                ..
+            } => {
+                if self.options.verbosity != Verbosity::Normal {
+                    let label = display_name
+                        .or(identifier)
+                        .unwrap_or_else(|| format!("action {action_index}"));
+                    let label = crate::terminal::captured_text(label.as_bytes());
+                    let target = crate::terminal::captured_text(target_id.as_bytes());
+                    let tag = match (result, was_cached) {
+                        (TargetResult::Succeeded, true) => style("cached").dim(),
+                        (TargetResult::Succeeded, false) => style("executed").cyan(),
+                        (TargetResult::Failed, _) => style("failed").red(),
+                        (TargetResult::Cancelled, _) => style("cancelled").yellow(),
+                        (TargetResult::Skipped, _) => style("skipped").dim(),
+                    };
+                    let duration = format_duration_ms(duration_ms);
+                    self.emit(format!("    {label} · {target} · {tag} · {duration}"));
+                }
                 false
             }
             RunEvent::LogChunk {

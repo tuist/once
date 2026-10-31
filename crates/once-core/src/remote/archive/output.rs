@@ -1,13 +1,25 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::archive_error;
 use super::limits::check_entries;
 use crate::remote::output_install::OutputStaging;
-use crate::remote::path::{path_is_declared, relative_link_stays_within};
+use crate::remote::path::{path_is_declared, Directory};
 use crate::remote::PhasePermit;
 use crate::{Error, RemoteIoLimits, Result, WorkspacePath};
 
-#[cfg(test)]
+#[path = "output/budget.rs"]
+mod budget;
+
+#[cfg(all(test, any(target_os = "linux", target_vendor = "apple")))]
+#[path = "output/budget_tests.rs"]
+mod budget_tests;
+
+#[cfg(all(test, any(target_os = "linux", target_vendor = "apple")))]
+#[path = "output/symlinks.rs"]
+mod symlink_tests;
+
+#[cfg(all(test, any(target_os = "linux", target_vendor = "apple")))]
 async fn install_output_archive(
     archive_path: &Path,
     workspace_root: &Path,
@@ -41,8 +53,15 @@ pub(in crate::remote) async fn install_output_archive_limited(
     let staging = tokio::task::spawn_blocking(move || {
         let _lease = extraction_lease;
         validate_headers(&archive, limits, provider)?;
-        let staging = OutputStaging::create(&workspace)?;
-        extract_output_archive(&archive, staging.files(), &staged_outputs, provider, limits)?;
+        let mut staging = OutputStaging::create_limited(&workspace, limits)?;
+        let modes = extract_output_archive(
+            &archive,
+            staging.files_directory(),
+            &staged_outputs,
+            provider,
+            limits,
+        )?;
+        staging.set_directory_modes(modes);
         Ok::<_, Error>(staging)
     })
     .await
@@ -92,11 +111,11 @@ fn validate_headers(path: &Path, limits: RemoteIoLimits, provider: &'static str)
 
 fn extract_output_archive(
     archive_path: &Path,
-    staging_root: &Path,
+    staging_root: &Directory,
     outputs: &[WorkspacePath],
     provider: &'static str,
     limits: RemoteIoLimits,
-) -> Result<()> {
+) -> Result<BTreeMap<PathBuf, u32>> {
     let declared_roots = outputs
         .iter()
         .map(|output| PathBuf::from(output.as_str()))
@@ -108,6 +127,8 @@ fn extract_output_archive(
     })?;
     let mut archive = tar::Archive::new(file);
     let mut total_bytes = 0_u64;
+    let mut directory_modes = BTreeMap::new();
+    let mut budget = budget::ExtractionBudget::new(limits, provider);
     for (index, entry) in archive
         .entries()
         .map_err(|source| {
@@ -136,29 +157,41 @@ fn extract_output_archive(
             provider,
             "extracted archive bytes",
         )?;
-        extract_output_entry(&mut entry, staging_root, &declared_roots, provider)?;
+        if let Some((path, mode)) = extract_output_entry(
+            &mut entry,
+            staging_root,
+            &declared_roots,
+            provider,
+            &mut budget,
+            &directory_modes,
+        )? {
+            directory_modes.insert(path, mode);
+        }
     }
     for output in outputs {
-        let path = output.resolve(staging_root);
-        std::fs::symlink_metadata(&path).map_err(|source| {
-            archive_error(
-                provider,
-                format!(
-                    "declared output `{}` was not returned: {source}",
-                    output.as_str()
-                ),
-            )
-        })?;
+        staging_root
+            .metadata(Path::new(output.as_str()))
+            .map_err(|source| {
+                archive_error(
+                    provider,
+                    format!(
+                        "declared output `{}` was not returned: {source}",
+                        output.as_str()
+                    ),
+                )
+            })?;
     }
-    Ok(())
+    Ok(directory_modes)
 }
 
 fn extract_output_entry(
     entry: &mut tar::Entry<'_, std::fs::File>,
-    staging_root: &Path,
+    staging_root: &Directory,
     declared_roots: &[PathBuf],
     provider: &'static str,
-) -> Result<()> {
+    budget: &mut budget::ExtractionBudget,
+    directory_modes: &BTreeMap<PathBuf, u32>,
+) -> Result<Option<(PathBuf, u32)>> {
     let raw_path = entry.path().map_err(|source| {
         archive_error(
             provider,
@@ -197,23 +230,48 @@ fn extract_output_entry(
             ),
         ));
     }
-    if kind.is_symlink() {
-        let target = entry
-            .link_name()
-            .map_err(|source| archive_error(provider, source.to_string()))?
-            .ok_or_else(|| archive_error(provider, "symbolic link has no target".to_string()))?;
-        if !relative_link_stays_within(&relative, &target, declared_roots) {
-            return Err(archive_error(
-                provider,
-                format!(
-                    "output symbolic link `{}` targets `{}` outside declared output trees",
-                    relative.display(),
-                    target.display()
-                ),
-            ));
-        }
-    }
-    let unpacked = entry.unpack_in(staging_root).map_err(|source| {
+    let directory_mode = if kind.is_dir() {
+        Some(
+            entry
+                .header()
+                .mode()
+                .map_err(|source| archive_error(provider, source.to_string()))?,
+        )
+    } else {
+        None
+    };
+    let target = if kind.is_symlink() {
+        Some(
+            entry
+                .link_name()
+                .map_err(|source| archive_error(provider, source.to_string()))?
+                .ok_or_else(|| {
+                    archive_error(provider, "symbolic link has no target".to_string())
+                })?,
+        )
+    } else {
+        None
+    };
+    budget.charge(
+        staging_root,
+        &relative,
+        kind.is_dir() && !directory_modes.contains_key(&relative),
+        target.as_deref(),
+    )?;
+    let extracted = if let Some(target) = target {
+        staging_root.symlink(&relative, &target)
+    } else if kind.is_dir() {
+        staging_root.descend(&relative, true).map(|_| ())
+    } else {
+        let mode = entry
+            .header()
+            .mode()
+            .map_err(|source| archive_error(provider, source.to_string()))?;
+        staging_root
+            .create_file(&relative, mode)
+            .and_then(|mut file| std::io::copy(entry, &mut file).map(|_| ()))
+    };
+    extracted.map_err(|source| {
         archive_error(
             provider,
             format!(
@@ -222,20 +280,14 @@ fn extract_output_entry(
             ),
         )
     })?;
-    if !unpacked {
-        return Err(archive_error(
-            provider,
-            format!("remote output `{}` escaped staging", relative.display()),
-        ));
-    }
-    Ok(())
+    Ok(directory_mode.map(|mode| (relative, mode)))
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", target_vendor = "apple")))]
 mod tests {
     use super::*;
 
-    fn write_archive(path: &Path, entries: &[(&str, &[u8])]) {
+    pub(super) fn write_archive(path: &Path, entries: &[(&str, &[u8])]) {
         let file = std::fs::File::create(path).unwrap();
         let mut archive = tar::Builder::new(file);
         for (entry_path, contents) in entries {
@@ -265,6 +317,10 @@ mod tests {
             },
             RemoteIoLimits {
                 max_archive_entries: 1,
+                ..RemoteIoLimits::default()
+            },
+            RemoteIoLimits {
+                max_metadata_bytes: 1,
                 ..RemoteIoLimits::default()
             },
         ] {

@@ -50,8 +50,26 @@ pub fn globals_for_prelude() -> Globals {
     GlobalsBuilder::standard().with(prelude_globals).build()
 }
 
+pub(super) fn selected_execution_context<'v>(eval: &Evaluator<'v, '_, '_>) -> Value<'v> {
+    with_store(|store| {
+        store
+            .and_then(|store| store.execution.as_ref())
+            .map_or(Value::new_none(), |execution| {
+                json_to_value(
+                    eval,
+                    &serde_json::to_value(execution).expect("execution is JSON"),
+                )
+            })
+    })
+}
+
 #[starlark_module]
 fn prelude_globals(builder: &mut GlobalsBuilder) {
+    #[allow(clippy::unnecessary_wraps)]
+    fn execution_context<'v>(eval: &mut Evaluator<'v, '_, '_>) -> anyhow::Result<Value<'v>> {
+        Ok(selected_execution_context(eval))
+    }
+
     #[allow(clippy::unnecessary_wraps)]
     fn analysis_warning(message: &str) -> anyhow::Result<NoneType> {
         if analysis_active() {
@@ -728,6 +746,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
                 store.actions.push(DeclaredAction {
                     presentation,
                     history: None,
+                    resources: once_core::ResourceRequest::default(),
                     operation: Some(DeclaredActionOperation::ExpandActions {
                         implementation: implementation.to_string(),
                         args,
@@ -777,6 +796,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         let action = DeclaredAction {
             presentation: unpack_presentation(presentation),
             history: None,
+            resources: once_core::ResourceRequest::default(),
             operation: Some(DeclaredActionOperation::WriteFile {
                 path: path.to_string(),
                 bytes,
@@ -840,6 +860,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         let action = DeclaredAction {
             presentation: unpack_presentation(presentation),
             history: None,
+            resources: once_core::ResourceRequest::default(),
             operation: Some(DeclaredActionOperation::CopyPath {
                 sources,
                 destination: destination.to_string(),
@@ -913,6 +934,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         let action = DeclaredAction {
             presentation: unpack_presentation(presentation),
             history: None,
+            resources: once_core::ResourceRequest::default(),
             operation: Some(DeclaredActionOperation::MaterializeHostFile {
                 source: source.to_string(),
                 source_sha256,
@@ -995,6 +1017,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         let action = DeclaredAction {
             presentation: unpack_presentation(presentation),
             history: None,
+            resources: once_core::ResourceRequest::default(),
             operation: Some(DeclaredActionOperation::MaterializeHostTree {
                 source: source.to_string(),
                 source_sha256,
@@ -1051,6 +1074,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         let action = DeclaredAction {
             presentation: unpack_presentation(presentation),
             history: None,
+            resources: once_core::ResourceRequest::default(),
             operation: Some(DeclaredActionOperation::LinkPath {
                 source: source.to_string(),
                 destination: destination.to_string(),
@@ -1109,6 +1133,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         let action = DeclaredAction {
             presentation: unpack_presentation(presentation),
             history: None,
+            resources: once_core::ResourceRequest::default(),
             operation: Some(DeclaredActionOperation::PreparePath {
                 path: path.to_string(),
                 mode,
@@ -1181,6 +1206,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         let action = DeclaredAction {
             presentation: unpack_presentation(presentation),
             history: None,
+            resources: once_core::ResourceRequest::default(),
             operation: Some(DeclaredActionOperation::WriteTreeDigest {
                 root: root.to_string(),
                 output: output.to_string(),
@@ -1262,6 +1288,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         let action = DeclaredAction {
             presentation: unpack_presentation(presentation),
             history: None,
+            resources: once_core::ResourceRequest::default(),
             operation: Some(DeclaredActionOperation::WriteArchive {
                 entries,
                 output: output.to_string(),
@@ -1338,6 +1365,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         let action = DeclaredAction {
             presentation: unpack_presentation(presentation),
             history: None,
+            resources: once_core::ResourceRequest::default(),
             operation: Some(DeclaredActionOperation::DownloadAndExtract {
                 url: url.to_string(),
                 sha256: sha256.to_string(),
@@ -1462,9 +1490,11 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named)] display_name: Option<String>,
         #[starlark(require = named)] source_files: Option<Value<'v>>,
         #[starlark(require = named)] intermediate: Option<bool>,
+        #[starlark(require = named)] resources: Option<Value<'v>>,
     ) -> anyhow::Result<NoneType> {
         validate_sandbox(sandbox.as_deref())?;
         validate_network(network.as_deref())?;
+        let resources = unpack_resources(resources)?;
         let argv = unpack_action_argv(argv, "argv")?;
         let inputs = inputs
             .map(|value| unpack_string_list(value, "inputs"))
@@ -1515,6 +1545,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         let action = DeclaredAction {
             presentation: unpack_presentation(presentation),
             history: unpack_history(history),
+            resources,
             operation: None,
             argv: argv.args,
             arg_files: argv.arg_files,
@@ -1557,6 +1588,56 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         let value: JsonValue = serde_json::from_str(src)?;
         Ok(json_to_value(eval, &value))
     }
+}
+
+fn unpack_resources(value: Option<Value<'_>>) -> Result<once_core::ResourceRequest> {
+    let mut request = once_core::ResourceRequest::default();
+    let Some(value) = value.filter(|value| !value.is_none()) else {
+        return Ok(request);
+    };
+    let dict = DictRef::from_value(value)
+        .ok_or_else(|| anyhow!("run_action resources must be a dictionary or None"))?;
+    for (key, value) in dict.iter() {
+        let key = key
+            .unpack_str()
+            .ok_or_else(|| anyhow!("run_action resources keys must be strings"))?;
+        match key {
+            "cpu_slots" => {
+                request.cpu_slots = usize::try_from(unpack_resource_count(value, key)?)
+                    .context("run_action resources.cpu_slots is too large")?;
+                if request.cpu_slots == 0 {
+                    anyhow::bail!("run_action resources.cpu_slots must be positive");
+                }
+            }
+            "memory_bytes" => request.memory_bytes = unpack_resource_count(value, key)?,
+            "slots" => {
+                let slots = DictRef::from_value(value)
+                    .ok_or_else(|| anyhow!("run_action resources.slots must be a dictionary"))?;
+                for (name, count) in slots.iter() {
+                    let name = name.unpack_str().ok_or_else(|| {
+                        anyhow!("run_action resources.slots keys must be strings")
+                    })?;
+                    let count = usize::try_from(unpack_resource_count(count, "slots")?)
+                        .context("run_action resources.slots count is too large")?;
+                    request = request.with_slot(name, count);
+                }
+            }
+            _ => anyhow::bail!(
+                "unknown run_action resources key `{key}`; expected cpu_slots, memory_bytes, or slots"
+            ),
+        }
+    }
+    Ok(request)
+}
+
+fn unpack_resource_count(value: Value<'_>, field: &str) -> Result<u64> {
+    value
+        .to_json_value()
+        .ok()
+        .and_then(|value| value.as_u64())
+        .ok_or_else(|| {
+            anyhow!("run_action resources.{field} must be a nonnegative integer within u64 range")
+        })
 }
 
 fn git_checkouts(repositories: &[super::repository::Checkout], cache_root: &str) -> Result<()> {
@@ -2565,6 +2646,7 @@ mod observation_completeness_tests {
         "copy_path",
         "declare_output",
         "download_and_extract",
+        "execution_context",
         "execution_path",
         "expand_actions",
         "json_decode",
@@ -2757,5 +2839,95 @@ mod unchanged_workspace_tests {
     #[test]
     fn an_unknown_window_settles_nothing() {
         assert!(UnchangedWorkspace::Unknown.expansion_could_differ("glob", "", &patterns(&["a"])));
+    }
+}
+
+#[cfg(test)]
+mod resource_tests {
+    use super::*;
+    use starlark::environment::Module;
+    use starlark::syntax::{AstModule, Dialect};
+
+    fn analyze(source: &str) -> Result<Vec<DeclaredAction>> {
+        let workspace = tempfile::tempdir()?;
+        let store = super::super::AnalysisStore::new(
+            workspace.path().to_path_buf(),
+            "pkg".to_string(),
+            ".once/out/pkg".to_string(),
+        );
+        let (store, result) = super::super::with_active_store(store, || {
+            Module::with_temp_heap(|module| -> Result<()> {
+                let ast =
+                    AstModule::parse("resources.star", source.to_string(), &Dialect::Standard)
+                        .map_err(|error| anyhow!("{error:?}"))?;
+                Evaluator::new(&module)
+                    .eval_module(ast, &globals_for_prelude())
+                    .map_err(|error| anyhow!("{error:?}"))?;
+                Ok(())
+            })
+        });
+        result?;
+        Ok(store.actions)
+    }
+
+    #[test]
+    fn run_action_resources_survive_analysis_and_legacy_serialization() {
+        let actions = analyze(
+            r#"
+run_action(["tool"], resources = {"cpu_slots": 2, "memory_bytes": 4 * 1024 * 1024 * 1024, "slots": {"device": 1, "unused": 0}})
+run_action(["tool"])
+run_action(["tool"], resources = {})
+run_action(["tool"], resources = None)
+run_action(["tool"], resources = {"cpu_slots": 1, "memory_bytes": 0, "slots": {"unused": 0}})
+run_action(["tool"], resources = {"memory_bytes": 18446744073709551615})
+"#,
+        )
+        .unwrap();
+        let expected =
+            once_core::ResourceRequest::new(2, 4 * 1024 * 1024 * 1024).with_slot("device", 1);
+        assert_eq!(actions[0].resources, expected);
+        let json = serde_json::to_value(&actions[0]).unwrap();
+        let decoded: DeclaredAction = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded.resources, expected);
+        let legacy_json = serde_json::to_value(&actions[1]).unwrap();
+        assert!(legacy_json.get("resources").is_none());
+        for action in &actions[1..5] {
+            assert_eq!(action.resources, once_core::ResourceRequest::default());
+            assert_eq!(serde_json::to_value(action).unwrap(), legacy_json);
+        }
+        let legacy: DeclaredAction = serde_json::from_value(legacy_json).unwrap();
+        assert_eq!(legacy.resources, once_core::ResourceRequest::default());
+        assert_eq!(actions[5].resources.memory_bytes, u64::MAX);
+    }
+
+    #[test]
+    fn run_action_resources_reject_invalid_shapes_and_counts() {
+        for resources in [
+            "[]",
+            "1",
+            "{1: 2}",
+            "{\"unknown\": 1}",
+            "{\"cpu_slots\": 0}",
+            "{\"cpu_slots\": -1}",
+            "{\"cpu_slots\": True}",
+            "{\"cpu_slots\": 1.0}",
+            "{\"memory_bytes\": -1}",
+            "{\"memory_bytes\": False}",
+            "{\"memory_bytes\": 1.0}",
+            "{\"memory_bytes\": \"1024\"}",
+            "{\"memory_bytes\": 18446744073709551616}",
+            "{\"slots\": []}",
+            "{\"slots\": {1: 1}}",
+            "{\"slots\": {\"device\": -1}}",
+            "{\"slots\": {\"device\": True}}",
+            "{\"slots\": {\"device\": 1.0}}",
+        ] {
+            let error =
+                analyze(&format!("run_action([\"tool\"], resources = {resources})")).unwrap_err();
+            assert!(
+                error.to_string().contains("resources"),
+                "{resources}: {error:#}"
+            );
+        }
     }
 }

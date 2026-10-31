@@ -12,6 +12,48 @@ use tokio::process::Command;
 
 use super::{capture_step, legacy_outputs, render_execution_error, uncached_process, Producers};
 
+pub(super) async fn execute_declared(
+    context: &super::DeclaredActionContext<'_>,
+    action: &Action,
+    declared: &once_frontend::analysis::DeclaredAction,
+    lease: &once_core::ExecutionPermit,
+) -> Result<ActionResult> {
+    if once_core::Executor::resolve(action)? == once_core::Executor::Local {
+        return once_core::with_execution_permit(
+            lease.clone(),
+            Box::pin(run_uncached_action_admitted(
+                action,
+                context.workspace,
+                context.cache,
+                declared.inherit_parent_env,
+                Some(lease.clone()),
+                Some((context.producers, context.identifier)),
+            )),
+        )
+        .await;
+    }
+    let result = super::provider::execute(
+        action,
+        context.workspace,
+        context.cache,
+        None,
+        lease.clone(),
+        &declared.clean_paths,
+        &declared.create_dirs,
+        &declared.arg_files,
+    )
+    .await?;
+    super::provider::replay_output(
+        &result,
+        context.cache,
+        context.output_observer,
+        context.workspace,
+        lease,
+    )
+    .await?;
+    Ok(result)
+}
+
 #[cfg(test)]
 pub(super) async fn run_uncached_action(
     action: &Action,
@@ -45,7 +87,10 @@ pub(super) async fn run_uncached_action_admitted(
         } => {
             // Network denial is enforced only by the core runner, so a command
             // that asks for it must not take the direct spawn below.
-            if *sandbox != SandboxMode::Off || network.is_denied() {
+            if *sandbox != SandboxMode::Off
+                || network.is_denied()
+                || once_core::Executor::resolve(action)? != once_core::Executor::Local
+            {
                 if inherit_parent_env {
                     anyhow::bail!(if network.is_denied() {
                         "inherit_parent_env cannot be combined with network = \"deny\"; remove one of them"

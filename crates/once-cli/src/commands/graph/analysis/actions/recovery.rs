@@ -162,6 +162,7 @@ struct ProducersInner {
     limits: RepairLimits,
     reporting: OnceLock<Reporting>,
     executors: OnceLock<once_core::ExecutorResources>,
+    execution: OnceLock<once_core::RemoteExecution>,
 }
 
 impl Default for Producers {
@@ -182,8 +183,25 @@ impl Producers {
                 limits,
                 reporting: OnceLock::new(),
                 executors: OnceLock::new(),
+                execution: OnceLock::new(),
             }),
         }
+    }
+
+    pub(in crate::commands::graph::analysis) fn set_execution(
+        &self,
+        execution: once_core::RemoteExecution,
+    ) {
+        self.inner
+            .execution
+            .set(execution)
+            .expect("execution is configured before graph work");
+    }
+
+    pub(in crate::commands::graph::analysis) fn execution(
+        &self,
+    ) -> Option<&once_core::RemoteExecution> {
+        self.inner.execution.get()
     }
 
     /// Report repairs on `bus`, taking lanes from `workers`. The first
@@ -611,6 +629,7 @@ impl Repair<'_> {
             self.workspace,
             digest,
             self.producers.executors(self.resources)?,
+            once_core::Executor::resolve(&producer.action)?,
             producer.action.resource_request().clone(),
             |_contended, lease| async move {
                 let attempt = match reporting {
@@ -618,28 +637,34 @@ impl Repair<'_> {
                     None => None,
                 };
                 let outcome = async {
-                    if let Some(setup) = &producer.setup {
-                        super::prepare_command_setup_admitted(
-                            self.workspace,
-                            self.cache,
-                            &setup.clean_paths,
-                            &setup.create_dirs,
-                            &lease,
-                        )
-                        .await?;
+                    let setup = producer.setup.as_ref();
+                    if let Some(setup) = setup {
+                        if once_core::Executor::resolve(&producer.action)?
+                            == once_core::Executor::Local
+                        {
+                            super::prepare_command_setup_admitted(
+                                self.workspace,
+                                self.cache,
+                                &setup.clean_paths,
+                                &setup.create_dirs,
+                                &lease,
+                            )
+                            .await?;
+                        }
                         super::preparation::write_args(self.workspace, &setup.arg_files, &lease)
                             .await?;
                     }
-                    let result = once_core::run_uncached_admitted(
+                    let result = super::provider::execute(
                         &producer.action,
                         self.workspace,
                         self.cache,
-                        false,
                         None,
                         lease,
+                        setup.map_or(&[], |setup| setup.clean_paths.as_slice()),
+                        setup.map_or(&[], |setup| setup.create_dirs.as_slice()),
+                        setup.map_or(&[], |setup| setup.arg_files.as_slice()),
                     )
-                    .await
-                    .map_err(anyhow::Error::from)?;
+                    .await?;
                     if result.exit_code == 0 {
                         self.cache.put_action_result(&digest, &result).await?;
                     }
@@ -783,6 +808,7 @@ pub(super) async fn with_action_lock_and_permit<T, F, Fut>(
     workspace: &Path,
     digest: Digest,
     resources: &once_core::ExecutorResources,
+    executor: once_core::Executor,
     request: ResourceRequest,
     work: F,
 ) -> Result<T>
@@ -794,9 +820,7 @@ where
     let mut work = Some(work);
     let mut contended = false;
     loop {
-        let permit = resources
-            .acquire(once_core::Executor::Local, &request)
-            .await;
+        let permit = resources.acquire(executor, &request).await;
         match lock.try_lock() {
             Ok(()) => {
                 let permit = permit.with_lifetime_owner(Arc::clone(&lock));
@@ -806,7 +830,7 @@ where
             Err(std::fs::TryLockError::WouldBlock) => {}
             Err(error) => {
                 return Err(anyhow::Error::msg(error.to_string()))
-                    .with_context(|| format!("locking action {digest}"))
+                    .with_context(|| format!("locking action {digest}"));
             }
         }
         drop(permit);
@@ -828,7 +852,7 @@ async fn wait_for_action_lock(lock: &std::fs::File, digest: Digest) -> Result<()
             }
             Err(error) => {
                 return Err(anyhow::Error::msg(error.to_string()))
-                    .with_context(|| format!("locking action {digest}"))
+                    .with_context(|| format!("locking action {digest}"));
             }
         }
     }

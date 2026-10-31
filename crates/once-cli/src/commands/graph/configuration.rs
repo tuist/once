@@ -35,9 +35,19 @@ pub struct ResolvedConfiguration {
     pub path_suffix: String,
     pub digest: Digest,
     pub native_targets: Option<Vec<once_frontend::Target>>,
+    pub execution: Option<once_core::RemoteExecution>,
 }
 
 impl ResolvedConfiguration {
+    pub fn with_execution(mut self, execution: once_core::RemoteExecution) -> Result<Self> {
+        once_core::Executor::from_binding(&execution)?;
+        let identity = serde_json::to_vec(&(self.digest, &execution))?;
+        self.digest = Digest::of_bytes(&identity);
+        self.path_suffix = format!("/cfg-{}", &self.digest.to_hex()[..PATH_DIGEST_HEX_LEN]);
+        self.execution = Some(execution);
+        Ok(self)
+    }
+
     pub fn workspace_targets(&self, workspace: &Path) -> Result<Vec<once_frontend::Target>> {
         self.native_targets.as_ref().map_or_else(
             || {
@@ -55,7 +65,10 @@ impl ResolvedConfiguration {
         let kinds = targets.iter().map(|target| target.kind.clone()).collect();
         once_frontend::analysis::AnalysisEngine::for_target_kinds(
             workspace,
-            once_frontend::analysis::AnalysisOptions::default(),
+            once_frontend::analysis::AnalysisOptions {
+                execution: self.execution.clone(),
+                ..Default::default()
+            },
             &kinds,
         )?
         .with_configuration(self.configuration.clone(), self.path_suffix.clone())
@@ -115,6 +128,7 @@ pub fn resolve(
         path_suffix,
         digest: effective_digest,
         native_targets: None,
+        execution: None,
     })
 }
 
@@ -152,5 +166,45 @@ mod tests {
     fn rejects_empty_config_value() {
         let error = parse_overrides(&["os=".to_string()]).unwrap_err();
         assert!(error.to_string().contains("empty value"));
+    }
+
+    #[test]
+    fn execution_environments_isolate_outputs_and_reuse_their_own_configuration() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("once.toml"), "").unwrap();
+        let local = resolve(root.path(), &ConfigurationOverrides::default()).unwrap();
+        assert!(local.path_suffix.is_empty());
+        let mut first = once_core::RemoteExecution::provider("workers");
+        first.executor = Some("docker".into());
+        first.environment = Some(format!("sha256:{}", "a".repeat(64)));
+        let mut second = first.clone();
+        second.environment = Some(format!("sha256:{}", "b".repeat(64)));
+        let remote = local.clone().with_execution(first.clone()).unwrap();
+        assert_ne!(remote.digest, local.digest);
+        assert_ne!(remote.path_suffix, local.path_suffix);
+        assert_eq!(
+            remote.path_suffix,
+            local.clone().with_execution(first).unwrap().path_suffix
+        );
+        assert_ne!(
+            remote.path_suffix,
+            local.with_execution(second).unwrap().path_suffix
+        );
+    }
+
+    #[test]
+    fn execution_properties_partition_configuration_identity() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("once.toml"), "").unwrap();
+        let local = resolve(root.path(), &ConfigurationOverrides::default()).unwrap();
+        let first = once_core::RemoteExecution::provider("local");
+        let mut second = first.clone();
+        second
+            .properties
+            .insert("version".into(), serde_json::json!(2));
+        let first = local.clone().with_execution(first).unwrap();
+        let second = local.with_execution(second).unwrap();
+        assert_ne!(first.digest, second.digest);
+        assert_ne!(first.path_suffix, second.path_suffix);
     }
 }

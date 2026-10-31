@@ -3915,7 +3915,7 @@ def _xcode_xcframework_selected_slice(spec):
     }.get(platform) or platform
     sdk_variant = attrs.get("sdk_variant") or "simulator"
     wanted_variant = "simulator" if sdk_variant == "simulator" and wanted_platform != "macos" else ""
-    wanted_arch = attrs.get("arch") or host_arch()
+    wanted_arch = attrs.get("arch") or _apple_default_arch(platform, sdk_variant)
     for library in data.get("AvailableLibraries") or []:
         if library.get("SupportedPlatform") != wanted_platform:
             continue
@@ -4030,7 +4030,7 @@ def _xcode_xcframework_serialized_imports(spec, module_files):
     sdk_version = host_command([xcrun, "--sdk", sdk_name, "--show-sdk-version"]).strip()
     if not sdk_path or not sdk_version:
         return []
-    arch = attrs.get("arch") or host_arch()
+    arch = attrs.get("arch") or _apple_default_arch(attrs.get("platform") or "ios", sdk_variant)
     target = arch + "-apple-" + triple_os + sdk_version + ("-simulator" if simulator else "")
     include_dirs = []
     module_names = []
@@ -5358,8 +5358,9 @@ def _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_
         "visionos": "xrsimulator" if sdk_variant == "simulator" else "xros",
         "macos": "macosx",
     }.get(platform) or sdkroot
+    build_arch = _apple_default_arch(platform, sdk_variant)
     settings = _xcode_select_conditional_settings(settings, {
-        "arch": host_arch(),
+        "arch": build_arch,
         "config": selected_configuration,
         "sdk": sdk_name,
         "target": target_name,
@@ -5394,8 +5395,8 @@ def _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_
         subs["EXECUTABLE_NAME"] = subs["FULL_PRODUCT_NAME"]
         subs["EXECUTABLE_PATH"] = subs["FULL_PRODUCT_NAME"]
     subs["PLATFORM_NAME"] = sdk_name
-    subs["ARCHS"] = host_arch()
-    subs["CURRENT_ARCH"] = host_arch()
+    subs["ARCHS"] = build_arch
+    subs["CURRENT_ARCH"] = build_arch
     subs["NATIVE_ARCH_ACTUAL"] = host_arch()
     signing_identity = "" if platform in ["macos", "macosx"] and _xcode_scalar(settings.get("CODE_SIGNING_ALLOWED")).upper() == "NO" else "-"
     subs["CODE_SIGN_IDENTITY"] = signing_identity

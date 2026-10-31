@@ -24,10 +24,13 @@ pub(super) async fn restore(
 
 pub(super) async fn setup(
     context: &DeclaredActionContext<'_>,
+    action: &once_core::Action,
     declared: &DeclaredAction,
     lease: &once_core::ExecutionPermit,
 ) -> Result<()> {
-    if declared.operation.is_none() {
+    if declared.operation.is_none()
+        && once_core::Executor::resolve(action)? == once_core::Executor::Local
+    {
         super::prepare_command_setup_admitted(
             context.workspace,
             context.cache,

@@ -113,7 +113,11 @@ kind = "daytona"
 image = "node:22.18.0-bookworm"
 ```
 
-E2B, Daytona, and Microsandbox provide execution only. Tuist provides shared
+Docker execution requires an already available, full immutable image ID in
+`image`, not a tag. See [Docker execution](/guide/infrastructure/docker) for
+image preparation and coordinator requirements.
+
+Docker, E2B, Daytona, and Microsandbox provide execution only. Tuist provides shared
 caching. Bind each capability independently when a workspace uses both.
 
 ## Targets

@@ -6,7 +6,8 @@ use once_cas::{CacheProvider, TuistCacheConfig, TUIST_OAUTH_CLIENT_ID_ENV};
 use once_core::RemoteExecution;
 use once_core::Xdg;
 use once_frontend::{
-    InfrastructureConfig, InfrastructureProviderConfig, NamedCacheProviderConfig, DEFAULT_TUIST_URL,
+    ExecutionProviderConfig, InfrastructureConfig, InfrastructureProviderConfig,
+    NamedCacheProviderConfig, DEFAULT_TUIST_URL,
 };
 use serde::Deserialize;
 
@@ -66,13 +67,26 @@ fn resolve_execution_unresolved(
     let workspace_config =
         once_frontend::load_infrastructure_config(workspace).context("loading infrastructure")?;
     if let Some(provider) = explicit_provider.and_then(non_empty_str) {
+        let configured = match workspace_config.execution.clone() {
+            Some(binding) => Some(binding),
+            None => maybe_load_user_config(xdg)?
+                .and_then(|config| config.infrastructure)
+                .and_then(|infrastructure| infrastructure.execution)
+                .map(UserExecutionProviderBinding::into_execution),
+        };
+        let properties = configured
+            .as_ref()
+            .filter(|binding| binding.name == provider)
+            .map(|binding| binding.properties.clone())
+            .unwrap_or_default();
         return resolve_execution_binding(
             xdg,
             &workspace_config,
-            NamedCacheProviderConfig {
+            ExecutionProviderConfig {
                 name: provider.to_string(),
                 account: None,
                 project: None,
+                properties,
             },
         );
     }
@@ -86,7 +100,7 @@ fn resolve_execution_unresolved(
             .take()
             .and_then(|infrastructure| infrastructure.execution)
         {
-            return resolve_execution_user_binding(xdg, binding.into_named(), config);
+            return resolve_execution_user_binding(xdg, binding.into_execution(), config);
         }
     }
 
@@ -236,7 +250,8 @@ fn resolve_named_workspace_provider(
         InfrastructureProviderConfig::Local => Ok(ResolvedCacheProviderConfig::Local),
         InfrastructureProviderConfig::Microsandbox(_)
         | InfrastructureProviderConfig::E2b(_)
-        | InfrastructureProviderConfig::Daytona(_) => {
+        | InfrastructureProviderConfig::Daytona(_)
+        | InfrastructureProviderConfig::Docker(_) => {
             bail!("infrastructure `{name}` provides execution but not shared caching")
         }
         InfrastructureProviderConfig::Tuist(config) => {
@@ -254,7 +269,7 @@ fn resolve_named_workspace_provider(
 fn resolve_execution_binding(
     xdg: &Xdg,
     workspace_config: &InfrastructureConfig,
-    binding: NamedCacheProviderConfig,
+    binding: ExecutionProviderConfig,
 ) -> Result<RemoteExecution> {
     if let Some(provider) = workspace_config.providers.get(&binding.name) {
         return Ok(remote_from_workspace_provider(binding, provider.clone()));
@@ -277,7 +292,7 @@ fn resolve_execution_binding(
 
 fn resolve_execution_user_binding(
     xdg: &Xdg,
-    binding: NamedCacheProviderConfig,
+    binding: ExecutionProviderConfig,
     mut config: UserConfig,
 ) -> Result<RemoteExecution> {
     if let Some(provider) = take_named_user_provider(&mut config, &binding.name) {
@@ -294,17 +309,19 @@ fn resolve_execution_user_binding(
 }
 
 fn remote_from_workspace_provider(
-    binding: NamedCacheProviderConfig,
+    binding: ExecutionProviderConfig,
     provider: InfrastructureProviderConfig,
 ) -> RemoteExecution {
-    let NamedCacheProviderConfig {
+    let ExecutionProviderConfig {
         name,
         account: binding_account,
         project: binding_project,
+        properties,
     } = binding;
     match provider {
         InfrastructureProviderConfig::Local => RemoteExecution {
             provider: name,
+            properties,
             executor: Some("local".to_string()),
             environment: None,
             account: binding_account,
@@ -312,6 +329,7 @@ fn remote_from_workspace_provider(
         },
         InfrastructureProviderConfig::Microsandbox(config) => RemoteExecution {
             provider: name,
+            properties,
             executor: Some("microsandbox".to_string()),
             environment: Some(config.image),
             account: binding_account,
@@ -319,6 +337,7 @@ fn remote_from_workspace_provider(
         },
         InfrastructureProviderConfig::E2b(config) => RemoteExecution {
             provider: name,
+            properties,
             executor: Some("e2b".to_string()),
             environment: Some(config.template),
             account: binding_account,
@@ -326,13 +345,23 @@ fn remote_from_workspace_provider(
         },
         InfrastructureProviderConfig::Daytona(config) => RemoteExecution {
             provider: name,
+            properties,
             executor: Some("daytona".to_string()),
+            environment: Some(config.image),
+            account: binding_account,
+            project: binding_project,
+        },
+        InfrastructureProviderConfig::Docker(config) => RemoteExecution {
+            provider: name,
+            properties,
+            executor: Some("docker".to_string()),
             environment: Some(config.image),
             account: binding_account,
             project: binding_project,
         },
         InfrastructureProviderConfig::Tuist(config) => RemoteExecution {
             provider: name,
+            properties,
             executor: Some("tuist".to_string()),
             environment: None,
             account: binding_account.or(config.account),
@@ -342,19 +371,21 @@ fn remote_from_workspace_provider(
 }
 
 fn remote_from_user_provider(
-    binding: NamedCacheProviderConfig,
+    binding: ExecutionProviderConfig,
     provider: UserCacheProvider,
 ) -> RemoteExecution {
-    let NamedCacheProviderConfig {
+    let ExecutionProviderConfig {
         name,
         account: binding_account,
         project: binding_project,
+        properties,
     } = binding;
     match provider {
         UserCacheProvider::Tuist {
             account, project, ..
         } => RemoteExecution {
             provider: name,
+            properties,
             executor: Some("tuist".to_string()),
             environment: None,
             account: binding_account.or(account),
@@ -363,9 +394,10 @@ fn remote_from_user_provider(
     }
 }
 
-fn remote_from_binding(binding: NamedCacheProviderConfig) -> RemoteExecution {
+fn remote_from_binding(binding: ExecutionProviderConfig) -> RemoteExecution {
     RemoteExecution {
         provider: binding.name,
+        properties: binding.properties,
         executor: None,
         environment: None,
         account: binding.account,
@@ -374,7 +406,7 @@ fn remote_from_binding(binding: NamedCacheProviderConfig) -> RemoteExecution {
 }
 
 fn is_builtin_execution_provider(name: &str) -> bool {
-    matches!(name, "microsandbox" | "e2b" | "daytona")
+    matches!(name, "microsandbox" | "e2b" | "daytona" | "docker")
 }
 
 fn default_tuist_config(
@@ -411,7 +443,29 @@ struct UserConfig {
 #[serde(default, deny_unknown_fields)]
 struct UserInfrastructureConfig {
     cache: Option<UserCacheProviderBinding>,
-    execution: Option<UserCacheProviderBinding>,
+    execution: Option<UserExecutionProviderBinding>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UserExecutionProviderBinding {
+    #[serde(alias = "provider")]
+    name: String,
+    account: Option<String>,
+    project: Option<String>,
+    #[serde(default)]
+    properties: BTreeMap<String, serde_json::Value>,
+}
+
+impl UserExecutionProviderBinding {
+    fn into_execution(self) -> ExecutionProviderConfig {
+        ExecutionProviderConfig {
+            name: self.name,
+            account: self.account,
+            project: self.project,
+            properties: self.properties,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -421,16 +475,6 @@ struct UserCacheProviderBinding {
     name: String,
     account: Option<String>,
     project: Option<String>,
-}
-
-impl UserCacheProviderBinding {
-    fn into_named(self) -> NamedCacheProviderConfig {
-        NamedCacheProviderConfig {
-            name: self.name,
-            account: self.account,
-            project: self.project,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -473,7 +517,15 @@ fn maybe_load_user_config(xdg: &Xdg) -> Result<Option<UserConfig>> {
         .as_mut()
         .and_then(|infrastructure| infrastructure.execution.as_mut())
     {
-        normalize_binding(binding, &path)?;
+        let mut named = UserCacheProviderBinding {
+            name: binding.name.clone(),
+            account: binding.account.take(),
+            project: binding.project.take(),
+        };
+        normalize_binding(&mut named, &path)?;
+        binding.name = named.name;
+        binding.account = named.account;
+        binding.project = named.project;
     }
     Ok(Some(config))
 }
@@ -1000,6 +1052,7 @@ project = "default-app"
                 environment: None,
                 account: Some("acme".to_string()),
                 project: Some("remote-builds".to_string()),
+                properties: BTreeMap::new(),
             }
         );
     }
@@ -1012,6 +1065,67 @@ project = "default-app"
         let remote = resolve_execution(tmp.path(), &xdg, None).unwrap();
 
         assert_eq!(remote, RemoteExecution::provider("microsandbox"));
+    }
+
+    #[test]
+    fn execution_properties_follow_only_the_selected_workspace_provider() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        write_workspace(
+            tmp.path(),
+            r#"
+[infrastructure.execution]
+provider = "workers"
+properties = { program = "/worker/tool", version = 1 }
+[infrastructures.workers]
+kind = "local"
+[infrastructures.other]
+kind = "local"
+"#,
+        );
+        let configured = resolve_execution_unresolved(tmp.path(), &xdg, None).unwrap();
+        assert_eq!(configured.properties["version"], serde_json::json!(1));
+        assert_eq!(
+            configured.properties,
+            resolve_execution_unresolved(tmp.path(), &xdg, Some("workers"))
+                .unwrap()
+                .properties
+        );
+        assert!(
+            resolve_execution_unresolved(tmp.path(), &xdg, Some("other"))
+                .unwrap()
+                .properties
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn execution_properties_follow_only_the_selected_user_provider() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        write_user_config(
+            &xdg,
+            r#"
+[infrastructure.execution]
+provider = "e2b"
+properties = { program = "/worker/tool", version = 1 }
+"#,
+        );
+        let configured = resolve_execution_unresolved(tmp.path(), &xdg, None).unwrap();
+        assert_eq!(configured.properties["version"], serde_json::json!(1));
+        assert_eq!(
+            configured.properties,
+            resolve_execution_unresolved(tmp.path(), &xdg, Some("e2b"))
+                .unwrap()
+                .properties
+        );
+        assert!(
+            resolve_execution_unresolved(tmp.path(), &xdg, Some("daytona"))
+                .unwrap()
+                .properties
+                .is_empty()
+        );
+        assert!(resolve_config(tmp.path(), &xdg).is_ok());
     }
 
     #[test]
@@ -1037,6 +1151,7 @@ image = "node:22.18.0-alpine"
                 environment: Some("node:22.18.0-alpine".to_string()),
                 account: None,
                 project: None,
+                properties: BTreeMap::new(),
             }
         );
     }
@@ -1064,6 +1179,7 @@ template = "vitest-v1"
                 environment: Some("vitest-v1".to_string()),
                 account: None,
                 project: None,
+                properties: BTreeMap::new(),
             }
         );
     }
@@ -1091,7 +1207,77 @@ image = "node:22-bookworm"
                 environment: Some("node:22-bookworm".to_string()),
                 account: None,
                 project: None,
+                properties: BTreeMap::new(),
             }
+        );
+    }
+
+    #[test]
+    fn resolve_execution_uses_named_docker_image() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        write_workspace(
+            tmp.path(),
+            r#"
+[infrastructure.execution]
+provider = "container_tests"
+account = "acme"
+project = "tests"
+
+[infrastructures.container_tests]
+kind = "docker"
+image = "node:22-bookworm"
+"#,
+        );
+
+        let remote = resolve_execution(tmp.path(), &xdg, None).unwrap();
+        assert_eq!(
+            remote,
+            RemoteExecution {
+                provider: "container_tests".to_string(),
+                executor: Some("docker".to_string()),
+                environment: Some("node:22-bookworm".to_string()),
+                account: Some("acme".to_string()),
+                project: Some("tests".to_string()),
+                properties: BTreeMap::new(),
+            }
+        );
+        let explicit = resolve_execution(tmp.path(), &xdg, Some("container_tests")).unwrap();
+        assert_eq!(explicit.executor, remote.executor);
+        assert_eq!(explicit.environment, remote.environment);
+        assert_eq!(explicit.account, None);
+        assert_eq!(explicit.project, None);
+    }
+
+    #[test]
+    fn docker_provider_rejects_cache_and_auth_roles() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        write_workspace(
+            tmp.path(),
+            r#"
+[infrastructure.cache]
+provider = "container_tests"
+
+[infrastructures.container_tests]
+kind = "docker"
+image = "node:22-bookworm"
+"#,
+        );
+
+        let error = resolve_config_with_env(tmp.path(), &xdg, None).unwrap_err();
+        assert!(format!("{error:#}").contains("not a cache"));
+        let error = resolve_auth_provider(tmp.path(), &xdg, "container_tests").unwrap_err();
+        assert!(error.to_string().contains("not shared caching"));
+    }
+
+    #[test]
+    fn resolve_execution_supports_builtin_docker() {
+        let tmp = TempDir::new().unwrap();
+        let xdg = xdg_under(tmp.path());
+        assert_eq!(
+            resolve_execution(tmp.path(), &xdg, Some("docker")).unwrap(),
+            RemoteExecution::provider("docker")
         );
     }
 

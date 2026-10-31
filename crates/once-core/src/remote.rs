@@ -7,6 +7,7 @@ use crate::{ExecutionPermit, Executor, RemoteExecution, ResourceRequest, Result,
 
 mod archive;
 mod daytona;
+mod docker;
 mod e2b;
 mod http;
 mod lifecycle;
@@ -41,6 +42,13 @@ impl PreparedCommand<'_> {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+pub(crate) struct CommandFilesystemSetup<'a> {
+    pub clean_paths: &'a [WorkspacePath],
+    pub create_dirs: &'a [WorkspacePath],
+    pub post_setup_inputs: &'a [WorkspacePath],
+}
+
 pub(super) async fn phase_permit(
     lease: Option<&ExecutionPermit>,
     bytes: u64,
@@ -62,7 +70,15 @@ pub(crate) async fn execute_command(
     workspace_root: &Path,
     cache: &CacheProvider,
     stream_to_parent: bool,
+    setup: CommandFilesystemSetup<'_>,
 ) -> Result<ActionResult> {
+    if executor != Executor::Docker
+        && (!setup.clean_paths.is_empty()
+            || !setup.create_dirs.is_empty()
+            || !setup.post_setup_inputs.is_empty())
+    {
+        return Err(executor.unsupported("explicit command filesystem setup"));
+    }
     tracing::debug!(
         provider = %remote.provider,
         executor = executor.name(),
@@ -72,6 +88,17 @@ pub(crate) async fn execute_command(
         "dispatching remote command"
     );
     match executor {
+        Executor::Docker => {
+            Box::pin(docker::execute_command(
+                remote,
+                command,
+                workspace_root,
+                cache,
+                stream_to_parent,
+                setup,
+            ))
+            .await
+        }
         Executor::Microsandbox => {
             microsandbox::execute_command(remote, command, workspace_root, cache, stream_to_parent)
                 .await

@@ -15,6 +15,8 @@ def host_env(name):
     return ""
 def host_path_exists(path):
     return True
+def host_path_is_within(path, root):
+    return path == root or path.startswith(root + "/")
 def host_file_exists(path):
     return True
 def host_tree_sha256(path):
@@ -157,6 +159,31 @@ result = repr([second["env"], first["identity"] != second["identity"], _apple_mo
 }
 
 #[test]
+fn sdk_bundle_identity_tracks_sibling_resources_without_hashing_partial_link_trees() {
+    let result = evaluate(
+        r#"
+def host_tree_sha256(path):
+    if path != "/sdk":
+        fail("SDK subtrees contain links to sibling resources: " + path)
+    return "first-bundle"
+first = _resolve_swiftc("ios", "device", "")
+def host_tree_sha256(path):
+    if path != "/sdk":
+        fail("SDK subtrees contain links to sibling resources: " + path)
+    return "changed-sibling-framework"
+second = _resolve_swiftc("ios", "device", "")
+result = repr([first["identity"] != second["identity"], _resolve_actool("")])
+"#,
+    )
+    .unwrap();
+    assert!(result.starts_with("[True,"), "{result}");
+    assert!(
+        result.contains("iPhoneOS.platform/Developer/usr/bin/actool"),
+        "{result}"
+    );
+}
+
+#[test]
 fn missing_sdk_reports_installation_and_repair_commands() {
     let error = evaluate(
         r#"
@@ -268,6 +295,13 @@ result = _apple_application_impl(ctx)
         .argv
         .iter()
         .any(|arg| arg == "arm64-apple-ios17.0"));
+    assert!(application.argv.windows(4).any(|args| args
+        == [
+            "-Xclang-linker",
+            "-resource-dir",
+            "-Xclang-linker",
+            "/sdk/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/clang",
+        ]));
     assert!(application.argv.iter().any(|arg| arg.ends_with("Core.a")));
     let sign = action_by_identifier(&store, "apple_application_codesign_Hello");
     assert_eq!(sign.argv[0], "/host/bin/rcodesign");
@@ -308,6 +342,142 @@ fn macos_only_workflows_fail_with_focused_messages() {
         ),
     ] {
         let error = evaluate(&format!("result = repr({call})")).unwrap_err();
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+const WORKER_TOOLCHAIN: &str = r#"
+worker = {
+    "schema_version": 1,
+    "environment": "immutable-image-a",
+    "os": "linux",
+    "arch": "arm64",
+    "bin": "/worker/bin",
+    "developer_dir": "/worker/sdk/Developer",
+    "tools": "/worker/sdk/toolset/bin",
+    "env": {"LD_LIBRARY_PATH": "/worker/compat"},
+    "programs": {"rcodesign": "/worker/bin/rcodesign"},
+    "sdks": {"iphonesimulator": {
+        "sdk_path": "/worker/sdk/Simulator.sdk",
+        "resource_dir": "/worker/sdk/swift",
+    }},
+}
+execution = {"provider": "workers", "executor": "docker", "environment": "immutable-image-a", "properties": {"apple": worker}}
+def execution_context():
+    return execution
+def host_os():
+    return "macos"
+def host_arch():
+    return "x86_64"
+def host_which(name):
+    fail("must not discover worker tools on the coordinator: " + name)
+def host_which_optional(name):
+    fail("must not discover optional worker tools on the coordinator: " + name)
+def host_command(argv, env = None, merge_stderr = None):
+    fail("must not execute worker commands on the coordinator: " + str(argv))
+def host_env(name):
+    fail("must not inherit coordinator environment: " + name)
+def host_file_sha256(path):
+    fail("must not hash worker files on the coordinator: " + path)
+def host_tree_sha256(path):
+    fail("must not hash worker trees on the coordinator: " + path)
+def host_file_exists(path):
+    fail("must not inspect worker files on the coordinator: " + path)
+def host_path_exists(path):
+    fail("must not inspect worker paths on the coordinator: " + path)
+"#;
+
+#[test]
+fn mac_coordinator_declares_linux_actions_with_dependency_inputs_without_host_probes() {
+    let workspace = TempDir::new().unwrap();
+    let source = format!(
+        r#"{}
+{WORKER_TOOLCHAIN}
+def glob(patterns):
+    return ["Sources/Value.swift", "Sources/Value.c"]
+ctx = {{"label": {{"package": "test", "name": "Core", "id": "test/Core"}}, "attr": {{"platform": "ios", "sdk_variant": "simulator", "minimum_os": "17.0"}}, "srcs": ["Sources/*.swift"], "deps": [], "build_dir": ".once/out/test", "scratch_dir": ".once/tmp/test", "capability": "build"}}
+core = _apple_library_impl(ctx)
+ctx["label"] = {{"package": "test", "name": "Hello", "id": "test/Hello"}}
+ctx["attr"]["bundle_id"] = "dev.once.hello"
+ctx["deps"] = [core]
+result = _apple_application_impl(ctx)
+"#,
+        apple_prelude_source(),
+    );
+    let (store, result) = with_active_store(store_for(workspace.path(), "test"), || {
+        Module::with_temp_heap(|module| {
+            let ast = AstModule::parse("worker.star", source, &Dialect::Standard)
+                .map_err(|error| anyhow::anyhow!("{error}"))?;
+            Evaluator::new(&module)
+                .eval_module(ast, &globals_for_prelude())
+                .map_err(|error| anyhow::anyhow!("{error}"))?;
+            anyhow::Ok(())
+        })
+    });
+    result.unwrap();
+    let clang = action_by_identifier(&store, "clang_compile_Core_Sources_Value.c");
+    assert_eq!(clang.argv[0], "/worker/bin/clang");
+    assert!(clang.inputs.iter().any(|path| path == "Sources/Value.c"));
+    assert!(clang
+        .argv
+        .iter()
+        .any(|arg| arg == "arm64-apple-ios17.0-simulator"));
+    let application = action_by_identifier(&store, "apple_application_compile_Hello");
+    assert_eq!(application.argv[0], "/worker/bin/swiftc");
+    assert!(application
+        .inputs
+        .iter()
+        .any(|path| path.ends_with("Core.a")));
+    assert!(application
+        .inputs
+        .iter()
+        .any(|path| path.ends_with("Core.swiftmodule")));
+    assert_eq!(
+        application.env.get("LD_LIBRARY_PATH").unwrap(),
+        "/worker/compat"
+    );
+    assert!(application
+        .argv
+        .iter()
+        .any(|arg| arg == "arm64-apple-ios17.0-simulator"));
+    assert_eq!(
+        action_by_identifier(&store, "apple_application_codesign_Hello").argv[0],
+        "/worker/bin/rcodesign"
+    );
+}
+
+#[test]
+fn worker_selection_is_bound_to_the_image_and_rejects_unsupported_features() {
+    let evaluate = |source: &str| {
+        eval_prelude_source_to_repr(format!(
+            "{}\n{WORKER_TOOLCHAIN}\n{source}",
+            apple_prelude_source()
+        ))
+    };
+    assert_eq!(
+        evaluate("execution = {'provider': 'local'}\nresult = repr(_apple_execution_toolchain())")
+            .unwrap(),
+        "None",
+    );
+    let result = evaluate(
+        r#"
+first = _resolve_swiftc("ios", "simulator", "")["identity"]
+worker["env"]["LD_LIBRARY_PATH"] = "/worker/changed"
+second = _resolve_swiftc("ios", "simulator", "")["identity"]
+result = repr(first != second)
+"#,
+    )
+    .unwrap();
+    assert_eq!(result, "True");
+    for (source, expected) in [
+        ("execution['environment'] = 'other-image'\nresult = repr(_resolve_swiftc('ios', 'simulator', ''))", "must match the selected execution environment"),
+        ("execution['properties'] = {}\nresult = repr(_resolve_swiftc('ios', 'simulator', ''))", "image-bound Linux toolchain description"),
+        ("result = repr(_resolve_swiftc('ios', 'device', ''))", "does not provide iphoneos"),
+        ("result = repr(_resolve_swiftc('ios', 'simulator', '/Applications/Xcode.app/Contents/Developer'))", "must match the selected Apple worker"),
+        ("result = repr(_resolve_attrs({}, {'explicit_modules': True}, 'Core', []))", "set explicit_modules = false"),
+        ("result = repr(_swift_macro_impl({'label': {'id': 'Macros'}}))", "binary_swift_plugins"),
+    ] {
+        let error = evaluate(source).unwrap_err();
         assert!(error.contains(expected), "{error}");
     }
 }

@@ -15,7 +15,7 @@ use once_core::{
     ArchiveEntry, ArchiveEntryKind, ArchiveFormat, CopyPathMode, EvidenceCacheState,
     EvidenceRecord, EvidenceSubject, FilesystemOperation, InputDigestBuilder,
     InputFingerprintComponent, InputFingerprintManifest, NetworkPolicy, OutputSymlinkMode,
-    PreparePathMode, ResourcePool, ResourceRequest, SandboxMode, WorkspacePath,
+    PreparePathMode, ResourcePool, SandboxMode, WorkspacePath,
 };
 use once_frontend::analysis::{
     AnalysisResult, DeclaredAction, DeclaredActionOperation, DeclaredArchiveEntryKind,
@@ -25,6 +25,9 @@ use once_frontend::analysis::{
 use once_frontend::GraphTarget;
 use serde::Serialize;
 
+#[cfg(test)]
+use once_core::ResourceRequest;
+
 use super::output_state;
 use super::source_digest_cache::SourceDigestCache;
 use super::{AvailableInput, BuildOutcome, PerActionOutcome};
@@ -32,6 +35,7 @@ use super::{AvailableInput, BuildOutcome, PerActionOutcome};
 pub(super) mod legacy_outputs;
 mod pending_outputs;
 mod preparation;
+mod provider;
 mod recovery;
 mod runner;
 
@@ -41,7 +45,6 @@ mod uncached;
 mod uncached_process;
 mod worker_lease;
 
-use uncached::run_uncached_action_admitted;
 #[cfg(test)]
 use uncached::{capture_uncached_outputs, capture_uncached_outputs_admitted, run_uncached_action};
 
@@ -905,7 +908,31 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
     .with_context(|| format!("building action {index} for {target_id} ({identifier_for_error})"))?;
     drop(preparation);
     let prepare_ms = i64::try_from(prepare_started.elapsed().as_millis()).unwrap_or(i64::MAX);
-    let action = prepared.action;
+    let mut action = prepared.action;
+    if let Action::RunCommand { remote, inputs, .. } = &mut action {
+        if let Some(execution) = producers.execution() {
+            *remote = Some(Box::new(execution.clone()));
+            if once_core::Executor::from_binding(execution)? != once_core::Executor::Local {
+                anyhow::ensure!(
+                    !declared.inherit_parent_env,
+                    "provider execution requires an explicitly declared environment"
+                );
+                *inputs = declared_action_inputs(&declared, false)?;
+                if declared.depends_on_prior_actions {
+                    inputs.extend(
+                        available_inputs
+                            .iter()
+                            .filter(|(_, input)| input.same_target)
+                            .map(|(path, _)| workspace_path(path, "prior action output"))
+                            .collect::<Result<Vec<_>>>()?,
+                    );
+                    inputs.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+                    inputs.dedup();
+                }
+            }
+        }
+    }
+    once_core::Executor::resolve(&action)?;
     let context = DeclaredActionContext {
         workspace,
         cache,
@@ -1183,6 +1210,7 @@ async fn resolve_cacheable_declared_action(
         context.workspace,
         action_digest,
         context.producers.executors(context.resources)?,
+        once_core::Executor::resolve(action)?,
         action.resource_request().clone(),
         |contended, lease| async move {
             // Another process held the action, so it may have produced the
@@ -1313,26 +1341,35 @@ async fn execute_declared_cache_miss(
     declared: &DeclaredAction,
     lease: once_core::ExecutionPermit,
 ) -> Result<once_core::Outcome> {
-    preparation::setup(context, declared, &lease).await?;
-    let result = match once_core::run_uncached_admitted(
+    preparation::setup(context, action, declared, &lease).await?;
+    let local = once_core::Executor::resolve(action)? == once_core::Executor::Local;
+    let result = provider::execute(
         action,
         context.workspace,
         context.cache,
-        false,
-        context.output_observer,
-        lease,
+        if local { context.output_observer } else { None },
+        lease.clone(),
+        &declared.clean_paths,
+        &declared.create_dirs,
+        &declared.arg_files,
     )
     .await
-    {
-        Ok(result) => Ok(result),
-        Err(error) => Err(render_execution_error(error, context.cache).await),
-    }
     .with_context(|| {
         format!(
             "executing action {} for {} ({})",
             context.index, context.target_id, context.identifier
         )
     })?;
+    if !local {
+        provider::replay_output(
+            &result,
+            context.cache,
+            context.output_observer,
+            context.workspace,
+            &lease,
+        )
+        .await?;
+    }
     let action_digest = action.digest();
     if result.exit_code == 0 {
         context
@@ -1441,28 +1478,21 @@ async fn run_uncacheable_declared_action(
     let lease = context
         .producers
         .executors(context.resources)?
-        .acquire(once_core::Executor::Local, action.resource_request())
+        .acquire(
+            once_core::Executor::resolve(&action)?,
+            action.resource_request(),
+        )
         .await;
     context.claim_worker().await;
-    preparation::setup(&context, declared, &lease).await?;
-    let result = once_core::with_execution_permit(
-        lease.clone(),
-        Box::pin(run_uncached_action_admitted(
-            &action,
-            context.workspace,
-            context.cache,
-            declared.inherit_parent_env,
-            Some(lease),
-            Some((context.producers, context.identifier)),
-        )),
-    )
-    .await
-    .with_context(|| {
-        format!(
-            "executing action {} for {} ({})",
-            context.index, context.target_id, context.identifier
-        )
-    })?;
+    preparation::setup(&context, &action, declared, &lease).await?;
+    let result = uncached::execute_declared(&context, &action, declared, &lease)
+        .await
+        .with_context(|| {
+            format!(
+                "executing action {} for {} ({})",
+                context.index, context.target_id, context.identifier
+            )
+        })?;
     let exit_code = result.exit_code;
     if exit_code != 0 {
         record_declared_action_evidence(
@@ -1835,7 +1865,7 @@ fn prepare_declared_action_with_inputs(
         source_digest_cache,
     )?;
     let input_digest = input_fingerprint.input_digest;
-    let inputs = declared_action_inputs(declared)?;
+    let inputs = declared_action_inputs(declared, true)?;
     let outputs = declared
         .outputs
         .iter()
@@ -1872,7 +1902,7 @@ fn prepare_declared_action_with_inputs(
             stdout_path,
             stderr_path,
             output_symlink_mode: OutputSymlinkMode::default(),
-            resources: ResourceRequest::default(),
+            resources: declared.resources.clone(),
             sandbox: effective_sandbox(declared.sandbox.as_deref(), sandbox_override)?,
             network: effective_network(declared.network.as_deref())?,
             timeout_ms: None,
@@ -2133,7 +2163,10 @@ fn missing_declared_inputs(workspace: &Path, declared: &DeclaredAction) -> Vec<S
         .collect()
 }
 
-fn declared_action_inputs(declared: &DeclaredAction) -> Result<Vec<WorkspacePath>> {
+fn declared_action_inputs(
+    declared: &DeclaredAction,
+    include_setup: bool,
+) -> Result<Vec<WorkspacePath>> {
     let mut inputs = declared
         .inputs
         .iter()
@@ -2143,10 +2176,9 @@ fn declared_action_inputs(declared: &DeclaredAction) -> Result<Vec<WorkspacePath
         inputs.push(workspace_path(&arg_file.path, "run_action arg file")?);
     }
     for path in &declared.create_dirs {
-        // Action-private directories must exist inside isolated and remote
-        // execution roots, while output directories must not be staged back
-        // as inputs.
-        if path == ".once/tmp" || path.starts_with(".once/tmp/") {
+        // Native input sandboxes stage private directories. Providers receive
+        // setup separately instead of inheriting mutable scratch contents.
+        if include_setup && (path == ".once/tmp" || path.starts_with(".once/tmp/")) {
             inputs.push(workspace_path(path, "run_action create_dirs entry")?);
         }
     }

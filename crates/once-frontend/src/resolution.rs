@@ -124,6 +124,7 @@ pub(crate) fn expand_workspace_targets(
     root: &Path,
     targets: Vec<Target>,
     schemas: &[TargetKindSchema],
+    options: &crate::analysis::AnalysisOptions,
 ) -> Result<ExpandedWorkspaceTargets> {
     if targets.len() > MAX_EXPANDED_TARGETS {
         return Err(resolution_error(
@@ -145,8 +146,11 @@ pub(crate) fn expand_workspace_targets(
         });
     }
     let mut record = ResolutionRecord::default();
-    let mut expanded =
-        AnalysisEngine::resolve_workspace_targets(root, &mut record.observations, |resolve| {
+    let mut expanded = AnalysisEngine::resolve_workspace_targets(
+        root,
+        options,
+        &mut record.observations,
+        |resolve| {
             Ok(expand_resolver_targets(
                 root,
                 targets,
@@ -154,11 +158,12 @@ pub(crate) fn expand_workspace_targets(
                 resolve,
                 &mut record.resolvers,
             ))
-        })
-        .map_err(|source| Error::Eval {
-            path: crate::modules::COMBINED_MODULE_PATH.to_string(),
-            message: source.to_string(),
-        })??;
+        },
+    )
+    .map_err(|source| Error::Eval {
+        path: crate::modules::COMBINED_MODULE_PATH.to_string(),
+        message: source.to_string(),
+    })??;
     expanded.record.resolvers = std::mem::take(&mut record.resolvers);
     expanded.record.observations = std::mem::take(&mut record.observations);
     Ok(expanded)
@@ -610,6 +615,62 @@ mod tests {
             std::fs::create_dir_all(parent).unwrap();
         }
         std::fs::write(path, contents).unwrap();
+    }
+
+    #[test]
+    fn selected_execution_context_reaches_resolver_callbacks() {
+        let temp = tempfile::tempdir().unwrap();
+        write(
+            temp.path().join("once.toml"),
+            r#"
+[modules]
+paths = ["defs.star"]
+[[target]]
+name = "owner"
+kind = "resolved_set"
+"#,
+        );
+        write(
+            temp.path().join("defs.star"),
+            r#"
+def _resolve(ctx):
+    if ctx["execution"] != execution_context():
+        fail("resolver context differs")
+    binding = execution_context()
+    return {"attrs": {"selected": binding["properties"]["program"] if binding else "local"}}
+resolved_set = target_kind(attrs = [attr("selected", "string")], resolver = _resolve)
+"#,
+        );
+        let mut binding = once_core::RemoteExecution::provider("workers");
+        binding
+            .properties
+            .insert("program".into(), serde_json::json!("/worker/tool"));
+        for execution in [None, Some(binding)] {
+            let expected = if execution.is_some() {
+                "/worker/tool"
+            } else {
+                "local"
+            };
+            let engine = AnalysisEngine::for_workspace_with_options(
+                temp.path(),
+                crate::analysis::AnalysisOptions {
+                    execution,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let direct = engine.load_graph_workspace(temp.path()).unwrap();
+            let targets = crate::load_workspace(temp.path()).unwrap();
+            let (recorded, _) = engine
+                .load_graph_workspace_from_targets_recorded(temp.path(), targets)
+                .unwrap();
+            for graph in [direct, recorded] {
+                assert_eq!(
+                    graph[0].attrs["selected"],
+                    AttrValue::String(expected.into())
+                );
+            }
+        }
     }
 
     #[test]

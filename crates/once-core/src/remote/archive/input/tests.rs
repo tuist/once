@@ -1,6 +1,24 @@
 use super::*;
 use std::path::PathBuf;
 
+#[cfg(unix)]
+#[tokio::test]
+async fn rejects_an_input_beneath_an_ancestor_symlink() {
+    let workspace = tempfile::tempdir().unwrap();
+    let sibling = tempfile::tempdir().unwrap();
+    std::fs::write(sibling.path().join("secret"), b"coordinator only").unwrap();
+    std::os::unix::fs::symlink(sibling.path(), workspace.path().join("alias")).unwrap();
+    assert!(create_input_archive_limited(
+        workspace.path(),
+        &[WorkspacePath::try_from("alias/secret").unwrap()],
+        "test",
+        RemoteIoLimits::default(),
+        None,
+    )
+    .await
+    .is_err());
+}
+
 #[tokio::test]
 async fn input_staging_rejects_byte_and_metadata_growth() {
     let workspace = tempfile::tempdir().unwrap();

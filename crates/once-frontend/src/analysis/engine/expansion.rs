@@ -18,12 +18,13 @@ impl AnalysisEngine {
         else {
             anyhow::bail!("expected an action expansion");
         };
-        let store = AnalysisStore::with_host_cache(
+        let mut store = AnalysisStore::with_host_cache(
             workspace.to_path_buf(),
             target.label.package.clone(),
             build_dir.clone(),
             self.host_cache.clone(),
         );
+        store.execution.clone_from(&self.options.execution);
         let (mut store, result) = with_active_store(store, || {
             Module::with_temp_heap(|module| {
                 let callback = self
@@ -38,6 +39,7 @@ impl AnalysisEngine {
                     "outputs": action.outputs,
                     "build_dir": build_dir,
                     "label": {"id": target.label.id, "package": target.label.package},
+                    "execution": self.options.execution,
                 });
                 let context = json_to_value(&eval, &context);
                 let returned = eval

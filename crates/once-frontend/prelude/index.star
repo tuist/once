@@ -4,6 +4,7 @@ PRELUDE_SOURCES = [
     "artifact.star",
     "lint.star",
     "apple_modules.star",
+    "apple_execution.star",
     "apple_linux.star",
     "apple_artifacts.star",
     "apple_build_tools.star",
@@ -36,7 +37,7 @@ PRELUDE_SOURCES = [
 PRELUDE_DEPENDENCIES = {
     "dockerfile.star": ["dockerfile_parser.star", "dockerfile_actions.star", "lint.star"],
     "oci_registry.star": ["oci.star"],
-    "apple.star": ["apple_modules.star", "apple_linux.star", "apple_artifacts.star", "apple_build_tools.star"],
+    "apple.star": ["apple_modules.star", "apple_execution.star", "apple_linux.star", "apple_artifacts.star", "apple_build_tools.star"],
     "android.star": ["jvm_test_runner.star"],
     "kotlin.star": ["jvm_test_runner.star"],
     "xcode.star": ["apple.star", "archive.star"],

@@ -341,11 +341,13 @@ pub fn load_graph_workspace_with_configuration(
 pub(crate) fn load_graph_workspace_with_compiled_schemas(
     root: &Path,
     compiled_schemas: &[TargetKindSchema],
+    options: &crate::analysis::AnalysisOptions,
 ) -> Result<Vec<GraphTarget>> {
     load_graph_workspace_with_compiled_schemas_and_targets(
         root,
         compiled_schemas,
         load_workspace(root)?,
+        options,
     )
 }
 
@@ -353,12 +355,14 @@ pub(crate) fn load_graph_workspace_with_compiled_schemas_and_targets(
     root: &Path,
     compiled_schemas: &[TargetKindSchema],
     targets: Vec<Target>,
+    options: &crate::analysis::AnalysisOptions,
 ) -> Result<Vec<GraphTarget>> {
     Ok(
         load_graph_workspace_with_compiled_schemas_and_targets_recorded(
             root,
             compiled_schemas,
             targets,
+            options,
         )?
         .0,
     )
@@ -368,9 +372,10 @@ pub(crate) fn load_graph_workspace_with_compiled_schemas_and_targets_recorded(
     root: &Path,
     compiled_schemas: &[TargetKindSchema],
     targets: Vec<Target>,
+    options: &crate::analysis::AnalysisOptions,
 ) -> Result<(Vec<GraphTarget>, crate::resolution::ResolutionRecord)> {
     let schemas = target_kind_schemas_for_workspace_from_compiled(root, compiled_schemas)?;
-    load_graph_workspace_recorded(root, targets, &schemas)
+    load_graph_workspace_recorded(root, targets, &schemas, options)
 }
 
 pub(crate) fn load_graph_workspace_with_targets_and_schemas(
@@ -378,7 +383,13 @@ pub(crate) fn load_graph_workspace_with_targets_and_schemas(
     targets: Vec<Target>,
     schemas: &[TargetKindSchema],
 ) -> Result<Vec<GraphTarget>> {
-    Ok(load_graph_workspace_recorded(root, targets, schemas)?.0)
+    Ok(load_graph_workspace_recorded(
+        root,
+        targets,
+        schemas,
+        &crate::analysis::AnalysisOptions::default(),
+    )?
+    .0)
 }
 
 /// Load the graph and report what deriving it read, so a caller that can tell
@@ -387,8 +398,10 @@ pub(crate) fn load_graph_workspace_recorded(
     root: &Path,
     targets: Vec<Target>,
     schemas: &[TargetKindSchema],
+    options: &crate::analysis::AnalysisOptions,
 ) -> Result<(Vec<GraphTarget>, crate::resolution::ResolutionRecord)> {
-    let mut expanded = crate::resolution::expand_workspace_targets(root, targets, schemas)?;
+    let mut expanded =
+        crate::resolution::expand_workspace_targets(root, targets, schemas, options)?;
     let record = std::mem::take(&mut expanded.record);
     let mut graph = graph_from_owned_targets_with_schemas(expanded.targets, schemas);
     for target in &mut graph {

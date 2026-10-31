@@ -177,7 +177,7 @@ def _xctoolchain_bin(xcode_developer_dir, name):
 # `xcrun --find` / `--show-sdk-path` for discovery but the cached
 # action argv contains only the resolved tool path.
 def _resolve_swiftc(platform, sdk_variant, xcode_developer_dir):
-    if host_os() == "linux":
+    if _apple_execution_os() == "linux":
         return _apple_linux_swiftc(platform, sdk_variant, xcode_developer_dir)
     sdk = _apple_sdk_name(platform, sdk_variant)
     env = _developer_env(xcode_developer_dir)
@@ -221,7 +221,7 @@ def _filter_assembly_sources(paths):
     return _filter_by_extensions(paths, [".s", ".S"])
 
 def _resolve_clang(platform, sdk_variant, xcode_developer_dir):
-    if host_os() == "linux":
+    if _apple_execution_os() == "linux":
         return _apple_linux_clang(platform, sdk_variant, xcode_developer_dir)
     sdk = _apple_sdk_name(platform, sdk_variant)
     env = _developer_env(xcode_developer_dir)
@@ -247,7 +247,7 @@ def _resolve_clang(platform, sdk_variant, xcode_developer_dir):
     }
 
 def _resolve_libtool(platform, sdk_variant, xcode_developer_dir):
-    if host_os() == "linux":
+    if _apple_execution_os() == "linux":
         return _apple_linux_tool("libtool", platform, sdk_variant, xcode_developer_dir)
     sdk = _apple_sdk_name(platform, sdk_variant)
     env = _developer_env(xcode_developer_dir)
@@ -265,7 +265,7 @@ def _resolve_libtool(platform, sdk_variant, xcode_developer_dir):
     }
 
 def _resolve_lipo(platform, sdk_variant, xcode_developer_dir):
-    if host_os() == "linux":
+    if _apple_execution_os() == "linux":
         return _apple_linux_tool("lipo", platform, sdk_variant, xcode_developer_dir)
     sdk = _apple_sdk_name(platform, sdk_variant)
     env = _developer_env(xcode_developer_dir)
@@ -283,6 +283,9 @@ def _resolve_lipo(platform, sdk_variant, xcode_developer_dir):
     }
 
 def _resolve_codesign(xcode_developer_dir):
+    worker = _apple_execution_toolchain()
+    if worker:
+        return {"codesign_path": _apple_worker_program("rcodesign"), "backend": "rcodesign", "identity": _apple_worker_identity(), "env": dict(worker.get("env") or {}, PATH = worker["tools"] + ":" + worker["bin"] + ":/usr/bin:/bin")}
     if host_os() == "linux":
         path = host_which("rcodesign")
         return {
@@ -305,6 +308,8 @@ def _resolve_codesign(xcode_developer_dir):
     }
 
 def _resolve_derq(xcode_developer_dir):
+    if _apple_execution_toolchain():
+        fail("DER entitlement processing is not supported by the Linux execution toolchain; use ad-hoc signing without DER entitlements")
     env = _developer_env(xcode_developer_dir)
     xcrun = host_which("xcrun")
     path = host_command([xcrun, "--find", "derq"], env = env).strip()
@@ -315,7 +320,7 @@ def _resolve_derq(xcode_developer_dir):
     }
 
 def _resolve_actool(xcode_developer_dir):
-    if host_os() == "linux":
+    if _apple_execution_os() == "linux":
         return _apple_linux_resource_tool("actool", xcode_developer_dir)
     env = _developer_env(xcode_developer_dir)
     xcrun = host_which("xcrun")
@@ -328,7 +333,7 @@ def _resolve_actool(xcode_developer_dir):
     }
 
 def _resolve_momc(xcode_developer_dir):
-    if host_os() == "linux":
+    if _apple_execution_os() == "linux":
         return _apple_linux_resource_tool("momc", xcode_developer_dir)
     env = _developer_env(xcode_developer_dir)
     xcrun = host_which("xcrun")
@@ -336,7 +341,7 @@ def _resolve_momc(xcode_developer_dir):
     return {"path": path, "env": env, "identity": "once.apple.momc.v1\x00" + path + "\x00" + (xcode_developer_dir or "")}
 
 def _resolve_ibtool(xcode_developer_dir):
-    if host_os() == "linux":
+    if _apple_execution_os() == "linux":
         return _apple_linux_resource_tool("ibtool", xcode_developer_dir)
     env = _developer_env(xcode_developer_dir)
     if xcode_developer_dir:
@@ -347,7 +352,7 @@ def _resolve_ibtool(xcode_developer_dir):
     return {"path": path, "env": env, "identity": "once.apple.ibtool.v1\x00" + path + "\x00" + version + "\x00" + (xcode_developer_dir or "")}
 
 def _resolve_intentbuilderc(xcode_developer_dir):
-    if host_os() == "linux":
+    if _apple_execution_os() == "linux":
         fail("Intent definition code generation requires macOS; provide generated sources when building on Linux")
     env = _developer_env(xcode_developer_dir)
     xcrun = host_which("xcrun")
@@ -355,14 +360,14 @@ def _resolve_intentbuilderc(xcode_developer_dir):
     return {"path": path, "env": env, "identity": "once.apple.intentbuilderc.v1\x00" + path + "\x00" + (xcode_developer_dir or "")}
 
 def _resolve_xcstringstool(xcode_developer_dir):
-    if host_os() == "linux":
+    if _apple_execution_os() == "linux":
         fail("String catalog compilation requires Xcode on macOS")
     env = _developer_env(xcode_developer_dir)
     path = host_command([host_which("xcrun"), "--find", "xcstringstool"], env = env).strip()
     return {"path": path, "env": env, "identity": "once.apple.xcstringstool.v1\x00" + path + "\x00" + host_file_sha256(path)}
 
 def _resolve_osacompile(xcode_developer_dir):
-    if host_os() == "linux":
+    if _apple_execution_os() == "linux":
         fail("AppleScript compilation requires macOS")
     env = _developer_env(xcode_developer_dir)
     path = host_command([host_which("xcrun"), "--find", "osacompile"], env = env).strip()
@@ -381,7 +386,7 @@ def _apple_actool_platform(platform, sdk_variant):
     return "iphoneos" if device else "iphonesimulator"
 
 def _resolve_apple_thinning_tools(xcode_developer_dir):
-    if host_os() == "linux":
+    if _apple_execution_os() == "linux":
         fail("Apple app thinning requires Xcode on macOS; build the application bundle on Linux without apple_thinned_package")
     env = _developer_env(xcode_developer_dir)
     xcrun = host_which("xcrun")
@@ -848,6 +853,18 @@ def _serialize_hmap(entries):
 def _write_hmap(path, entries):
     write_path(path, _serialize_hmap(entries))
 
+def _apple_header_search_flags(directories, hmaps, swift = False):
+    # Clang resolves relative hmap values through subsequent search directories.
+    # Defer an existing root entry too, since Clang deduplicates include paths.
+    paths = [directory for directory in directories if not hmaps or directory not in [".", "./"]]
+    paths.extend(hmaps)
+    if hmaps:
+        paths.append(".")
+    flags = []
+    for path in paths:
+        flags.extend(["-I", path])
+    return [token for flag in flags for token in ["-Xcc", flag]] if swift else flags
+
 # Normalise a dep reference written in `[target.attrs]` (`./AppCore`,
 # `../web/Common`, or a root-relative `apps/ios/AppCore`) to the
 # absolute target id Once stores in `dep["label_id"]`. This keeps
@@ -1242,7 +1259,9 @@ def _resolve_attrs(ctx, attrs, label_id, non_configurable):
         if key in non_configurable and _is_select_shape(value):
             fail(label_id + ": attribute `" + key + "` is not configurable but uses select()")
         out[key] = _resolve_select(value, tokens, label_id, key)
-    if host_os() == "linux":
+    if _apple_execution_toolchain() and out.get("explicit_modules"):
+        fail(label_id + ": explicit_modules is not yet supported with an image-bound execution toolchain; set explicit_modules = false")
+    if _apple_execution_os() == "linux":
         if out.get("mac_catalyst"):
             fail(label_id + ": Mac Catalyst is not supported by the Linux Darwin SDK; set mac_catalyst = false")
         if out.get("swift_testing") or out.get("xctest_support"):
@@ -2163,28 +2182,25 @@ def _apple_library_impl(ctx):
     # doesn't help with. The target's own map includes private headers
     # because its sources may use module-qualified imports for them, but
     # only exported headers flow into dependency providers. Each entry
-    # maps to the header's workspace-absolute path so compilation does
-    # not depend on broad directory inputs.
+    # is relative to the execution root so the map relocates with its inputs.
     hmap_path = ""
     if enable_modules and len(own_exported_headers) > 0:
         hmap_path = declare_output(module_name + ".hmap")
         hmap_entries = {}
         for header in own_exported_headers:
             base = _basename(header)
-            absolute_header = workspace_root() + "/" + header
-            hmap_entries[base] = absolute_header
-            hmap_entries[module_name + "/" + base] = absolute_header
+            hmap_entries[base] = header
+            hmap_entries[module_name + "/" + base] = header
         for header in own_private_header_files:
             base = _basename(header)
-            absolute_header = workspace_root() + "/" + header
             if base not in hmap_entries:
-                hmap_entries[base] = absolute_header
+                hmap_entries[base] = header
             module_key = module_name + "/" + base
             if module_key not in hmap_entries:
-                hmap_entries[module_key] = absolute_header
+                hmap_entries[module_key] = header
         if len(swift_srcs) > 0 and staged_headers_dir:
             generated_swift_header = (generated_framework_root + "/Headers/" + module_name + "-Swift.h") if generated_framework_module else (staged_headers_dir + "/" + module_name + "/" + module_name + "-Swift.h")
-            hmap_entries[module_name + "/" + module_name + "-Swift.h"] = workspace_root() + "/" + generated_swift_header
+            hmap_entries[module_name + "/" + module_name + "-Swift.h"] = generated_swift_header
         _write_hmap(hmap_path, hmap_entries)
 
     exported_deps_records = [deps[i] for i in exported_dep_indices]
@@ -2305,10 +2321,11 @@ def _apple_library_impl(ctx):
             # Header search paths flow through `-Xcc -I` so swiftc's
             # underlying Clang invocation (for bridging headers + ObjC
             # interop) can locate dep headers.
-            for hdir in compile_header_dirs:
-                swift_base_argv.extend(["-Xcc", "-I", "-Xcc", hdir])
-            for hdir in own_private_header_dirs:
-                swift_base_argv.extend(["-Xcc", "-I", "-Xcc", hdir])
+            swift_base_argv.extend(_apple_header_search_flags(
+                compile_header_dirs + own_private_header_dirs,
+                ([hmap_path] if hmap_path and not generated_framework_module else []) + dep_hmaps,
+                swift = True,
+            ))
             # Feed each dep's modulemap to swiftc's underlying Clang so
             # `import` of a clang-module dep resolves without manual
             # `-fmodule-map-file` from the user.
@@ -2318,13 +2335,6 @@ def _apple_library_impl(ctx):
                 swift_base_argv.extend(["-Xcc", "-fmodule-map-file=" + mmap])
             for mmap in dep_modulemaps:
                 swift_base_argv.extend(["-Xcc", "-fmodule-map-file=" + mmap])
-            # Header maps flow through Clang's `-I` search, so the bridging
-            # header (and any dep ObjC interop) can resolve `#include "Foo.h"`
-            # without enumerating include directories.
-            if hmap_path and not generated_framework_module:
-                swift_base_argv.extend(["-Xcc", "-I", "-Xcc", hmap_path])
-            for hmap in dep_hmaps:
-                swift_base_argv.extend(["-Xcc", "-I", "-Xcc", hmap])
             for overlay in compile_vfs_overlays:
                 swift_base_argv.extend(["-Xcc", "-ivfsoverlay", "-Xcc", overlay])
             if enable_modules:
@@ -2430,6 +2440,7 @@ def _apple_library_impl(ctx):
 
             if authored_modulemap:
                 _apple_swift_action(ctx, attrs, swiftc, ctx["deps"],
+                    resources = {"memory_bytes": 4 * 1024 * 1024 * 1024},
                     argv = swift_compile_argv,
                     inputs = swift_compile_inputs,
                     outputs = swift_compile_outputs,
@@ -2446,6 +2457,7 @@ def _apple_library_impl(ctx):
                 )
             else:
                 _apple_swift_action(ctx, attrs, swiftc, ctx["deps"],
+                    resources = {"memory_bytes": 4 * 1024 * 1024 * 1024},
                     argv = swift_compile_argv,
                     inputs = swift_compile_inputs,
                     outputs = swift_compile_outputs,
@@ -2463,6 +2475,7 @@ def _apple_library_impl(ctx):
             swift_libtool = _resolve_libtool(platform, sdk_variant, xcode_developer_dir)
             run_action(
                 display_name = "Archive Swift library · " + ctx["label"]["name"],
+                resources = {"memory_bytes": 512 * 1024 * 1024},
                 presentation = _apple_action_metadata(triple, platform, sdk_variant, arch),
                 source_files = _action_source_files(list(swift_objects)),
                 argv = list(swift_libtool["argv"]) + ["-static", "-o", swift_archive] + swift_objects,
@@ -2509,12 +2522,10 @@ def _apple_library_impl(ctx):
                 if not is_assembly:
                     for framework in sdk_frameworks:
                         argv.extend(["-framework", framework])
-                for hdir in compile_header_dirs:
-                    argv.extend(["-I", hdir])
-                for hdir in own_exported_header_dirs:
-                    argv.extend(["-I", hdir])
-                for hdir in own_private_header_dirs:
-                    argv.extend(["-I", hdir])
+                argv.extend(_apple_header_search_flags(
+                    compile_header_dirs + own_exported_header_dirs + own_private_header_dirs,
+                    ([hmap_path] if hmap_path else []) + dep_hmaps,
+                ))
                 for framework_dir in compile_framework_search_dirs:
                     argv.extend(["-F", framework_dir])
                 if modulemap_path and not is_assembly:
@@ -2524,10 +2535,6 @@ def _apple_library_impl(ctx):
                         argv.append("-fmodule-map-file=" + mmap)
                     for mmap in dep_modulemaps:
                         argv.append("-fmodule-map-file=" + mmap)
-                if hmap_path:
-                    argv.extend(["-I", hmap_path])
-                for hmap in dep_hmaps:
-                    argv.extend(["-I", hmap])
                 for overlay in compile_vfs_overlays:
                     argv.extend(["-ivfsoverlay", overlay])
                 if prefix_header and not is_assembly:
@@ -2585,6 +2592,7 @@ def _apple_library_impl(ctx):
                 if authored_modulemap:
                     run_action(
                         display_name = "Compile " + src + arch_suffix,
+                        resources = {"memory_bytes": 1024 * 1024 * 1024},
                         source_files = _action_source_files([src]),
                         argv = argv,
                         inputs = inputs,
@@ -2598,6 +2606,7 @@ def _apple_library_impl(ctx):
                 else:
                     run_action(
                         display_name = "Compile " + src + arch_suffix,
+                        resources = {"memory_bytes": 1024 * 1024 * 1024},
                         source_files = _action_source_files([src]),
                         argv = argv,
                         inputs = inputs,
@@ -2634,6 +2643,7 @@ def _apple_library_impl(ctx):
             libtool_inputs.extend(arch_clang_objects)
             run_action(
                 display_name = "Merge static libraries · " + ctx["label"]["name"],
+                resources = {"memory_bytes": 512 * 1024 * 1024},
                 presentation = _apple_action_metadata(triple, platform, sdk_variant, arch),
                 source_files = _action_source_files(libtool_inputs),
                 argv = libtool_argv,
@@ -2649,6 +2659,7 @@ def _apple_library_impl(ctx):
             libtool_argv.extend(arch_clang_objects)
             run_action(
                 display_name = "Archive static library · " + ctx["label"]["name"],
+                resources = {"memory_bytes": 512 * 1024 * 1024},
                 presentation = _apple_action_metadata(triple, platform, sdk_variant, arch),
                 source_files = _action_source_files(list(arch_clang_objects)),
                 argv = libtool_argv,
@@ -2680,6 +2691,7 @@ def _apple_library_impl(ctx):
         lipo_argv.extend(per_arch_archives)
         run_action(
             display_name = "Combine architecture slices · " + ctx["label"]["name"],
+            resources = {"memory_bytes": 512 * 1024 * 1024},
             presentation = _action_metadata(platforms = [_apple_action_metadata(_apple_triple(platform, target_sdk_version, sdk_variant, arch, mac_catalyst), platform, sdk_variant, arch)["platforms"][0] for arch in archs]),
             source_files = _action_source_files(list(per_arch_archives)),
             argv = lipo_argv,
@@ -2842,6 +2854,10 @@ def _apple_clang_profile_runtime(platform, sdk_variant, xcode_developer_dir):
         return ""
     device_suffix, simulator_suffix = suffixes
     suffix = simulator_suffix if sdk_variant == "simulator" and platform != "macos" else device_suffix
+    if _apple_execution_toolchain():
+        sdk = _apple_worker_sdk(platform, sdk_variant, xcode_developer_dir)
+        path = (sdk.get("profile_runtimes") or {}).get(suffix)
+        return _apple_worker_path(path, "profile_runtimes." + suffix) if path else ""
     if host_os() == "linux":
         sdk = _apple_linux_sdk(platform, sdk_variant, xcode_developer_dir)
         path = sdk["resource_dir"] + "/clang/lib/darwin/libclang_rt.profile_" + suffix + ".a"
@@ -2903,7 +2919,7 @@ def _apple_xcframework_import_impl(ctx):
     selected = None
     wanted_platform = _apple_xcframework_platform(platform)
     wanted_variant = "simulator" if sdk_variant == "simulator" and wanted_platform != "macos" else ""
-    wanted_arch = attrs.get("arch") or host_arch()
+    wanted_arch = attrs.get("arch") or _apple_default_arch(platform, sdk_variant)
     for library in data.get("AvailableLibraries") or []:
         if library.get("SupportedPlatform") != wanted_platform:
             continue
@@ -2998,7 +3014,7 @@ def _apple_xcframework_import_impl(ctx):
     }
 
 def _swift_macro_impl(ctx):
-    if host_os() == "linux":
+    if _apple_execution_os() == "linux":
         fail(ctx["label"]["id"] + ": swift_macro currently requires macOS; provide a Linux compiler plugin through binary_swift_plugins instead")
     attrs = _resolve_attrs(ctx, ctx["attr"], ctx["label"]["id"], ["module_name"])
     minimum_os = attrs.get("minimum_os") or "13.0"
@@ -3048,12 +3064,9 @@ def _swift_macro_impl(ctx):
     compile_argv = []
     for d in dep_swiftmodule_dirs:
         compile_argv.extend(["-I", d])
-    for hdir in dep_header_dirs:
-        compile_argv.extend(["-Xcc", "-I", "-Xcc", hdir])
+    compile_argv.extend(_apple_header_search_flags(dep_header_dirs, dep_hmaps, swift = True))
     for modulemap in dep_modulemaps:
         compile_argv.extend(["-Xcc", "-fmodule-map-file=" + modulemap])
-    for hmap in dep_hmaps:
-        compile_argv.extend(["-Xcc", "-I", "-Xcc", hmap])
     for overlay in dep_vfs_overlays:
         compile_argv.extend(["-Xcc", "-ivfsoverlay", "-Xcc", overlay])
     for framework_dir in dep_framework_search_dirs:
@@ -3122,6 +3135,7 @@ def _swift_macro_impl(ctx):
         argv = swift_argv,
         inputs = swift_inputs,
         outputs = [plugin_executable, plugin_swiftmodule, plugin_swiftdoc] + plugin_module_sidecars,
+        resources = {"memory_bytes": 4 * 1024 * 1024 * 1024},
         env = swiftc["env"],
         toolchain_identity = swiftc["identity"],
         identifier = "swift_macro_compile_" + module_name,
@@ -3149,6 +3163,7 @@ def _swift_macro_impl(ctx):
         argv = archive_argv,
         inputs = swift_inputs,
         outputs = [plugin_archive],
+        resources = {"memory_bytes": 4 * 1024 * 1024 * 1024},
         env = swiftc["env"],
         toolchain_identity = swiftc["identity"],
         identifier = "swift_macro_archive_" + module_name,
@@ -3991,6 +4006,7 @@ def _apple_mixed_framework_impl(ctx):
             link_inputs.append(path)
     run_action(
         display_name = "Link framework · " + ctx["label"]["name"],
+        resources = {"memory_bytes": 2 * 1024 * 1024 * 1024},
         presentation = _apple_action_metadata(triple, platform, sdk_variant, _apple_default_arch(platform, sdk_variant)),
         source_files = _action_source_files(link_inputs),
         argv = link_argv,
@@ -4278,14 +4294,9 @@ def _apple_framework_impl(ctx):
         swift_argv.append("-enable-testing")
     for d in compile_swiftmodule_dirs:
         swift_argv.extend(["-I", d])
-    for hdir in compile_header_dirs:
-        swift_argv.extend(["-Xcc", "-I", "-Xcc", hdir])
-    for hdir in private_header_dirs:
-        swift_argv.extend(["-Xcc", "-I", "-Xcc", hdir])
+    swift_argv.extend(_apple_header_search_flags(compile_header_dirs + private_header_dirs, dep_hmaps, swift = True))
     for mmap in dep_modulemaps:
         swift_argv.extend(["-Xcc", "-fmodule-map-file=" + mmap])
-    for hmap in dep_hmaps:
-        swift_argv.extend(["-Xcc", "-I", "-Xcc", hmap])
     for overlay in dep_vfs_overlays:
         swift_argv.extend(["-Xcc", "-ivfsoverlay", "-Xcc", overlay])
     for d in framework_search_dirs:
@@ -4341,6 +4352,7 @@ def _apple_framework_impl(ctx):
         argv = swift_argv,
         inputs = swift_inputs,
         outputs = [dylib, swiftmodule, swiftdoc] + swift_module_sidecars,
+        resources = {"memory_bytes": 4 * 1024 * 1024 * 1024},
         env = swiftc["env"],
         toolchain_identity = swiftc["identity"],
         identifier = "apple_framework_compile_" + module_name,
@@ -4961,7 +4973,7 @@ def _apple_application_impl(ctx):
     triple = _apple_triple(platform, target_sdk_version, sdk_variant, arch, False)
 
     if ctx["capability"] == "run":
-        if host_os() == "linux":
+        if _apple_execution_os() == "linux":
             fail(ctx["label"]["id"] + ": Linux builds produce an ad-hoc signed application; provision, re-sign, install and launch it with xtool or omarchy-apple-dev's device-run.sh. Simulator execution requires macOS")
         run_dir = ctx["build_dir"] + "/run"
         run_record = run_dir + "/run.json"
@@ -5104,14 +5116,9 @@ def _apple_application_impl(ctx):
         swift_argv.extend(["-import-objc-header", _package_relative(ctx, bridging_header)])
     for d in compile_swiftmodule_dirs:
         swift_argv.extend(["-I", d])
-    for hdir in compile_header_dirs:
-        swift_argv.extend(["-Xcc", "-I", "-Xcc", hdir])
-    for hdir in private_header_dirs:
-        swift_argv.extend(["-Xcc", "-I", "-Xcc", hdir])
+    swift_argv.extend(_apple_header_search_flags(compile_header_dirs + private_header_dirs, dep_hmaps, swift = True))
     for mmap in dep_modulemaps:
         swift_argv.extend(["-Xcc", "-fmodule-map-file=" + mmap])
-    for hmap in dep_hmaps:
-        swift_argv.extend(["-Xcc", "-I", "-Xcc", hmap])
     for overlay in dep_vfs_overlays:
         swift_argv.extend(["-Xcc", "-ivfsoverlay", "-Xcc", overlay])
     for d in framework_search_dirs:
@@ -5218,10 +5225,7 @@ def _apple_application_impl(ctx):
             module_argv.extend(["-import-objc-header", _package_relative(ctx, bridging_header)])
         for d in compile_swiftmodule_dirs:
             module_argv.extend(["-I", d])
-        for hdir in compile_header_dirs:
-            module_argv.extend(["-Xcc", "-I", "-Xcc", hdir])
-        for hdir in private_header_dirs:
-            module_argv.extend(["-Xcc", "-I", "-Xcc", hdir])
+        module_argv.extend(_apple_header_search_flags(compile_header_dirs + private_header_dirs, dep_hmaps, swift = True))
         for mmap in dep_modulemaps:
             module_argv.extend(["-Xcc", "-fmodule-map-file=" + mmap])
         for overlay in dep_vfs_overlays:
@@ -5273,6 +5277,7 @@ def _apple_application_impl(ctx):
             argv = module_argv,
             inputs = module_inputs,
             outputs = [swiftmodule, swiftdoc] + swift_module_sidecars + ([swift_objc_header] if swift_objc_header else []),
+            resources = {"memory_bytes": 4 * 1024 * 1024 * 1024},
             depends_on_prior_actions = False,
             create_dirs = [ctx["build_dir"] + "/ModuleIntermediates"],
             env = swiftc["env"],
@@ -5310,17 +5315,12 @@ def _apple_application_impl(ctx):
                 argv.extend(["-fmodules", "-fmodule-name=" + module_name])
             if language == "objective-c" or language == "objective-c++":
                 argv.append("-fobjc-arc")
-            for hdir in compile_header_dirs:
-                argv.extend(["-I", hdir])
-            for hdir in private_header_dirs:
-                argv.extend(["-I", hdir])
+            argv.extend(_apple_header_search_flags(compile_header_dirs + private_header_dirs, dep_hmaps))
             if swift_objc_header:
                 argv.extend(["-I", ctx["build_dir"]])
             if not is_assembly:
                 for mmap in dep_modulemaps:
                     argv.append("-fmodule-map-file=" + mmap)
-            for hmap in dep_hmaps:
-                argv.extend(["-I", hmap])
             for overlay in dep_vfs_overlays:
                 argv.extend(["-ivfsoverlay", overlay])
             if prefix_header and not is_assembly:
@@ -5374,6 +5374,7 @@ def _apple_application_impl(ctx):
                 env = clang["env"],
                 toolchain_identity = clang["identity"],
                 depends_on_prior_actions = False,
+                resources = {"memory_bytes": 1024 * 1024 * 1024},
                 identifier = "apple_application_clang_compile_" + module_name + "_" + sanitised,
             )
             clang_objects.append(obj)
@@ -5397,6 +5398,7 @@ def _apple_application_impl(ctx):
         inputs = swift_inputs,
         outputs = [executable],
         depends_on_prior_actions = False,
+        resources = {"memory_bytes": 4 * 1024 * 1024 * 1024},
         env = swiftc["env"],
         toolchain_identity = swiftc["identity"],
         identifier = "apple_application_compile_" + product_name,
@@ -5786,7 +5788,7 @@ def _apple_thinned_package_impl(ctx):
     }
 
 def _apple_test_bundle_impl(ctx):
-    if host_os() == "linux":
+    if _apple_execution_os() == "linux":
         fail(ctx["label"]["id"] + ": apple_test_bundle requires macOS test runtimes; Linux supports cross-compiling applications and libraries only")
     attrs = _resolve_attrs(ctx, ctx["attr"], ctx["label"]["id"], ["product_name"])
     _reject_unsupported_attrs(attrs, ctx["label"]["id"], ["test_host", "entitlements", "destination", "test_plan"])
@@ -6031,12 +6033,9 @@ def _apple_test_bundle_impl(ctx):
     for d in compile_swiftmodule_dirs:
         swift_argv.extend(["-I", d])
     if swift_srcs:
-        for hdir in compile_header_dirs + private_header_dirs:
-            swift_argv.extend(["-Xcc", "-I", "-Xcc", hdir])
+        swift_argv.extend(_apple_header_search_flags(compile_header_dirs + private_header_dirs, dep_hmaps, swift = True))
         for mmap in dep_modulemaps:
             swift_argv.extend(["-Xcc", "-fmodule-map-file=" + mmap])
-        for hmap in dep_hmaps:
-            swift_argv.extend(["-Xcc", "-I", "-Xcc", hmap])
         for overlay in dep_vfs_overlays:
             swift_argv.extend(["-Xcc", "-ivfsoverlay", "-Xcc", overlay])
     for d in framework_search_dirs:
@@ -6136,13 +6135,10 @@ def _apple_test_bundle_impl(ctx):
                 argv.append("-fobjc-arc")
             if prefix_header:
                 argv.extend(["-include", _package_relative(ctx, prefix_header)])
-            for hdir in compile_header_dirs + private_header_dirs:
-                argv.extend(["-I", hdir])
+            argv.extend(_apple_header_search_flags(compile_header_dirs + private_header_dirs, dep_hmaps))
             if not is_assembly:
                 for mmap in dep_modulemaps:
                     argv.append("-fmodule-map-file=" + mmap)
-            for hmap in dep_hmaps:
-                argv.extend(["-I", hmap])
             for overlay in dep_vfs_overlays:
                 argv.extend(["-ivfsoverlay", overlay])
             for framework_dir in framework_search_dirs:
@@ -6191,6 +6187,7 @@ def _apple_test_bundle_impl(ctx):
                 outputs = [obj],
                 env = clang["env"],
                 toolchain_identity = clang["identity"],
+                resources = {"memory_bytes": 1024 * 1024 * 1024},
                 identifier = "apple_test_bundle_clang_compile_" + module_name + "_" + sanitised,
             )
             clang_objects.append(obj)
@@ -6214,6 +6211,7 @@ def _apple_test_bundle_impl(ctx):
             argv = swift_argv,
             inputs = swift_inputs,
             outputs = [test_binary],
+            resources = {"memory_bytes": 4 * 1024 * 1024 * 1024},
             env = swiftc["env"],
             toolchain_identity = swiftc["identity"],
             identifier = "apple_test_bundle_compile_" + module_name,
@@ -6225,6 +6223,7 @@ def _apple_test_bundle_impl(ctx):
             argv = swift_argv,
             inputs = swift_inputs,
             outputs = [test_binary],
+            resources = {"memory_bytes": 2 * 1024 * 1024 * 1024},
             env = link_tool["env"],
             toolchain_identity = link_tool["identity"],
             identifier = "apple_test_bundle_link_" + module_name,
@@ -6958,7 +6957,7 @@ def _swift_package_pin_impl(ctx):
     }
 
 def _swift_package_dependencies_impl(ctx):
-    if host_os() == "linux":
+    if _apple_execution_os() == "linux":
         fail(ctx["label"]["id"] + ": Swift package delegation is not supported by the Linux Apple toolchain; declare native apple_library dependencies instead")
     attrs = ctx["attr"]
     platform = attrs.get("platform") or "macos"
@@ -7033,6 +7032,7 @@ def _swift_package_dependencies_impl(ctx):
     argv.extend(build_flags)
     run_action(
         display_name = "Build Swift package dependencies · " + ctx["label"]["name"],
+        resources = {"memory_bytes": 4 * 1024 * 1024 * 1024},
         source_files = _action_source_files(build_inputs),
         argv = argv,
         inputs = build_inputs,
@@ -7477,7 +7477,7 @@ def _apple_executable_impl(ctx):
     compile_module_cache = ctx["build_dir"] + "/ModuleCache/Compile"
 
     if ctx["capability"] == "run":
-        if host_os() == "linux":
+        if _apple_execution_os() == "linux":
             fail(ctx["label"]["id"] + ": Apple executables cannot run on Linux; build the target and run it on its destination platform")
         run_dir = ctx["build_dir"] + "/run"
         run_record = run_dir + "/run.json"
@@ -7564,14 +7564,9 @@ def _apple_executable_impl(ctx):
         swift_argv.extend(["-import-objc-header", _package_relative(ctx, bridging_header)])
     for d in compile_swiftmodule_dirs:
         swift_argv.extend(["-I", d])
-    for hdir in compile_header_dirs:
-        swift_argv.extend(["-Xcc", "-I", "-Xcc", hdir])
-    for hdir in own_header_dirs:
-        swift_argv.extend(["-Xcc", "-I", "-Xcc", hdir])
+    swift_argv.extend(_apple_header_search_flags(compile_header_dirs + own_header_dirs, dep_hmaps, swift = True))
     for mmap in dep_modulemaps:
         swift_argv.extend(["-Xcc", "-fmodule-map-file=" + mmap])
-    for hmap in dep_hmaps:
-        swift_argv.extend(["-Xcc", "-I", "-Xcc", hmap])
     for overlay in dep_vfs_overlays:
         swift_argv.extend(["-Xcc", "-ivfsoverlay", "-Xcc", overlay])
     for d in framework_search_dirs:
@@ -7644,6 +7639,7 @@ def _apple_executable_impl(ctx):
         argv = swift_argv,
         inputs = swift_inputs,
         outputs = [executable],
+        resources = {"memory_bytes": 4 * 1024 * 1024 * 1024},
         env = swiftc["env"],
         toolchain_identity = swiftc["identity"],
         identifier = "apple_executable_compile_" + product_name,

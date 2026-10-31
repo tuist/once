@@ -23,7 +23,13 @@ pub struct InfrastructureConfig {
     pub providers: BTreeMap<String, InfrastructureProviderConfig>,
 }
 
-pub type ExecutionProviderConfig = NamedCacheProviderConfig;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionProviderConfig {
+    pub name: String,
+    pub account: Option<String>,
+    pub project: Option<String>,
+    pub properties: BTreeMap<String, serde_json::Value>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NamedCacheProviderConfig {
@@ -56,11 +62,17 @@ pub struct DaytonaExecutionProviderConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DockerExecutionProviderConfig {
+    pub image: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InfrastructureProviderConfig {
     Local,
     Microsandbox(MicrosandboxExecutionProviderConfig),
     E2b(E2bExecutionProviderConfig),
     Daytona(DaytonaExecutionProviderConfig),
+    Docker(DockerExecutionProviderConfig),
     Tuist(TuistCacheProviderConfig),
 }
 
@@ -68,9 +80,41 @@ pub enum InfrastructureProviderConfig {
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct InfrastructureToml {
     pub cache: Option<CacheProviderToml>,
-    pub execution: Option<NamedCacheProviderToml>,
+    pub execution: Option<ExecutionProviderToml>,
     pub artifacts: Option<NamedCacheProviderToml>,
     pub publish_on_build: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ExecutionProviderToml {
+    #[serde(alias = "provider")]
+    name: String,
+    account: Option<String>,
+    project: Option<String>,
+    #[serde(default)]
+    properties: BTreeMap<String, serde_json::Value>,
+}
+
+impl ExecutionProviderToml {
+    pub(crate) fn into_config(
+        self,
+        display_name: &str,
+        section_name: &str,
+    ) -> Result<ExecutionProviderConfig> {
+        let binding = NamedCacheProviderToml {
+            name: self.name,
+            account: self.account,
+            project: self.project,
+        }
+        .into_config(display_name, section_name)?;
+        Ok(ExecutionProviderConfig {
+            name: binding.name,
+            account: binding.account,
+            project: binding.project,
+            properties: self.properties,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -112,6 +156,9 @@ pub(crate) enum InfrastructureProviderToml {
         template: String,
     },
     Daytona {
+        image: String,
+    },
+    Docker {
         image: String,
     },
     Tuist {
@@ -199,6 +246,10 @@ impl InfrastructureProviderToml {
                 let image =
                     required_value(display_name, provider_name, "daytona", "image", &image)?;
                 InfrastructureProviderConfig::Daytona(DaytonaExecutionProviderConfig { image })
+            }
+            Self::Docker { image } => {
+                let image = required_value(display_name, provider_name, "docker", "image", &image)?;
+                InfrastructureProviderConfig::Docker(DockerExecutionProviderConfig { image })
             }
             Self::Tuist {
                 url,

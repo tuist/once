@@ -6,7 +6,7 @@ use crate::{ExecutionPermit, RemoteIoLimits, Result, WorkspacePath};
 
 mod build;
 mod plan;
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", target_vendor = "apple")))]
 mod tests;
 
 pub(in crate::remote) async fn create_input_archive_limited(

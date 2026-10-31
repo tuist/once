@@ -41,6 +41,9 @@ type ResolverCallback<'a> =
 /// Extra execution context supplied by command surfaces.
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 pub struct AnalysisOptions {
+    /// Selected execution binding, independent of the coordinator platform.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution: Option<once_core::RemoteExecution>,
     /// Request a visible runtime surface for run capabilities when the target
     /// kind supports one.
     pub run_visible: bool,
@@ -143,16 +146,17 @@ impl AnalysisEngine {
 
     pub(crate) fn resolve_workspace_targets<T>(
         root: &Path,
+        options: &AnalysisOptions,
         observations: &mut AnalysisObservations,
         operation: impl FnOnce(&mut ResolverCallback<'_>) -> Result<T>,
     ) -> Result<T> {
         let source = crate::modules::combined_module_source_for_workspace(root)?;
         resolve_targets_in_starlark(
-            crate::modules::COMBINED_MODULE_PATH,
             &source,
             root,
             &HostCache::default(),
             &crate::manifest::load_workspace_configuration(root)?,
+            options,
             observations,
             operation,
         )
@@ -251,6 +255,7 @@ impl AnalysisEngine {
             crate::graph::load_graph_workspace_with_compiled_schemas(
                 root,
                 &self.target_kind_schemas,
+                &self.options,
             )
             .map_err(anyhow::Error::new)
         })
@@ -280,6 +285,7 @@ impl AnalysisEngine {
                 root,
                 &self.target_kind_schemas,
                 targets,
+                &self.options,
             )
             .map_err(anyhow::Error::new)
         })
@@ -605,12 +611,13 @@ fn analyze_target_with_host_cache(
         ".once/tmp/analysis/{}{}",
         analysis.target.label.id, analysis.configuration_path_suffix
     );
-    let store = AnalysisStore::with_host_cache(
+    let mut store = AnalysisStore::with_host_cache(
         analysis.workspace_root.to_path_buf(),
         analysis.target.label.package.clone(),
         build_dir.clone(),
         host_cache,
     );
+    store.execution.clone_from(&analysis.options.execution);
 
     let (store, result) = with_active_store(store, || {
         analyze_in_starlark(
@@ -722,18 +729,22 @@ fn analyze_in_starlark(
 }
 
 fn resolve_targets_in_starlark<T>(
-    path: &str,
     source: &str,
     workspace_root: &Path,
     host_cache: &HostCache,
     configuration: &crate::manifest::BuildConfiguration,
+    options: &AnalysisOptions,
     observations: &mut AnalysisObservations,
     operation: impl FnOnce(&mut ResolverCallback<'_>) -> Result<T>,
 ) -> Result<T> {
     let recorded = std::cell::RefCell::new(AnalysisObservations::default());
     let result = Module::with_temp_heap(|module| {
-        let ast = AstModule::parse(path, source.to_string(), &Dialect::Standard)
-            .map_err(|error| anyhow!("prelude parse failed: {error:?}"))?;
+        let ast = AstModule::parse(
+            crate::modules::COMBINED_MODULE_PATH,
+            source.to_string(),
+            &Dialect::Standard,
+        )
+        .map_err(|error| anyhow!("prelude parse failed: {error:?}"))?;
         let globals = globals_for_prelude();
         let mut eval = Evaluator::new(&module);
         eval.eval_module(ast, &globals)
@@ -747,12 +758,13 @@ fn resolve_targets_in_starlark<T>(
                 return Ok(None);
             };
             let build_dir = format!(".once/out/{}", target.label.id);
-            let store = AnalysisStore::with_host_cache(
+            let mut store = AnalysisStore::with_host_cache(
                 workspace_root.to_path_buf(),
                 target.label.package.clone(),
                 build_dir,
                 host_cache.clone(),
             );
+            store.execution.clone_from(&options.execution);
             let (store, result) = with_active_store(store, || -> Result<Option<JsonValue>> {
                 let ctx = build_resolver_ctx(&eval, target, files, configuration);
                 let graph_data = eval
@@ -960,6 +972,10 @@ fn build_resolver_ctx<'v>(
         ("srcs", heap.alloc(target.srcs.clone())),
         ("files", file_values),
         ("configuration", configuration),
+        (
+            "execution",
+            super::globals::selected_execution_context(eval),
+        ),
     ]))
 }
 
@@ -1043,6 +1059,10 @@ fn build_ctx<'v>(
         ("run", run),
         ("test", test),
         ("configuration", configuration),
+        (
+            "execution",
+            super::globals::selected_execution_context(eval),
+        ),
     ]))
 }
 

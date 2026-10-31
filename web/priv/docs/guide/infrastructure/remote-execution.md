@@ -5,7 +5,16 @@ repository while the process runs in a fresh environment supplied by an
 infrastructure provider.
 
 The important boundary is the action, not the test framework. Vitest is the
-program being run. Microsandbox, E2B, and Daytona are execution providers.
+program being run. Docker, Microsandbox, E2B, and Daytona are execution providers.
+
+Declared build graphs can also dispatch command actions with
+`once build --remote --compute <provider>`. Once keeps dependency scheduling and
+caching on the coordinator; each uncached command runs through the selected
+adapter. Start with [Docker execution](/guide/infrastructure/docker) for local
+validation, including the toolchain-matching requirements and current limits.
+Graph filesystem operations remain on the coordinator; Docker applies command
+directory setup inside the worker. Selecting a provider does not add a warm
+worker pool or a distributed artifact service.
 
 ## What Moves To The Machine
 
@@ -71,12 +80,14 @@ again.
 
 ## Choose A Provider
 
-Use [Microsandbox](/guide/infrastructure/microsandbox) to test the contract on
+Use [Docker](/guide/infrastructure/docker) to distribute graph command actions
+across fresh containers with a locally prepared image. Use
+[Microsandbox](/guide/infrastructure/microsandbox) to test the contract on
 a supported local computer. Use [E2B](/guide/infrastructure/e2b) when you have
 a prepared hosted template. Use [Daytona](/guide/infrastructure/daytona) when
 you want Once to start from a container image.
 
-All three adapters implement the same declared input and output boundary. E2B
+These adapters implement the same declared input and output boundary. E2B
 and Daytona use one archive for each transfer so large dependency trees do not
 require one network request per file. The hosted image or template must
 provide `tar` for unpacking and packing those archives.

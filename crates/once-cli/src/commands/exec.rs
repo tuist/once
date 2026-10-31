@@ -869,7 +869,9 @@ async fn cached_blob_text(cache: &CacheProvider, digest: Option<Digest>) -> Resu
 
 async fn run_fingerprint_commands(invocation: &ScriptInvocation) -> Result<Vec<FingerprintResult>> {
     if invocation.network.is_denied() && !invocation.fingerprints.is_empty() {
-        anyhow::bail!("fingerprint commands cannot enforce --network deny; replace the fingerprint with declared inputs or omit the fingerprint before running offline");
+        anyhow::bail!(
+            "fingerprint commands cannot enforce --network deny; replace the fingerprint with declared inputs or omit the fingerprint before running offline"
+        );
     }
     let mut out = Vec::with_capacity(invocation.fingerprints.len());
     for command in &invocation.fingerprints {
@@ -1698,6 +1700,7 @@ image = "node:22.18.0-alpine"
                 environment: Some("node:22.18.0-alpine".to_string()),
                 account: None,
                 project: None,
+                properties: BTreeMap::new(),
             }))
         );
     }

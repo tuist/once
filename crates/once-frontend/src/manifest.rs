@@ -590,6 +590,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn execution_properties_are_generic_and_not_cache_configuration() {
+        let config = load_infrastructure_toml_str("once.toml", r#"
+[infrastructure.execution]
+provider = "workers"
+properties = { program = "/worker/tool", capabilities = ["compile", "link"], metadata = { version = 1, enabled = true } }
+"#).unwrap();
+        let execution = config.execution.unwrap();
+        assert_eq!(
+            execution.properties["metadata"],
+            serde_json::json!({"version": 1, "enabled": true})
+        );
+        assert_eq!(
+            execution.properties["capabilities"],
+            serde_json::json!(["compile", "link"])
+        );
+        for section in ["cache", "artifacts"] {
+            let source = format!(
+                "[infrastructure.{section}]\nprovider = \"workers\"\nproperties = {{ program = \"tool\" }}\n"
+            );
+            assert!(load_infrastructure_toml_str("once.toml", &source).is_err());
+        }
+    }
+
+    #[test]
     fn workspace_config_does_not_declare_targets() {
         let src = r#"
 [workspace]
@@ -617,10 +641,11 @@ image = "node:22.18.0-alpine"
 
         assert_eq!(
             config.execution,
-            Some(crate::cache_provider::NamedCacheProviderConfig {
+            Some(crate::cache_provider::ExecutionProviderConfig {
                 name: "remote_tests".to_string(),
                 account: None,
                 project: None,
+                properties: BTreeMap::new(),
             })
         );
         assert_eq!(
@@ -648,6 +673,46 @@ image = "   "
         .unwrap_err();
 
         assert!(error.to_string().contains("image must not be empty"));
+    }
+
+    #[test]
+    fn loads_named_docker_execution_provider() {
+        let config = load_infrastructure_toml_str(
+            "once.toml",
+            r#"
+[infrastructure.execution]
+provider = "container_tests"
+
+[infrastructures.container_tests]
+kind = "docker"
+image = "node:22-bookworm"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.execution.unwrap().name, "container_tests");
+        assert_eq!(
+            config.providers.get("container_tests"),
+            Some(
+                &crate::cache_provider::InfrastructureProviderConfig::Docker(
+                    crate::cache_provider::DockerExecutionProviderConfig {
+                        image: "node:22-bookworm".to_string(),
+                    }
+                )
+            )
+        );
+    }
+
+    #[test]
+    fn rejects_missing_or_empty_docker_image() {
+        for image in ["", "image = \"\"", "image = \"   \""] {
+            let manifest = format!("[infrastructures.container_tests]\nkind = \"docker\"\n{image}");
+            let error = load_infrastructure_toml_str("once.toml", &manifest).unwrap_err();
+            assert!(error.to_string().contains("image"), "{error}");
+            if !image.is_empty() {
+                assert!(error.to_string().contains("must not be empty"), "{error}");
+            }
+        }
     }
 
     #[test]

@@ -84,6 +84,7 @@ It can also use either capability on its own.
 
 | Provider | Capability | Environment | Best fit |
 | --- | --- | --- | --- |
+| [Docker](/guide/infrastructure/docker) | Execution | Local immutable image | Validate per-action graph dispatch in fresh containers. |
 | [Microsandbox](/guide/infrastructure/microsandbox) | Execution | Local image | Validate an action boundary on the current computer. |
 | [E2B](/guide/infrastructure/e2b) | Execution | Hosted template | Start a prepared hosted environment quickly. |
 | [Daytona](/guide/infrastructure/daytona) | Execution | Hosted container image | Build a hosted environment from a familiar image. |

@@ -304,6 +304,17 @@ fn workdir(cwd: Option<&WorkspacePath>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn output_paths_cannot_become_options() {
+        let args = pack_output_args(&[WorkspacePath::try_from("-danger").unwrap()]);
+        assert_eq!(args.last().unwrap(), "./-danger");
+    }
+}
+
+#[cfg(all(test, any(target_os = "linux", target_vendor = "apple")))]
+mod lifecycle_tests {
     use std::future::Future;
     use std::task::Poll;
 
@@ -313,12 +324,6 @@ mod tests {
     use super::*;
     use crate::remote::test_server::{self, Response};
     use crate::{ExecutionPermit, Executor, ResourceRequest};
-
-    #[test]
-    fn output_paths_cannot_become_options() {
-        let args = pack_output_args(&[WorkspacePath::try_from("-danger").unwrap()]);
-        assert_eq!(args.last().unwrap(), "./-danger");
-    }
 
     #[tokio::test]
     async fn deletes_the_sandbox_after_success() {

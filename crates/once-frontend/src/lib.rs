@@ -34,10 +34,10 @@ pub const BUILD_FILE_NAME: &str = TOML_BUILD_FILE_NAME;
 
 pub use analysis::flush_host_tree_digest_caches;
 pub use cache_provider::{
-    CacheProviderConfig, DaytonaExecutionProviderConfig, E2bExecutionProviderConfig,
-    ExecutionProviderConfig, InfrastructureConfig, InfrastructureProviderConfig,
-    MicrosandboxExecutionProviderConfig, NamedCacheProviderConfig, TuistCacheProviderConfig,
-    DEFAULT_TUIST_URL,
+    CacheProviderConfig, DaytonaExecutionProviderConfig, DockerExecutionProviderConfig,
+    E2bExecutionProviderConfig, ExecutionProviderConfig, InfrastructureConfig,
+    InfrastructureProviderConfig, MicrosandboxExecutionProviderConfig, NamedCacheProviderConfig,
+    TuistCacheProviderConfig, DEFAULT_TUIST_URL,
 };
 pub use cache_resolution::{
     resolve_cache_provider, ResolvedCacheProviderConfig, ResolvedTuistCacheProviderConfig,

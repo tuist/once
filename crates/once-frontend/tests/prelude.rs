@@ -41,6 +41,9 @@ mod test_result_adapters;
 #[path = "prelude/apple_modules.rs"]
 mod apple_modules;
 
+#[path = "prelude/apple_relocation.rs"]
+mod apple_relocation;
+
 #[path = "prelude/apple_linux.rs"]
 mod apple_linux;
 
@@ -149,9 +152,10 @@ fn fake_android_ndk_for_mobile_test(workspace: &Path) -> std::path::PathBuf {
 
 fn apple_prelude_source() -> String {
     format!(
-        "{}\n{}\n{}\n{}\n{}\n{}\ndef host_os():\n    return \"macos\"\n",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\ndef host_os():\n    return \"macos\"\n",
         include_str!("../prelude/common.star"),
         include_str!("../prelude/apple_modules.star"),
+        include_str!("../prelude/apple_execution.star"),
         include_str!("../prelude/apple_linux.star"),
         include_str!("../prelude/apple_artifacts.star"),
         include_str!("../prelude/apple_build_tools.star"),
@@ -4663,6 +4667,7 @@ result = repr(_c_library_impl(ctx))
 
     let compile = action_by_identifier(&store, "pkg/native:c-compile:pkg/src/native.c");
     assert_eq!(compile.argv[0], "/tools/cc");
+    assert!(!compile.depends_on_prior_actions);
     assert!(compile.argv.contains(&"-DNATIVE=1".to_string()));
     assert!(compile.argv.contains(&"pkg/include".to_string()));
     assert!(compile.argv.contains(&"-Wall".to_string()));
@@ -4684,6 +4689,7 @@ result = repr(_c_library_impl(ctx))
 
     let archive = action_by_identifier(&store, "pkg/native:c-archive");
     assert_eq!(archive.argv[0], "/tools/ar");
+    assert!(archive.depends_on_prior_actions);
     assert_eq!(archive.argv[1], "crs");
     assert!(archive
         .outputs

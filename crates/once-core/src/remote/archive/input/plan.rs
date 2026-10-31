@@ -4,9 +4,11 @@ use std::path::{Path, PathBuf};
 use crate::remote::archive::file_error;
 use crate::remote::archive::limits::check_entries;
 use crate::remote::http::check_size;
+use crate::remote::path::Directory;
 use crate::{RemoteIoLimits, Result, WorkspacePath};
 
 pub(super) struct InputPlan {
+    pub(super) workspace: Directory,
     pub(super) entries: BTreeMap<PathBuf, PathBuf>,
     pub(super) declared_roots: Vec<PathBuf>,
     pub(super) archive_bytes: u64,
@@ -21,6 +23,8 @@ impl InputPlan {
         limits: RemoteIoLimits,
     ) -> Result<Self> {
         let mut plan = Self {
+            workspace: Directory::open(workspace)
+                .map_err(|source| file_error("open_remote_input_root", workspace, source))?,
             entries: BTreeMap::new(),
             declared_roots: Vec::new(),
             archive_bytes: 1024,
@@ -60,7 +64,9 @@ impl InputPlan {
         if self.entries.contains_key(relative) {
             return Ok(());
         }
-        let metadata = std::fs::symlink_metadata(source)
+        let metadata = self
+            .workspace
+            .metadata(relative)
             .map_err(|source_error| file_error("read_remote_input", relative, source_error))?;
         check_entries(
             self.entries.len().saturating_add(1),
@@ -78,8 +84,9 @@ impl InputPlan {
             provider,
             "archive metadata bytes",
         )?;
-        let link_bytes = if metadata.file_type().is_symlink() {
-            std::fs::read_link(source)
+        let link_bytes = if metadata.is_symlink() {
+            self.workspace
+                .read_link(relative)
                 .map_err(|source_error| {
                     file_error("read_remote_input_link", relative, source_error)
                 })?
@@ -88,11 +95,7 @@ impl InputPlan {
         } else {
             0
         };
-        let data_bytes = if metadata.is_file() {
-            metadata.len()
-        } else {
-            0
-        };
+        let data_bytes = if metadata.is_file() { metadata.len } else { 0 };
         if !relative.as_os_str().is_empty() {
             self.archive_bytes = self
                 .archive_bytes
@@ -111,10 +114,16 @@ impl InputPlan {
         }
         self.entries
             .insert(relative.to_path_buf(), source.to_path_buf());
-        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        if !metadata.is_dir() {
             return Ok(());
         }
-        let children = std::fs::read_dir(source).map_err(|source_error| {
+        let directory = self
+            .workspace
+            .descend(relative, false)
+            .map_err(|source_error| {
+                file_error("read_remote_input_directory", relative, source_error)
+            })?;
+        let children = directory.entries().map_err(|source_error| {
             file_error("read_remote_input_directory", relative, source_error)
         })?;
         for child in children {
@@ -122,8 +131,8 @@ impl InputPlan {
                 file_error("read_remote_input_directory", relative, source_error)
             })?;
             self.collect_entry(
-                &child.path(),
-                &relative.join(child.file_name()),
+                &source.join(&child),
+                &relative.join(&child),
                 provider,
                 limits,
             )?;
@@ -136,9 +145,40 @@ fn padded(bytes: u64) -> u64 {
     bytes.div_ceil(512).saturating_mul(512)
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", target_vendor = "apple")))]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_parent_and_leaf_symlink_swaps_after_planning() {
+        for swap_parent in [true, false] {
+            let workspace = tempfile::tempdir().unwrap();
+            let sibling = tempfile::tempdir().unwrap();
+            std::fs::create_dir(workspace.path().join("input")).unwrap();
+            std::fs::write(workspace.path().join("input/secret"), b"declared").unwrap();
+            std::fs::write(sibling.path().join("secret"), b"coordinator only").unwrap();
+            let plan = InputPlan::collect(
+                workspace.path(),
+                &[WorkspacePath::try_from("input/secret").unwrap()],
+                "test",
+                RemoteIoLimits::default(),
+            )
+            .unwrap();
+            if swap_parent {
+                std::fs::remove_dir_all(workspace.path().join("input")).unwrap();
+                std::os::unix::fs::symlink(sibling.path(), workspace.path().join("input")).unwrap();
+            } else {
+                std::fs::remove_file(workspace.path().join("input/secret")).unwrap();
+                std::os::unix::fs::symlink(
+                    sibling.path().join("secret"),
+                    workspace.path().join("input/secret"),
+                )
+                .unwrap();
+            }
+            assert!(super::super::build::archive(workspace.path(), plan, "test").is_err());
+        }
+    }
 
     #[test]
     fn tiny_inputs_reserve_their_planned_size_not_the_archive_cap() {

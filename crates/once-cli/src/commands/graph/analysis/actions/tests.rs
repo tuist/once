@@ -161,6 +161,7 @@ fn missing_declared_inputs_reports_only_absent_paths() {
     let workspace = tempfile::tempdir().unwrap();
     std::fs::write(workspace.path().join("present.rs"), b"fn main() {}").unwrap();
     let declared = DeclaredAction {
+        resources: ResourceRequest::default(),
         history: None,
         presentation: None,
         operation: None,
@@ -232,6 +233,7 @@ async fn same_target_outputs_materialize_before_a_later_miss() {
 fn declared_action_uses_direct_argv_and_creates_output_parents() {
     let workspace = tempfile::tempdir().unwrap();
     let declared = DeclaredAction {
+        resources: ResourceRequest::default(),
         operation: None,
         history: None,
         presentation: None,
@@ -335,6 +337,7 @@ async fn declared_command_setup_cleans_paths_and_creates_dirs() {
     .unwrap();
     std::fs::write(workspace.path().join(".once/out/stale-file.txt"), b"stale").unwrap();
     let declared = DeclaredAction {
+        resources: ResourceRequest::default(),
         operation: None,
         argv: vec!["tool".to_string()],
         arg_files: Vec::new(),
@@ -894,6 +897,7 @@ async fn single_action_outcome_preserves_streams_for_capability_evidence() {
     };
     let analysis = AnalysisResult {
         actions: vec![DeclaredAction {
+            resources: ResourceRequest::default(),
             operation: None,
             argv: vec![
                 "/bin/sh".to_string(),
@@ -1058,6 +1062,7 @@ demo_kind = {"_once_target_kind": True, "kind": "demo_kind", "impl": impl}
 fn cached_test_analysis(dependency_path: &str) -> AnalysisResult {
     AnalysisResult {
         actions: vec![DeclaredAction {
+            resources: ResourceRequest::default(),
             operation: None,
             argv: vec![
                 "/bin/sh".to_string(),
@@ -1518,6 +1523,7 @@ async fn declared_actions_record_success_evidence_per_action() {
         diagnostics: Vec::new(),
     };
     let action = |name: &str| DeclaredAction {
+        resources: ResourceRequest::default(),
         history: None,
         presentation: None,
         operation: None,
@@ -1625,6 +1631,7 @@ async fn declared_action_can_skip_prior_same_target_digests() {
     let analysis = |first_value: &str| AnalysisResult {
         actions: vec![
             DeclaredAction {
+                resources: ResourceRequest::default(),
                 operation: None,
                 argv: vec![
                     "/bin/sh".to_string(),
@@ -1655,6 +1662,7 @@ async fn declared_action_can_skip_prior_same_target_digests() {
                 source_files: Vec::new(),
             },
             DeclaredAction {
+                resources: ResourceRequest::default(),
                 operation: None,
                 argv: vec![
                     "/bin/sh".to_string(),
@@ -1787,6 +1795,7 @@ fn input_digest_changes_with_toolchain_identity() {
     let workspace = tempfile::tempdir().unwrap();
     std::fs::write(workspace.path().join("input.txt"), b"content").unwrap();
     let declared = DeclaredAction {
+        resources: ResourceRequest::default(),
         operation: None,
         argv: vec!["tool".to_string()],
         arg_files: Vec::new(),
@@ -1857,6 +1866,7 @@ fn input_fingerprint_explains_inputs_without_exposing_values() {
     let workspace = tempfile::tempdir().unwrap();
     std::fs::write(workspace.path().join("input.txt"), b"content").unwrap();
     let declared = DeclaredAction {
+        resources: ResourceRequest::default(),
         operation: None,
         history: None,
         presentation: None,
@@ -1984,6 +1994,7 @@ fn presentation_and_history_do_not_change_action_cache_identity() {
 fn input_digest_changes_with_command_setup_paths() {
     let workspace = tempfile::tempdir().unwrap();
     let declared = DeclaredAction {
+        resources: ResourceRequest::default(),
         operation: None,
         argv: vec!["tool".to_string()],
         arg_files: Vec::new(),
@@ -2026,6 +2037,7 @@ fn input_digest_changes_with_declared_arg_files() {
     let workspace = tempfile::tempdir().unwrap();
     std::fs::write(workspace.path().join("input.txt"), b"content").unwrap();
     let declared = DeclaredAction {
+        resources: ResourceRequest::default(),
         operation: None,
         history: None,
         presentation: None,
@@ -2074,6 +2086,7 @@ fn input_digest_ignores_unrelated_module_source_changes() {
     let workspace = tempfile::tempdir().unwrap();
     std::fs::write(workspace.path().join("input.txt"), b"content").unwrap();
     let declared = DeclaredAction {
+        resources: ResourceRequest::default(),
         operation: None,
         argv: vec!["tool".to_string()],
         arg_files: Vec::new(),
@@ -2122,6 +2135,7 @@ fn same_target_generated_input_uses_its_content_digest() {
     let workspace = tempfile::tempdir().unwrap();
     let input = ".once/out/fingerprint.txt";
     let declared = DeclaredAction {
+        resources: ResourceRequest::default(),
         operation: None,
         argv: vec!["tool".to_string()],
         arg_files: Vec::new(),
@@ -2185,6 +2199,7 @@ fn dependency_generated_input_uses_its_content_digest() {
     let workspace = tempfile::tempdir().unwrap();
     let input = ".once/out/dependency.txt";
     let declared = DeclaredAction {
+        resources: ResourceRequest::default(),
         operation: None,
         argv: vec!["tool".to_string()],
         arg_files: Vec::new(),
@@ -2259,6 +2274,7 @@ fn input_digest_ignores_unconsumed_dependency_digests() {
     let workspace = tempfile::tempdir().unwrap();
     std::fs::write(workspace.path().join("input.txt"), b"content").unwrap();
     let declared = DeclaredAction {
+        resources: ResourceRequest::default(),
         operation: None,
         argv: vec!["tool".to_string()],
         arg_files: Vec::new(),
@@ -2584,6 +2600,7 @@ fn shell_action(
     intermediate: bool,
 ) -> DeclaredAction {
     DeclaredAction {
+        resources: ResourceRequest::default(),
         operation: None,
         argv: vec!["/bin/sh".to_string(), "-c".to_string(), script.to_string()],
         arg_files: Vec::new(),

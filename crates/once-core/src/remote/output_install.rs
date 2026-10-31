@@ -1,51 +1,111 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::remote::path::{Directory, Parent};
 use crate::remote::PhasePermit;
-use crate::{Error, Result, WorkspacePath};
+use crate::{Error, RemoteIoLimits, Result, WorkspacePath};
 
-#[cfg(test)]
+mod lock;
+mod publish;
+#[cfg(all(test, any(target_os = "linux", target_vendor = "apple")))]
 mod tests;
+#[cfg(all(test, not(any(target_os = "linux", target_vendor = "apple"))))]
+mod unsupported;
 
 pub(super) struct OutputStaging {
     root: PathBuf,
+    #[cfg(any(
+        feature = "remote-microsandbox",
+        all(test, any(target_os = "linux", target_vendor = "apple"))
+    ))]
     files: PathBuf,
-    backup: PathBuf,
+    root_parent: Parent,
+    files_dir: Directory,
+    backup_dir: Directory,
+    workspace_dir: Directory,
+    limits: RemoteIoLimits,
+    directory_modes: BTreeMap<PathBuf, u32>,
 }
 
 impl OutputStaging {
+    #[cfg(any(
+        feature = "remote-microsandbox",
+        all(test, any(target_os = "linux", target_vendor = "apple"))
+    ))]
     pub(super) fn create(workspace_root: &Path) -> Result<Self> {
+        Self::create_limited(workspace_root, RemoteIoLimits::default())
+    }
+
+    pub(super) fn create_limited(workspace_root: &Path, limits: RemoteIoLimits) -> Result<Self> {
         let parent = workspace_root.join(".once/tmp");
-        std::fs::create_dir_all(&parent).map_err(|source| {
-            host_error(
-                "create_remote_output_staging",
-                Path::new(".once/tmp"),
-                source,
-            )
-        })?;
+        let workspace_dir = Directory::open(workspace_root)
+            .map_err(|source| host_error("open_remote_output_workspace", workspace_root, source))?;
+        let parent_dir = workspace_dir
+            .descend(Path::new(".once/tmp"), true)
+            .map_err(|source| {
+                host_error(
+                    "create_remote_output_staging",
+                    Path::new(".once/tmp"),
+                    source,
+                )
+            })?;
         for attempt in 0..100 {
             let nanos = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_nanos();
-            let root = parent.join(format!(
+            let name = PathBuf::from(format!(
                 "remote-output-{}-{nanos}-{attempt}",
                 std::process::id()
             ));
-            match std::fs::create_dir(&root) {
+            let root = parent.join(&name);
+            match parent_dir.mkdir(&name) {
                 Ok(()) => {
+                    #[cfg(any(
+                        feature = "remote-microsandbox",
+                        all(test, any(target_os = "linux", target_vendor = "apple"))
+                    ))]
                     let files = root.join("files");
-                    let backup = root.join("backup");
-                    std::fs::create_dir(&files).map_err(|source| {
-                        host_error("create_remote_output_staging", Path::new("files"), source)
+                    let root_dir = parent_dir.descend(&name, false).map_err(|source| {
+                        host_error("create_remote_output_staging", &name, source)
                     })?;
-                    std::fs::create_dir(&backup).map_err(|source| {
-                        host_error("create_remote_output_staging", Path::new("backup"), source)
+                    let files_dir =
+                        root_dir
+                            .descend(Path::new("files"), true)
+                            .map_err(|source| {
+                                host_error(
+                                    "create_remote_output_staging",
+                                    Path::new("files"),
+                                    source,
+                                )
+                            })?;
+                    let backup_dir =
+                        root_dir
+                            .descend(Path::new("backup"), true)
+                            .map_err(|source| {
+                                host_error(
+                                    "create_remote_output_staging",
+                                    Path::new("backup"),
+                                    source,
+                                )
+                            })?;
+                    let root_parent = parent_dir.parent(&name, false).map_err(|source| {
+                        host_error("create_remote_output_staging", &name, source)
                     })?;
                     return Ok(Self {
                         root,
+                        #[cfg(any(
+                            feature = "remote-microsandbox",
+                            all(test, any(target_os = "linux", target_vendor = "apple"))
+                        ))]
                         files,
-                        backup,
+                        root_parent,
+                        files_dir,
+                        backup_dir,
+                        workspace_dir,
+                        limits,
+                        directory_modes: BTreeMap::new(),
                     });
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -68,11 +128,26 @@ impl OutputStaging {
         ))
     }
 
+    #[cfg(any(
+        feature = "remote-microsandbox",
+        all(test, any(target_os = "linux", target_vendor = "apple"))
+    ))]
     pub(super) fn files(&self) -> &Path {
         &self.files
     }
 
-    #[cfg(any(feature = "remote-microsandbox", test))]
+    pub(super) fn files_directory(&self) -> &Directory {
+        &self.files_dir
+    }
+
+    pub(super) fn set_directory_modes(&mut self, modes: BTreeMap<PathBuf, u32>) {
+        self.directory_modes = modes;
+    }
+
+    #[cfg(any(
+        feature = "remote-microsandbox",
+        all(test, any(target_os = "linux", target_vendor = "apple"))
+    ))]
     pub(super) async fn install(
         self,
         outputs: &[WorkspacePath],
@@ -85,16 +160,22 @@ impl OutputStaging {
     pub(super) async fn install_admitted(
         self,
         outputs: &[WorkspacePath],
-        workspace_root: &Path,
+        _workspace_root: &Path,
         lease: PhasePermit,
     ) -> Result<()> {
-        let workspace = workspace_root.to_path_buf();
         let outputs = outputs.to_vec();
         tokio::task::spawn_blocking(move || {
             let _lease = lease;
             let staging = self;
-            crate::outputs::with_output_lock(&workspace, || {
-                install_outputs(&staging.files, &staging.backup, &workspace, &outputs)
+            lock::with_output_lock(&staging.workspace_dir, || {
+                publish::install_outputs(
+                    &staging.files_dir,
+                    &staging.backup_dir,
+                    &staging.workspace_dir,
+                    &outputs,
+                    staging.limits,
+                    &staging.directory_modes,
+                )
             })
         })
         .await
@@ -110,91 +191,11 @@ impl OutputStaging {
 
 impl Drop for OutputStaging {
     fn drop(&mut self) {
-        if let Err(error) = std::fs::remove_dir_all(&self.root) {
+        if let Err(error) = self.root_parent.remove() {
             if error.kind() != std::io::ErrorKind::NotFound {
                 tracing::warn!(path = %self.root.display(), %error, "failed to remove remote output staging directory");
             }
         }
-    }
-}
-
-fn install_outputs(
-    files: &Path,
-    backup: &Path,
-    workspace: &Path,
-    outputs: &[WorkspacePath],
-) -> Result<()> {
-    let mut backed_up = Vec::new();
-    let mut installed = Vec::new();
-    for output in outputs {
-        if let Err(error) = install_output(
-            files,
-            backup,
-            workspace,
-            output,
-            &mut backed_up,
-            &mut installed,
-        ) {
-            rollback_outputs(&installed, &backed_up);
-            return Err(error);
-        }
-    }
-    Ok(())
-}
-
-fn install_output(
-    files: &Path,
-    backup: &Path,
-    workspace: &Path,
-    output: &WorkspacePath,
-    backed_up: &mut Vec<(PathBuf, PathBuf)>,
-    installed: &mut Vec<PathBuf>,
-) -> Result<()> {
-    let destination = output.resolve(workspace);
-    if std::fs::symlink_metadata(&destination).is_ok() {
-        let saved = output.resolve(backup);
-        create_parent(&saved)?;
-        std::fs::rename(&destination, &saved).map_err(|source| {
-            host_error("backup_remote_output", Path::new(output.as_str()), source)
-        })?;
-        backed_up.push((destination.clone(), saved));
-    }
-    let source = output.resolve(files);
-    create_parent(&destination)?;
-    std::fs::rename(&source, &destination).map_err(|source| {
-        host_error("install_remote_output", Path::new(output.as_str()), source)
-    })?;
-    installed.push(destination);
-    Ok(())
-}
-
-fn rollback_outputs(installed: &[PathBuf], backed_up: &[(PathBuf, PathBuf)]) {
-    for path in installed.iter().rev() {
-        let _ = remove_host_path(path);
-    }
-    for (destination, saved) in backed_up.iter().rev() {
-        let _ = std::fs::rename(saved, destination);
-    }
-}
-
-fn create_parent(path: &Path) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|source| host_error("create_remote_output_parent", path, source))?;
-    }
-    Ok(())
-}
-
-fn remove_host_path(path: &Path) -> std::io::Result<()> {
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error),
-    };
-    if metadata.is_dir() && !metadata.file_type().is_symlink() {
-        std::fs::remove_dir_all(path)
-    } else {
-        std::fs::remove_file(path)
     }
 }
 

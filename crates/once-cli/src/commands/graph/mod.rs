@@ -128,7 +128,14 @@ pub async fn build(
 ) -> Result<ExitCode> {
     let started_at = Instant::now();
     let bus = RunEventBus::new(EVENT_BUS_CAPACITY);
-    let command_label = format!("build {target_id}");
+    let command_label = if let Some(execution) = &resolved.execution {
+        let provider = crate::terminal::captured_text(execution.provider.as_bytes());
+        let executor = execution.executor.as_deref().unwrap_or(&execution.provider);
+        let executor = crate::terminal::captured_text(executor.as_bytes());
+        format!("build {target_id} · {provider} ({executor})")
+    } else {
+        format!("build {target_id}")
+    };
     let reporter = spawn_reporter(&bus, output, &command_label);
     let live_reporter = crate::live_run_reporter::spawn(
         &bus,
