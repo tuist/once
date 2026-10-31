@@ -11,6 +11,10 @@ use serde::Deserialize;
 use super::globals::sha256_hex;
 use super::store::{capture_host_command_output, HOST_COMMAND_OUTPUT_LIMIT};
 
+#[cfg(test)]
+#[path = "tests/repository.rs"]
+mod tests;
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Checkout {
@@ -78,6 +82,36 @@ pub(super) fn checkout(
     path: &Path,
     cache: &Path,
 ) -> Result<()> {
+    checkout_inner(git, url, revision, path, cache).map_err(|error| {
+        anyhow::anyhow!(
+            "repository acquisition failed for `{}` at checkout `{}`: {error:#}",
+            diagnostic_url(url),
+            path.display().to_string().escape_debug(),
+        )
+    })
+}
+
+fn diagnostic_url(url: &str) -> String {
+    let url = url.split(['?', '#']).next().unwrap_or_default();
+    let sanitized = if let Some((scheme, rest)) = url.split_once("://") {
+        let authority_end = rest.find('/').unwrap_or(rest.len());
+        let (authority, path) = rest.split_at(authority_end);
+        let host = authority.rsplit('@').next().unwrap_or_default();
+        format!("{scheme}://{host}{path}")
+    } else if let Some((authority, path)) = url.split_once(':') {
+        if !authority.contains('/') && authority.contains('@') {
+            let host = authority.rsplit('@').next().unwrap_or_default();
+            format!("{host}:{path}")
+        } else {
+            url.to_owned()
+        }
+    } else {
+        url.to_owned()
+    };
+    sanitized.escape_debug().to_string()
+}
+
+fn checkout_inner(git: &str, url: &str, revision: &str, path: &Path, cache: &Path) -> Result<()> {
     if revision.len() != 40 && revision.len() != 64
         || !revision.bytes().all(|b| b.is_ascii_hexdigit())
     {
@@ -107,7 +141,9 @@ pub(super) fn checkout(
             true,
         )?;
         if origin.trim() != url {
-            bail!("package checkout at `{}` belongs to a different repository; remove this cached checkout and reload", path.display());
+            bail!(
+                "checkout belongs to a different repository; remove this cached checkout and reload"
+            );
         }
         let current = run(
             git,
@@ -313,7 +349,7 @@ where
         .context("running repository acquisition command")?;
     if check && !status.success() {
         // Git's stderr and argv can contain credentials embedded in repository URLs.
-        bail!("repository acquisition failed ({status}); check repository access and the pinned revision");
+        bail!("Git command failed ({status}); check repository access and the pinned revision");
     }
     Ok(String::from_utf8(stdout)?)
 }

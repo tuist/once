@@ -412,8 +412,8 @@ SH
     The stdout should include '"status":"completed"'
     The path "$WORKSPACE/once.toml" should not be exist
     The path "$WORKSPACE/.once/out/SignalApp/SignalApp.app/SignalApp" should be file
-    The path "$WORKSPACE/.once/out/SignalShare/SignalShare.app/SignalShare" should be file
-    The path "$WORKSPACE/.once/out/SignalNotification/SignalNotification.app/SignalNotification" should be file
+    The path "$WORKSPACE/.once/out/SignalShare/SignalShare.appex/SignalShare" should be file
+    The path "$WORKSPACE/.once/out/SignalNotification/SignalNotification.appex/SignalNotification" should be file
     End
 
   It 'lists the Signal-style targets with their Once kinds'

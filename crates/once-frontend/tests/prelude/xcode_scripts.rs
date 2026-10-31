@@ -226,3 +226,48 @@ result = repr([env["DEVELOPER_DIR"], env["CUSTOM_TOOL"], env["TOOLCHAIN_DIR"], e
         r#"["/opt/Selected Xcode/Contents/Developer", "/opt/Selected Xcode/Contents/Developer/Toolchains", "/opt/Selected Xcode/Contents/Developer/Toolchains/XcodeDefault.xctoolchain", "YES", ""]"#
     );
 }
+
+#[test]
+fn unresolved_script_paths_are_skipped_in_both_variable_syntaxes() {
+    let source = format!(
+        r#"{}
+def workspace_root():
+    return "/workspace"
+result = repr(_xcode_shell_phase_paths({{"inputPaths": ["${{UNKNOWN}}/a", "$(UNKNOWN)/b", "prefix/${{UNKNOWN}}/c", "prefix/$(UNKNOWN)/d", "$(SRCROOT)/known"]}}, "inputPaths", "", {{"SRCROOT": "/workspace"}}))
+"#,
+        xcode_prelude_source()
+    );
+    assert_eq!(eval_prelude_source_to_repr(source).unwrap(), r#"["known"]"#);
+}
+
+#[test]
+fn native_scripts_resolve_dsym_defaults_and_overrides() {
+    for (settings, folder, filename) in [
+        ("", "/workspace/.once/out/App", "App.app.dSYM"),
+        (
+            r#", "DWARF_DSYM_FOLDER_PATH": "$(TARGET_BUILD_DIR)/Symbols", "DWARF_DSYM_FILE_NAME": "Custom.dSYM""#,
+            "/workspace/.once/out/App/Symbols",
+            "Custom.dSYM",
+        ),
+    ] {
+        let source = format!(
+            r#"{}
+def workspace_root():
+    return "/workspace"
+phase = {{"isa": "PBXShellScriptBuildPhase", "shellScript": "verify", "inputPaths": ["${{DWARF_DSYM_FOLDER_PATH}}/${{DWARF_DSYM_FILE_NAME}}"]}}
+phases = _xcode_shell_script_phases({{"label": {{"package": "", "id": "Seed"}}, "attr": {{"project": "App.xcodeproj"}}}}, {{"phase": phase}}, {{"buildPhases": ["phase"]}}, {{"FULL_PRODUCT_NAME": "App.app"{settings}}}, "", "App")
+action = json_decode(phases["actions"][0])
+result = repr([action["inputs"], action["env"]["DWARF_DSYM_FOLDER_PATH"], action["env"]["DWARF_DSYM_FILE_NAME"]])
+"#,
+            xcode_prelude_source()
+        );
+        let result = eval_prelude_source_to_repr(source).unwrap();
+        assert_eq!(
+            result,
+            format!(
+                r#"[["{}"], "{folder}", "{filename}"]"#,
+                format!("{folder}/{filename}").trim_start_matches("/workspace/")
+            )
+        );
+    }
+}

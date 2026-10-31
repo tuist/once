@@ -65,6 +65,72 @@ fn acquire(
 }
 
 #[test]
+fn git_acquisition_failure_reports_safe_repository_and_checkout_through_both_bridges() {
+    let temporary = TempDir::new().unwrap();
+    let root = temporary.path();
+    let tool = root.join("git-wrapper");
+    executable(
+        &tool,
+        "#!/bin/sh\nprintf 'stdout-secret %s\\n' \"$@\"\nprintf 'stderr-secret %s\\n' \"$@\" >&2\nexit 128\n",
+    );
+    let url = "https://username-secret:password-secret@example.invalid/team/private.git?token=query-secret#fragment-secret";
+    std::fs::write(root.join("repository-url"), url).unwrap();
+    for bridge in ["host_git_checkout", "host_git_checkouts"] {
+        let store = AnalysisStore::with_host_cache(
+            root.into(),
+            String::new(),
+            String::new(),
+            HostCache::with_tool_paths(BTreeMap::from([(
+                "git".into(),
+                tool.display().to_string(),
+            )])),
+        );
+        let arguments = format!(
+            "url, {:?}, {:?}, {:?}",
+            "a".repeat(40),
+            root.join("checkouts/private-package").display().to_string(),
+            root.join("cache").display().to_string(),
+        );
+        let call = if bridge == "host_git_checkout" {
+            format!("host_git_checkout({arguments})")
+        } else {
+            format!(
+                "host_git_checkouts([{{\"url\": url, \"revision\": {:?}, \"path\": {:?}}}], cache_root = {:?})",
+                "a".repeat(40),
+                root.join("checkouts/private-package").display().to_string(),
+                root.join("cache").display().to_string(),
+            )
+        };
+        let source = format!(
+            "url = host_file_read({:?})\n{call}",
+            root.join("repository-url").display().to_string(),
+        );
+        let (_, result) = with_active_store(store, || run(&source));
+        let error = result.unwrap_err().to_string();
+        for expected in [
+            "repository acquisition failed",
+            "https://example.invalid/team/private.git",
+            "checkouts/private-package",
+            "128",
+            "check repository access and the pinned revision",
+        ] {
+            assert!(error.contains(expected), "{error}");
+        }
+        for secret in [
+            "username-secret",
+            "password-secret",
+            "query-secret",
+            "fragment-secret",
+            "stderr-secret",
+            "stdout-secret",
+        ] {
+            assert!(!error.contains(secret), "{error}");
+        }
+        assert!(!root.join("checkouts/private-package").exists());
+    }
+}
+
+#[test]
 fn shared_git_preserves_origin_identity_when_git_rewrites_repository_urls() {
     let temporary = TempDir::new().unwrap();
     let root = temporary.path();

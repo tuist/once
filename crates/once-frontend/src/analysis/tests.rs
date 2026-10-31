@@ -491,7 +491,7 @@ run_action(
 }
 
 #[test]
-fn run_action_can_inherit_parent_environment_only_when_uncacheable() {
+fn run_action_can_inherit_parent_environment_only_when_unsandboxed() {
     let tmp = TempDir::new().unwrap();
     let store = store_for(tmp.path(), "apps/service");
     let (store, ()) = with_active_store(store, || {
@@ -507,14 +507,11 @@ run_action(
     assert!(store.actions[0].inherit_parent_env);
 
     let store = store_for(tmp.path(), "apps/service");
-    let (_, err) = with_active_store(store, || {
-        run(r#"run_action(argv = ["tool"], inherit_parent_env = True)"#).unwrap_err()
+    let (store, ()) = with_active_store(store, || {
+        run(r#"run_action(argv = ["tool"], inherit_parent_env = True, sandbox = "off")"#).unwrap();
     });
-    let message = format!("{err:?}");
-    assert!(
-        message.contains("inherit_parent_env requires cacheable = False"),
-        "{message}"
-    );
+    assert!(store.actions[0].cacheable);
+    assert!(store.actions[0].inherit_parent_env);
 
     let message = format!(
         "{:#}",

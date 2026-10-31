@@ -1423,8 +1423,8 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     /// execution; `cwd`: optional workspace-relative directory to run
     /// the command in, defaulting to the workspace root; `env`: optional
     /// string->string dict; `cacheable`: optional bool, default true;
-    /// `inherit_parent_env`: optional bool for uncached local run actions,
-    /// default false;
+    /// `inherit_parent_env`: optional bool for unsandboxed local run actions,
+    /// default false; cacheable actions hash the effective environment;
     /// `sandbox`: optional local filesystem sandbox policy, `"off"`,
     /// `"inputs"`, or `"copied-inputs"`; the copied mode materializes
     /// private input copies for tools that cannot consume links;
@@ -1498,11 +1498,6 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             .unwrap_or_default();
         let cacheable = cacheable.unwrap_or(true);
         let inherit_parent_env = inherit_parent_env.unwrap_or(false);
-        if cacheable && inherit_parent_env {
-            return Err(anyhow!(
-                "run_action inherit_parent_env requires cacheable = False"
-            ));
-        }
         if inherit_parent_env && sandbox.as_deref().is_some_and(|mode| mode != "off") {
             return Err(anyhow!(
                 "run_action inherit_parent_env requires sandbox = \"off\""

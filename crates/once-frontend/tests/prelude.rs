@@ -7306,6 +7306,12 @@ ctx = {{
                 ],
                 "label_id": "shared/Shared",
         }}],
+    }}, {{
+        "label_id": "Widget",
+        "application_extension": True,
+        "app_path": ".once/out/Widget/Widget.appex",
+        "app_files": [".once/out/Widget/Widget.appex/Widget", ".once/out/Widget/Widget.appex/Info.plist"],
+        "host_link_archives": [".once/out/WidgetOnly.a"],
     }}],
     "srcs": ["Sources/**/*.swift", "Sources/**/*.m"],
     "build_dir": ".once/out/app/App",
@@ -7345,6 +7351,8 @@ result = repr([
     );
     let generated_header = ".once/out/shared/Headers/Shared/Shared-Swift.h";
     let compile = action_by_identifier(&store, "apple_application_compile_App");
+    assert!(!compile.depends_on_prior_actions);
+    assert!(!compile.argv.iter().any(|arg| arg.contains("WidgetOnly")));
     assert!(compile.inputs.iter().any(|input| input == generated_header));
     assert!(compile
         .inputs
@@ -7363,6 +7371,27 @@ result = repr([
         ]
     }));
     let module = action_by_identifier(&store, "apple_application_module_App");
+    assert!(!module.depends_on_prior_actions);
+    let file_map = ".once/out/app/ModuleIntermediates/output-file-map.json";
+    assert!(module
+        .argv
+        .windows(2)
+        .any(|args| args == ["-output-file-map", file_map]));
+    assert!(module.inputs.iter().any(|input| input == file_map));
+    let map = store
+        .actions
+        .iter()
+        .find_map(|action| match &action.operation {
+            Some(DeclaredActionOperation::WriteFile { path, bytes }) if path == file_map => {
+                Some(serde_json::from_slice::<serde_json::Value>(bytes).unwrap())
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        map["app/Sources/App.swift"]["swiftmodule"],
+        ".once/out/app/App/ModuleIntermediates/0.swiftmodule"
+    );
     assert!(module.inputs.iter().any(|input| input == generated_header));
     assert!(module
         .inputs
@@ -7388,6 +7417,7 @@ result = repr([
         &store,
         "apple_application_clang_compile_App_app_Sources_Legacy.m",
     );
+    assert!(!clang.depends_on_prior_actions);
     assert!(clang
         .inputs
         .iter()
@@ -7452,6 +7482,15 @@ result = repr([
         ]
     }));
     let codesign = action_by_identifier(&store, "apple_application_codesign_App");
+    let extension = action_by_identifier(&store, "apple_application_embed_extension_Widget.appex");
+    assert_eq!(
+        extension.outputs,
+        [".once/out/app/App.app/PlugIns/Widget.appex"]
+    );
+    assert!(codesign.inputs.contains(&extension.outputs[0]));
+    assert!(extension
+        .inputs
+        .contains(&".once/out/Widget/Widget.appex/Widget".into()));
     assert!(
         !codesign.argv.iter().any(|arg| arg == "--entitlements"),
         "{:?}",
@@ -14798,7 +14837,7 @@ result = repr(True)
         [".once/out/App/App", ".once/out/App/App/Intermediates"]
     );
     assert!(generator.cacheable);
-    assert!(!generator.inherit_parent_env);
+    assert!(generator.inherit_parent_env);
     assert!(generator
         .toolchain_identity
         .as_deref()

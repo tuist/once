@@ -924,9 +924,13 @@ and includes its identity in the action's cache key.
   inputs retain cache reuse. A raw file with bytes exactly equal to an earlier
   fingerprint at the same path cannot be restored during that invocation.
 - `inherit_parent_env`: `False` by default. Set `True` only on an
-  uncacheable, unsandboxed local run action that should behave like a command
+  unsandboxed local run action that should behave like a command
   launched from the user's development shell. Explicit `env` values take
-  precedence.
+  precedence. Cacheable actions capture the effective UTF-8 environment when
+  preparing execution and include it in cache identity. Environment values are
+  not stored in the derived graph. Targets containing these actions revisit
+  action preparation on each invocation rather than reusing a whole-target
+  outcome, so caller environment changes cannot bypass cache-key validation.
 - `depends_on_prior_actions`: `True` by default. When true, each action key
   includes prior actions declared by the same target and acts as an ordering
   barrier. With `False`, declared input and output paths determine ordering;

@@ -1995,7 +1995,7 @@ def _apple_library_impl(ctx):
         resolved_header_dir = _package_relative(ctx, header_dir)
         if resolved_header_dir and resolved_header_dir not in own_private_header_dirs:
             own_private_header_dirs.append(resolved_header_dir)
-    own_private_header_files = _unique((attrs.get("private_headers") or []) + _apple_header_inputs(ctx, own_private_header_dirs))
+    own_private_header_files = _unique((attrs.get("private_headers") or []) + _apple_header_inputs(ctx, own_private_header_dirs) + _filter_by_extensions(generated_srcs, [".h", ".hh", ".hpp", ".hxx", ".inc", ".inl", ".ipp", ".tpp", ".def"]))
 
     staged_headers = []
     staged_headers_dir = ""
@@ -2433,6 +2433,7 @@ def _apple_library_impl(ctx):
                     argv = swift_compile_argv,
                     inputs = swift_compile_inputs,
                     outputs = swift_compile_outputs,
+                    depends_on_prior_actions = False,
                     clean_paths = obsolete_modulemaps,
                     create_dirs = [swift_object_dir],
                     env = swiftc["env"],
@@ -2448,6 +2449,7 @@ def _apple_library_impl(ctx):
                     argv = swift_compile_argv,
                     inputs = swift_compile_inputs,
                     outputs = swift_compile_outputs,
+                    depends_on_prior_actions = False,
                     clean_paths = obsolete_modulemaps,
                     create_dirs = [swift_object_dir],
                     env = swiftc["env"],
@@ -2587,6 +2589,7 @@ def _apple_library_impl(ctx):
                         argv = argv,
                         inputs = inputs,
                         outputs = [obj],
+                        depends_on_prior_actions = False,
                         env = clang["env"],
                         sandbox = "off",
                         toolchain_identity = clang["identity"],
@@ -2599,6 +2602,7 @@ def _apple_library_impl(ctx):
                         argv = argv,
                         inputs = inputs,
                         outputs = [obj],
+                        depends_on_prior_actions = False,
                         env = clang["env"],
                         toolchain_identity = clang["identity"],
                         identifier = "clang_compile_" + module_name + arch_suffix + "_" + sanitised,
@@ -4528,6 +4532,31 @@ def _apple_embed_resource_bundles(ctx, deps, bundle_dir, codesign, identifier_pr
         "files": embedded_files,
     }
 
+def _apple_embed_extensions(ctx, deps, contents_dir):
+    outputs = []
+    destinations = {}
+    for dep in deps:
+        if not dep.get("application_extension") or not dep.get("app_path"):
+            continue
+        source = dep["app_path"]
+        destination = contents_dir + "/PlugIns/" + _basename(source)
+        if destination in destinations:
+            if destinations[destination] != source:
+                fail(ctx["label"]["id"] + ": extension bundle collision for `" + _basename(source) + "`")
+            continue
+        destinations[destination] = source
+        output = declare_output(destination)
+        copy_path(
+            source,
+            output,
+            kind = "tree",
+            inputs = dep.get("app_files") or [source],
+            identifier = "apple_application_embed_extension_" + _basename(source),
+            source_files = _action_source_files([source]),
+        )
+        outputs.append(output)
+    return outputs
+
 def shell_quote_for_action(path):
     # Single-quote the path and escape any embedded single quotes by
     # closing, escaping with double-quoted apostrophe, and reopening.
@@ -4741,7 +4770,7 @@ def _apple_run_build_actions(ctx, actions, identifier_prefix, product_inputs = [
             cwd = action.get("cwd") or None,
             env = action_env,
             cacheable = cacheable,
-            inherit_parent_env = not cacheable,
+            inherit_parent_env = action.get("script") != None or not cacheable,
             sandbox = "copied-inputs" if cacheable and action.get("script") == None else "off",
             clean_paths = [product_root + "/_CodeSignature", product_root + "/Contents/_CodeSignature"] if product_root and not cacheable else [],
             create_dirs = _unique(output_dirs + [ctx["build_dir"], ctx["build_dir"] + "/Intermediates"]),
@@ -4836,7 +4865,7 @@ def _apple_application_impl(ctx):
         swift_flags = list(swift_flags) + ["-enable-testing"]
 
     is_macos = platform in ["macos", "macosx"]
-    app_dir = product_name + ".app"
+    app_dir = product_name + (".appex" if application_extension else ".app")
     app_path = ctx["build_dir"] + "/" + app_dir
     contents_dir = app_dir + "/Contents" if is_macos else app_dir
     resources_dir = contents_dir + "/Resources" if is_macos else app_dir
@@ -4854,6 +4883,7 @@ def _apple_application_impl(ctx):
     assembly_srcs = _filter_assembly_sources(all_srcs)
     if len(swift_srcs) == 0:
         fail("apple_application " + ctx["label"]["id"] + " has no Swift sources (.swift)")
+    private_header_files = _unique(private_header_files + _filter_by_extensions(generated_srcs, [".h", ".hh", ".hpp", ".hxx", ".inc", ".inl", ".ipp", ".tpp", ".def"]))
     emits_swift_module = enable_testing or len(objc_srcs) > 0
     swiftmodule = declare_output(product_name + ".swiftmodule") if emits_swift_module else ""
     swiftdoc = declare_output(product_name + ".swiftdoc") if emits_swift_module else ""
@@ -5212,7 +5242,10 @@ def _apple_application_impl(ctx):
             module_argv.append(flag)
         for src in swift_srcs:
             module_argv.append(src)
-        module_inputs = list(swift_srcs)
+        module_file_map = declare_output("ModuleIntermediates/output-file-map.json")
+        write_path(module_file_map, _json_encode({src: {"swiftmodule": ctx["build_dir"] + "/ModuleIntermediates/" + str(index) + ".swiftmodule"} for index, src in enumerate(swift_srcs)}))
+        module_argv.extend(["-output-file-map", module_file_map])
+        module_inputs = list(swift_srcs) + [module_file_map]
         if bridging_header and _package_relative(ctx, bridging_header) not in module_inputs:
             module_inputs.append(_package_relative(ctx, bridging_header))
         for mmap in dep_modulemaps:
@@ -5240,6 +5273,8 @@ def _apple_application_impl(ctx):
             argv = module_argv,
             inputs = module_inputs,
             outputs = [swiftmodule, swiftdoc] + swift_module_sidecars + ([swift_objc_header] if swift_objc_header else []),
+            depends_on_prior_actions = False,
+            create_dirs = [ctx["build_dir"] + "/ModuleIntermediates"],
             env = swiftc["env"],
             toolchain_identity = swiftc["identity"],
             identifier = "apple_application_module_" + product_name,
@@ -5338,6 +5373,7 @@ def _apple_application_impl(ctx):
                 outputs = [obj],
                 env = clang["env"],
                 toolchain_identity = clang["identity"],
+                depends_on_prior_actions = False,
                 identifier = "apple_application_clang_compile_" + module_name + "_" + sanitised,
             )
             clang_objects.append(obj)
@@ -5360,6 +5396,7 @@ def _apple_application_impl(ctx):
         argv = swift_argv,
         inputs = swift_inputs,
         outputs = [executable],
+        depends_on_prior_actions = False,
         env = swiftc["env"],
         toolchain_identity = swiftc["identity"],
         identifier = "apple_application_compile_" + product_name,
@@ -5381,7 +5418,7 @@ def _apple_application_impl(ctx):
             "CFBundleIdentifier": bundle_id,
             "CFBundleInfoDictionaryVersion": "6.0",
             "CFBundleName": product_name,
-            "CFBundlePackageType": "APPL",
+            "CFBundlePackageType": "XPC!" if application_extension else "APPL",
             "CFBundleShortVersionString": "1.0",
             "CFBundleVersion": "1",
             "MinimumOSVersion": minimum_os,
@@ -5435,6 +5472,7 @@ def _apple_application_impl(ctx):
         codesign,
         "apple_application_embed_resource",
     )
+    embedded_extensions = _apple_embed_extensions(ctx, deps, contents_dir)
 
     # Ad-hoc codesign the .app bundle itself. Must run after embedded
     # frameworks land so their signature is included in the bundle's
@@ -5448,6 +5486,7 @@ def _apple_application_impl(ctx):
         cs_inputs.append(stamp)
     for stamp in embedded_resource_bundles["stamps"]:
         cs_inputs.append(stamp)
+    cs_inputs.extend(embedded_extensions)
     script_outputs = _apple_run_postbuild_actions(ctx, attrs, _unique(cs_inputs + embedded_frameworks["files"] + embedded_resource_bundles["files"]), app_path)
     cs_inputs = _unique(cs_inputs + script_outputs)
     resource_files = _unique(resource_files + script_outputs)
@@ -5494,7 +5533,7 @@ def _apple_application_impl(ctx):
         "app_executable": executable,
         "application_extension": application_extension,
         "host_link_archives": dep_archives,
-        "app_files": [executable, info_plist, app_cs_stamp] + resource_files + embedded_frameworks["files"] + embedded_resource_bundles["files"] + ([asset_car] if asset_car else []) + ([swiftmodule, swiftdoc] if enable_testing else []),
+        "app_files": [executable, info_plist, app_cs_stamp] + resource_files + embedded_frameworks["files"] + embedded_resource_bundles["files"] + embedded_extensions + ([asset_car] if asset_car else []) + ([swiftmodule, swiftdoc] if enable_testing else []),
         "bundle_id": bundle_id,
         "platform": platform,
         "sdk_variant": sdk_variant,
@@ -7728,7 +7767,7 @@ apple_executable = target_kind(
 )
 
 apple_application = target_kind(
-    docs = "Builds an ad-hoc signed Apple application bundle (`Foo.app`). macOS uses Contents/MacOS, Contents/Resources, and Contents/Frameworks; other platforms use a flat bundle. Distribution signing and notarization belong in a separate credential-isolated workflow operating on a copy of the bundle.",
+    docs = "Builds an ad-hoc signed Apple application bundle (`Foo.app`) or app extension (`Foo.appex`). Extension dependencies are embedded in the host's PlugIns directory before signing. macOS uses Contents/MacOS, Contents/Resources, and Contents/Frameworks; other platforms use a flat bundle. Distribution signing and notarization belong in a separate credential-isolated workflow operating on a copy of the bundle.",
     impl = _apple_application_impl,
     attrs = [
         attr("prepackage_actions", "list<string>", default = "[]", docs = "Ordered serialized scripts run after linking and before resource packaging.", configurable = False),
@@ -7773,7 +7812,7 @@ apple_application = target_kind(
         attr("prefix_header", "string", docs = "Prefix header included before every C-family source"),
         attr("entitlements_substitutions", "map<string,string>", default = "{}", docs = "Build-setting values substituted into `$(NAME)` or `${NAME}` placeholders before signing", configurable = False),
         attr("prebuild_actions", "list<string>", default = "[]", docs = "Ordered serialized build preparation actions that run before compilation.", configurable = False),
-        attr("application_extension", "bool", default = "false", docs = "Build as an app extension: entered through `NSExtensionMain` and compiled against the app-extension-safe API surface"),
+        attr("application_extension", "bool", default = "false", docs = "Build a .appex bundle entered through NSExtensionMain and compiled against the app-extension-safe API surface; application dependencies embed it in PlugIns"),
         attr("asset_catalogs", "list<string>", default = "[]", docs = "Asset catalogs (`.xcassets`) compiled into the bundle's `Assets.car` and used to generate type-safe `ImageResource`/`ColorResource` accessors"),
         attr("app_icon", "string", docs = "Asset catalog app-icon set name (`ASSETCATALOG_COMPILER_APPICON_NAME`) compiled into the app icon"),
         attr("asset_symbols", "bool", default = "true", docs = "Generate Swift asset symbols from `asset_catalogs` (`ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS`)"),

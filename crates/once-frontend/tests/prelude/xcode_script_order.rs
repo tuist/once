@@ -118,6 +118,8 @@ result = repr(_apple_run_prepackage_actions(ctx, {{"prepackage_actions": [
     );
     let action = action_by_identifier(&store, "prepackage_action:App:fixtures");
     assert!(action.cacheable);
+    assert!(action.inherit_parent_env);
+    assert_eq!(action.sandbox.as_deref(), Some("off"));
     assert_eq!(
         action.outputs,
         vec![

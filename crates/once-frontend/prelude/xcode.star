@@ -2004,7 +2004,7 @@ def _xcode_lowered_attrs(ctx, attrs):
 
 def _xcode_script_path(value, subs):
     path = _xcode_resolve_vars(value or "", subs)
-    if not path or path.startswith("$("):
+    if not path or "$(" in path or "${" in path:
         return ""
     # Xcode resolves relative script input and output paths against `SRCROOT`.
     source_root = str(subs.get("SRCROOT") or "")
@@ -2208,6 +2208,10 @@ def _xcode_shell_script_phases(ctx, objects, target, subs, project_dir, target_n
     script_subs["PROJECT_TEMP_DIR"] = derived_dir + "/Intermediates"
     script_subs["TARGET_TEMP_DIR"] = derived_dir + "/Intermediates"
     script_subs["CONFIGURATION_TEMP_DIR"] = derived_dir + "/Intermediates"
+    if not script_subs.get("DWARF_DSYM_FOLDER_PATH"):
+        script_subs["DWARF_DSYM_FOLDER_PATH"] = "$(CONFIGURATION_BUILD_DIR)"
+    if not script_subs.get("DWARF_DSYM_FILE_NAME"):
+        script_subs["DWARF_DSYM_FILE_NAME"] = "$(FULL_PRODUCT_NAME).dSYM"
     developer_dir = ctx["attr"].get("xcode_developer_dir") or ""
     if not developer_dir and "/Platforms/" in (script_subs.get("SDKROOT") or ""):
         developer_dir = script_subs["SDKROOT"].split("/Platforms/")[0]
@@ -2841,13 +2845,20 @@ def _xcode_package_resolved_pins_at(package_path):
         return {}
     return _xcode_resolved_pins_from_path(package_path + "/Package.resolved")
 
+def _xcode_same_package_path(left, right):
+    if left == right:
+        return True
+    left = _xcode_abs(left)
+    right = _xcode_abs(right)
+    return host_path_exists(left) and host_path_exists(right) and host_path_is_within(left, right) and host_path_is_within(right, left)
+
 def _xcode_expand_swift_package_infos(ctx, initial_infos, cache = None, follow_resolved = True):
     infos = list(initial_infos)
     known = {}
     for info in infos:
         key = (info.get("identity") or "").lower()
         path = _xcode_normalize_path(info["path"])
-        if key in known and known[key] != path:
+        if key in known and not _xcode_same_package_path(known[key], path):
             fail("Swift package identity `" + key + "` refers to both `" + known[key] + "` and `" + path + "`; remove the stale package reference or give the dependencies distinct identities")
         known[key] = path
     pending = list(infos)
@@ -2864,7 +2875,7 @@ def _xcode_expand_swift_package_infos(ctx, initial_infos, cache = None, follow_r
                     identity = local.get("nameForTargetDependencyResolutionOnly") or local.get("identity") or _basename(path)
                     key = identity.lower()
                     path = _xcode_normalize_path(path)
-                    if path and key in known and known[key] != path:
+                    if path and key in known and not _xcode_same_package_path(known[key], path):
                         fail("Swift package identity `" + key + "` refers to both `" + known[key] + "` and explicit .package(path: \"" + path + "\"); remove the stale package reference or give the dependencies distinct identities")
                     if not path or key in known or not host_file_exists(_xcode_abs(path + "/Package.swift")):
                         continue
@@ -4130,13 +4141,6 @@ def _xcode_product_kind(product_type):
         return "library"
     if product_type in ["com.apple.product-type.bundle.unit-test", "com.apple.product-type.bundle.ui-testing"]:
         return "test"
-    # App extensions (share, widget, notification-service, intents, sticker
-    # packs, ExtensionKit, driver/system/PlugInKit/Spotlight/TV variants) and
-    # embedded watchOS apps are executable bundles. They lower to
-    # `apple_application` so their first-party sources compile and cache like any
-    # other app module. The bundle wrapper an `.appex`/watch app needs (extension
-    # point Info.plist, `.appex` suffix) is not modeled yet, so they build as app
-    # bundles rather than embedded extension bundles.
     if _xcode_is_extension_product(product_type):
         return "extension"
     if product_type in ["com.apple.product-type.application.watchapp2", "com.apple.product-type.application.watchapp"]:
@@ -5365,7 +5369,7 @@ def _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_
         product_name_seed = target_name
     resolved_sdkroot = host_command([host_which("xcrun"), "--sdk", sdk_name, "--show-sdk-path"], env = _developer_env(ctx["attr"].get("xcode_developer_dir") or "")).strip() if sdk_name else sdkroot
     subs = _xcode_setting_subs(ctx, target_name, product_name_seed, resolved_sdkroot, settings, project_dir, selected_configuration)
-    wrapper_suffix = {"test": ".xctest", "application": ".app", "extension": ".app", "watch_app": ".app", "framework": ".framework", "bundle": ".bundle"}.get(kind) or ""
+    wrapper_suffix = {"test": ".xctest", "application": ".app", "extension": ".appex", "watch_app": ".app", "framework": ".framework", "bundle": ".bundle"}.get(kind) or ""
     static_library = kind == "library" or (kind == "framework" and _xcode_framework_is_static(settings, product_type))
     if static_library:
         wrapper_suffix = ""

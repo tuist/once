@@ -4,7 +4,7 @@ def _apple_export_artifact(ctx, provider, info_plist, minimum_os, architecture):
     sdk_variant = "device" if platform == "macos" else provider["sdk_variant"]
     archive = declare_output("artifact/" + provider["product_name"] + ".zip")
     write_archive(
-        [_artifact_entry(provider["app_path"], provider["product_name"] + ".app", kind = "tree", mode = 493)],
+        [_artifact_entry(provider["app_path"], _basename(provider["app_path"]), kind = "tree", mode = 493)],
         archive,
         format = "zip",
         inputs = provider["app_files"],

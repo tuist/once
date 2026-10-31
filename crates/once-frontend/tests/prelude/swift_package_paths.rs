@@ -230,6 +230,34 @@ _xcode_expand_swift_package_infos({{}}, [{{"identity": "same", "path": "stale/Sa
 
 #[cfg(unix)]
 #[test]
+fn swift_package_identity_accepts_existing_aliases_but_not_distinct_directories() {
+    let workspace = TempDir::new().unwrap();
+    let package = workspace.path().join("FetchDeeplinks");
+    std::fs::create_dir(&package).unwrap();
+    std::fs::create_dir(package.join("Nested")).unwrap();
+    std::fs::create_dir(workspace.path().join("Other")).unwrap();
+    std::os::unix::fs::symlink(&package, workspace.path().join("Alias")).unwrap();
+    let mut aliases = vec!["Alias"];
+    if workspace.path().join("FetchDeepLinks").exists() {
+        aliases.push("FetchDeepLinks");
+    }
+    for alias in aliases {
+        let source = format!(
+            r#"{}
+infos = _xcode_expand_swift_package_infos({{}}, [{{"identity": "fetchdeeplinks", "path": "FetchDeeplinks", "info": {{"dependencies": [{{"fileSystem": [{{"identity": "fetchdeeplinks", "path": workspace_root() + "/{alias}"}}]}}]}}}}], follow_resolved = False)
+result = repr([len(infos), _xcode_same_package_path("FetchDeeplinks", "Other"), _xcode_same_package_path("FetchDeeplinks", "FetchDeeplinks/Nested")])
+"#,
+            xcode_prelude_source()
+        );
+        let (_, result) = with_active_store(store_for(workspace.path(), ""), || {
+            eval_prelude_source_to_repr(source)
+        });
+        assert_eq!(result.unwrap(), "[1, False, False]");
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn swift_package_warm_manifest_dump_invalidates_manifest_source_additions_and_removals() {
     use std::os::unix::fs::PermissionsExt;
     for discovery in [false, true] {

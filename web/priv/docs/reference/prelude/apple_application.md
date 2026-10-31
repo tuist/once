@@ -44,6 +44,11 @@ property lists use `LSMinimumSystemVersion` and omit iOS device-family keys.
 The `macosx` platform alias uses the same layout. Other Apple platforms retain
 their flat bundle layout.
 
+With `application_extension = true`, the product uses an `.appex` wrapper.
+Application-extension dependencies are copied into the host application's
+`PlugIns` directory, or `Contents/PlugIns` on macOS, before host signing.
+The extension's `info_plist` supplies its `NSExtension` metadata.
+
 Linux builds use Swift, xtool's Darwin SDK, and `rcodesign`. iOS device builds
 use ARM64 even on x86_64 Linux hosts. The output remains ad-hoc signed and must
 be provisioned and re-signed before installation on a physical device. The
@@ -98,7 +103,7 @@ import inference and should not be authored manually.
 | `bridging_header` | string | no |  | Objective-C bridging header imported into Swift sources |
 | `prefix_header` | string | no |  | Prefix header included before every C-family source |
 | `prebuild_actions` | list&lt;string&gt; | no | `[]` | Adapter-owned serialized build preparation actions that run before compilation. Records may opt into caching when they declare complete inputs and outputs; always-run records remain uncached |
-| `application_extension` | bool | no | `false` | Build as an app extension: entered through `NSExtensionMain` and compiled against the app-extension-safe interface |
+| `application_extension` | bool | no | `false` | Build an `.appex` bundle entered through `NSExtensionMain` and compiled against the app-extension-safe interface |
 | `app_icon` | string | no |  | Asset catalog app-icon set name compiled into the application icon |
 | `asset_symbols` | bool | no | `true` | Generate Swift asset symbols for the application's asset catalogs |
 | `enable_testing` | bool | no | `false` | Compile Swift with testability enabled so hosted test bundles can use `@testable import` |
@@ -120,7 +125,7 @@ for mapped build settings and file-list variables.
 
 | Edge | Accepts | Description |
 | --- | --- | --- |
-| `deps` | `apple_linkable`, `apple_framework`, `apple_resource`, `apple_swift_plugin`, `native_linkable`, `apple_generated_files` | Libraries, frameworks, resources, native linkables, compiler plugins, or generated package files consumed by the app |
+| `deps` | `apple_linkable`, `apple_framework`, `apple_resource`, `apple_application`, `apple_swift_plugin`, `native_linkable`, `apple_generated_files` | Libraries, frameworks, resources, application extensions, native linkables, compiler plugins, or generated package files consumed by the app |
 
 Transitive library resource bundles are embedded at the application root on
 iOS and in `Contents/Resources` on macOS.

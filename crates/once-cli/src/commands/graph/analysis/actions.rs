@@ -1792,6 +1792,31 @@ fn prepare_declared_action_with_inputs(
     source_digest_cache: Option<&SourceDigestCache>,
     sandbox_override: SandboxMode,
 ) -> Result<PreparedDeclaredAction> {
+    let inherited;
+    let declared = if declared.cacheable && declared.inherit_parent_env {
+        anyhow::ensure!(
+            effective_sandbox(declared.sandbox.as_deref(), sandbox_override)? == SandboxMode::Off,
+            "inherit_parent_env requires sandbox = \"off\""
+        );
+        let mut effective = declared.clone();
+        effective.env = env::vars_os()
+            .map(|(key, value)| {
+                Ok((
+                    key.into_string().map_err(|_| {
+                        anyhow::anyhow!("inherited environment names must be UTF-8")
+                    })?,
+                    value.into_string().map_err(|_| {
+                        anyhow::anyhow!("inherited environment values must be UTF-8")
+                    })?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        effective.env.extend(declared.env.clone());
+        inherited = effective;
+        &inherited
+    } else {
+        declared
+    };
     let env_keys = declared.env.keys().cloned().collect::<Vec<_>>();
     tracing::trace!(
         identifier = ?declared.identifier,

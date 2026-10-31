@@ -23,6 +23,9 @@ Describe 'real-world native graph shapes'
       cat "$WORKSPACE/build.err"
       return 1
     }
+    if grep -E 'Internal Error:|DecodingError\.dataCorrupted|Corrupted JSON' "$WORKSPACE/build.err"; then
+      return 1
+    fi
   }
 
   graph_validate() {
@@ -43,6 +46,72 @@ Describe 'real-world native graph shapes'
       ([$new[] | {action_digest, input_digest, outputs}] | sort_by(.action_digest)) ==
       ([$cold[0][] | {action_digest, input_digest, outputs}] | sort_by(.action_digest))
     ' "$WORKSPACE/evidence-warm.json" >/dev/null
+  }
+
+  exercise_warm_package_graph() {
+    local ONCE_ACTUAL_SWIFT ONCE_MANIFEST_PROBES actual_swift
+    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/xcode-generated-source-e2e/." "$WORKSPACE/"
+    mkdir -p "$SPEC_ROOT/tools"
+    actual_swift="$(xcrun --find swift)" || return
+    cat > "$SPEC_ROOT/tools/swift" <<'SH'
+#!/bin/sh
+case " $* " in
+  *' dump-package '*) printf 'dump\n' >> "$ONCE_MANIFEST_PROBES" ;;
+esac
+exec "$ONCE_ACTUAL_SWIFT" "$@"
+SH
+    cat > "$SPEC_ROOT/tools/xcrun" <<'SH'
+#!/bin/sh
+if [ "$#" = 2 ] && [ "$1" = --find ] && [ "$2" = swift ]; then
+  printf '%s/swift\n' "${0%/*}"
+else
+  exec /usr/bin/xcrun "$@"
+fi
+SH
+    chmod +x "$SPEC_ROOT/tools/swift" "$SPEC_ROOT/tools/xcrun"
+    export ONCE_ACTUAL_SWIFT="$actual_swift" ONCE_MANIFEST_PROBES="$SPEC_ROOT/manifest-probes"
+    PATH="$SPEC_ROOT/tools:$PATH" graph_snapshot || return
+    cp "$WORKSPACE/graph.json" "$SPEC_ROOT/cold-graph.json"
+    [ -s "$ONCE_MANIFEST_PROBES" ] || return 1
+    cp "$ONCE_MANIFEST_PROBES" "$SPEC_ROOT/cold-probes"
+    PATH="$SPEC_ROOT/tools:$PATH" graph_snapshot || return
+    cmp -s "$WORKSPACE/graph.json" "$SPEC_ROOT/cold-graph.json" || return
+    cmp -s "$ONCE_MANIFEST_PROBES" "$SPEC_ROOT/cold-probes" || return
+
+    mkdir -p "$WORKSPACE/Packages/Shared/Sources/Added"
+    printf 'public let added = 1\n' > "$WORKSPACE/Packages/Shared/Sources/Added/Added.swift"
+    perl -pi -e 's/targets: \[.target\(name: "Shared"\)\]/targets: [.target(name: "Shared"), .target(name: "Added")]/' "$WORKSPACE/Packages/Shared/Package.swift"
+    PATH="$SPEC_ROOT/tools:$PATH" graph_snapshot || return
+    jq -e 'to_entries | any(.key | endswith("_Added"))' "$WORKSPACE/graph.json" >/dev/null || return
+    [ "$(wc -l < "$ONCE_MANIFEST_PROBES")" -gt "$(wc -l < "$SPEC_ROOT/cold-probes")" ]
+  }
+
+  exercise_package_path_alias() {
+    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/xcode-generated-source-e2e/." "$WORKSPACE/"
+    [ -d "$WORKSPACE/Packages/sHaReD" ] || ln -s Shared "$WORKSPACE/Packages/sHaReD"
+    mkdir -p "$WORKSPACE/Packages/Consumer/Sources/Consumer"
+    cat > "$WORKSPACE/Packages/Consumer/Package.swift" <<'SWIFT'
+// swift-tools-version: 5.9
+import PackageDescription
+let package = Package(
+    name: "Consumer",
+    products: [.library(name: "Consumer", targets: ["Consumer"])],
+    dependencies: [.package(path: "../sHaReD")],
+    targets: [.target(name: "Consumer", dependencies: [.product(name: "Shared", package: "shared")])]
+)
+SWIFT
+    printf 'import Shared\npublic let consumed = Shared.prefix\n' > "$WORKSPACE/Packages/Consumer/Sources/Consumer/Consumer.swift"
+    perl -pi -e '
+      s/packageReferences = \(SHARED_PACKAGE\)/packageReferences = (SHARED_PACKAGE, CONSUMER_PACKAGE)/;
+      s/packageProductDependencies = \(SHARED_PRODUCT\)/packageProductDependencies = (SHARED_PRODUCT, CONSUMER_PRODUCT)/;
+      s/SHARED_PACKAGE = \{/CONSUMER_PACKAGE = {isa = XCLocalSwiftPackageReference; relativePath = Packages\/Consumer; }; CONSUMER_PRODUCT = {isa = XCSwiftPackageProductDependency; package = CONSUMER_PACKAGE; productName = Consumer; }; SHARED_PACKAGE = {/;
+    ' "$WORKSPACE/Generated.xcodeproj/project.pbxproj"
+    graph_snapshot || return
+    jq -e '
+      [to_entries[] | select(.key | endswith("_MacroHost") | not) | .value] |
+      (map(select(.attrs.module_name == "Shared")) | length) == 1 and
+      (map(select(.attrs.module_name == "Consumer")) | length) == 1
+    ' "$WORKSPACE/graph.json" >/dev/null
   }
 
   exercise_vapor_graph() {
@@ -209,6 +278,20 @@ Describe 'real-world native graph shapes'
     fi
     grep -q 'Requested lint failure' "$WORKSPACE/failure.err"
   }
+
+  It 'reuses real Swift manifest discovery on a warm graph and reloads changed package membership'
+    Skip if 'requires Xcode' native_graph_toolchain_unavailable
+    When call exercise_warm_package_graph
+    The status should be success
+    The output should equal ''
+  End
+
+  It 'accepts local package spelling aliases without duplicating a native package target'
+    Skip if 'requires Xcode' native_graph_toolchain_unavailable
+    When call exercise_package_path_alias
+    The status should be success
+    The output should equal ''
+  End
 
   It 'builds and tests an Xcode workspace with source-built tools, prebuild discovery, resources, and output-free commands'
     Skip if 'requires Xcode' native_graph_toolchain_unavailable

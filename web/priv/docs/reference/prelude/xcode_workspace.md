@@ -112,8 +112,10 @@ supplied by an external dependency manager or bootstrap step, including
 CocoaPods build integration and vendored binaries a repository fetches, has to
 be in place before the build.
 
-App extensions and embedded watch apps compile as application bundles. The
-`.appex` wrapper and its extension-point metadata are not modeled yet.
+App extensions build as `.appex` bundles and are embedded in their host
+application's `PlugIns` directory, or `Contents/PlugIns` on macOS. Extension-point
+metadata comes from the extension's `Info.plist`. Embedded watch applications
+still build as application bundles without their native embedded layout.
 
 Targets without compilable sources are skipped, and dependency edges to targets
 that were not emitted are dropped so the remaining graph stays loadable.

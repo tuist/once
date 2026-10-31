@@ -1542,11 +1542,12 @@ async fn build_one(
     .await
     .context("joining graph analysis task")??;
     let observations = analysis.observations.clone();
-    let has_deferred_actions = analysis.actions.iter().any(|action| {
-        matches!(
-            action.operation,
-            Some(once_frontend::analysis::DeclaredActionOperation::ExpandActions { .. })
-        )
+    let requires_action_replay = analysis.actions.iter().any(|action| {
+        action.inherit_parent_env
+            || matches!(
+                action.operation,
+                Some(once_frontend::analysis::DeclaredActionOperation::ExpandActions { .. })
+            )
     });
     let declared_inputs = analysis
         .actions
@@ -1584,7 +1585,7 @@ async fn build_one(
         .as_deref()
         .map(|key| target_outcomes::key(key, &action_digests, &available_inputs))
     {
-        if !has_deferred_actions {
+        if !requires_action_replay {
             target_outcomes.record(&target, key, &observations, &declared_inputs, &outcome);
         }
     }

@@ -299,6 +299,9 @@ workspace and products, not an Xcode derived-data directory. Product settings
 such as `EXECUTABLE_PATH`, `INFOPLIST_PATH`, and
 `UNLOCALIZED_RESOURCES_FOLDER_PATH` describe the bundle Once actually creates.
 Configuration-specific Once output directories are reflected at execution.
+Scripts inherit the caller's environment, with resolved build settings taking
+precedence. `DWARF_DSYM_FOLDER_PATH` and `DWARF_DSYM_FILE_NAME` identify the
+configured symbol-bundle location.
 
 Input and output paths become graph inputs and outputs. File-list contents
 are expanded for dependency tracking, while the script receives the separate
@@ -335,9 +338,11 @@ Script ordering uses preparation, pre-package, and post-package stages. Projects
 that interleave repeated copy or resource phases with scripts may require
 explicit graph declarations to preserve that finer-grained ordering.
 
-App extensions and embedded watch apps compile as application bundles. The
-`.appex` wrapper and its extension-point metadata are not modeled yet, so their
-sources compile and cache but the embedded bundle layout is not reproduced.
+App extensions build as `.appex` bundles. Application dependencies that are
+extensions are embedded under `PlugIns`, or `Contents/PlugIns` on macOS, before
+the host application is signed. Supply extension-point metadata through the
+extension's `Info.plist`. Embedded watch applications still use application
+bundles; their native embedded layout is not reproduced.
 
 Targets with no compilable sources, such as a script-only extension, are
 skipped rather than lowered. Dependency edges to targets that were not emitted

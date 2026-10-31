@@ -1,0 +1,31 @@
+// !$*UTF8*$!
+{
+ archiveVersion = 1;
+ objectVersion = 56;
+ objects = {
+  ROOT = {isa = PBXProject; mainGroup = GROUP; buildConfigurationList = PROJECT_CONFIGS; targets = (HOST, WIDGET); };
+  GROUP = {isa = PBXGroup; sourceTree = "<group>"; children = (MAIN, HELPER, PRINCIPAL, WIDGET_HELPER); };
+  MAIN = {isa = PBXFileReference; path = Host/main.swift; sourceTree = "<group>"; };
+  HELPER = {isa = PBXFileReference; path = Host/Helper.swift; sourceTree = "<group>"; };
+  PRINCIPAL = {isa = PBXFileReference; path = Widget/Principal.swift; sourceTree = "<group>"; };
+  WIDGET_HELPER = {isa = PBXFileReference; path = Widget/Helper.swift; sourceTree = "<group>"; };
+  MAIN_BUILD = {isa = PBXBuildFile; fileRef = MAIN; };
+  HELPER_BUILD = {isa = PBXBuildFile; fileRef = HELPER; };
+  PRINCIPAL_BUILD = {isa = PBXBuildFile; fileRef = PRINCIPAL; };
+  WIDGET_HELPER_BUILD = {isa = PBXBuildFile; fileRef = WIDGET_HELPER; };
+  HOST_SOURCES = {isa = PBXSourcesBuildPhase; files = (MAIN_BUILD, HELPER_BUILD); };
+  WIDGET_SOURCES = {isa = PBXSourcesBuildPhase; files = (PRINCIPAL_BUILD, WIDGET_HELPER_BUILD); };
+  PROJECT_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (PROJECT_DEBUG); defaultConfigurationName = Debug; };
+  PROJECT_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {SDKROOT = macosx; MACOSX_DEPLOYMENT_TARGET = 13.0; SWIFT_VERSION = 6.0; ENABLE_TESTABILITY = YES; }; };
+  HOST_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (HOST_DEBUG); defaultConfigurationName = Debug; };
+  HOST_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {PRODUCT_NAME = Host; PRODUCT_BUNDLE_IDENTIFIER = dev.once.native-extension; }; };
+  WIDGET_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (WIDGET_DEBUG); defaultConfigurationName = Debug; };
+  WIDGET_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {PRODUCT_NAME = Widget; PRODUCT_BUNDLE_IDENTIFIER = dev.once.native-extension.widget; INFOPLIST_FILE = Widget/Info.plist; }; };
+  HOST = {isa = PBXNativeTarget; name = Host; productType = "com.apple.product-type.application"; buildConfigurationList = HOST_CONFIGS; buildPhases = (ENVIRONMENT, PREPARE, HOST_SOURCES); dependencies = (WIDGET_DEP); };
+  WIDGET = {isa = PBXNativeTarget; name = Widget; productType = "com.apple.product-type.app-extension"; buildConfigurationList = WIDGET_CONFIGS; buildPhases = (WIDGET_SOURCES); dependencies = (); };
+  WIDGET_DEP = {isa = PBXTargetDependency; target = WIDGET; };
+  ENVIRONMENT = {isa = PBXShellScriptBuildPhase; name = "Cache declared caller environment"; shellPath = /bin/sh; shellScript = "set -eu\nprintf '%s|%s\\n' \"$ONCE_DECLARED_CI_VALUE\" \"$PRODUCT_NAME\" > \"$SCRIPT_OUTPUT_FILE_0\""; inputPaths = ("$(SRCROOT)/value.txt"); outputPaths = ("$(DERIVED_FILE_DIR)/environment.txt"); };
+  PREPARE = {isa = PBXShellScriptBuildPhase; name = "Generate source and unrelated directory"; alwaysOutOfDate = 1; shellPath = /bin/sh; shellScript = "set -eu\nsh \"$SRCROOT/prepare.sh\""; inputPaths = ("$(SRCROOT)/value.txt", "${NOT_DEFINED}/missing", "$(NOT_DEFINED)/missing"); outputPaths = ("$(SRCROOT)/Vendor/Plugin.app", "$(DERIVED_FILE_DIR)/Generated.swift"); };
+ };
+ rootObject = ROOT;
+}

@@ -196,6 +196,45 @@ EOF
     The stdout should include '"success":false'
   End
 
+  exercise_cached_environment() {
+    create_declared_action_workspace
+    cat > "$WORKSPACE/modules/demo.star" <<'EOF'
+def _demo_impl(ctx):
+    out = declare_output("environment.txt")
+    run_action(
+        argv = [host_which("sh"), "-c", "printf '%s:%s' \"$ONCE_INHERITED_VALUE\" \"$NATIVE_SETTING\" > \"$1\"", "sh", out],
+        outputs = [out],
+        inherit_parent_env = True,
+        sandbox = "off",
+        env = {"NATIVE_SETTING": "resolved"},
+    )
+    return {}
+
+demo_action = target_kind(
+    attrs = [attr("message", "string")],
+    capabilities = [capability("build", ["default"])],
+    impl = _demo_impl,
+)
+EOF
+    for value in first first second second; do
+      ONCE_CHANGE_TRACKER=0 ONCE_INHERITED_VALUE="$value" NATIVE_SETTING=caller once --format json build tools/demo/Task > "$SPEC_ROOT/environment.json" 2> "$SPEC_ROOT/environment.err" || { cat "$SPEC_ROOT/environment.err"; return 1; }
+      [ "$(cat "$WORKSPACE/.once/out/tools/demo/Task/environment.txt")" = "$value:resolved" ] || return 1
+      jq -r '.cache' "$SPEC_ROOT/environment.json" >> "$SPEC_ROOT/cache-states"
+      rm "$WORKSPACE/.once/out/tools/demo/Task/environment.txt"
+    done
+    [ "$(cat "$SPEC_ROOT/cache-states")" = "$(printf 'miss\nhit\nmiss\nhit')" ] || return 1
+    [ -d "$WORKSPACE/.once/analysis" ] || return 1
+    if grep -R -E '"ONCE_INHERITED_VALUE"[[:space:]]*:[[:space:]]*"(first|second)"' "$WORKSPACE/.once/analysis"; then
+      return 1
+    fi
+  }
+
+  It 'caches the effective inherited environment, restores outputs, and honors explicit overrides'
+    When call exercise_cached_environment
+    The status should be success
+    The output should equal ''
+  End
+
   It 'keeps later graph actions cached when they skip prior action digests'
     create_split_action_workspace
     once --format json build tools/split/Task >/dev/null
