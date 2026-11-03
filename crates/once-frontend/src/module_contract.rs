@@ -363,6 +363,10 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
                 "Read a host text file during analysis.",
             ),
             entry(
+                "host_file_cms_content(path)",
+                "Read the encapsulated UTF-8 content of a host CMS SignedData file without verifying its signature.",
+            ),
+            entry(
                 "host_file_sha256(path)",
                 "Digest a host file used during analysis.",
             ),
@@ -401,6 +405,14 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
             entry(
                 "toml_decode(source)",
                 "Decode structured TOML data for a resolver.",
+            ),
+            entry(
+                "plist_decode(source)",
+                "Decode an XML property list for a resolver.",
+            ),
+            entry(
+                "plist_encode(value)",
+                "Encode string-keyed dictionaries, lists, tuples, strings, integers, floats, and booleans as an XML property list; other values fail.",
             ),
         ],
         action_primitives: vec![

@@ -152,11 +152,12 @@ fn fake_android_ndk_for_mobile_test(workspace: &Path) -> std::path::PathBuf {
 
 fn apple_prelude_source() -> String {
     format!(
-        "{}\n{}\n{}\n{}\n{}\n{}\n{}\ndef host_os():\n    return \"macos\"\n",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\ndef host_os():\n    return \"macos\"\n",
         include_str!("../prelude/common.star"),
         include_str!("../prelude/apple_modules.star"),
         include_str!("../prelude/apple_execution.star"),
         include_str!("../prelude/apple_linux.star"),
+        include_str!("../prelude/apple_signing.star"),
         include_str!("../prelude/apple_artifacts.star"),
         include_str!("../prelude/apple_build_tools.star"),
         include_str!("../prelude/apple.star")

@@ -4544,6 +4544,40 @@ def _apple_embed_resource_bundles(ctx, deps, bundle_dir, codesign, identifier_pr
         "files": embedded_files,
     }
 
+def _apple_remove_undeclared_bundle_entries(ctx, bundle_path, declared, identifier_prefix):
+    """Remove entries an earlier build left in `bundle_path` that this build does not declare.
+
+    Signing seals every file in a bundle, so a leftover would be sealed into
+    the signature and into its cached result. `declared` lists the bundle's
+    files and directory outputs; whole directories that hold nothing declared
+    are removed rather than emptied.
+    """
+    covered = {path: True for path in declared}
+    ancestors = {}
+    for path in declared:
+        parent = _parent_dir(path)
+        for _ in range(64):
+            if not parent.startswith(bundle_path + "/"):
+                break
+            ancestors[parent] = True
+            parent = _parent_dir(parent)
+    root = workspace_root() + "/"
+    frontier = [bundle_path]
+    for _ in range(64):
+        next_frontier = []
+        for directory in frontier:
+            for name in host_read_dir(root + directory):
+                entry = directory + "/" + name
+                if entry in covered:
+                    continue
+                if entry in ancestors:
+                    next_frontier.append(entry)
+                    continue
+                prepare_path(entry, kind = "remove", identifier = identifier_prefix + ":" + entry, display_name = "Remove stale bundle entry · " + name)
+        frontier = next_frontier
+        if not frontier:
+            break
+
 def _apple_embed_extensions(ctx, deps, contents_dir):
     outputs = []
     destinations = {}
@@ -4832,14 +4866,12 @@ def _apple_swift_link_flags(flags):
 
 def _apple_application_impl(ctx):
     attrs = _resolve_attrs(ctx, ctx["attr"], ctx["label"]["id"], ["product_name"])
-    _reject_unsupported_attrs(attrs, ctx["label"]["id"], ["provisioning_profile", "signing_identity"])
-    if attrs.get("signing") and attrs.get("signing") != "ad_hoc":
-        fail(ctx["label"]["id"] + ": attribute `signing` only supports `ad_hoc` today")
     platform = attrs["platform"]
     bundle_id = attrs["bundle_id"]
     minimum_os = attrs.get("minimum_os") or "13.0"
     target_sdk_version = attrs.get("target_sdk_version") or minimum_os
     sdk_variant = attrs.get("sdk_variant") or "simulator"
+    signing = _apple_signing(ctx, attrs, platform, sdk_variant)
     xcode_developer_dir = attrs.get("xcode_developer_dir") or ""
     product_name = attrs.get("product_name") or ctx["label"]["name"]
     # The Swift module name must be a valid identifier, while the product name
@@ -5011,16 +5043,20 @@ def _apple_application_impl(ctx):
     processed_entitlements = ""
     der_entitlements = ""
     embeds_simulator_entitlements = entitlements and sdk_variant == "simulator" and platform != "macos" and platform != "macosx"
-    if entitlements:
+    if entitlements or signing:
         entitlements_source = _package_relative(ctx, entitlements)
-        entitlements_path = entitlements_source if entitlements_source.startswith("/") else workspace_root() + "/" + entitlements_source
-        entitlements_content = host_file_read(entitlements_path)
+        entitlements_content = ""
+        if entitlements:
+            entitlements_path = entitlements_source if entitlements_source.startswith("/") else workspace_root() + "/" + entitlements_source
+            entitlements_content = host_file_read(entitlements_path)
         for key, value in entitlements_substitutions.items():
             entitlements_content = entitlements_content.replace("$(" + key + ")", value).replace("${" + key + "}", value)
+        if signing:
+            entitlements_content = _apple_development_entitlements(ctx, signing, platform, bundle_id, development_team, entitlements_content)
         if embeds_simulator_entitlements:
             entitlements_content = _apple_entitlements_with_application_identifier(entitlements_content, development_team, bundle_id)
         processed_entitlements = declare_output(ctx["label"]["name"] + "/processed-entitlements.plist")
-        write_path(processed_entitlements, entitlements_content, display_name = "Prepare signing entitlements · " + product_name, source_files = _action_source_files([entitlements_source]))
+        write_path(processed_entitlements, entitlements_content, display_name = "Prepare signing entitlements · " + product_name, source_files = _action_source_files([entitlements_source] if entitlements else []))
         if embeds_simulator_entitlements:
             derq = _resolve_derq(xcode_developer_dir)
             der_entitlements = declare_output(ctx["label"]["name"] + "/processed-entitlements.der")
@@ -5458,7 +5494,7 @@ def _apple_application_impl(ctx):
     )
     resource_files = _unique(resource_files + prepackage_outputs)
 
-    codesign = _resolve_codesign(xcode_developer_dir)
+    codesign = _apple_codesign_with_signing(_resolve_codesign(xcode_developer_dir), signing, ctx["label"]["id"])
     embedded_frameworks = _apple_embed_framework_bundles(
         ctx,
         deps,
@@ -5474,13 +5510,18 @@ def _apple_application_impl(ctx):
         codesign,
         "apple_application_embed_resource",
     )
+    if signing:
+        for dep in deps:
+            if dep.get("application_extension") and dep.get("signing") != "development":
+                fail(ctx["label"]["id"] + ": application extension `" + (dep.get("label_id") or "") + "` is ad hoc signed and would not install with a development signed host; set signing = \"development\" with its own provisioning_profile on the extension")
     embedded_extensions = _apple_embed_extensions(ctx, deps, contents_dir)
+    embedded_profile = [_apple_embed_provisioning_profile(ctx, signing, contents_dir, platform)] if signing else []
 
-    # Ad-hoc codesign the .app bundle itself. Must run after embedded
-    # frameworks land so their signature is included in the bundle's
-    # resource envelope.
+    # Sign the .app bundle itself. Must run after embedded frameworks,
+    # extensions and the provisioning profile land so the bundle's resource
+    # envelope seals them.
     app_cs_stamp = declare_output(contents_dir + "/_CodeSignature/CodeResources")
-    cs_inputs = [executable, info_plist]
+    cs_inputs = [executable, info_plist] + embedded_profile
     if asset_car:
         cs_inputs.append(asset_car)
     cs_inputs.extend(resource_files)
@@ -5493,6 +5534,10 @@ def _apple_application_impl(ctx):
     cs_inputs = _unique(cs_inputs + script_outputs)
     resource_files = _unique(resource_files + script_outputs)
     signing_entitlements = processed_entitlements if processed_entitlements and not embeds_simulator_entitlements else ""
+    bundle_files = [executable, info_plist, app_cs_stamp] + embedded_profile + resource_files + embedded_frameworks["files"] + embedded_resource_bundles["files"] + embedded_extensions + ([asset_car] if asset_car else [])
+    # Build scripts may leave undeclared files in the bundle on purpose.
+    if not attrs.get("prepackage_actions") and not attrs.get("postbuild_actions"):
+        _apple_remove_undeclared_bundle_entries(ctx, app_path, bundle_files + [ctx["build_dir"] + "/" + contents_dir + "/_CodeSignature"], "apple_application_stale_" + product_name)
     codesign_argv = _apple_codesign_argv(codesign, ctx["build_dir"] + "/" + app_dir, signing_entitlements)
     if signing_entitlements:
         cs_inputs.append(signing_entitlements)
@@ -5534,8 +5579,9 @@ def _apple_application_impl(ctx):
         "module_name": module_name,
         "app_executable": executable,
         "application_extension": application_extension,
+        "signing": signing["mode"] if signing else "ad_hoc",
         "host_link_archives": dep_archives,
-        "app_files": [executable, info_plist, app_cs_stamp] + resource_files + embedded_frameworks["files"] + embedded_resource_bundles["files"] + embedded_extensions + ([asset_car] if asset_car else []) + ([swiftmodule, swiftdoc] if enable_testing else []),
+        "app_files": bundle_files + ([swiftmodule, swiftdoc] if enable_testing else []),
         "bundle_id": bundle_id,
         "platform": platform,
         "sdk_variant": sdk_variant,
@@ -7763,7 +7809,7 @@ apple_executable = target_kind(
 )
 
 apple_application = target_kind(
-    docs = "Builds an ad-hoc signed Apple application bundle (`Foo.app`) or app extension (`Foo.appex`). Extension dependencies are embedded in the host's PlugIns directory before signing. macOS uses Contents/MacOS, Contents/Resources, and Contents/Frameworks; other platforms use a flat bundle. Distribution signing and notarization belong in a separate credential-isolated workflow operating on a copy of the bundle.",
+    docs = "Builds a signed Apple application bundle (`Foo.app`) or app extension (`Foo.appex`). Signing is ad hoc by default; `signing = \"development\"` signs a device build with a development identity and provisioning profile, embeds the profile, and derives entitlements from it. Embedded frameworks and resource bundles are signed with the same identity before the bundle; extension dependencies sign themselves and are embedded in the host's PlugIns directory before signing. macOS uses Contents/MacOS, Contents/Resources, and Contents/Frameworks; other platforms use a flat bundle. Distribution signing and notarization belong in a separate credential-isolated workflow operating on a copy of the bundle.",
     impl = _apple_application_impl,
     attrs = [
         attr("prepackage_actions", "list<string>", default = "[]", docs = "Ordered serialized scripts run after linking and before resource packaging.", configurable = False),
@@ -7783,10 +7829,11 @@ apple_application = target_kind(
         attr("info_plist", "string", docs = "Info.plist template path"),
         attr("info_plist_substitutions", "map<string,string>", default = "{}", docs = "Values substituted into the generated Info.plist"),
         attr("entitlements", "string", docs = "Entitlements plist path"),
-        attr("development_team", "string", docs = "Apple development team identifier used to derive simulator application identity", configurable = False),
-        attr("provisioning_profile", "string", docs = "Provisioning profile label or path used for signing"),
-        attr("signing_identity", "string", docs = "Local signing identity selector used for development device signing"),
-        attr("signing", "string", default = "ad_hoc", docs = "Signing mode or policy name"),
+        attr("development_team", "string", docs = "Apple development team identifier used to derive simulator application identity; with `signing = \"development\"` it must match the provisioning profile team", configurable = False),
+        attr("provisioning_profile", "string", docs = "Development provisioning profile path (`.mobileprovision`, or `.provisionprofile` on macOS) for `signing = \"development\"`. It is embedded in the bundle, its team and application identifier must match `bundle_id`, and every requested entitlement must be granted by it"),
+        attr("signing_identity", "string", docs = "Development signing identity for `signing = \"development\"`: a `.p12`/`.pfx` or PEM file holding the certificate and private key, signed with rcodesign on any host, or on macOS a keychain identity name or SHA-1 fingerprint, resolved to its fingerprint and signed with codesign. Key files are read by the signing action in place; their digest partitions the cache, and their contents never become action inputs, outputs, arguments or environment"),
+        attr("signing_identity_password_file", "string", docs = "File holding the password of a `.p12`/`.pfx` `signing_identity`, required for those identities; use an empty file for a key without a password. Passed to the signer by path and excluded from cache identity", configurable = False),
+        attr("signing", "string", default = "ad_hoc", docs = "`ad_hoc` signs without an identity; `development` signs a device build with `signing_identity` and `provisioning_profile`", allowed_values = ["ad_hoc", "development"]),
         attr("sdk_frameworks", "list<string>", default = "[]", docs = "Apple SDK frameworks linked by name"),
         attr("weak_sdk_frameworks", "list<string>", default = "[]", docs = "Apple SDK frameworks linked weakly"),
         attr("sdk_dylibs", "list<string>", default = "[]", docs = "Apple SDK dynamic libraries linked by name"),

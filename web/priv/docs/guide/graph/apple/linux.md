@@ -17,7 +17,7 @@ Follow omarchy-apple-dev's installation guide. You need:
 
 - A Linux Swift toolchain matching the Swift version in the selected Xcode.
 - An xtool Darwin SDK built from your own Apple-provided `Xcode.xip` download.
-- `rcodesign` for ad-hoc bundle signing.
+- `rcodesign` for bundle signing.
 - The Linux `actool`, `momc`, and `ibtool` compatibility tools when your targets
   use asset catalogs, Core Data models, storyboards, or xibs. Their supported
   resource formats are determined by omarchy-apple-dev, not by Once.
@@ -87,13 +87,34 @@ omarchy-apple-dev's `install-toolchain.sh --repair`.
 
 ## Deploying and Shipping
 
-Once produces an **ad-hoc signed** application bundle. It does not provision an
-Apple identity, install a provisioning profile, or upload a build. The bundle
-must be provisioned and re-signed before a physical iPhone will accept it.
-Use xtool or omarchy-apple-dev's documented signing and USB deployment workflow
-for those steps. Its `ship.sh` workflow separately handles distribution signing,
-validation, and App Store Connect uploads; a Once build is not automatically
-an App Store-ready archive.
+By default Once produces an **ad-hoc signed** application bundle, which a
+physical iPhone does not accept. To build an installable development build, give
+the application an Apple Development identity and a development provisioning
+profile that includes the device:
+
+```toml
+[target.attrs]
+platform = "ios"
+sdk_variant = "device"
+minimum_os = "17.0"
+bundle_id = "dev.once.hello"
+signing = "development"
+signing_identity = "/secure/AppleDevelopment.p12"
+signing_identity_password_file = "/secure/AppleDevelopment.password"
+provisioning_profile = "/secure/Hello_Development.mobileprovision"
+```
+
+Once embeds the profile, derives the signing entitlements from it, and signs
+embedded frameworks and then the application with rcodesign. The identity
+stays where it is on disk; see
+[development signing](/reference/prelude/apple_application#development-signing)
+for how it is validated and kept out of the cache.
+
+Once does not request identities or profiles from Apple, or install the
+bundle on a device. Use xtool or omarchy-apple-dev for account provisioning and
+USB deployment. Their distribution workflows separately handle App Store
+signing, validation, and App Store Connect uploads; a Once build is not
+automatically an App Store-ready archive.
 
 ## Boundaries
 

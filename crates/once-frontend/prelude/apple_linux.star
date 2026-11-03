@@ -169,14 +169,3 @@ def _apple_linux_resource_tool(name, developer_dir):
         "identity": sdk["identity"] + "\x00" + path + "\x00" + host_file_sha256(path) + "\x00" + companion_identity + "\x00" + _json_encode(env),
         "env": env,
     }
-
-def _apple_codesign_argv(codesign, path, entitlements = ""):
-    if codesign.get("backend") == "rcodesign":
-        argv = [codesign["codesign_path"], "sign", "--shallow", "--timestamp-url", "none"]
-        if entitlements:
-            argv.extend(["--entitlements-xml-file", entitlements])
-    else:
-        argv = [codesign["codesign_path"], "--force", "--sign", "-", "--timestamp=none"]
-        if entitlements:
-            argv.extend(["--entitlements", entitlements])
-    return argv + [path]

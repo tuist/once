@@ -23,7 +23,7 @@ def _apple_export_artifact(ctx, provider, info_plist, minimum_os, architecture):
             implementation = "apple_artifact_metadata_plan",
             inputs = _unique(provider["app_files"] + [info_plist]),
             outputs = [metadata],
-            args = {"application": provider["app_path"], "executable": provider["app_executable"], "info_plist": info_plist, "metadata": metadata, "platform": platform, "sdk_variant": sdk_variant, "developer_dir": provider["xcode_developer_dir"]},
+            args = {"application": provider["app_path"], "executable": provider["app_executable"], "info_plist": info_plist, "metadata": metadata, "platform": platform, "sdk_variant": sdk_variant, "developer_dir": provider["xcode_developer_dir"], "signing": provider.get("signing") or "ad_hoc"},
         )
         payloads["metadata"] = {"path": metadata, "media_type": "application/json"}
         interfaces["dev.once.apple-install.v2"] = {"payload": "bundle", "spec": {"metadata_payload": "metadata"}}
@@ -56,6 +56,6 @@ def apple_artifact_metadata_plan(ctx):
         "mach_o_uuids": uuids,
         "platform": platform,
         "sdk_variant": spec["sdk_variant"],
-        "signing": "ad_hoc",
+        "signing": spec.get("signing") or "ad_hoc",
         "signature_verified": True,
     }))
