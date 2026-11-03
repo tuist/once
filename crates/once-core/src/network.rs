@@ -40,6 +40,13 @@
 //! numbers differ between ABIs and the native table would not cover it.
 //! Architectures without a known audit identifier are not armed at all;
 //! [`arm`] reports them so the caller fails closed.
+//!
+//! The kernel must provide `PR_SET_NO_NEW_PRIVS` (Linux 3.5), seccomp filter
+//! mode (`CONFIG_SECCOMP_FILTER`), and `close_range` with
+//! `CLOSE_RANGE_CLOEXEC` (Linux 5.11). [`arm`] probes each in the parent and
+//! names the first one missing, so an unenforceable denial is refused before
+//! fork rather than surfacing as an opaque spawn error. Landlock and network
+//! namespaces are not used.
 
 mod program;
 
@@ -134,6 +141,31 @@ mod install {
         unsafe { close_on_exec_from(libc::c_uint::MAX).is_ok() }
     }
 
+    /// Whether this kernel accepts seccomp filters. Installing a null filter
+    /// pointer fails with `EFAULT` only after the kernel has recognized
+    /// filter mode, so nothing is installed; a kernel built without
+    /// `CONFIG_SECCOMP_FILTER`, or a runtime that intercepts the call, fails
+    /// it some other way.
+    fn seccomp_filter_is_supported() -> bool {
+        // SAFETY: a null filter pointer is rejected before anything is
+        // installed.
+        let rc = unsafe {
+            libc::prctl(
+                libc::PR_SET_SECCOMP,
+                libc::SECCOMP_MODE_FILTER,
+                std::ptr::null::<libc::sock_fprog>(),
+            )
+        };
+        rc == -1 && io::Error::last_os_error().raw_os_error() == Some(libc::EFAULT)
+    }
+
+    /// Whether this kernel supports `PR_SET_NO_NEW_PRIVS` (Linux 3.5), which
+    /// unprivileged seccomp filters require. Reading the flag changes nothing.
+    fn no_new_privs_is_supported() -> bool {
+        // SAFETY: `PR_GET_NO_NEW_PRIVS` only reads the calling thread's flag.
+        unsafe { libc::prctl(libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) >= 0 }
+    }
+
     /// Check the standard streams, keep inherited descriptors from reaching
     /// the action, then drop privileges and apply the filter. Must run in the
     /// child after fork, after the standard streams are in place.
@@ -168,6 +200,16 @@ mod install {
         let Some(abi) = program::Abi::native() else {
             return Err("network denial on this platform");
         };
+        if !no_new_privs_is_supported() {
+            return Err(
+                "network denial on this kernel, which lacks prctl PR_SET_NO_NEW_PRIVS (Linux 3.5)",
+            );
+        }
+        if !seccomp_filter_is_supported() {
+            return Err(
+                "network denial on this kernel, which lacks seccomp filter mode (CONFIG_SECCOMP_FILTER) or whose runtime blocks prctl PR_SET_SECCOMP",
+            );
+        }
         if !close_on_exec_is_supported() {
             return Err(
                 "network denial on this kernel, which lacks close_range with CLOSE_RANGE_CLOEXEC (Linux 5.11)",
