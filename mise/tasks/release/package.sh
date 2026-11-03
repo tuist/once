@@ -72,6 +72,21 @@ if [[ ! -f "${source}" ]]; then
   exit 1
 fi
 
+# Linux binaries take their glibc symbol versions from the build host's
+# headers. The release runners use Ubuntu 22.04 so the binary loads on
+# glibc 2.35 userlands; fail instead of silently raising that floor.
+linux_glibc_ceiling="2.35"
+case "${target}" in
+  *-linux-gnu)
+    required_glibc="$(objdump -T "${source}" | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/^GLIBC_//' | sort -uV | tail -n 1)"
+    highest="$(printf '%s\n%s\n' "${required_glibc:-0}" "${linux_glibc_ceiling}" | sort -V | tail -n 1)"
+    if [[ "${highest}" != "${linux_glibc_ceiling}" ]]; then
+      echo "${source} requires glibc ${required_glibc}, above the ${linux_glibc_ceiling} release baseline; build it on an older userland" >&2
+      exit 1
+    fi
+    ;;
+esac
+
 stage_dir="$(mktemp -d)"
 cp "${source}" "${stage_dir}/${bin_name}"
 
