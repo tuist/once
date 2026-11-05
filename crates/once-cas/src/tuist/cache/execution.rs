@@ -23,13 +23,16 @@ const FIND_MISSING_CHUNK: usize = 4096;
 const EXECUTE_SUBMISSIONS: u32 = 3;
 /// Reattachments to one operation after its stream broke.
 const EXECUTE_REATTACHMENTS: u32 = 5;
-/// Queueing and transfer time allowed beyond the action's own timeout.
-const EXECUTE_SLACK: Duration = Duration::from_mins(5);
+/// Time allowed beyond the action's own timeout: Tuist keeps an action
+/// queued for up to fifteen minutes, plus transfer time.
+const EXECUTE_SLACK: Duration = Duration::from_mins(20);
 /// Workers apply this timeout when an action declares none.
 pub const DEFAULT_EXECUTION_TIMEOUT: Duration = Duration::from_mins(10);
 /// Wait before resubmitting to a full queue, doubling up to the maximum.
 const QUEUE_BACKOFF: Duration = Duration::from_millis(500);
 const MAX_QUEUE_BACKOFF: Duration = Duration::from_secs(10);
+/// The capabilities document is a handful of short fields.
+const CAPABILITIES_LIMIT: usize = 64 * 1024;
 const PRECONDITION_FAILURE_TYPE: &str = "type.googleapis.com/google.rpc.PreconditionFailure";
 
 /// A connection to the project's remote execution service and the CAS its
@@ -127,13 +130,24 @@ impl TuistCache {
                 format!("{}{hint}", redact::http_status(code)),
             ));
         }
-        let body = response.bytes().await.map_err(|source| {
+        let mut response = response;
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|source| {
             status::remote(
                 operation,
                 ErrorKind::Unavailable,
                 redact::transport(&source),
             )
-        })?;
+        })? {
+            if body.len() + chunk.len() > CAPABILITIES_LIMIT {
+                return Err(status::remote(
+                    operation,
+                    ErrorKind::Protocol,
+                    "the capabilities response exceeds its size limit",
+                ));
+            }
+            body.extend_from_slice(&chunk);
+        }
         let capabilities: Capabilities = serde_json::from_slice(&body).map_err(|source| {
             status::remote(
                 operation,
@@ -227,10 +241,19 @@ impl TuistExecution {
     /// The subset of `digests` the execution CAS does not hold. A rejected
     /// credential is resolved again once.
     pub async fn find_missing(&self, digests: Vec<reapi::Digest>) -> Result<Vec<reapi::Digest>> {
-        match self.find_missing_once(&digests).await {
+        self.refreshing(|| self.find_missing_once(&digests)).await
+    }
+
+    /// Run `call`, and once more after resolving the credential again when the
+    /// CAS rejects it, so a token that expires during a long build recovers.
+    async fn refreshing<T, F>(&self, call: impl Fn() -> F) -> Result<T>
+    where
+        F: std::future::Future<Output = Result<T>>,
+    {
+        match call().await {
             Err(error) if error.kind() == ErrorKind::Refused => {
                 self.cas.refresh_auth_token().await?;
-                self.find_missing_once(&digests).await
+                call().await
             }
             outcome => outcome,
         }
@@ -269,9 +292,11 @@ impl TuistExecution {
     /// Upload a blob held in memory, such as an encoded directory or command.
     pub async fn upload_blob(&self, digest: &reapi::Digest, bytes: &[u8]) -> Result<()> {
         validate_sha256_digest(digest, bytes, "upload execution input")?;
-        self.cas
-            .upload_reapi_blob(digest, bytes, "upload execution input")
-            .await
+        self.refreshing(|| {
+            self.cas
+                .upload_reapi_blob(digest, bytes, "upload execution input")
+        })
+        .await
     }
 
     /// Stream a file whose content `digest` describes.
@@ -288,16 +313,17 @@ impl TuistExecution {
             .acquire()
             .await
             .expect("transfer semaphore remains open");
-        self.cas
-            .write_reapi_blob_file_stream(digest, path, operation)
-            .await
+        self.refreshing(|| {
+            self.cas
+                .write_reapi_blob_file_stream(digest, path, operation)
+        })
+        .await
     }
 
     /// Copy a verified output blob into the local store and return its local
     /// digest.
     pub async fn mirror_blob(&self, digest: &reapi::Digest) -> Result<Digest> {
-        self.cas
-            .mirror_reapi_blob(digest, "read execution output")
+        self.refreshing(|| self.cas.mirror_reapi_blob(digest, "read execution output"))
             .await
     }
 
@@ -325,11 +351,21 @@ impl TuistExecution {
         let mut refreshed = false;
         let mut backoff = QUEUE_BACKOFF;
         loop {
-            if operation_name.is_none() {
+            let submitting = operation_name.is_none();
+            if submitting {
                 submissions += 1;
             } else {
                 reattachments += 1;
             }
+            // Undo this attempt's count when it ended in a wait that does not
+            // spend a retry.
+            let uncount = |submissions: &mut u32, reattachments: &mut u32| {
+                if submitting {
+                    *submissions -= 1;
+                } else {
+                    *reattachments -= 1;
+                }
+            };
             let attempt = self.attempt(&client, action, &mut operation_name);
             let outcome = tokio::time::timeout_at(deadline, attempt)
                 .await
@@ -357,17 +393,18 @@ impl TuistExecution {
                 }
                 Err(status) => status,
             };
-            if status.code() == Code::ResourceExhausted && operation_name.is_none() {
-                // The service refused to queue the action; nothing ran yet.
-                submissions -= 1;
+            if status.code() == Code::ResourceExhausted {
+                // A full queue or a gateway with too many open streams; the
+                // request was refused before it was accepted or reattached.
+                uncount(&mut submissions, &mut reattachments);
                 if Instant::now() + backoff >= deadline {
                     return Err(status::remote(
                         "execute",
                         ErrorKind::Unavailable,
-                        "the project's execution queue stayed full until the action's deadline",
+                        "the project's execution service stayed busy until the action's deadline",
                     ));
                 }
-                tracing::debug!(?backoff, "execution queue is full; waiting");
+                tracing::debug!(?backoff, "execution service is busy; waiting");
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(MAX_QUEUE_BACKOFF);
                 continue;
@@ -378,11 +415,7 @@ impl TuistExecution {
             ) && !refreshed
             {
                 refreshed = true;
-                if operation_name.is_none() {
-                    submissions -= 1;
-                } else {
-                    reattachments -= 1;
-                }
+                uncount(&mut submissions, &mut reattachments);
                 self.cas.refresh_auth_token().await?;
                 continue;
             }
@@ -400,6 +433,15 @@ impl TuistExecution {
                 if submissions < EXECUTE_SUBMISSIONS {
                     tracing::debug!(code = ?status.code(), "submitting the remote action again");
                     continue;
+                }
+                if lost {
+                    // Not missing inputs: the service kept losing the
+                    // operation, so uploading again would not help.
+                    return Err(status::remote(
+                        "execute",
+                        ErrorKind::Unavailable,
+                        "the execution service lost the operation on every submission",
+                    ));
                 }
             } else if broken && reattachments < EXECUTE_REATTACHMENTS {
                 tracing::debug!(code = ?status.code(), "reattaching to the remote operation");

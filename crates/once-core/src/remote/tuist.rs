@@ -58,7 +58,7 @@ pub(super) async fn execute_command(
     if let Some(capture) = &capture {
         capture.reserve_upfront().await?;
     }
-    let _slot = execution.admit().await;
+    let slot = execution.admit().await;
     upload_missing(&execution, &input_tree, workspace, lease).await?;
     tracing::debug!(executor = PROVIDER, action_digest = %action_digest.hash, "executing remote action");
 
@@ -73,6 +73,8 @@ pub(super) async fn execute_command(
         }
         executed => executed?,
     };
+    // Downloading results does not occupy the account's execution capacity.
+    drop(slot);
     let result = executed.result;
     let stdout = mirror_log(
         &execution,
@@ -492,6 +494,9 @@ async fn output_entries(
             .tree_digest
             .as_ref()
             .ok_or_else(|| tree::api_error("output directory without a tree".into()))?;
+        if u64::try_from(digest.size_bytes).map_or(true, |size| size > MAX_OUTPUT_TREE_BYTES) {
+            return Err(tree::api_error("output tree exceeds 4 MiB".into()));
+        }
         let local = execution.mirror_blob(digest).await?;
         let (bytes, truncated) = cache
             .read_blob_limited(&local, MAX_OUTPUT_TREE_BYTES, false)
@@ -516,9 +521,24 @@ async fn install_outputs(
     limits: RemoteIoLimits,
 ) -> Result<()> {
     let entries = output_entries(execution, cache, command, cwd, result, limits).await?;
+    // Digests carry every size, so an oversized result is refused before any
+    // of it is downloaded.
+    let bytes = entries
+        .iter()
+        .map(|entry| match entry {
+            Entry::File(_, digest, _) => u64::try_from(digest.size_bytes).unwrap_or(u64::MAX),
+            Entry::Directory(_) | Entry::Link(..) => 0,
+        })
+        .fold(0_u64, u64::saturating_add);
+    if bytes > limits.max_archive_bytes {
+        return Err(Error::ExecutorResourceLimit {
+            executor: PROVIDER.into(),
+            resource: "output bytes",
+            limit: limits.max_archive_bytes,
+        });
+    }
     // Download every file into the local store before reserving staging, so
-    // the reservation covers what this result needs and is not held across
-    // the network.
+    // the reservation is not held across the network.
     let entries = futures::stream::iter(entries)
         .map(|entry| {
             async move {
@@ -533,20 +553,6 @@ async fn install_outputs(
         .buffer_unordered(PARALLEL_TRANSFERS)
         .try_collect::<Vec<_>>()
         .await?;
-    let bytes = entries
-        .iter()
-        .map(|(entry, _)| match entry {
-            Entry::File(_, digest, _) => u64::try_from(digest.size_bytes).unwrap_or(u64::MAX),
-            Entry::Directory(_) | Entry::Link(..) => 0,
-        })
-        .fold(0_u64, u64::saturating_add);
-    if bytes > limits.max_archive_bytes {
-        return Err(Error::ExecutorResourceLimit {
-            executor: PROVIDER.into(),
-            resource: "output bytes",
-            limit: limits.max_archive_bytes,
-        });
-    }
     // The staged copy and the backup of any outputs it replaces.
     let phase = super::phase_permit(command.lease.as_ref(), bytes.saturating_mul(2)).await?;
     let staging = OutputStaging::create_limited(workspace, limits)?;

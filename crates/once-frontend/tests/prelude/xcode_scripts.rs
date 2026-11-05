@@ -241,6 +241,37 @@ result = repr(_xcode_shell_phase_paths({{"inputPaths": ["${{UNKNOWN}}/a", "$(UNK
 }
 
 #[test]
+fn native_scripts_only_declare_dsym_inputs_when_xcode_writes_them() {
+    for (format, expected) in [
+        (
+            "dwarf",
+            r#"[["App.app/Info.plist"], ".once/out/App/App.app.dSYM/Contents/Resources/DWARF/App"]"#,
+        ),
+        (
+            "dwarf-with-dsym",
+            r#"[[".once/out/App/App.app.dSYM/Contents/Resources/DWARF/App", "App.app/Info.plist"], ".once/out/App/App.app.dSYM/Contents/Resources/DWARF/App"]"#,
+        ),
+    ] {
+        let source = format!(
+            r#"{}
+def workspace_root():
+    return "/workspace"
+phase = {{"isa": "PBXShellScriptBuildPhase", "shellScript": "upload", "inputPaths": ["${{DWARF_DSYM_FOLDER_PATH}}/${{DWARF_DSYM_FILE_NAME}}/Contents/Resources/DWARF/${{TARGET_NAME}}", "$(SRCROOT)/App.app/Info.plist"]}}
+phases = _xcode_shell_script_phases({{"label": {{"package": "", "id": "Seed"}}, "attr": {{"project": "App.xcodeproj"}}}}, {{"phase": phase}}, {{"buildPhases": ["phase"]}}, {{"FULL_PRODUCT_NAME": "App.app", "TARGET_NAME": "App", "DEBUG_INFORMATION_FORMAT": "{format}"}}, "", "App")
+action = json_decode(phases["actions"][0])
+result = repr([sorted(action["inputs"]), action["env"]["SCRIPT_INPUT_FILE_0"].removeprefix("/workspace/")])
+"#,
+            xcode_prelude_source()
+        );
+        assert_eq!(
+            eval_prelude_source_to_repr(source).unwrap(),
+            expected,
+            "{format}"
+        );
+    }
+}
+
+#[test]
 fn native_scripts_resolve_dsym_defaults_and_overrides() {
     for (settings, folder, filename) in [
         ("", "/workspace/.once/out/App", "App.app.dSYM"),

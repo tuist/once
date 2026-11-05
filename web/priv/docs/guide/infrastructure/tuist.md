@@ -263,9 +263,12 @@ execution directory, because it cannot place outputs and working directories
 safely without it.
 
 Once keeps at most as many actions in flight as the account's advertised
-concurrency. When the service answers that its queue is full, Once waits with
-backoff and submits again instead of failing. If the service rejects the
-credential during a long build, Once refreshes it once and retries.
+concurrency. When the service answers that its queue is full or that it is
+serving too many streams, Once waits with backoff and tries again instead of
+failing. If the service rejects the credential during a long build, Once
+refreshes it once and retries. Once waits for an action up to its timeout
+plus twenty minutes, which covers the fifteen minutes Tuist keeps an action
+queued.
 
 Workers run `linux/amd64`. Commands must resolve their tools inside the worker
 image, not on the computer that started the build, and declared outputs must

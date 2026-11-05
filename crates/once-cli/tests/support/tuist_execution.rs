@@ -47,6 +47,14 @@ pub enum Fault {
     Evict,
     /// Report the action as stopped at its timeout, with its logs.
     TimeOut,
+    /// Report that the worker failed before running the action, the way
+    /// Tuist answers when a VM dies or the queue times out.
+    WorkerFailure,
+    /// Run the action, then reject the credential on the open stream, the
+    /// way the gateway answers when a token expires during a long poll.
+    RejectToken,
+    /// Run the action and report an output file far larger than any budget.
+    Oversize,
 }
 
 #[derive(Default)]
@@ -68,6 +76,11 @@ pub struct State {
     /// Submissions refused because the client exceeded `max_concurrency`.
     pub over_limit: usize,
     operations: HashMap<String, reapi::ExecuteResponse>,
+    /// `WaitExecution` calls refused as too many streams before one is served.
+    pub busy_waits: usize,
+    /// `WaitExecution` calls, including refused ones.
+    pub waits: usize,
+    next_operation: u64,
 }
 
 #[derive(Clone)]
@@ -389,9 +402,17 @@ impl Service {
     }
 }
 
-fn done(response: &reapi::ExecuteResponse) -> Operation {
+/// The first update the gateway sends for an accepted action.
+fn queued(name: &str) -> Operation {
     Operation {
-        name: "operations/finished".into(),
+        name: name.into(),
+        ..Default::default()
+    }
+}
+
+fn done(name: &str, response: &reapi::ExecuteResponse) -> Operation {
+    Operation {
+        name: name.into(),
         metadata: None,
         done: true,
         result: Some(operation::Result::Response(Any {
@@ -436,15 +457,18 @@ impl Execution for Service {
         request: Request<reapi::WaitExecutionRequest>,
     ) -> Rpc<Self::WaitExecutionStream> {
         let name = request.into_inner().name;
-        let response = self
-            .state
-            .lock()
-            .await
+        let mut state = self.state.lock().await;
+        state.waits += 1;
+        if state.busy_waits > 0 {
+            state.busy_waits -= 1;
+            return Err(Status::resource_exhausted("too many execution streams"));
+        }
+        let response = state
             .operations
             .remove(&name)
             .ok_or_else(|| Status::not_found("operation not found"))?;
         Ok(Response::new(
-            futures::stream::iter([Ok(done(&response))]).boxed(),
+            futures::stream::iter([Ok(queued(&name)), Ok(done(&name, &response))]).boxed(),
         ))
     }
 }
@@ -472,65 +496,83 @@ fn worker_program(command: &reapi::Command, working: &Path) -> Result<PathBuf, S
 
 impl Service {
     async fn answer(&self, digest: &reapi::Digest) -> Vec<Result<Operation, Status>> {
-        let fault = {
+        let (fault, name) = {
             let mut state = self.state.lock().await;
             let fault = state.faults.pop_front();
             if matches!(fault, Some(Fault::Evict)) {
                 state.blobs.clear();
             }
-            fault
+            state.next_operation += 1;
+            let name = format!(
+                "accounts/acme/projects/app/operations/00000000-0000-4000-8000-{:012x}",
+                state.next_operation
+            );
+            (fault, name)
         };
-        if matches!(fault, Some(Fault::Evict)) {
-            return vec![Ok(done(&reapi::ExecuteResponse {
-                status: Some(RpcStatus {
-                    code: tonic::Code::FailedPrecondition as i32,
-                    details: vec![Any {
+        let failed = |code: tonic::Code, details: Vec<Any>| {
+            vec![
+                Ok(queued(&name)),
+                Ok(done(
+                    &name,
+                    &reapi::ExecuteResponse {
+                        status: Some(RpcStatus {
+                            code: code as i32,
+                            details,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                )),
+            ]
+        };
+        match fault {
+            Some(Fault::Evict) => {
+                return failed(
+                    tonic::Code::FailedPrecondition,
+                    vec![Any {
                         type_url: "type.googleapis.com/google.rpc.PreconditionFailure".into(),
                         value: MISSING_PRECONDITION.to_vec(),
                     }],
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }))];
+                );
+            }
+            Some(Fault::WorkerFailure) => return failed(tonic::Code::Unavailable, Vec::new()),
+            _ => {}
         }
-        let response = self.run(digest).await;
-        match response {
-            _ if matches!(fault, Some(Fault::Lose)) => vec![
-                Ok(Operation {
-                    name: "operations/lost".into(),
-                    ..Default::default()
-                }),
-                Err(Status::unavailable("scheduler restarted")),
-            ],
-            Ok(response) if matches!(fault, Some(Fault::Break)) => {
+        let response = match self.run(digest).await {
+            Ok(response) => response,
+            Err(status) => return failed(status.code(), Vec::new()),
+        };
+        let interrupted = |status: Status| vec![Ok(queued(&name)), Err(status)];
+        match fault {
+            Some(Fault::Lose) => interrupted(Status::unavailable("scheduler restarted")),
+            Some(Fault::Break | Fault::RejectToken) => {
                 self.state
                     .lock()
                     .await
                     .operations
-                    .insert("operations/broken".into(), response);
-                vec![
-                    Ok(Operation {
-                        name: "operations/broken".into(),
-                        ..Default::default()
-                    }),
-                    Err(Status::unavailable("stream reset")),
-                ]
+                    .insert(name.clone(), response);
+                interrupted(if matches!(fault, Some(Fault::Break)) {
+                    Status::unavailable("stream reset")
+                } else {
+                    Status::permission_denied("execution request refused")
+                })
             }
-            Ok(mut response) if matches!(fault, Some(Fault::TimeOut)) => {
+            Some(Fault::TimeOut) => {
+                let mut response = response;
                 response.status = Some(RpcStatus {
                     code: tonic::Code::DeadlineExceeded as i32,
                     ..Default::default()
                 });
-                vec![Ok(done(&response))]
+                vec![Ok(queued(&name)), Ok(done(&name, &response))]
             }
-            Ok(response) => vec![Ok(done(&response))],
-            Err(status) => vec![Ok(done(&reapi::ExecuteResponse {
-                status: Some(RpcStatus {
-                    code: status.code() as i32,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }))],
+            Some(Fault::Oversize) => {
+                let mut response = response;
+                for file in &mut response.result.as_mut().unwrap().output_files {
+                    file.digest.as_mut().unwrap().size_bytes = 1 << 50;
+                }
+                vec![Ok(queued(&name)), Ok(done(&name, &response))]
+            }
+            _ => vec![Ok(queued(&name)), Ok(done(&name, &response))],
         }
     }
 }

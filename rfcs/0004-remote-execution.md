@@ -301,7 +301,8 @@ missing, and installs outputs read back by digest. Lost operations are
 resubmitted and broken streams reattach, because the service may execute an
 action more than once; only duplicate-safe actions belong there. The
 adapter holds one of the account's advertised concurrency slots from upload
-through completion and treats a full queue as backpressure, not failure. Graph
+until the service answers, and treats a full queue or a busy gateway as
+backpressure, not failure. Graph
 toolchains still resolve tool paths on the coordinator, so this path needs
 target kinds to describe worker-side toolchains before Rust or other compiled
 graphs can use it from a Mac.

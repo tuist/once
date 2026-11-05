@@ -346,6 +346,95 @@ async fn a_broken_stream_reattaches_and_an_evicted_input_is_uploaded_again() {
     );
 }
 
+/// A workspace for `MODULE` whose first action hits `faults` in order.
+async fn faulted(
+    faults: impl IntoIterator<Item = tuist_execution::Fault>,
+) -> (tuist_execution::Server, tempfile::TempDir) {
+    let server = tuist_execution::start().await;
+    let root = workspace(&server.url, MODULE, "");
+    std::fs::write(root.path().join("input.txt"), b"asymmetric Input").unwrap();
+    std::fs::create_dir(root.path().join("prune")).unwrap();
+    server.service.state.lock().await.faults.extend(faults);
+    (server, root)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_credential_rejected_on_an_open_stream_is_refreshed_and_the_operation_reattached() {
+    let (server, root) = faulted([tuist_execution::Fault::RejectToken]).await;
+    let home = tempfile::tempdir().unwrap();
+
+    let output = build(root.path(), home.path()).await;
+    assert!(output.status.success(), "{}", stderr(&output));
+    let state = server.service.state.lock().await;
+    assert_eq!(
+        state.executed.len(),
+        2,
+        "the accepted action is not submitted again"
+    );
+    assert_eq!(state.waits, 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_worker_is_resubmitted_and_a_busy_gateway_is_waited_out() {
+    let (server, root) = faulted([
+        tuist_execution::Fault::WorkerFailure,
+        tuist_execution::Fault::Break,
+    ])
+    .await;
+    server.service.state.lock().await.busy_waits = 2;
+    let home = tempfile::tempdir().unwrap();
+
+    let output = build(root.path(), home.path()).await;
+    assert!(output.status.success(), "{}", stderr(&output));
+    let state = server.service.state.lock().await;
+    assert_eq!(state.executed.len(), 2);
+    assert_eq!(state.waits, 3, "two busy answers, then the reattach");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_operation_lost_on_every_submission_fails_without_uploading_again() {
+    let (server, root) = faulted([
+        tuist_execution::Fault::Lose,
+        tuist_execution::Fault::Lose,
+        tuist_execution::Fault::Lose,
+    ])
+    .await;
+    let home = tempfile::tempdir().unwrap();
+
+    let output = build(root.path(), home.path()).await;
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("lost the operation"),
+        "{}",
+        stderr(&output)
+    );
+    let state = server.service.state.lock().await;
+    assert_eq!(state.executed.len(), 3);
+    assert_eq!(
+        state
+            .uploads
+            .iter()
+            .filter(|hash| **hash == sha256(b"asymmetric Input"))
+            .count(),
+        1,
+        "a lost operation is not missing inputs"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_output_larger_than_the_budget_is_refused_before_it_is_downloaded() {
+    let (_server, root) = faulted([tuist_execution::Fault::Oversize]).await;
+    let home = tempfile::tempdir().unwrap();
+
+    let output = build(root.path(), home.path()).await;
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("output bytes limit"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_timed_out_action_fails_as_a_timeout() {
     let server = tuist_execution::start().await;
