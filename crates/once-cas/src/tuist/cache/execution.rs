@@ -130,24 +130,7 @@ impl TuistCache {
                 format!("{}{hint}", redact::http_status(code)),
             ));
         }
-        let mut response = response;
-        let mut body = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|source| {
-            status::remote(
-                operation,
-                ErrorKind::Unavailable,
-                redact::transport(&source),
-            )
-        })? {
-            if body.len() + chunk.len() > CAPABILITIES_LIMIT {
-                return Err(status::remote(
-                    operation,
-                    ErrorKind::Protocol,
-                    "the capabilities response exceeds its size limit",
-                ));
-            }
-            body.extend_from_slice(&chunk);
-        }
+        let body = read_capabilities(response, operation).await?;
         let capabilities: Capabilities = serde_json::from_slice(&body).map_err(|source| {
             status::remote(
                 operation,
@@ -397,16 +380,7 @@ impl TuistExecution {
                 // A full queue or a gateway with too many open streams; the
                 // request was refused before it was accepted or reattached.
                 uncount(&mut submissions, &mut reattachments);
-                if Instant::now() + backoff >= deadline {
-                    return Err(status::remote(
-                        "execute",
-                        ErrorKind::Unavailable,
-                        "the project's execution service stayed busy until the action's deadline",
-                    ));
-                }
-                tracing::debug!(?backoff, "execution service is busy; waiting");
-                tokio::time::sleep(backoff).await;
-                backoff = (backoff * 2).min(MAX_QUEUE_BACKOFF);
+                wait_while_busy(&mut backoff, deadline).await?;
                 continue;
             }
             if matches!(
@@ -484,6 +458,46 @@ impl TuistExecution {
         };
         follow(stream, operation_name).await
     }
+}
+
+async fn read_capabilities(
+    mut response: reqwest::Response,
+    operation: &'static str,
+) -> Result<Vec<u8>> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|source| {
+        status::remote(
+            operation,
+            ErrorKind::Unavailable,
+            redact::transport(&source),
+        )
+    })? {
+        if body.len() + chunk.len() > CAPABILITIES_LIMIT {
+            return Err(status::remote(
+                operation,
+                ErrorKind::Protocol,
+                "the capabilities response exceeds its size limit",
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+/// Back off before asking a busy service again, failing once the wait would
+/// pass the action's deadline.
+async fn wait_while_busy(backoff: &mut Duration, deadline: Instant) -> Result<()> {
+    if Instant::now() + *backoff >= deadline {
+        return Err(status::remote(
+            "execute",
+            ErrorKind::Unavailable,
+            "the project's execution service stayed busy until the action's deadline",
+        ));
+    }
+    tracing::debug!(?backoff, "execution service is busy; waiting");
+    tokio::time::sleep(*backoff).await;
+    *backoff = (*backoff * 2).min(MAX_QUEUE_BACKOFF);
+    Ok(())
 }
 
 /// Read operation updates until one is done, remembering the operation's
