@@ -75,12 +75,21 @@ struct Record {
     per_action_outcomes: Vec<super::PerActionOutcome>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize)]
 struct Stored {
     schema: String,
     /// Watcher position the records describe.
     position: ChangePosition,
     targets: BTreeMap<String, Record>,
+}
+
+/// The serialized shape of [`Stored`], borrowing the records so writing them
+/// does not hold a second copy of every one in memory.
+#[derive(Serialize)]
+struct StoredRef<'a> {
+    schema: &'a str,
+    position: &'a ChangePosition,
+    targets: &'a BTreeMap<String, Record>,
 }
 
 /// Outcomes remembered for one capability of one workspace.
@@ -325,19 +334,10 @@ impl TargetOutcomes {
         let targets = self
             .learned
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if targets.is_empty() {
             return;
         }
-        let stored = Stored {
-            schema: SCHEMA.to_string(),
-            position: position.clone(),
-            targets,
-        };
-        let Ok(raw) = serde_json::to_vec(&stored) else {
-            return;
-        };
         if let Some(parent) = self.path.parent() {
             if std::fs::create_dir_all(parent).is_err() {
                 return;
@@ -346,9 +346,19 @@ impl TargetOutcomes {
         let temporary = self
             .path
             .with_extension(format!("json.tmp-{}", std::process::id()));
-        if std::fs::write(&temporary, raw).is_ok()
-            && std::fs::rename(&temporary, &self.path).is_err()
-        {
+        // Large workspaces record tens of megabytes of outcomes; stream them to
+        // the file rather than building the whole document in memory first.
+        let written = std::fs::File::create(&temporary).ok().is_some_and(|file| {
+            let mut writer = std::io::BufWriter::new(file);
+            let stored = StoredRef {
+                schema: SCHEMA,
+                position,
+                targets: &targets,
+            };
+            serde_json::to_writer(&mut writer, &stored).is_ok()
+                && std::io::Write::flush(&mut writer).is_ok()
+        });
+        if !written || std::fs::rename(&temporary, &self.path).is_err() {
             let _ = std::fs::remove_file(&temporary);
         }
     }
