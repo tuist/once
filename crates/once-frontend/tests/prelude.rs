@@ -3221,6 +3221,51 @@ fn prelude_mix_package_uses_native_mix_compiler_pipeline() {
 }
 
 #[test]
+fn prelude_mix_rebar_package_app_copy_reads_the_staged_package_metadata() {
+    // Hex packages such as ranch ship `ebin/<app>.app`. The copy that
+    // assembles the application must list the staged metadata output itself;
+    // Once only links an input to the producer of that path or a parent of it.
+    let workspace = TempDir::new().unwrap();
+    let source = format!(
+        r#"{}
+def workspace_root():
+    return "/ws"
+def host_env(name):
+    return ""
+def glob(patterns):
+    if patterns[0].endswith("/ebin/**/*"):
+        return ["deps/ranch/ebin/ranch.app"]
+    return []
+def _elixir_rebar_toolchain():
+    return {{"elixir": "elixir", "rebar3": "rebar3", "path": "/bin", "identity": "rebar"}}
+ctx = {{
+    "label": {{"package": "", "name": "mix-ranch", "id": "mix-ranch"}},
+    "attr": {{}},
+    "srcs": ["deps/ranch/**/*"],
+    "build_dir": ".once/out/mix-ranch",
+    "scratch_dir": ".once/tmp/mix-ranch",
+}}
+app_dir = ".once/out/mix-ranch/mix/prod/lib/ranch"
+result = repr(_mix_rebar_package_action(
+    ctx, "deps/ranch", "ranch", "prod", [], app_dir, app_dir + "/ebin",
+    ".once/out/mix-ranch/compile.log", ".once/out/mix-ranch/warnings.log", "ranch",
+))
+"#,
+        all_prelude_source()
+    );
+    let (store, result) = with_active_store(store_for(workspace.path(), ""), || {
+        eval_prelude_source_to_repr(source)
+    });
+    result.unwrap();
+
+    let metadata = action_by_identifier(&store, "mix-ranch:rebar-metadata");
+    let app = action_by_identifier(&store, "mix-ranch:rebar-app");
+    for output in &metadata.outputs {
+        assert!(app.inputs.contains(output), "{:?}", app.inputs);
+    }
+}
+
+#[test]
 fn prelude_elixir_test_paths_only_select_executable_test_files() {
     let source = format!(
         r#"{}
