@@ -86,6 +86,8 @@ across fresh containers with a locally prepared image. Use
 a supported local computer. Use [E2B](/guide/infrastructure/e2b) when you have
 a prepared hosted template. Use [Daytona](/guide/infrastructure/daytona) when
 you want Once to start from a container image.
+Use [Tuist](/guide/infrastructure/tuist#run-actions-on-tuist-workers) to run
+graph actions on a Tuist project's remote execution workers.
 
 These adapters implement the same declared input and output boundary. E2B
 and Daytona use one archive for each transfer so large dependency trees do not
@@ -198,6 +200,9 @@ original failure and records a cleanup failure in its internal log.
 content-addressed values are missing and uploads only those values. That is the
 right transport for a large shared worker fleet because unchanged files do not
 cross the network again.
+
+The Tuist adapter uses this protocol: it uploads only the input blobs the
+project cache is missing and reads outputs back by digest.
 
 The E2B and Daytona adapters currently upload one complete archive of the
 declared inputs for each cache miss. This gives Once the same correctness

@@ -44,6 +44,8 @@ pub struct TuistCacheProviderConfig {
     pub account: Option<String>,
     pub project: Option<String>,
     pub oauth_client_id: Option<String>,
+    /// Worker image remote execution pins, such as `sha-<commit>`.
+    pub execution_image: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,6 +168,7 @@ pub(crate) enum InfrastructureProviderToml {
         account: Option<String>,
         project: Option<String>,
         oauth_client_id: Option<String>,
+        execution_image: Option<String>,
     },
 }
 
@@ -188,6 +191,7 @@ impl CacheProviderToml {
                     account: non_empty(account),
                     project: non_empty(project),
                     oauth_client_id: non_empty(oauth_client_id),
+                    execution_image: None,
                 }))
             }
         }
@@ -256,11 +260,13 @@ impl InfrastructureProviderToml {
                 account,
                 project,
                 oauth_client_id,
+                execution_image,
             } => InfrastructureProviderConfig::Tuist(TuistCacheProviderConfig {
                 url: non_empty(url).unwrap_or_else(|| DEFAULT_TUIST_URL.to_string()),
                 account: non_empty(account),
                 project: non_empty(project),
                 oauth_client_id: non_empty(oauth_client_id),
+                execution_image: non_empty(execution_image),
             }),
         })
     }

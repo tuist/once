@@ -294,7 +294,21 @@ archive transfers, validated output installation, and journaled cleanup. Graph
 analysis remains on a compatible coordinator, and provider binding partitions
 configuration, outputs, and cache identity. File operations remain local.
 
-This is not a running-worker pool or a remote CAS implementation. Intermediates
-still return through the coordinator. Worker pooling, multi-provider placement,
-native Mac workers, and the Bazel Remote Execution protocol remain future work
-over the same prepared-command boundary.
+A Tuist adapter adds the native REAPI path. It encodes the prepared command,
+input Merkle tree, and pinned platform (`OSFamily`, `Arch`, and the Tuist
+worker image) as REAPI values, uploads only blobs the project CAS reports
+missing, and installs outputs read back by digest. Lost operations are
+resubmitted and broken streams reattach, because the service may execute an
+action more than once; only duplicate-safe actions belong there. The
+adapter holds one of the account's advertised concurrency slots from upload
+until the service answers, and treats a full queue or a busy gateway as
+backpressure, not failure. Graph
+toolchains still resolve tool paths on the coordinator, so this path needs
+target kinds to describe worker-side toolchains before Rust or other compiled
+graphs can use it from a Mac.
+
+Docker remains a per-action adapter, not a running-worker pool or a remote CAS
+implementation. Docker intermediates still return through the coordinator.
+Worker pooling, multi-provider placement, native Mac workers, and REAPI
+adapters for services other than Tuist remain future work over the same
+prepared-command boundary.

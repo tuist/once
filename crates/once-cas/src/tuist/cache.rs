@@ -37,6 +37,7 @@ use crate::{ActionCacheHit, ActionResult, Cas, Digest, Error, ErrorKind, Result,
 mod batch_download;
 mod batch_rpc;
 mod download;
+mod execution;
 mod stream_limits;
 
 #[path = "cache_download.rs"]
@@ -108,7 +109,13 @@ pub struct TuistCache {
     auth: TuistAuth,
     auth_token_cache: Arc<Recovering<String>>,
     endpoint_override: Option<String>,
+    execution_cache: Arc<Recovering<execution::TuistExecution>>,
+    /// A credential resolved again after the service rejected the cached one.
+    /// Shared by every clone, so one refresh serves the whole process.
+    refreshed_token: Arc<std::sync::Mutex<Option<String>>>,
 }
+
+pub use execution::{Executed, TuistExecution, DEFAULT_EXECUTION_TIMEOUT};
 
 /// Both channels reach the same endpoint. `ByteStream` writes get their own
 /// because tonic's request timeout lasts until response headers arrive, which
@@ -163,6 +170,8 @@ impl TuistCache {
             auth,
             auth_token_cache: Arc::default(),
             endpoint_override: env_token(TUIST_CACHE_ENDPOINT_ENV),
+            execution_cache: Arc::default(),
+            refreshed_token: Arc::default(),
         })
     }
 
@@ -1548,9 +1557,33 @@ impl TuistCache {
         message: T,
         operation: &'static str,
     ) -> Result<Request<T>> {
-        let token = self.auth_token().await?;
-        authorized_grpc_request_with_token(message, token, Some(self.account()))
+        let refreshed = self
+            .refreshed_token
+            .lock()
+            .expect("refreshed token lock is not poisoned")
+            .clone();
+        let token = match refreshed {
+            Some(token) => token,
+            None => self.auth_token().await?.to_string(),
+        };
+        authorized_grpc_request_with_token(message, &token, Some(self.account()))
             .map_err(|message| status::remote(operation, ErrorKind::Misconfigured, message))
+    }
+
+    /// Resolve the credential again, refreshing a stored session that is
+    /// about to expire, after the service rejected the one in use.
+    pub(super) async fn refresh_auth_token(&self) -> Result<()> {
+        let auth = self.auth.clone();
+        let token = tokio::task::spawn_blocking(move || auth.token())
+            .await
+            .map_err(|source| {
+                status::remote("refresh auth token", ErrorKind::Other, source.to_string())
+            })??;
+        *self
+            .refreshed_token
+            .lock()
+            .expect("refreshed token lock is not poisoned") = Some(token);
+        Ok(())
     }
 
     fn account(&self) -> &str {

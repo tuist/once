@@ -363,7 +363,7 @@ fn remote_from_workspace_provider(
             provider: name,
             properties,
             executor: Some("tuist".to_string()),
-            environment: None,
+            environment: config.execution_image,
             account: binding_account.or(config.account),
             project: binding_project.or(config.project),
         },

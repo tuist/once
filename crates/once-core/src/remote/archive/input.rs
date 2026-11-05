@@ -5,7 +5,7 @@ use crate::remote::{phase_permit, PhasePermit};
 use crate::{ExecutionPermit, RemoteIoLimits, Result, WorkspacePath};
 
 mod build;
-mod plan;
+pub(in crate::remote) mod plan;
 #[cfg(all(test, any(target_os = "linux", target_vendor = "apple")))]
 mod tests;
 

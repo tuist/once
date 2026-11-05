@@ -7,7 +7,8 @@ kinds or test selection.
 
 Start with the [provider guide](/guide/infrastructure/providers). This reference
 describes the internal adapter boundary and hosted service requirements. It is
-not an HTTP schema or a claim that Once supports REAPI `Execution.Execute`.
+not an HTTP schema. The Tuist adapter is the one adapter that speaks the REAPI
+`Execution` service; the others transfer archives to sandboxes.
 
 ## Prepared Command
 

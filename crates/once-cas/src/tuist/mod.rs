@@ -19,7 +19,7 @@ use reqwest::Url;
 use crate::{Error, Result};
 
 pub use auth::{TuistAuth, TuistAuthPrompt, TUIST_APP_OAUTH_CLIENT_ID, TUIST_OAUTH_CLIENT_ID_ENV};
-pub use cache::TuistCache;
+pub use cache::{Executed, TuistCache, TuistExecution, DEFAULT_EXECUTION_TIMEOUT};
 pub use projects::{ProjectCreateError, RemoteProject, TuistProjects};
 
 const PROVIDER_NAME: &str = "tuist";

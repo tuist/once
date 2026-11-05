@@ -937,7 +937,15 @@ async fn execute_command(
         return Err(executor.unsupported("live output observers"));
     }
     let result = match (executor, stream_to_parent, sandbox) {
-        (Executor::Microsandbox | Executor::E2b | Executor::Daytona | Executor::Docker, _, _) => {
+        (
+            Executor::Microsandbox
+            | Executor::E2b
+            | Executor::Daytona
+            | Executor::Docker
+            | Executor::Tuist,
+            _,
+            _,
+        ) => {
             Box::pin(remote::execute_command(
                 executor,
                 remote.as_deref().expect("remote executor has a binding"),
