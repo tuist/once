@@ -126,11 +126,24 @@ impl Default for ResourceLimits {
 }
 
 fn detected_memory_bytes() -> Option<u64> {
-    let mut system = System::new();
+    let mut system = System::new().ok()?;
     system.refresh_memory();
     let host = system.total_memory();
-    let constrained = system
-        .cgroup_limits()
+    #[cfg(target_os = "linux")]
+    let constrained = {
+        let pid = sysinfo::Pid::from_u32(std::process::id());
+        system.refresh_processes_specifics(
+            sysinfo::ProcessesToUpdate::Some(&[pid]),
+            true,
+            sysinfo::ProcessRefreshKind::nothing().without_tasks(),
+        );
+        system
+            .process(pid)
+            .and_then(sysinfo::Process::cgroup_limits)
+    };
+    #[cfg(not(target_os = "linux"))]
+    let constrained = system.cgroup_limits();
+    let constrained = constrained
         .map(|limits| limits.total_memory)
         .filter(|memory| *memory > 0);
     [Some(host).filter(|memory| *memory > 0), constrained]
