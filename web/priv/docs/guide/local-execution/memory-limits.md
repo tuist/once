@@ -5,6 +5,10 @@ default, it schedules against two thirds of the memory visible to the host or
 container. This leaves room for Once itself, the operating system, editors, and
 other processes.
 
+On Linux, automatic detection considers the current process's readable cgroup
+limits, including visible ancestor limits, rather than only the host total.
+If cgroup information is unavailable, detection falls back to host memory.
+
 Override the budget for any command with `--memory-limit`:
 
 ```sh
@@ -90,6 +94,10 @@ This is an admission-control budget based on action estimates, not a hard
 operating-system memory ceiling. It bounds Once's scheduling decisions and its
 own artifact buffering. A command that uses more memory than its estimate can
 still exceed the budget by itself.
+
+The budget belongs to one invocation. Independent Once processes do not share
+a host-wide reservation pool, so their combined reservations can exceed a
+single invocation's budget.
 
 Use a container or operating-system process limit when a command must be
 forcibly stopped at an exact resident-memory boundary. Pair that hard boundary
