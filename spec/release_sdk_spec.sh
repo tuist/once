@@ -30,6 +30,7 @@ Describe 'release SDK packaging scripts'
       "$WORKSPACE/crates/once-events-client"
     touch \
       "$WORKSPACE/Cargo.toml" \
+      "$WORKSPACE/crates/once/Cargo.toml" \
       "$WORKSPACE/once.toml" \
       "$WORKSPACE/crates/once-cas/once.toml" \
       "$WORKSPACE/crates/once-core/once.toml" \
@@ -61,6 +62,82 @@ name = "tonic-prost-build"
 version = "0.14.6"
 LOCK
   }
+
+  setup_dependency_preparation() {
+    setup_release_path
+    setup_release_graph_workspace
+    write_stub cargo \
+      '#!/usr/bin/env bash' \
+      'case "$1" in' \
+      '  vendor) mkdir -p third_party/rust/vendor ;;' \
+      '  metadata) printf "%s\n" "{\"packages\":[]}" ;;' \
+      'esac'
+    write_stub mise \
+      '#!/usr/bin/env bash' \
+      'shift 2' \
+      'exec "$@"'
+    cd "$WORKSPACE"
+  }
+
+  prepare_dependencies() {
+    "$REPO_ROOT/mise/tasks/release/prepare-rust-graph-deps.sh" "$@"
+  }
+
+  It 'reuses prepared dependencies without vendoring or downloading again'
+    setup_dependency_preparation
+    prepare_dependencies --target x86_64-unknown-linux-gnu
+    printf retained > third_party/rust/vendor/retained
+
+    When call prepare_dependencies --target x86_64-unknown-linux-gnu
+    The status should be success
+    The stderr should include 'reusing prepared dependencies'
+    The contents of file third_party/rust/vendor/retained should equal retained
+  End
+
+  Describe 'prepared dependency invalidation'
+    Parameters
+      lockfile
+      manifest
+      target
+      missing-vendor
+    End
+
+    It "rebuilds prepared dependencies after changing $1"
+      setup_dependency_preparation
+      prepare_dependencies --target x86_64-unknown-linux-gnu
+      printf stale > third_party/rust/vendor/retained
+      next_target=x86_64-unknown-linux-gnu
+      case "$1" in
+        lockfile) printf '\n# changed\n' >> Cargo.lock ;;
+        manifest) printf '\n# changed\n' >> crates/once/Cargo.toml ;;
+        target) next_target=aarch64-unknown-linux-gnu ;;
+        missing-vendor) rm -rf third_party/rust/vendor ;;
+      esac
+
+      When call prepare_dependencies --target "$next_target"
+      The status should be success
+      The path third_party/rust/vendor should be directory
+      The path third_party/rust/vendor/retained should not be exist
+    End
+  End
+
+  It 'does not reuse dependencies after an incomplete agentd download'
+    setup_dependency_preparation
+    write_stub jq \
+      '#!/usr/bin/env bash' \
+      'if [[ "$*" == *microsandbox-filesystem* ]]; then echo 0.7.6; fi'
+    write_stub curl \
+      '#!/usr/bin/env bash' \
+      'printf partial > third_party/rust/vendor/build/agentd.tmp' \
+      'exit 22'
+    write_stub sleep '#!/usr/bin/env bash'
+
+    When call prepare_dependencies --target aarch64-unknown-linux-gnu
+    The status should be failure
+    The stderr should include 'download agentd failed; retrying'
+    The path third_party/rust/.prepared should not be exist
+    The path third_party/rust/vendor/build/agentd should not be exist
+  End
 
   It 'copies a built shared library into each SDK prebuild directory'
     setup_release_path
