@@ -791,9 +791,18 @@ async fn run_query_command(
         Some(cli::QueryCmd::TestResults {
             target,
             summary_only,
-        }) => commands::query::test_results(workspace, output, &target, summary_only)
-            .await
-            .map(|()| ExitCode::SUCCESS),
+            case,
+            attempt,
+        }) => commands::query::test_results(
+            workspace,
+            output,
+            &target,
+            summary_only,
+            case.as_deref(),
+            attempt.as_deref(),
+        )
+        .await
+        .map(|()| ExitCode::SUCCESS),
         Some(cli::QueryCmd::TestManifest { target }) => {
             commands::query::test_manifest(workspace, output, &target)
                 .await

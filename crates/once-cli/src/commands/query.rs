@@ -3,9 +3,11 @@
 mod expression;
 mod external_source;
 mod script;
+pub(crate) mod test_case;
 pub(crate) mod test_plan;
 
 pub(crate) use script::script_validation_value;
+pub(crate) use test_case::test_case_value;
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -843,7 +845,23 @@ pub async fn test_results(
     output: Output,
     target_id: &str,
     summary_only: bool,
+    case: Option<&str>,
+    attempt: Option<&str>,
 ) -> Result<()> {
+    let attempt = attempt
+        .map(|value| {
+            let position = value
+                .parse::<i128>()
+                .ok()
+                .and_then(|value| u64::try_from(value).ok());
+            test_case::attempt_position(target_id, position)
+        })
+        .transpose()?;
+    test_case::validate_selection(target_id, summary_only, case, attempt)?;
+    if let Some(case) = case {
+        let value = test_case_value(workspace, target_id, case, attempt)?;
+        return write_body(output, || format!("{value:#}\n"), &value).await;
+    }
     let mut value = test_results_value(workspace, target_id)?;
     if summary_only {
         value = test_results_summary_value(&value)?;

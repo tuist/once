@@ -66,6 +66,107 @@ SH
     The path "$WORKSPACE/out.txt" should not be exist
   End
 
+  It 'returns matching retained evidence and diagnostics without evaluating the current graph'
+    mkdir -p "$WORKSPACE/.once/out/tests/unit/test"
+    cat > "$WORKSPACE/.once/out/tests/unit/test/test_results.json" <<'EOF'
+{"schema":"once.test_results.v1","target":"tests/unit","status":"cancelled","runner":{"type":"native","metadata":{}},"summary":{"total":2,"passed":1,"failed":0,"skipped":0,"flaky":1},"cases":[{"id":"other","name":"other","suite":"unit","status":"passed","runner_metadata":{},"attempts":[{"status":"passed"}]},{"id":"retry","name":"retry","suite":"unit","status":"flaky","runner_metadata":{},"attempts":[{"status":"failed","timestamp":900,"failure":{"message":"first failure"},"producer_extension":{"n":7}},{"status":"producer_future_status","timestamp":100,"producer_extension":[3,1]}]}],"artifacts":{"logs":["../../never-read","https://invalid.example/private"],"native_results":[]}}
+EOF
+    cat > "$SPEC_ROOT/check_retained.py" <<'PY'
+import json, os, pathlib, subprocess
+root = pathlib.Path(os.environ['WORKSPACE'])
+command = [os.environ['ONCE_BIN'], '-C', str(root)]
+path = root / '.once/out/tests/unit/test/test_results.json'
+raw = path.read_bytes()
+retained = json.loads(raw)
+
+def query(case=None, attempt=None, summary=False, error=None, attached=False, cli_attempt=None):
+    args = {'target': 'tests/unit'}
+    cli = command + ['--format', 'json', 'query', 'test-results', 'tests/unit']
+    if case is not None:
+        args['case'] = case
+        cli += ['--case', case]
+    if attempt is not None:
+        args['attempt'] = attempt
+        position = str(attempt) if cli_attempt is None else cli_attempt
+        cli += ['--attempt=' + position] if attached else ['--attempt', position]
+    if summary:
+        args['summary_only'] = True
+        cli += ['--summary-only']
+    direct = subprocess.run(cli, capture_output=True, text=True)
+    request = {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {'name': 'once_query_test_results', 'arguments': args}}
+    mcp = subprocess.run(command + ['mcp'], input=json.dumps(request)+'\n', capture_output=True, text=True)
+    assert mcp.returncode == 0, mcp.stderr
+    response = json.loads(mcp.stdout)['result']
+    if error:
+        assert direct.returncode != 0 and not direct.stdout
+        cli_error = json.loads(direct.stderr.splitlines()[-1])['error']
+        mcp_error = response['structuredContent']['error']
+        assert response['isError'] and cli_error['code'] == mcp_error['code'] == error
+        assert cli_error['diagnostics'] == mcp_error['diagnostics']
+        diagnostic = cli_error['diagnostics'][0]
+        assert diagnostic['target'] == 'tests/unit' and diagnostic['attribute'] and diagnostic['repairs']
+        assert len(direct.stderr) < 20000 and len(mcp.stdout) < 20000
+        if attempt is not None and len(str(attempt)) >= 100:
+            assert str(attempt) not in direct.stderr and str(attempt) not in mcp.stdout
+        return
+    assert direct.returncode == 0, direct.stderr
+    value = json.loads(direct.stdout)
+    assert value == response['structuredContent']['result'] == json.loads(response['content'][0]['text'])
+    return value
+
+for manifest in (None, 'invalid [ TOML'):
+    if manifest is not None:
+        (root / 'once.toml').write_text(manifest)
+    before = {str(p.relative_to(root)): (p.read_bytes(), p.stat().st_mtime_ns) for p in root.rglob('*') if p.is_file()}
+    first = query('retry', 1)
+    latest = query('retry')
+    assert first['status'] == 'cancelled' and first['case']['status'] == 'flaky'
+    assert first['attempt_result'] == retained['cases'][1]['attempts'][0]
+    assert latest['attempt_result'] == retained['cases'][1]['attempts'][1]
+    assert latest == query('retry', 2) and latest['attempt'] == latest['attempt_count'] == 2
+    assert latest['target_artifacts'] == retained['artifacts'] and latest['artifact_availability'] == 'not_checked'
+    assert latest['rerun'] == {'argv': ['once', 'test', '--format', 'json', '--', 'tests/unit'], 'scope': 'target', 'configuration': 'current', 'reason': 'retained_evidence_only'}
+    assert query('other')['case']['status'] == 'passed'
+    assert query() == retained
+    assert query(summary=True)['schema'] == 'once.test_results_summary.v1'
+    query('missing', error='test_case_not_found')
+    query('retry', 3, error='test_attempt_not_found')
+    query('retry', 0, error='invalid_test_result_selection')
+    query(attempt=1, error='invalid_test_result_selection')
+    query('retry', summary=True, error='invalid_test_result_selection')
+    query('', error='invalid_test_result_selection')
+    for attempt in [18446744073709551616, -1, -18446744073709551616, 1.25, -1.25, 'nope', '9' * 20000]:
+        for attached in [False, True]:
+            query('retry', attempt, error='invalid_test_result_selection', attached=attached)
+    for attached in [False, True]:
+        query('retry', 0, cli_attempt='-0', error='invalid_test_result_selection', attached=attached)
+        query('retry', 18446744073709551615, error='test_attempt_not_found', attached=attached)
+        assert query('retry', 1, cli_attempt='+01', attached=attached) == first
+    after = {str(p.relative_to(root)): (p.read_bytes(), p.stat().st_mtime_ns) for p in root.rglob('*') if p.is_file()}
+    assert before == after, (before.keys(), after.keys())
+assert path.read_bytes() == raw
+path.write_bytes(raw + b'\n')
+assert query('retry')['results_digest'] != latest['results_digest']
+path.write_bytes(raw + b' ' * (16777217 - len(raw)))
+query('retry', error='test_results_too_large')
+oversized = json.loads(raw)
+oversized['cases'][1]['attempts'][1]['padding'] = 'x' * 1048576
+path.write_text(json.dumps(oversized))
+query('retry', error='test_case_projection_too_large')
+oversized['schema'] = 'invalid' * 200000
+path.write_text(json.dumps(oversized))
+query('retry', error='invalid_test_results')
+path.write_text('[' * 200 + '0' + ']' * 200)
+query('retry', error='invalid_test_results')
+path.unlink()
+query('retry', error='test_results_unavailable')
+print('retained CLI/MCP parity, statuses, selectors, diagnostics, and read-only checks passed')
+PY
+    When call "$SPEC_PYTHON3" "$SPEC_ROOT/check_retained.py"
+    The status should be success
+    The stdout should equal 'retained CLI/MCP parity, statuses, selectors, diagnostics, and read-only checks passed'
+  End
+
   It 'keeps editing and execution tools out of the default catalog'
     printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' > "$WORKSPACE/mcp.jsonl"
 

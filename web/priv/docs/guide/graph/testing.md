@@ -68,6 +68,50 @@ repository uses a different runtime layout.
 
 ## Start With the Safety Model
 
+### Inspect Retained Case Evidence
+
+Read a target's retained normalized report with `once query test-results tests
+--format json`, or use `--summary-only` for totals without cases. To inspect an
+exact case id without returning every case:
+
+```sh
+once query test-results tests --case 'suite::case_name' --format json
+once query test-results tests --case 'suite::case_name' --attempt 1 --format json
+```
+
+The matching read-only MCP tool is `once_query_test_results`, with `target`,
+`case`, and optional `attempt` arguments. These reads do not evaluate the graph,
+run a planner, execute tests, or refresh discovery. They work with missing or
+broken current manifests when the retained target report is available.
+
+The focused `once.test_case_result.v1` response keeps the raw target `status`,
+`case.status`, and `attempt_result.status` distinct. The complete selected
+producer attempt object preserves unknown fields and statuses. `attempt` is a
+one-based position in the retained case's `attempts` array; omitted means the
+last element, not the newest timestamp. It is not a schedule retry or durable
+cross-run identity. `results_digest` is the BLAKE3 digest of the same file bytes
+used for the projection, so replacing the retained report changes its identity.
+
+`target_artifacts` remains target-level metadata, not case-owned attachments.
+`artifact_availability` is `not_checked`: paths are inert, no artifact is read,
+and remote content is neither fetched nor published. `rerun.argv` suggests only
+the whole target under the **current** configuration. It does not promise an
+exact-case rerun or replay the original configuration.
+
+Focused reads accept at most 16 MiB (16777216 bytes) of raw retained JSON and
+1 MiB (1048576 bytes) of compact logical projection JSON. Counting serialization
+checks the projection before materializing it. These are not peak-memory
+ceilings or wire-response caps: parsing has overhead, pretty CLI output can be
+larger, and MCP duplicates the result in structured and text content. Deeply
+nested JSON beyond the parser recursion limit is rejected. Full and summary
+queries without selectors retain their existing behavior, including large reports.
+
+`case` conflicts with `summary_only`; `attempt` requires `case` and starts at 1.
+Focused failures use structured diagnostics with `code`, `target`, `attribute`,
+and `repairs`, including bounded retained-id suggestions or a valid attempt range.
+
+### Selection and Scheduling Boundaries
+
 | Layer | Decides | Stable output |
 | --- | --- | --- |
 | Selection | Which test targets or explicit units belong in the run | Selection reasons and safety level |

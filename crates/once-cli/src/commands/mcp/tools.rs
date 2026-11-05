@@ -509,7 +509,7 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "once_query_test_results",
             description: "Read normalized once.test_results.v1 results for a target.",
-            long_description: "Reads the normalized result file produced by the target's `test` capability. This is the stable agent-facing interface for pass or fail summaries, case-level failures, attempts, and artifacts. Set `summary_only` when exact totals are sufficient and a large case array would waste model context. The matching command-line operation is `once query test-results <target> --summary-only --format json`. Callers do not need to parse a runner's command output.",
+            long_description: "Reads retained normalized results without graph evaluation, discovery updates, or execution, even if the current manifest is missing or broken. Set `summary_only` for totals without cases. Set `case` to an exact retained case id for once.test_case_result.v1 evidence, and optionally `attempt` to a one-based producer attempt array position (defaults to the last element, not timestamp order). Positions are not schedule retries or durable cross-run ids; results_digest is the BLAKE3 digest of the same bytes read. Raw target status, case status, and the complete selected attempt object remain distinct, including unknown producer fields and statuses. target_artifacts stays separate with artifact_availability=not_checked; paths are inert and no attachments are read, fetched, or published. Rerun argv is only a whole-target suggestion using current configuration, not an exact-case or historical replay promise. Focused reads accept at most 16777216 raw file bytes and 1048576 compact logical projection JSON bytes, checked by counting serialization before materialization. These are not peak-memory or wire-envelope limits: CLI pretty printing and MCP's duplicated structured/text envelope can be larger. Focused failures return structured diagnostics with code, target, attribute, and repairs. `case` conflicts with `summary_only`; `attempt` requires `case` and must be positive. Matches `once query test-results <target> --case <id> --attempt <position> --format json`. Without selectors the legacy full/summary views and their limits are unchanged.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -520,6 +520,16 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                     "summary_only": {
                         "type": "boolean",
                         "description": "Return once.test_results_summary.v1 status, totals, runner, and artifacts without case-level records."
+                    },
+                    "case": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Exact retained case id to inspect; conflicts with summary_only."
+                    },
+                    "attempt": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "One-based producer attempt array position within case; requires case. Defaults to the last element."
                     }
                 },
                 "required": ["target"]
