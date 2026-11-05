@@ -1020,15 +1020,11 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         // one of them on every graph load is the bulk of what an unchanged
         // build spends its time on, so consult the stat-described cache
         // first and only read bytes when the tree looks different.
-        let source_sha256 = with_store(|store| {
-            let store =
-                store.ok_or_else(|| anyhow!("materialize_host_tree called outside analysis"))?;
-            host_tree_digest_cache(&store.workspace_root)
-                .digest("host-tree", source_path, || {
-                    once_host_tree::host_tree_sha256_hex(source_path)
-                })
-                .with_context(|| format!("hashing host directory `{source}`"))
-        })?;
+        let source_sha256 = host_tree_digest_cache()
+            .digest("host-tree", source_path, || {
+                once_host_tree::host_tree_sha256_hex(source_path)
+            })
+            .with_context(|| format!("hashing host directory `{source}`"))?;
         observe(Observation::TreeDigest {
             path: source.to_string(),
             sha256: source_sha256.clone(),
@@ -2626,21 +2622,24 @@ pub fn flush_host_tree_digest_caches() {
     }
 }
 
-/// One tree digest cache per workspace, shared across every analysis in the
-/// process and persisted so the next invocation starts warm.
-fn host_tree_digest_cache(workspace_root: &Path) -> Arc<once_host_tree::TreeDigestCache> {
+/// The trees `materialize_host_tree` snapshots, such as unpacked dependency
+/// packages, live outside any one workspace and are shared by every checkout
+/// and worktree on the host. Their digests are remembered in the user cache so
+/// a fresh checkout does not re-read them; each entry is still checked against
+/// the tree's stat description before it is reused.
+fn host_tree_digest_cache() -> Arc<once_host_tree::TreeDigestCache> {
+    let path = once_core::Xdg::from_env()
+        .cache_home
+        .join("once")
+        .join("host-tree-digests");
     let caches = HOST_TREE_DIGEST_CACHES.get_or_init(|| Mutex::new(BTreeMap::new()));
     let mut caches = caches
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     Arc::clone(
-        caches
-            .entry(workspace_root.to_path_buf())
-            .or_insert_with_key(|root| {
-                Arc::new(once_host_tree::TreeDigestCache::open(
-                    root.join(".once").join("host-tree-digests"),
-                ))
-            }),
+        caches.entry(path).or_insert_with_key(|path| {
+            Arc::new(once_host_tree::TreeDigestCache::open(path.clone()))
+        }),
     )
 }
 

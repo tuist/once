@@ -155,7 +155,20 @@ impl TreeDigestCache {
         if !self.dirty.swap(false, Ordering::Relaxed) {
             return;
         }
-        let entries = self.lock();
+        let mut entries = self.lock();
+        // Several processes share one cache file, so keep what the others
+        // saved since this one opened it. Answers learned here win.
+        if let Some(saved) = std::fs::read_to_string(&self.path)
+            .ok()
+            .and_then(|text| parse(&text))
+        {
+            for (slot, entry) in saved {
+                if entries.len() >= MAX_ENTRIES {
+                    break;
+                }
+                entries.entry(slot).or_insert(entry);
+            }
+        }
         let mut out = String::from(SCHEMA);
         out.push('\n');
         for (slot, entry) in entries.iter() {
@@ -416,6 +429,39 @@ mod tests {
         cache.save();
         drop(cache);
         TreeDigestCache::open(path.to_path_buf())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_processes_keep_each_others_answers() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (first_tree, second_tree) = (tmp.path().join("first"), tmp.path().join("second"));
+        for tree in [&first_tree, &second_tree] {
+            std::fs::create_dir_all(tree).unwrap();
+            std::fs::write(tree.join("a.txt"), b"a").unwrap();
+        }
+        let path = tmp.path().join("cache");
+        let first = TreeDigestCache::open(path.clone());
+        let second = TreeDigestCache::open(path.clone());
+        first
+            .digest("test", &first_tree, || Ok("first".to_string()))
+            .unwrap();
+        second
+            .digest("test", &second_tree, || Ok("second".to_string()))
+            .unwrap();
+        first.save();
+        second.save();
+
+        let reopened = TreeDigestCache::open(path);
+        let recompute = || Ok("recomputed".to_string());
+        assert_eq!(
+            reopened.digest("test", &first_tree, recompute).unwrap(),
+            "first"
+        );
+        assert_eq!(
+            reopened.digest("test", &second_tree, recompute).unwrap(),
+            "second"
+        );
     }
 
     #[test]
