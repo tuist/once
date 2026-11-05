@@ -4,6 +4,7 @@ kind = "rust_library"
 deps = [
   "crates/once-presentation/once_presentation",
   "crates/once-host-tree/once_host_tree",
+  "crates/once-core/once_core",
   "cargo_dependencies",
 ]
 srcs = ["src/**/*.rs", "prelude/**/*.star", "prelude/examples/**"]
@@ -26,6 +27,7 @@ kind = "rust_test"
 deps = [
   "crates/once-presentation/once_presentation",
   "crates/once-host-tree/once_host_tree",
+  "crates/once-core/once_core",
   "cargo_dependencies",
 ]
 srcs = [
