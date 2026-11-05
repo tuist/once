@@ -149,6 +149,12 @@ pub enum QueryCmd {
         /// Return the normalized status and totals without case-level records.
         #[usage(long)]
         summary_only: bool,
+        /// Inspect an exact retained case id; conflicts with --summary-only.
+        #[usage(long)]
+        case: Option<String>,
+        /// One-based producer attempt position, requires --case; defaults to the last array element.
+        #[usage(long)]
+        attempt: Option<usize>,
     },
 
     /// List stable test units discovered in a target's normalized results.

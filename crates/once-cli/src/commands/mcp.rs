@@ -520,6 +520,49 @@ impl Server {
             .map(|value| value.as_bool().context("`summary_only` must be a boolean"))
             .transpose()?
             .unwrap_or(false);
+        let case = args
+            .get("case")
+            .map(|value| {
+                value.as_str().ok_or_else(|| {
+                    crate::commands::query::test_case::diagnostic(
+                        target_id,
+                        "invalid_test_result_selection",
+                        "case",
+                        "Use a string for the exact retained case id.",
+                    )
+                })
+            })
+            .transpose()?;
+        let attempt = args
+            .get("attempt")
+            .map(|value| {
+                value
+                    .as_u64()
+                    .and_then(|value| usize::try_from(value).ok())
+                    .ok_or_else(|| {
+                        crate::commands::query::test_case::diagnostic(
+                            target_id,
+                            "invalid_test_result_selection",
+                            "attempt",
+                            "Use a one-based producer attempt position representable on this host.",
+                        )
+                    })
+            })
+            .transpose()?;
+        crate::commands::query::test_case::validate_selection(
+            target_id,
+            summary_only,
+            case,
+            attempt,
+        )?;
+        if let Some(case) = case {
+            return crate::commands::query::test_case_value(
+                &self.workspace,
+                target_id,
+                case,
+                attempt,
+            );
+        }
         let value = crate::commands::query::test_results_value(&self.workspace, target_id)?;
         if summary_only {
             return crate::commands::query::test_results_summary_value(&value);
