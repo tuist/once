@@ -1,0 +1,15 @@
+[package]
+name = "e7_tiny"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[features]
+default = []
+extra = []
+
+[profile.dev]
+opt-level = 0
+debug = 2
+incremental = false

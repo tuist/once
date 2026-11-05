@@ -1,0 +1,10 @@
+[[target]]
+name = "cargo"
+kind = "cargo_workspace"
+srcs = ["Cargo.toml", "Cargo.lock"]
+
+[target.attrs]
+features = ["extra"]
+no_default_features = true
+target = "x86_64-unknown-linux-gnu"
+build_script_tools = []
