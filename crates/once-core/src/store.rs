@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use sea_orm::{Database, DatabaseConnection};
+use sea_orm::sqlx::sqlite::{SqliteJournalMode, SqliteSynchronous};
+use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 use sea_orm_migration::MigratorTrait;
 
 use crate::evidence::migration::Migrator;
@@ -28,7 +29,17 @@ impl WorkspaceStore {
                 .await
                 .with_context(|| format!("creating Once state directory `{}`", parent.display()))?;
         }
-        let db = Database::connect(sqlite_url(&self.path)?)
+        let mut options = ConnectOptions::new(sqlite_url(&self.path)?);
+        // A build appends evidence as each target finishes, so a commit that
+        // waits for the disk holds up the targets behind it. The write-ahead
+        // log commits without syncing and still cannot be torn by a crash; at
+        // worst a power loss drops the last records written.
+        options.map_sqlx_sqlite_opts(|sqlite| {
+            sqlite
+                .journal_mode(SqliteJournalMode::Wal)
+                .synchronous(SqliteSynchronous::Normal)
+        });
+        let db = Database::connect(options)
             .await
             .with_context(|| format!("opening Once database `{}`", self.path.display()))?;
         Migrator::up(&db, None)
