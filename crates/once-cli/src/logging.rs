@@ -5,6 +5,8 @@ use std::sync::Mutex;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 use uuid::Uuid;
 
+mod retention;
+
 const INTERNAL_DEFAULT_FILTER: &str =
     "once=debug,once_cli=debug,once_core=debug,once_cas=debug,once_frontend=debug,warn";
 const STDERR_ONCE_TARGETS: &[&str] =
@@ -52,6 +54,15 @@ pub fn init(verbose: u8) -> Logging {
             .with(file_layer)
             .with(stderr_layer)
             .init();
+
+        let retention = retention::Retention::from_env();
+        let removed = retention::prune(&dir, session_id, retention);
+        tracing::debug!(
+            removed,
+            max_logs = retention.max_logs,
+            max_bytes = retention.max_bytes,
+            "pruned session logs"
+        );
 
         return Logging {
             session_id,
