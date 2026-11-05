@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+repo_root="$PWD"
+
+step() {
+  local label="$1"
+  shift
+  local start=$SECONDS
+  echo "==> $label"
+  "$@"
+  echo "<== $label ($((SECONDS - start))s)"
+}
+
+install_apt_packages() {
+  local packages=(libcap-ng-dev libasound2-dev ca-certificates)
+  local missing=()
+  for package in "${packages[@]}"; do
+    dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q "install ok installed" || missing+=("$package")
+  done
+  if ((${#missing[@]})); then
+    sudo apt-get update -qq
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${missing[@]}"
+  else
+    echo "apt packages already installed"
+  fi
+}
+
+install_mise_tools() {
+  mise trust --quiet "$repo_root/mise.toml"
+  mise install --yes
+  # Downloaded archives are not needed once tools are extracted and only bloat the snapshot.
+  mise cache clear
+}
+
+fetch_elixir_deps() {
+  (
+    cd web
+    mise exec -- mix local.hex --force --if-missing
+    mise exec -- mix local.rebar --force --if-missing
+    HEX_CACERTS_PATH=/etc/ssl/certs/ca-certificates.crt mise exec -- mix deps.get --check-locked
+  )
+}
+
+persist_shell_env() {
+  local marker="# once: mise shims"
+  if ! grep -Fqx "$marker" "$HOME/.bash_profile" 2>/dev/null; then
+    cat >>"$HOME/.bash_profile" <<'EOF'
+
+# once: mise shims
+case ":$PATH:" in
+  *":$HOME/.local/share/mise/shims:"*) ;;
+  *) export PATH="$HOME/.local/share/mise/shims:$PATH" ;;
+esac
+EOF
+  fi
+}
+
+step "apt packages" install_apt_packages
+step "mise tools" install_mise_tools
+step "cargo fetch" mise exec -- cargo fetch --locked
+step "elixir deps" fetch_elixir_deps
+step "shell environment" persist_shell_env

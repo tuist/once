@@ -2,6 +2,7 @@
 /.once/
 **/.once/
 /.blick/runs/
+/.amp/portals/*
 /vendor
 /third_party/rust/src/
 /third_party/rust/vendor/
