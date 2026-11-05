@@ -25,7 +25,7 @@ aube = "1.41.0"
 helm = "4.3.0"
 kubectl = "1.37.1"
 jq = "1.8.2"
-hyperfine = "1.20.0"
+hyperfine = "1.21.0"
 "github:bazelbuild/bazelisk" = "1.29.0"
 "github:buchgr/bazel-remote" = "2.6.2"
 "github:facebook/buck2" = { version = "2026-07-15", rename_exe = "buck2" }
