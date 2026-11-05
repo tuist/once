@@ -13,6 +13,24 @@ from pathlib import Path
 import parity
 
 
+class ComparisonTest(unittest.TestCase):
+    def test_later_compilation_does_not_hide_an_empty_build(self):
+        unit = '["fixture", "src/lib.rs", false]'
+        native = {
+            "build_exit": 0,
+            "build_units": [unit],
+            "test_exit": 0,
+            "units": {unit: {"exit": 0}},
+            "tests": {"same test binary": {"exit": 0}},
+            "executed_cases": [("same case", "ok")],
+        }
+        once = native | {"build_units": []}
+        self.assertEqual(
+            parity.compare(native, once),
+            [{"field": "build_units", "native": native["build_units"], "once": []}],
+        )
+
+
 class CommandBoundaryTest(unittest.TestCase):
     def test_timeout_stops_descendants(self):
         with tempfile.TemporaryDirectory() as temporary:

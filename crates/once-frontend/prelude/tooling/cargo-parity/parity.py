@@ -287,6 +287,19 @@ def observe(base, fixture, arm, seed, once, real, environment):
     ]
     if arm == "native":
         build = run(["cargo", "build", *common], root, env, directory / "build.log")
+    else:
+        build = run(
+            [once, "--memory-limit", "2560MiB", "--format", "json", "build", "cargo"],
+            root,
+            env,
+            directory / "build.log",
+        )
+    build_units = {
+        json.dumps(record["unit"])
+        for path in logs.glob("*.json")
+        if (record := json.loads(path.read_text()))["unit"][0] != "UNKNOWN"
+    }
+    if arm == "native":
         test = run(
             ["cargo", "test", "--tests", *common], root, env, directory / "test.log"
         )
@@ -298,12 +311,6 @@ def observe(base, fixture, arm, seed, once, real, environment):
             )
         )
     else:
-        build = run(
-            [once, "--memory-limit", "2560MiB", "--format", "json", "build", "cargo"],
-            root,
-            env,
-            directory / "build.log",
-        )
         test = run(
             [
                 once,
@@ -404,6 +411,7 @@ def observe(base, fixture, arm, seed, once, real, environment):
             tests[unit] = {"exit": status, "cases": sorted(cases)}
     result = {
         "build_exit": build,
+        "build_units": sorted(build_units),
         "test_exit": test,
         "units": units,
         "tests": tests,
@@ -422,7 +430,7 @@ def observe(base, fixture, arm, seed, once, real, environment):
 
 def compare(native, once):
     differences = []
-    for field in ("build_exit", "test_exit", "tests", "executed_cases"):
+    for field in ("build_exit", "build_units", "test_exit", "tests", "executed_cases"):
         if native[field] != once[field]:
             differences.append(
                 {"field": field, "native": native[field], "once": once[field]}

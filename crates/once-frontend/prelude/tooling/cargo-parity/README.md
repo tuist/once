@@ -48,6 +48,8 @@ or build scripts, and their outputs are private temporary files.
 
 The comparator checks, symmetrically:
 
+- Build-phase unit membership, captured before testing, so later test compilation
+  cannot hide an incomplete successful build.
 - Compiler-selected source and included-file membership, relative to the owning
   package, rather than the resolver's declared source globs.
 - Actual direct `--extern` aliases for each package/root/test compilation unit.
