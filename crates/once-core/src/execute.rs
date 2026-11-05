@@ -1201,13 +1201,15 @@ async fn materialize_host_tree(
                 actual,
             });
         }
-        copy_sandbox_output_blocking(&source, &destination_path).map_err(|source_error| {
-            Error::FileAction {
+        copy_sandbox_output_blocking(&source, &destination_path)
+            .and_then(|()| {
+                once_host_tree::copy_escaping_symlink_targets(&source, &destination_path)
+            })
+            .map_err(|source_error| Error::FileAction {
                 action: "materialize_host_tree",
                 path: destination_label,
                 source: source_error,
-            }
-        })?;
+            })?;
         // The hash above and this copy are independent traversals of the
         // source. If the source changed in between, the destination we just
         // captured no longer matches `expected`; re-hash the copied snapshot

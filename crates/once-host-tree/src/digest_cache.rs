@@ -237,7 +237,7 @@ pub fn tree_stat_fingerprint(root: &Path) -> std::io::Result<String> {
     #[cfg(unix)]
     {
         let mut hasher = sha2::Sha256::new();
-        hasher.update(b"once.tree_stat.v2\0");
+        hasher.update(b"once.tree_stat.v3\0");
         hash_stat_directory(root, root, &mut hasher, 0)?;
         Ok(hex_lower(&hasher.finalize()))
     }
@@ -288,6 +288,12 @@ fn hash_stat_directory(
             // The link's own text is cheap and is what the content digest
             // records, so include it rather than trusting its metadata alone.
             hasher.update(utf8_path(&std::fs::read_link(&path)?)?.as_bytes());
+            // A link whose target leaves the tree is hashed as that target, so
+            // the target's own metadata has to move this description too.
+            if let Ok(target) = std::fs::metadata(&path) {
+                hasher.update(target.len().to_le_bytes());
+                hasher.update(stat_change_marker(&target));
+            }
         } else if metadata.is_dir() {
             hash_stat_directory(root, &path, hasher, depth + 1)?;
         }
@@ -425,6 +431,28 @@ mod tests {
             .unwrap();
 
         std::fs::write(tree.join("a.txt"), b"changed and longer").unwrap();
+        let after = next_run(cache, &path)
+            .digest("test", &tree, || Ok("computed-2".to_string()))
+            .unwrap();
+
+        assert_eq!(after, "computed-2");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recomputes_after_an_external_symlink_target_changes() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tree = tmp.path().join("tree");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(tmp.path().join("LICENSE"), b"a").unwrap();
+        std::os::unix::fs::symlink("../LICENSE", tree.join("LICENSE")).unwrap();
+        let path = tmp.path().join("cache");
+        let cache = TreeDigestCache::open(path.clone());
+        cache
+            .digest("test", &tree, || Ok("computed-1".to_string()))
+            .unwrap();
+
+        std::fs::write(tmp.path().join("LICENSE"), b"changed and longer").unwrap();
         let after = next_run(cache, &path)
             .digest("test", &tree, || Ok("computed-2".to_string()))
             .unwrap();

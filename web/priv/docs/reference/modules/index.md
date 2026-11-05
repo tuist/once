@@ -805,7 +805,9 @@ Built-in history currently covers Rust compilation/build scripts/test-runner com
 - `materialize_host_tree(source, destination)` snapshots one absolute host
   directory into a workspace directory output. Analysis and execution verify
   its content, file modes, and symbolic links before the output enters the
-  cache.
+  cache. A symbolic link that resolves to a file outside the directory is
+  snapshotted as that file, so its contents are part of the verified digest.
+  A link to a directory outside it fails analysis.
 - `link_path(source, destination)` declares an uncached, relative workspace
   link. The source must exist and is automatically declared as an input.
   Linked contents are not copied into the action cache, while downstream

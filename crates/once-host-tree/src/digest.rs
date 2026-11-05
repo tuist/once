@@ -24,14 +24,16 @@
 //! survive both paths and stay in the digest, so the executable bit that a
 //! build actually depends on is still an input.
 //!
-//! Symlinks contribute only their target text, not the contents behind them.
-//! That is sound for links that stay inside the tree, but a link whose target
-//! resolves outside the tree would let external contents change without moving
-//! the digest, while output capture materializes those same external contents.
-//! To keep the digest an honest cache key, a symlink proven to point outside
-//! the tree is rejected rather than silently under-hashed.
+//! Symlinks that stay inside the tree contribute only their target text, not
+//! the contents behind them. A link whose target resolves outside the tree
+//! would let external contents change without moving the digest, so such a
+//! link to a regular file is hashed as that file, with its mode and contents,
+//! and materialization copies it as a regular file, the way a package inside
+//! a repository checkout sees a license file linked from the repository root.
+//! A link proven to point at a directory outside the tree is
+//! rejected rather than silently under-hashed.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use sha2::Digest as _;
 
@@ -39,7 +41,7 @@ use sha2::Digest as _;
 ///
 /// Entries that are neither files, directories, nor symlinks (sockets, fifos,
 /// device nodes) are skipped so the digest depends only on portable content.
-/// Fails if a symlink resolves to a target outside `root`.
+/// Fails if a symlink resolves to a directory outside `root`.
 pub fn host_tree_sha256_hex(root: &Path) -> std::io::Result<String> {
     let root_canonical = root.canonicalize()?;
     let mut hasher = sha2::Sha256::new();
@@ -58,9 +60,29 @@ fn hash_host_tree_directory(
     children.sort_by_key(std::fs::DirEntry::file_name);
     for child in children {
         let path = child.path();
-        let metadata = std::fs::symlink_metadata(&path)?;
+        let mut metadata = std::fs::symlink_metadata(&path)?;
         let relative = portable_path(path.strip_prefix(root).map_err(std::io::Error::other)?)?;
-        let kind = if metadata.file_type().is_symlink() {
+        let mut link_target = None;
+        if metadata.file_type().is_symlink() {
+            let target = std::fs::read_link(&path)?;
+            match escaping_symlink_target(root_canonical, &path, &target) {
+                Some(resolved) if resolved.is_file() => metadata = std::fs::metadata(&resolved)?,
+                Some(_) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "host tree `{}` contains symlink `{}` pointing to a directory \
+                             outside the tree; external directory targets are not supported \
+                             because their contents cannot be tracked in the tree digest",
+                            root.display(),
+                            path.display()
+                        ),
+                    ));
+                }
+                None => link_target = Some(target),
+            }
+        }
+        let kind = if link_target.is_some() {
             b'l'
         } else if metadata.is_dir() {
             b'd'
@@ -75,21 +97,8 @@ fn hash_host_tree_directory(
         if kind != b'd' {
             hasher.update(host_file_mode(&metadata).to_le_bytes());
         }
-        if metadata.file_type().is_symlink() {
-            let target = std::fs::read_link(&path)?;
-            if symlink_target_escapes(root_canonical, &path, &target) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!(
-                        "host tree `{}` contains symlink `{}` pointing outside the tree; \
-                         external symlink targets are not supported because their contents \
-                         cannot be tracked in the tree digest",
-                        root.display(),
-                        path.display()
-                    ),
-                ));
-            }
-            hasher.update(utf8_path(&target)?.as_bytes());
+        if let Some(target) = &link_target {
+            hasher.update(utf8_path(target)?.as_bytes());
         } else if metadata.is_file() {
             hasher.update(file_sha256_hex(&path)?.as_bytes());
         }
@@ -101,23 +110,56 @@ fn hash_host_tree_directory(
     Ok(())
 }
 
-/// Whether `target` (as read from the symlink at `symlink_path`) provably
-/// resolves outside `root_canonical`. A target that cannot be resolved (a
-/// dangling link) is treated as inside: it carries no external contents to
-/// track, so hashing its link text alone stays sound.
-fn symlink_target_escapes(root_canonical: &Path, symlink_path: &Path, target: &Path) -> bool {
-    let resolved = if target.is_absolute() {
-        target.to_path_buf()
-    } else {
-        match symlink_path.parent() {
-            Some(parent) => parent.join(target),
-            None => target.to_path_buf(),
-        }
+/// The canonical path `target` (as read from the symlink at `symlink_path`)
+/// resolves to, when it provably lies outside `root_canonical`. A target that
+/// cannot be resolved (a dangling link) is treated as inside: it carries no
+/// external contents to track, so hashing its link text alone stays sound.
+fn escaping_symlink_target(
+    root_canonical: &Path,
+    symlink_path: &Path,
+    target: &Path,
+) -> Option<PathBuf> {
+    let resolved = match symlink_path.parent() {
+        Some(parent) if !target.is_absolute() => parent.join(target),
+        _ => target.to_path_buf(),
     };
-    match resolved.canonicalize() {
-        Ok(canonical) => !canonical.starts_with(root_canonical),
-        Err(_) => false,
+    resolved
+        .canonicalize()
+        .ok()
+        .filter(|canonical| !canonical.starts_with(root_canonical))
+}
+
+/// Replace each symlink under `destination` whose counterpart under `source`
+/// resolves to a file outside `source` with a copy of that file, so a snapshot
+/// of `source` carries the external contents its digest records.
+pub fn copy_escaping_symlink_targets(source: &Path, destination: &Path) -> std::io::Result<()> {
+    let root_canonical = source.canonicalize()?;
+    copy_escaping_symlink_targets_in(&root_canonical, source, destination)
+}
+
+fn copy_escaping_symlink_targets_in(
+    root_canonical: &Path,
+    source: &Path,
+    destination: &Path,
+) -> std::io::Result<()> {
+    for child in std::fs::read_dir(source)? {
+        let child = child?;
+        let path = child.path();
+        let file_type = child.file_type()?;
+        let copied = destination.join(child.file_name());
+        if file_type.is_dir() {
+            copy_escaping_symlink_targets_in(root_canonical, &path, &copied)?;
+        } else if file_type.is_symlink() {
+            let target = std::fs::read_link(&path)?;
+            if let Some(resolved) = escaping_symlink_target(root_canonical, &path, &target) {
+                if resolved.is_file() {
+                    std::fs::remove_file(&copied)?;
+                    std::fs::copy(&resolved, &copied)?;
+                }
+            }
+        }
     }
+    Ok(())
 }
 
 pub(crate) fn utf8_path(path: &Path) -> std::io::Result<&str> {
@@ -219,13 +261,45 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn external_symlink_is_rejected() {
+    fn external_file_symlink_is_hashed_and_copied_as_its_target() {
         let outside = tempfile::TempDir::new().unwrap();
-        let external = outside.path().join("secret.txt");
+        let external = outside.path().join("LICENSE");
         std::fs::write(&external, b"external payload").unwrap();
 
+        let linked = tempfile::TempDir::new().unwrap();
+        std::os::unix::fs::symlink(&external, linked.path().join("LICENSE")).unwrap();
+        let copied = tempfile::TempDir::new().unwrap();
+        std::fs::copy(&external, copied.path().join("LICENSE")).unwrap();
+
+        let linked_digest = host_tree_sha256_hex(linked.path()).unwrap();
+        assert_eq!(linked_digest, host_tree_sha256_hex(copied.path()).unwrap());
+
+        std::fs::write(&external, b"changed payload").unwrap();
+        assert_ne!(linked_digest, host_tree_sha256_hex(linked.path()).unwrap());
+
+        let destination = tempfile::TempDir::new().unwrap();
+        std::os::unix::fs::symlink(&external, destination.path().join("LICENSE")).unwrap();
+        copy_escaping_symlink_targets(linked.path(), destination.path()).unwrap();
+        let restored = destination.path().join("LICENSE");
+        assert!(!std::fs::symlink_metadata(&restored)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read(&restored).unwrap(), b"changed payload");
+        assert_eq!(
+            host_tree_sha256_hex(linked.path()).unwrap(),
+            host_tree_sha256_hex(destination.path()).unwrap()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn external_directory_symlink_is_rejected() {
+        let outside = tempfile::TempDir::new().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), b"external payload").unwrap();
+
         let tmp = tempfile::TempDir::new().unwrap();
-        std::os::unix::fs::symlink(&external, tmp.path().join("link.txt")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("linked")).unwrap();
 
         let err = host_tree_sha256_hex(tmp.path()).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);

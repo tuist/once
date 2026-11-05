@@ -6,5 +6,5 @@
 mod digest;
 mod digest_cache;
 
-pub use digest::host_tree_sha256_hex;
+pub use digest::{copy_escaping_symlink_targets, host_tree_sha256_hex};
 pub use digest_cache::{tree_stat_fingerprint, TreeDigestCache};
