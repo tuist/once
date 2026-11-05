@@ -83,6 +83,29 @@ LOCK
     "$REPO_ROOT/mise/tasks/release/prepare-rust-graph-deps.sh" "$@"
   }
 
+  Describe 'platform checksum tools'
+    Parameters
+      sha256sum
+      shasum
+    End
+
+    It "prepares dependencies with only $1 available"
+      Skip if "$1 is unavailable" test -z "$(command -v "$1")"
+      setup_dependency_preparation
+      for tool in bash awk mkdir rm head jq "$1"; do
+        ln -s "$(command -v "$tool")" "$WORKSPACE/bin/$tool"
+      done
+
+      prepare_with_platform_tools() {
+        PATH="$WORKSPACE/bin" prepare_dependencies --target x86_64-pc-windows-msvc
+      }
+
+      When call prepare_with_platform_tools
+      The status should be success
+      The path third_party/rust/.prepared should be file
+    End
+  End
+
   It 'reuses prepared dependencies without vendoring or downloading again'
     setup_dependency_preparation
     prepare_dependencies --target x86_64-unknown-linux-gnu

@@ -29,11 +29,17 @@ for tool in jq mise; do
   fi
 done
 
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256=(sha256sum)
+else
+  sha256=(shasum -a 256)
+fi
+
 fingerprint="$(
   {
     printf '%s\n' "${target}"
-    shasum -a 256 Cargo.lock Cargo.toml crates/*/Cargo.toml "${BASH_SOURCE[0]}"
-  } | shasum -a 256 | awk '{print $1}'
+    "${sha256[@]}" Cargo.lock Cargo.toml crates/*/Cargo.toml "${BASH_SOURCE[0]}"
+  } | "${sha256[@]}" | awk '{print $1}'
 )"
 prepared_file="third_party/rust/.prepared"
 if [[ -d third_party/rust/vendor && -f "${prepared_file}" && "$(cat "${prepared_file}")" == "${fingerprint}" ]]; then
@@ -171,7 +177,7 @@ PY
       # verification see the file as authentic.
       checksum_file="third_party/rust/vendor/microsandbox-filesystem-${microsandbox_version}/.cargo-checksum.json"
       if [[ -f "${checksum_file}" ]]; then
-        new_hash="$(shasum -a 256 "${build_rs}" | awk '{print $1}')"
+        new_hash="$("${sha256[@]}" "${build_rs}" | awk '{print $1}')"
         python3 - "${checksum_file}" "${new_hash}" <<'PY'
 import json, sys
 path, new_hash = sys.argv[1], sys.argv[2]
