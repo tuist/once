@@ -3,8 +3,8 @@ name = "once_frontend"
 kind = "rust_library"
 deps = [
   "crates/once-presentation/once_presentation",
-  "crates/once-core/once_core",
   "crates/once-host-tree/once_host_tree",
+  "crates/once-core/once_core",
   "cargo_dependencies",
 ]
 srcs = ["src/**/*.rs", "prelude/**/*.star", "prelude/examples/**"]
@@ -26,8 +26,8 @@ name = "once_frontend_unit_tests"
 kind = "rust_test"
 deps = [
   "crates/once-presentation/once_presentation",
-  "crates/once-core/once_core",
   "crates/once-host-tree/once_host_tree",
+  "crates/once-core/once_core",
   "cargo_dependencies",
 ]
 srcs = [
@@ -98,7 +98,6 @@ name = "prelude_tests"
 kind = "rust_test"
 deps = [
   "crates/once-frontend/once_frontend",
-  "crates/once-core/once_core",
   "crates/once-host-tree/once_host_tree",
   "cargo_dependencies",
 ]

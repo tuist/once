@@ -239,8 +239,8 @@ name = "once_frontend_${suffix}"
 kind = "rust_library"
 deps = [
   "crates/once-presentation/once_presentation_${suffix}",
-  "crates/once-core/once_core_${suffix}",
   "crates/once-host-tree/once_host_tree_${suffix}",
+  "crates/once-core/once_core_${suffix}",
   "${dependency_target}",
 ]
 srcs = ["src/**/*.rs", "prelude/**/*.star", "prelude/examples/**"]
