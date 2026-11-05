@@ -2012,15 +2012,6 @@ def _xcode_script_path(value, subs):
         path = source_root + "/" + path
     return _xcode_workspace_relative(_xcode_normalize_path(path))
 
-def _xcode_is_absent_dsym(path, subs):
-    # Xcode only writes a symbol bundle for `dwarf-with-dsym`; with any other
-    # explicit format the path never exists and Xcode still runs the phase.
-    debug_format = _xcode_resolve_vars(str(subs.get("DEBUG_INFORMATION_FORMAT") or ""), subs)
-    if not debug_format or debug_format == "dwarf-with-dsym":
-        return False
-    bundle = _xcode_script_path("$(DWARF_DSYM_FOLDER_PATH)/$(DWARF_DSYM_FILE_NAME)", subs)
-    return bool(bundle) and (path == bundle or path.startswith(bundle + "/"))
-
 def _xcode_shell_phase_paths(phase, paths_key, file_lists_key, subs):
     paths = []
     for value in phase.get(paths_key) or []:
@@ -2267,7 +2258,7 @@ def _xcode_shell_script_phases(ctx, objects, target, subs, project_dir, target_n
                         if _basename(input) == _basename(output) and input not in resource_inputs:
                             resource_inputs.append(input)
                             structured_resource_inputs.append(input)
-        inputs = [path for path in script_inputs if not path.startswith("/") and not _xcode_is_absent_dsym(path, script_subs)]
+        inputs = [path for path in script_inputs if not path.startswith("/")]
         env = {}
         for key, value in script_subs.items():
             resolved = _xcode_resolve_vars(value, script_subs)
