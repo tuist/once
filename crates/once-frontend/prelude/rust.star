@@ -3021,22 +3021,21 @@ def _cargo_dependencies_resolver(ctx):
     }
 
 def _cargo_metadata_for_platform(ctx, cargo, manifest, platform):
-    argv = [cargo]
-    config = _cargo_resolver_config(ctx)
-    if config:
-        argv.extend(["--config", _workspace_absolute(config)])
-    argv.extend([
-        "metadata",
-        "--format-version", "1",
-        "--manifest-path", _workspace_absolute(manifest),
-    ])
-    lockfile = _rust_attr(ctx, "lockfile", "Cargo.lock")
-    lockfile_key = lockfile[2:] if lockfile.startswith("./") else lockfile
-    if (ctx.get("files") or {}).get(lockfile_key) != None:
-        argv.append("--locked")
-    if platform:
-        argv.extend(["--filter-platform", platform])
-    argv.extend(_cargo_feature_args(ctx))
+    def cargo_argv(subcommand, platform_flag):
+        argv = [cargo]
+        config = _cargo_resolver_config(ctx)
+        if config:
+            argv.extend(["--config", _workspace_absolute(config)])
+        argv.extend(subcommand + ["--manifest-path", _workspace_absolute(manifest)])
+        lockfile = _rust_attr(ctx, "lockfile", "Cargo.lock")
+        lockfile_key = lockfile[2:] if lockfile.startswith("./") else lockfile
+        if (ctx.get("files") or {}).get(lockfile_key) != None:
+            argv.append("--locked")
+        if platform:
+            argv.extend([platform_flag, platform])
+        argv.extend(_cargo_feature_args(ctx))
+        return argv
+
     metadata_env = {}
     for name in [
         "CARGO_HOME",
@@ -3049,12 +3048,82 @@ def _cargo_metadata_for_platform(ctx, cargo, manifest, platform):
         value = host_env(name)
         if value:
             metadata_env[name] = value
-    metadata_content = host_command(
-        argv,
+    metadata = json_decode(host_command(
+        cargo_argv(["metadata", "--format-version", "1"], "--filter-platform"),
+        env = metadata_env,
+        cwd = workspace_root(),
+    ))
+    if not platform:
+        return metadata
+
+    # `cargo metadata` resolves features across every platform even with
+    # `--filter-platform`, so a crate whose per-platform features are mutually
+    # exclusive receives all of them, and optional dependencies that only
+    # another platform activates stay in the graph. `cargo tree` runs the
+    # feature resolver for the selected platform; its packages, edges, and
+    # per-package feature union replace what metadata reports.
+    tree = host_command(
+        cargo_argv(
+            ["tree", "--workspace", "--edges", "normal,build,dev", "--prefix", "depth", "--format", "{p}|{f}"],
+            "--target",
+        ),
         env = metadata_env,
         cwd = workspace_root(),
     )
-    return json_decode(metadata_content)
+    platform_features = {}
+    platform_edges = {}
+    ancestors = []
+    for line in tree.splitlines():
+        digits = 0
+        for character in line.elems():
+            if not character.isdigit():
+                break
+            digits += 1
+        package, separator, features = line[digits:].partition("|")
+        words = package.split(" ")
+        if not digits or not separator or len(words) < 2:
+            continue
+        depth = int(line[:digits])
+        if features.endswith(" (*)"):
+            features = features[:-len(" (*)")]
+        key = words[0] + "@" + words[1].removeprefix("v")
+        ancestors = ancestors[:depth] + [key]
+        if depth > 0:
+            platform_edges[ancestors[depth - 1] + "\x00" + key] = True
+        enabled = platform_features.setdefault(key, {})
+        for feature in features.split(","):
+            if feature:
+                enabled[feature] = True
+    versions = {
+        package.get("id"): package.get("name") + "@" + package.get("version")
+        for package in metadata.get("packages") or []
+    }
+    resolve = metadata.get("resolve") or {}
+    nodes = []
+    for node in resolve.get("nodes") or []:
+        key = versions.get(node.get("id")) or ""
+        enabled = platform_features.get(key)
+        if enabled == None:
+            continue
+        node["features"] = sorted(enabled.keys())
+        node["deps"] = [
+            dep
+            for dep in node.get("deps") or []
+            if platform_edges.get(key + "\x00" + (versions.get(dep.get("pkg")) or ""))
+        ]
+        node["dependencies"] = [
+            dep
+            for dep in node.get("dependencies") or []
+            if platform_edges.get(key + "\x00" + (versions.get(dep) or ""))
+        ]
+        nodes.append(node)
+    resolve["nodes"] = nodes
+    metadata["packages"] = [
+        package
+        for package in metadata.get("packages") or []
+        if versions.get(package.get("id")) in platform_features
+    ]
+    return metadata
 
 def _cargo_resolver_config(ctx):
     files = ctx.get("files") or {}

@@ -46,7 +46,7 @@ metadata_file = "cargo-metadata.json"' "$WORKSPACE/once.toml"
   prepare_counted_live_cargo() {
     real_cargo=$(command -v cargo) || return
     mkdir -p "$WORKSPACE/tools"
-    printf '#!/bin/sh\nprintf "metadata\\n" >> "%s"\nexec "%s" "$@"\n' \
+    printf '#!/bin/sh\nfor arg in "$@"; do\n  case "$arg" in metadata|tree) printf "%%s\\n" "$arg" >> "%s"; break ;; esac\ndone\nexec "%s" "$@"\n' \
       "$WORKSPACE/cargo-invocations.log" \
       "$real_cargo" \
       > "$WORKSPACE/tools/cargo"
@@ -60,7 +60,7 @@ metadata_file = "cargo-metadata.json"' "$WORKSPACE/once.toml"
 
     PATH="$WORKSPACE/tools:$PATH" once --format json run apps/hello/hello \
       > "$WORKSPACE/run.json" || return
-    [ "$(wc -l < "$WORKSPACE/cargo-invocations.log" | tr -d ' ')" -eq 1 ]
+    [ "$(wc -l < "$WORKSPACE/cargo-invocations.log" | tr -d ' ')" -eq 2 ]
   }
 
   validate_with_counted_live_cargo_resolution() {
@@ -68,7 +68,7 @@ metadata_file = "cargo-metadata.json"' "$WORKSPACE/once.toml"
 
     PATH="$WORKSPACE/tools:$PATH" once --format json query validate-workspace \
       > "$WORKSPACE/validation.json" || return
-    [ "$(wc -l < "$WORKSPACE/cargo-invocations.log" | tr -d ' ')" -eq 1 ]
+    [ "$(wc -l < "$WORKSPACE/cargo-invocations.log" | tr -d ' ')" -eq 2 ]
   }
 
   resolve_build_and_run_elixir_consumer() {
@@ -134,7 +134,8 @@ vendor_path = "Vendor/Greeting/VendorScratch"' "$WORKSPACE/once.toml"
 
     When call run_rust_consumer_with_counted_live_resolution
     The status should be success
-    The contents of file "$WORKSPACE/cargo-invocations.log" should equal 'metadata'
+    The contents of file "$WORKSPACE/cargo-invocations.log" should equal "metadata
+tree"
     The contents of file "$WORKSPACE/run.json" should include '"target":"apps/hello/hello"'
   End
 
@@ -144,7 +145,8 @@ vendor_path = "Vendor/Greeting/VendorScratch"' "$WORKSPACE/once.toml"
 
     When call validate_with_counted_live_cargo_resolution
     The status should be success
-    The contents of file "$WORKSPACE/cargo-invocations.log" should equal 'metadata'
+    The contents of file "$WORKSPACE/cargo-invocations.log" should equal "metadata
+tree"
     The contents of file "$WORKSPACE/validation.json" should include '"valid":true'
   End
 
