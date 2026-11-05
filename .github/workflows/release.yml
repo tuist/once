@@ -69,7 +69,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - runner: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
-          - runner: macos-15-intel
+          - runner: macos-15
             target: x86_64-apple-darwin
           - runner: macos-15
             target: aarch64-apple-darwin
@@ -101,8 +101,24 @@ jobs:
         with:
           shared-key: release-${{ matrix.target }}
           cache-on-failure: true
+      - name: Cache prepared Rust dependencies
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: third_party/rust
+          key: release-deps-${{ matrix.runner }}-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', 'mise/tasks/release/prepare-rust-graph-deps.sh') }}
+      - name: Cache Once actions
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.cache/once/cas
+          key: release-actions-${{ matrix.runner }}-${{ matrix.target }}-${{ hashFiles('mise.toml') }}-${{ github.sha }}
+          restore-keys: |
+            release-actions-${{ matrix.runner }}-${{ matrix.target }}-${{ hashFiles('mise.toml') }}-
       - name: Add Rust target
         run: rustup target add ${{ matrix.target }}
+      - name: Resolve bootstrap Once
+        run: |
+          once_bin="$(./mise/tasks/release/bootstrap-once.sh)"
+          echo "ONCE_BIN=${once_bin}" >> "$GITHUB_ENV"
       - name: Package release archive
         run: mise run release:package --target "${{ matrix.target }}" --version "${{ needs.detect.outputs.next-version }}"
         env:
@@ -117,6 +133,17 @@ jobs:
         with:
           name: ${{ matrix.target }}
           path: dist/*
+      - name: Package SDK libraries
+        run: mise run release:package-sdk-libs --target "${{ matrix.target }}" --version "${{ needs.detect.outputs.next-version }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Upload SDK libraries
+        uses: actions/upload-artifact@v7
+        with:
+          name: sdk-libs-${{ matrix.target }}
+          path: |
+            packages/js/prebuilds/*
+            packages/ruby/prebuilds/*
 
   build-xcframework:
     name: Build Once.xcframework
@@ -134,6 +161,18 @@ jobs:
         with:
           shared-key: release-xcframework
           cache-on-failure: true
+      - name: Cache prepared Rust dependencies
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: third_party/rust
+          key: release-deps-macos-26-xcframework-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', 'mise/tasks/release/prepare-rust-graph-deps.sh') }}
+      - name: Cache Once actions
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.cache/once/cas
+          key: release-actions-macos-26-xcframework-${{ hashFiles('mise.toml') }}-${{ github.sha }}
+          restore-keys: |
+            release-actions-macos-26-xcframework-${{ hashFiles('mise.toml') }}-
       - name: Package XCFramework
         run: mise run release:package-xcframework --version "${{ needs.detect.outputs.next-version }}"
         env:
@@ -154,60 +193,13 @@ jobs:
           path: dist/*
 
   build-sdk-libs:
-    name: Build SDK libraries ${{ matrix.target }}
-    needs: detect
+    name: Build SDK libraries
+    needs: [detect, build]
     if: needs.detect.outputs.should-release == 'true'
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Ubuntu 22.04 keeps the binaries loadable on glibc 2.35.
-          - runner: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-          - runner: ubuntu-22.04-arm
-            target: aarch64-unknown-linux-gnu
-          - runner: macos-15-intel
-            target: x86_64-apple-darwin
-          - runner: macos-15
-            target: aarch64-apple-darwin
-          - runner: windows-latest
-            target: x86_64-pc-windows-msvc
-    defaults:
-      run:
-        shell: bash
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - name: Set HOME for mise templates
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: '"HOME=$env:USERPROFILE" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append'
-      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151
-        with:
-          version: ${{ env.MISE_VERSION }}
-          install_args: "rust jq"
-      # Same native libraries as the CLI build above.
-      - if: startsWith(matrix.runner, 'ubuntu-')
-        run: sudo apt-get update && sudo apt-get install -y binutils build-essential libcap-ng-dev libasound2-dev
-      - name: Cache Rust
-        continue-on-error: true
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
-        with:
-          shared-key: release-sdk-${{ matrix.target }}
-          cache-on-failure: true
-      - name: Add Rust target
-        run: rustup target add ${{ matrix.target }}
-      - name: Package SDK libraries
-        run: mise run release:package-sdk-libs --target "${{ matrix.target }}" --version "${{ needs.detect.outputs.next-version }}"
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - name: Upload SDK libraries
-        uses: actions/upload-artifact@v7
-        with:
-          name: sdk-libs-${{ matrix.target }}
-          path: |
-            packages/js/prebuilds/*
-            packages/ruby/prebuilds/*
+      - name: Confirm SDK libraries built
+        run: echo "SDK libraries were packaged and uploaded by the build matrix."
 
   publish:
     name: Publish GitHub release
@@ -227,6 +219,7 @@ jobs:
           install_args: "git-cliff"
       - uses: actions/download-artifact@v8
         with:
+          pattern: '!sdk-libs-*'
           path: dist
       - name: Flatten artifacts
         run: find dist -type f -exec mv {} dist/ \;

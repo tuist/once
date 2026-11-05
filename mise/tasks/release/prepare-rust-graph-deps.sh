@@ -29,6 +29,19 @@ for tool in jq mise; do
   fi
 done
 
+fingerprint="$(
+  {
+    printf '%s\n' "${target}"
+    shasum -a 256 Cargo.lock Cargo.toml crates/*/Cargo.toml "${BASH_SOURCE[0]}"
+  } | shasum -a 256 | awk '{print $1}'
+)"
+prepared_file="third_party/rust/.prepared"
+if [[ -d third_party/rust/vendor && -f "${prepared_file}" && "$(cat "${prepared_file}")" == "${fingerprint}" ]]; then
+  echo "prepare-rust-graph-deps: reusing prepared dependencies" >&2
+  exit 0
+fi
+rm -f "${prepared_file}"
+
 export CARGO_NET_RETRY="${CARGO_NET_RETRY:-10}"
 
 retry_command() {
@@ -51,7 +64,7 @@ retry_command() {
 }
 
 cargo_vendor() {
-  mise exec -- cargo vendor --locked --versioned-dirs third_party/rust/vendor >/tmp/once-cargo-vendor-config
+  mise exec -- cargo vendor --locked --versioned-dirs third_party/rust/vendor >/dev/null
 }
 
 rm -rf third_party/rust/vendor
@@ -122,10 +135,12 @@ if [[ -n "${microsandbox_version}" && "${microsandbox_version}" != "null" ]]; th
     echo "prepare-rust-graph-deps: fetching ${agentd_url}" >&2
     fetch_agentd() {
       curl --fail --location --silent --show-error \
-        --output third_party/rust/vendor/build/agentd \
+        --retry 5 --retry-max-time 300 --connect-timeout 30 --max-time 120 \
+        --output third_party/rust/vendor/build/agentd.tmp \
         "${agentd_url}"
     }
     retry_command "download agentd" fetch_agentd
+    mv third_party/rust/vendor/build/agentd.tmp third_party/rust/vendor/build/agentd
     chmod +x third_party/rust/vendor/build/agentd
     # The upstream build script only consults the pre-staged binary when it
     # detects a CI environment; under Once's hermetic execution neither the
@@ -169,3 +184,5 @@ PY
     fi
   fi
 fi
+
+printf '%s\n' "${fingerprint}" > "${prepared_file}"
