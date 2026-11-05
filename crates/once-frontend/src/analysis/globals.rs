@@ -535,6 +535,25 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         String::from_utf8(bytes).with_context(|| format!("host file `{path}` is not UTF-8 text"))
     }
 
+    /// Read the encapsulated content of one host CMS `SignedData` file, such
+    /// as a signed configuration document, as UTF-8 text. The signature is
+    /// not verified.
+    fn host_file_cms_content(path: &str) -> anyhow::Result<String> {
+        if !analysis_active() {
+            return Ok(String::new());
+        }
+        observe_host_path(Path::new(path))?;
+        let bytes = read_bounded_host_file(path)?;
+        observe(Observation::FileText {
+            path: path.to_string(),
+            sha256: sha256_hex(&bytes),
+        });
+        let content = super::property_list::cms_signed_content(&bytes)
+            .with_context(|| format!("reading CMS content of host file `{path}`"))?;
+        String::from_utf8(content)
+            .with_context(|| format!("CMS content of host file `{path}` is not UTF-8 text"))
+    }
+
     /// Return whether one host file contains `needle` as text.
     fn host_file_contains(path: &str, needle: &str) -> anyhow::Result<bool> {
         if !analysis_active() {
@@ -1579,6 +1598,19 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     fn toml_decode<'v>(src: &str, eval: &mut Evaluator<'v, '_, '_>) -> anyhow::Result<Value<'v>> {
         let value: toml::Value = toml::from_str(src)?;
         Ok(toml_value_to_starlark(eval, value))
+    }
+
+    /// Decode an XML property list into Starlark dictionaries/lists/scalars.
+    /// Dates become RFC 3339 strings and data becomes base64 strings.
+    fn plist_decode<'v>(src: &str, eval: &mut Evaluator<'v, '_, '_>) -> anyhow::Result<Value<'v>> {
+        let value = super::property_list::plist_to_json(src)?;
+        Ok(json_to_value(eval, &value))
+    }
+
+    /// Encode Starlark dictionaries/lists/scalars as an XML property list,
+    /// failing on values a property list cannot represent.
+    fn plist_encode(value: Value<'_>) -> anyhow::Result<String> {
+        super::property_list::starlark_to_plist_xml(value)
     }
 
     /// Decode JSON into Starlark dictionaries/lists/scalars. Dependency
@@ -2651,6 +2683,8 @@ mod observation_completeness_tests {
         "expand_actions",
         "json_decode",
         "link_path",
+        "plist_decode",
+        "plist_encode",
         "prepare_path",
         "run_action",
         "toml_decode",
@@ -2670,6 +2704,7 @@ mod observation_completeness_tests {
         "host_git_checkouts",
         "host_env",
         "host_environment_sha256",
+        "host_file_cms_content",
         "host_file_contains",
         "host_file_exists",
         "host_file_read",

@@ -87,6 +87,10 @@ are surfaced rather than hidden. A generic Tuist publication service needs
 server support for immutable artifact descriptors, explicit grouping,
 idempotent commit receipts and retention independent of cache eviction.
 
+The proposed [provider-neutral publication protocol](0016-artifact-publication-protocol.md)
+specifies that follow-up boundary, including Once-owned opt-in automation.
+It is not implemented by the compatibility adapter described here.
+
 ## Consumer responsibilities and non-goals
 
 Infrastructure owns installation, activation, isolation, routing, secret bindings,

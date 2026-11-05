@@ -15,6 +15,7 @@ mod engine;
 mod globals;
 mod metadata;
 mod presentation;
+mod property_list;
 mod repository;
 mod resources;
 

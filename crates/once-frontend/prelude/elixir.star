@@ -2461,7 +2461,7 @@ def _mix_rebar_package_action(ctx, source_root, app_name, mix_env, apps, app_dir
     app_inputs = []
     if package_ebin:
         app_sources.append(metadata_stage)
-        app_inputs.append(metadata_stage)
+        app_inputs.append(metadata_stage + "/ebin")
     app_sources.append(compiled_app_dir)
     app_inputs.extend([compiled_ebin_dir] + resource_inputs)
     copy_path(

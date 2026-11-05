@@ -5,7 +5,8 @@ Apple application bundle.
 ## Description
 
 Builds an Apple application bundle with a generated `Info.plist` property-list
-file, linked dependencies, embedded frameworks, and ad-hoc signing. The `run`
+file, linked dependencies, embedded frameworks, and code signing (ad hoc by
+default, or development signing for devices). The `run`
 capability builds the required bundle and launches it. Attributes whose names
 contain `sdk` configure the
 [Apple software development kit (SDK)](https://developer.apple.com/documentation/xcode)
@@ -15,6 +16,13 @@ Framework dependencies are transitive at runtime. Declare the framework the
 application imports directly. Once links the direct dynamic boundary, embeds
 its complete framework closure, removes duplicate paths, signs every embedded
 framework, and then signs the application.
+
+Before signing, Once removes files and directories that an earlier build left in
+the bundle and the current build no longer declares, such as a deleted resource
+or a provisioning profile from a previous development build, so the signature
+seals only declared content. Targets with `prepackage_actions` or
+`postbuild_actions` keep those leftovers, because their scripts may write
+undeclared files into the bundle.
 
 The `artifact` capability packages the completed application as a ZIP. The
 provider adds `once_artifact_info` with one `product` member and a `bundle`
@@ -50,8 +58,9 @@ Application-extension dependencies are copied into the host application's
 The extension's `info_plist` supplies its `NSExtension` metadata.
 
 Linux builds use Swift, xtool's Darwin SDK, and `rcodesign`. iOS device builds
-use ARM64 even on x86_64 Linux hosts. The output remains ad-hoc signed and must
-be provisioned and re-signed before installation on a physical device. The
+use ARM64 even on x86_64 Linux hosts. Ad-hoc signed output must be re-signed
+before installation on a physical device; use [development
+signing](#development-signing) to produce an installable build directly. The
 `run` capability requires macOS. See [Build iOS Applications on
 Linux](/guide/graph/apple/linux) for setup and a runnable starter.
 
@@ -83,10 +92,11 @@ import inference and should not be authored manually.
 | `info_plist_substitutions` | map&lt;string,string&gt; | no | `{}` | Values substituted into the generated Info.plist |
 | `entitlements` | string | no |  | Entitlements plist path |
 | `entitlements_substitutions` | map&lt;string,string&gt; | no | `{}` | Build-setting values substituted into `$(NAME)` or `${NAME}` placeholders before signing |
-| `development_team` | string | no |  | Apple development team identifier used to derive simulator application identity |
-| `provisioning_profile` | string | no |  | Provisioning profile label or path used for signing |
-| `signing_identity` | string | no |  | Local signing identity selector used for development device signing |
-| `signing` | string | no | `ad_hoc` | Signing mode or policy name |
+| `development_team` | string | no |  | Apple development team identifier used to derive simulator application identity; with `signing = "development"` it must match the provisioning profile team |
+| `provisioning_profile` | string | no |  | Development provisioning profile path (`.mobileprovision`, or `.provisionprofile` on macOS) for `signing = "development"` |
+| `signing_identity` | string | no |  | Development identity: a `.p12`, `.pfx`, or PEM file holding the certificate and private key, or on macOS a keychain identity name or SHA-1 fingerprint |
+| `signing_identity_password_file` | string | no |  | File holding the password of a `.p12` or `.pfx` `signing_identity`, required for those identities |
+| `signing` | string | no | `ad_hoc` | `ad_hoc`, or `development` to sign a device build with `signing_identity` and `provisioning_profile` |
 | `sdk_frameworks` | list&lt;string&gt; | no | `[]` | Apple software development kit frameworks linked by name |
 | `weak_sdk_frameworks` | list&lt;string&gt; | no | `[]` | Apple software development kit frameworks linked weakly |
 | `sdk_dylibs` | list&lt;string&gt; | no | `[]` | Apple software development kit dynamic libraries linked by name |
@@ -185,11 +195,73 @@ Each run writes a run record and log under the target's output directory.
 Repeated runs launch the application again rather than replaying an
 action-cache hit. Physical-device launch is unsupported.
 
+## Development signing
+
+`signing = "development"` signs a device build (`sdk_variant = "device"`, or
+macOS) so it can be installed on a registered device:
+
+```toml
+[target.attrs]
+platform = "ios"
+sdk_variant = "device"
+bundle_id = "dev.once.Hello"
+entitlements = "Hello.entitlements"
+signing = "development"
+signing_identity = "/secure/AppleDevelopment.p12"
+signing_identity_password_file = "/secure/AppleDevelopment.password"
+provisioning_profile = "/secure/Hello_Development.mobileprovision"
+```
+
+Once reads the provisioning profile during analysis and:
+
+- checks that its team matches `development_team` when set, that its platform
+  matches, and that its application identifier, wildcards included, covers
+  `bundle_id`;
+- derives `application-identifier`, `com.apple.developer.team-identifier`,
+  and `get-task-allow` from it, replacing `$(AppIdentifierPrefix)` and
+  `$(TeamIdentifierPrefix)` in `entitlements`;
+- rejects requested entitlements the profile does not grant, including values
+  outside its wildcards. On macOS, sandbox and hardened runtime entitlements
+  (`com.apple.security.*`) are not provisioned, so those absent from the
+  profile are signed as requested;
+- embeds it as `embedded.mobileprovision` (`Contents/embedded.provisionprofile`
+  on macOS) before the bundle is sealed.
+
+Embedded frameworks and resource bundles are signed with the same identity
+before the application. Application extension dependencies sign themselves,
+so give each extension its own `signing` attributes and profile; a development
+signed application rejects an ad hoc signed extension.
+
+A `.p12`, `.pfx`, or `.pem` identity is signed with
+[rcodesign](https://github.com/indygreg/apple-platform-rs), which must be on
+`PATH`, on Linux and macOS alike. A value containing `/` without one of those
+extensions is read as a PEM file. A PEM file must hold both the certificate and
+the private key. A `.p12` or `.pfx` identity requires
+`signing_identity_password_file`; point it at an empty file for a key exported
+without a password. PKCS #12 files exported with legacy encryption, as Keychain
+Access does, are supported; rcodesign rejects files that use newer OpenSSL 3
+defaults with an "incorrect password" error.
+
+On macOS, any other value is a keychain identity name or SHA-1 fingerprint.
+Once resolves it with `security find-identity` during analysis and signs with
+`codesign` using the resolved fingerprint, which also keys the cache, so a
+renewed certificate with the same name re-signs. An unknown or ambiguous name
+fails with the available identities and their fingerprints.
+
+Identity and password files are read in place by the signing actions. They are
+never action inputs, outputs, arguments by content, or environment values, so
+they are not copied into the action cache or uploaded for remote execution.
+The identity file's digest partitions the signing actions' cache keys, so
+switching identities re-signs; the password is excluded from cache identity.
+Development signing is unavailable with Apple workers, because the identity
+stays on the analysis host.
+
 ## Limitations
 
-Provisioning profiles, signing identities, and signing modes other than
-`ad_hoc` are unsupported. The target rejects unsupported values instead of
-ignoring them.
+Signing modes other than `ad_hoc` and `development` are unsupported. Once does
+not check that the signing certificate is listed in the profile, that the
+profile is unexpired, or that the device is provisioned; installing on a
+device is the authoritative check.
 
 For Developer ID distribution, sign and notarize a separate copy, outside
 Once's cached actions. See [macOS applications and distribution](/guide/graph/apple#macos-applications-and-distribution)

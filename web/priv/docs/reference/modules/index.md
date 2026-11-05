@@ -741,6 +741,12 @@ separate update workflow.
 - `host_file_read(path)` reads a host file as
   [Unicode Transformation Format, 8-bit (UTF-8)](https://www.unicode.org/faq/utf_bom.html#UTF8)
   text. Analysis rejects files larger than 16 mebibytes.
+- `host_file_cms_content(path)` reads a host file holding a
+  [Cryptographic Message Syntax (CMS)](https://www.rfc-editor.org/rfc/rfc5652)
+  `SignedData` message in DER or BER encoding and returns its encapsulated
+  content as UTF-8 text. The signature is not verified, so treat the content
+  as a description to validate rather than as trusted data. The 16 mebibyte
+  file limit applies.
 - `host_file_sha256(path)` returns a host file's
   [Secure Hash Algorithm 256-bit](https://csrc.nist.gov/pubs/fips/180-4/upd1/final)
   digest as lowercase hexadecimal text.
@@ -853,6 +859,13 @@ Built-in history currently covers Rust compilation/build scripts/test-runner com
   also be refused to prevent decoder fallback from bypassing the limits.
 - `toml_decode(src)` and `json_decode(src)` decode data into Starlark
   values.
+- `plist_decode(src)` decodes an XML property list into Starlark values. Dates
+  become RFC 3339 strings and data becomes base64 strings.
+  Documents nested more than 256 levels deep fail.
+  `plist_encode(value)` encodes dictionaries with string keys, lists, tuples,
+  strings, integers, floats, and booleans as an XML property list, keeping
+  dictionary insertion order. Any other value fails, so data and date values
+  read by `plist_decode` are written back as strings.
 
 Portable file actions derive their cache keys from their operation and consumed
 inputs, not from unrelated actions declared earlier by the same target. Copy,
