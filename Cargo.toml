@@ -37,13 +37,12 @@ fd-lock = "4"
 futures = "0.3"
 glob = "0.3"
 hex = "0.4"
-# sysinfo 0.39.6 uses iOS symbols removed from libc 0.2.190.
 libc = "=0.2.189"
 notify = "8.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
-sysinfo = { version = "0.39.6", default-features = false, features = ["system", "network"] }
+sysinfo = { version = "0.40.1", default-features = false, features = ["system", "network"] }
 starlark = "0.14.2"
 toml = "1.0"
 toon-rust = { package = "toon-format", version = "0.5", default-features = false }

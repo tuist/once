@@ -37,12 +37,24 @@ fn spawn_system_sampler_with_initial_wait(
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
 
     let handle = tokio::spawn(async move {
-        let mut system = sysinfo::System::new_with_specifics(
+        let mut system = match sysinfo::System::new_with_specifics(
             sysinfo::RefreshKind::nothing()
-                .with_cpu(sysinfo::CpuRefreshKind::nothing().with_cpu_usage())
+                .with_cpu(sysinfo::CpuRefreshKind::nothing().with_usage())
                 .with_memory(sysinfo::MemoryRefreshKind::nothing().with_ram()),
-        );
-        let mut networks = sysinfo::Networks::new_with_refreshed_list();
+        ) {
+            Ok(system) => system,
+            Err(error) => {
+                tracing::debug!(%error, "system sampler initialization failed");
+                return;
+            }
+        };
+        let mut networks = match sysinfo::Networks::new_with_refreshed_list() {
+            Ok(networks) => networks,
+            Err(error) => {
+                tracing::debug!(%error, "network sampler initialization failed");
+                return;
+            }
+        };
 
         // sysinfo's CPU usage needs two refreshes to compute a delta.
         system.refresh_cpu_usage();

@@ -126,7 +126,7 @@ impl Default for ResourceLimits {
 }
 
 fn detected_memory_bytes() -> Option<u64> {
-    let mut system = System::new();
+    let mut system = System::new().ok()?;
     system.refresh_memory();
     let host = system.total_memory();
     #[cfg(target_os = "linux")]

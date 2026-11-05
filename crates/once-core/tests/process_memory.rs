@@ -5,6 +5,41 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use once_core::ResourceLimits;
+use rustix::process::{getrlimit, setrlimit, Resource};
+
+#[test]
+fn default_memory_preserves_file_limits() {
+    const CHILD: &str = "ONCE_TEST_FILE_LIMIT_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "default_memory_preserves_file_limits",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        println!("{}", String::from_utf8_lossy(&output.stdout));
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let mut before = getrlimit(Resource::Nofile);
+    before.current = Some(1024.min(before.maximum.unwrap_or(u64::MAX) / 2));
+    assert!(before.current.unwrap() > 0 && before.current != before.maximum);
+    setrlimit(Resource::Nofile, before).unwrap();
+    for _ in 0..4 {
+        let limits = ResourceLimits::default();
+        assert!(limits.memory_bytes > 0);
+        let after = getrlimit(Resource::Nofile);
+        println!("NOFILE before={before:?} after={after:?}");
+        assert_eq!(after, before);
+    }
+}
 
 fn unescape_mount(value: &str) -> PathBuf {
     PathBuf::from(
