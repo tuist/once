@@ -8,6 +8,19 @@ use serde_json::{json, Value};
 const MAX_RESULTS_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PROJECTION_BYTES: usize = 1024 * 1024;
 
+pub(crate) fn attempt_position(target: &str, position: Option<u64>) -> Result<usize> {
+    position
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(|| {
+            diagnostic(
+                target,
+                "invalid_test_result_selection",
+                "attempt",
+                "Use a one-based producer attempt position representable on this host.",
+            )
+        })
+}
+
 pub(crate) fn diagnostic(target: &str, code: &str, attribute: &str, repair: &str) -> anyhow::Error {
     once_frontend::analysis::AnalysisFailure {
         diagnostic: once_frontend::Diagnostic::new(code, repair)

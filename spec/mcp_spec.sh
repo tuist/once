@@ -79,7 +79,7 @@ path = root / '.once/out/tests/unit/test/test_results.json'
 raw = path.read_bytes()
 retained = json.loads(raw)
 
-def query(case=None, attempt=None, summary=False, error=None):
+def query(case=None, attempt=None, summary=False, error=None, attached=False, cli_attempt=None):
     args = {'target': 'tests/unit'}
     cli = command + ['--format', 'json', 'query', 'test-results', 'tests/unit']
     if case is not None:
@@ -87,7 +87,8 @@ def query(case=None, attempt=None, summary=False, error=None):
         cli += ['--case', case]
     if attempt is not None:
         args['attempt'] = attempt
-        cli += ['--attempt', str(attempt)]
+        position = str(attempt) if cli_attempt is None else cli_attempt
+        cli += ['--attempt=' + position] if attached else ['--attempt', position]
     if summary:
         args['summary_only'] = True
         cli += ['--summary-only']
@@ -105,6 +106,8 @@ def query(case=None, attempt=None, summary=False, error=None):
         diagnostic = cli_error['diagnostics'][0]
         assert diagnostic['target'] == 'tests/unit' and diagnostic['attribute'] and diagnostic['repairs']
         assert len(direct.stderr) < 20000 and len(mcp.stdout) < 20000
+        if attempt is not None and len(str(attempt)) >= 100:
+            assert str(attempt) not in direct.stderr and str(attempt) not in mcp.stdout
         return
     assert direct.returncode == 0, direct.stderr
     value = json.loads(direct.stdout)
@@ -132,6 +135,13 @@ for manifest in (None, 'invalid [ TOML'):
     query(attempt=1, error='invalid_test_result_selection')
     query('retry', summary=True, error='invalid_test_result_selection')
     query('', error='invalid_test_result_selection')
+    for attempt in [18446744073709551616, -1, -18446744073709551616, 1.25, -1.25, 'nope', '9' * 20000]:
+        for attached in [False, True]:
+            query('retry', attempt, error='invalid_test_result_selection', attached=attached)
+    for attached in [False, True]:
+        query('retry', 0, cli_attempt='-0', error='invalid_test_result_selection', attached=attached)
+        query('retry', 18446744073709551615, error='test_attempt_not_found', attached=attached)
+        assert query('retry', 1, cli_attempt='+01', attached=attached) == first
     after = {str(p.relative_to(root)): (p.read_bytes(), p.stat().st_mtime_ns) for p in root.rglob('*') if p.is_file()}
     assert before == after, (before.keys(), after.keys())
 assert path.read_bytes() == raw

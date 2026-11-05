@@ -799,7 +799,7 @@ async fn run_query_command(
             &target,
             summary_only,
             case.as_deref(),
-            attempt,
+            attempt.as_deref(),
         )
         .await
         .map(|()| ExitCode::SUCCESS),

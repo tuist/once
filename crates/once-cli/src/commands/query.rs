@@ -846,8 +846,17 @@ pub async fn test_results(
     target_id: &str,
     summary_only: bool,
     case: Option<&str>,
-    attempt: Option<usize>,
+    attempt: Option<&str>,
 ) -> Result<()> {
+    let attempt = attempt
+        .map(|value| {
+            let position = value
+                .parse::<i128>()
+                .ok()
+                .and_then(|value| u64::try_from(value).ok());
+            test_case::attempt_position(target_id, position)
+        })
+        .transpose()?;
     test_case::validate_selection(target_id, summary_only, case, attempt)?;
     if let Some(case) = case {
         let value = test_case_value(workspace, target_id, case, attempt)?;

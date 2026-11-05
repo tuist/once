@@ -153,8 +153,8 @@ pub enum QueryCmd {
         #[usage(long)]
         case: Option<String>,
         /// One-based producer attempt position, requires --case; defaults to the last array element.
-        #[usage(long)]
-        attempt: Option<usize>,
+        #[usage(long, allow_negative_numbers)]
+        attempt: Option<String>,
     },
 
     /// List stable test units discovered in a target's normalized results.

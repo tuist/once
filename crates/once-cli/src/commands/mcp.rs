@@ -536,17 +536,7 @@ impl Server {
         let attempt = args
             .get("attempt")
             .map(|value| {
-                value
-                    .as_u64()
-                    .and_then(|value| usize::try_from(value).ok())
-                    .ok_or_else(|| {
-                        crate::commands::query::test_case::diagnostic(
-                            target_id,
-                            "invalid_test_result_selection",
-                            "attempt",
-                            "Use a one-based producer attempt position representable on this host.",
-                        )
-                    })
+                crate::commands::query::test_case::attempt_position(target_id, value.as_u64())
             })
             .transpose()?;
         crate::commands::query::test_case::validate_selection(
