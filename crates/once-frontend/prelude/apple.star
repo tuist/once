@@ -3233,6 +3233,62 @@ def _render_plist(entries, bool_entries = {}, array_entries = {}):
     lines.append("")
     return "\n".join(lines)
 
+def _apple_plist_entry(contents, key):
+    # Returns the start, value bounds and end of `key`'s entry, or None.
+    start = contents.find("<key>" + key + "</key>")
+    if start < 0:
+        return None
+    value_start = contents.find("<", start + len("<key>" + key + "</key>"))
+    tag_end = contents.find(">", value_start)
+    if value_start < 0 or tag_end < 0:
+        return None
+    if contents[tag_end - 1] == "/":
+        return (start, value_start, tag_end + 1, tag_end + 1)
+    tag = contents[value_start + 1:tag_end].split(" ")[0]
+    closing = contents.find("</" + tag + ">", tag_end)
+    if closing < 0:
+        return None
+    return (start, tag_end + 1, closing, closing + len("</" + tag + ">"))
+
+def _apple_version_less(left, right):
+    left_parts = [int(part) if part.isdigit() else 0 for part in left.strip().split(".")]
+    right_parts = [int(part) if part.isdigit() else 0 for part in right.strip().split(".")]
+    width = max(len(left_parts), len(right_parts))
+    left_parts = left_parts + [0] * (width - len(left_parts))
+    right_parts = right_parts + [0] * (width - len(right_parts))
+    return left_parts < right_parts
+
+def _apple_plist_with_build_entries(contents, entries, array_entries, replace = []):
+    # Mirrors Xcode's Info.plist processing for templates: build-derived keys
+    # the template leaves out are added, keys in `replace` (UIDeviceFamily
+    # from TARGETED_DEVICE_FAMILY) are overwritten, and a deployment target
+    # key below the build's value is raised to it.
+    updates = {}
+    update_arrays = {}
+    for key, value in entries.items():
+        entry = _apple_plist_entry(contents, key)
+        if entry == None or key in replace:
+            updates[key] = value
+        elif key in ["MinimumOSVersion", "LSMinimumSystemVersion"]:
+            current = contents[entry[1]:entry[2]] if entry[1] != entry[2] else ""
+            if not current.strip() or _apple_version_less(current, value):
+                updates[key] = value
+    for key, value in array_entries.items():
+        if value and (key in replace or _apple_plist_entry(contents, key) == None):
+            update_arrays[key] = value
+    for key in list(updates.keys()) + list(update_arrays.keys()):
+        entry = _apple_plist_entry(contents, key)
+        if entry != None:
+            contents = contents[:entry[0]] + contents[entry[3]:]
+    if not updates and not update_arrays:
+        return contents
+    closing = contents.rfind("</dict>")
+    if closing < 0:
+        return contents
+    rendered = _render_plist(updates, {}, update_arrays)
+    body = rendered[rendered.find("<dict>\n") + len("<dict>\n"):rendered.rfind("</dict>")]
+    return contents[:closing] + body + contents[closing:]
+
 def _apple_entitlements_with_application_identifier(contents, development_team, bundle_id):
     if not development_team or not bundle_id or "<key>application-identifier</key>" in contents:
         return contents
@@ -5442,13 +5498,28 @@ def _apple_application_impl(ctx):
         source_files = _action_source_files(swift_inputs),
     )
 
+    device_family_codes = []
+    for family in families:
+        if family == "iphone":
+            device_family_codes.append({"integer": 1})
+        elif family == "ipad":
+            device_family_codes.append({"integer": 2})
+    build_entries = {
+        "LSMinimumSystemVersion" if is_macos else "MinimumOSVersion": minimum_os,
+        "DTPlatformName": swiftc["sdk_name"],
+    }
+    build_arrays = {"CFBundleSupportedPlatforms": [_apple_supported_platform(swiftc["sdk_name"])]}
+    if not is_macos:
+        build_arrays["UIDeviceFamily"] = device_family_codes
     if info_plist_template:
         info_plist_source = _package_relative(ctx, info_plist_template)
         info_plist_path = info_plist_source if info_plist_source.startswith("/") else workspace_root() + "/" + info_plist_source
         info_plist_contents = host_file_read(info_plist_path)
         for key, value in info_plist_substitutions.items():
             info_plist_contents = info_plist_contents.replace("$(" + key + ")", value).replace("${" + key + "}", value)
-        write_path(info_plist, info_plist_contents)
+        # Only iPhone and iPad device family codes are modelled.
+        template_arrays = build_arrays if platform == "ios" else {"CFBundleSupportedPlatforms": build_arrays["CFBundleSupportedPlatforms"]}
+        write_path(info_plist, _apple_plist_with_build_entries(info_plist_contents, build_entries, template_arrays, ["UIDeviceFamily"]))
     else:
         plist_entries = {
             "CFBundleDevelopmentRegion": "en",
@@ -5459,26 +5530,10 @@ def _apple_application_impl(ctx):
             "CFBundlePackageType": "XPC!" if application_extension else "APPL",
             "CFBundleShortVersionString": "1.0",
             "CFBundleVersion": "1",
-            "MinimumOSVersion": minimum_os,
-            "DTPlatformName": swiftc["sdk_name"],
         }
-        bool_entries = {"LSRequiresIPhoneOS": True}
-        device_family_codes = []
-        for family in families:
-            if family == "iphone":
-                device_family_codes.append({"integer": 1})
-            elif family == "ipad":
-                device_family_codes.append({"integer": 2})
-        array_entries = {
-            "CFBundleSupportedPlatforms": [_apple_supported_platform(swiftc["sdk_name"])],
-            "UIDeviceFamily": device_family_codes,
-        }
-        if is_macos:
-            plist_entries.pop("MinimumOSVersion")
-            plist_entries["LSMinimumSystemVersion"] = minimum_os
-            bool_entries = {}
-            array_entries.pop("UIDeviceFamily")
-        write_path(info_plist, _render_plist(plist_entries, bool_entries, array_entries))
+        plist_entries.update(build_entries)
+        bool_entries = {} if is_macos else {"LSRequiresIPhoneOS": True}
+        write_path(info_plist, _render_plist(plist_entries, bool_entries, build_arrays))
 
     prepackage_outputs = _apple_run_prepackage_actions(ctx, attrs, [executable, info_plist], app_path)
     resource_files = _apple_materialize_resources(

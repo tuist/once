@@ -159,3 +159,56 @@ result = repr([
         r#"[[], ["Images.xcassets", "Panel.nib", "View.xib", "Main.storyboard", "Model.xcdatamodeld", "Mapping.xcmappingmodel", "Oldish/Kept.xib"], ["Images.xcassets", "Panel.nib", "View.xib", "Main.storyboard", "Localizable.xcstrings", "Model.xcdatamodeld", "Mapping.xcmappingmodel", "Oldish/Kept.xib"], ["."], ["./Images.xcassets/", "Panel.nib", "View.xib", "Main.storyboard", "Localizable.xcstrings", "Model.xcdatamodeld", "Mapping.xcmappingmodel", "Oldish/Kept.xib"], []]"#
     );
 }
+
+#[test]
+fn info_plist_templates_receive_build_entries_like_xcode() {
+    let merge = |template_minimum: &str| {
+        let template = format!(
+            "<plist version=\"1.0\"><dict><key>MinimumOSVersion</key><string>{template_minimum}</string><key>UIDeviceFamily</key><array><integer>1</integer></array><key>NSExtension</key><dict><key>NSExtensionPointIdentifier</key><string>com.apple.widgetkit-extension</string></dict></dict></plist>"
+        );
+        let source = format!(
+            r#"{}
+result = _apple_plist_with_build_entries(
+    {template:?},
+    {{"MinimumOSVersion": "17.4", "DTPlatformName": "iphonesimulator"}},
+    {{"CFBundleSupportedPlatforms": ["iPhoneSimulator"], "UIDeviceFamily": [{{"integer": 1}}, {{"integer": 2}}]}},
+    ["UIDeviceFamily"],
+)
+"#,
+            apple_prelude_source()
+        );
+        plist::Value::from_reader_xml(std::io::Cursor::new(
+            eval_prelude_source_to_repr(source).unwrap(),
+        ))
+        .unwrap()
+        .into_dictionary()
+        .unwrap()
+    };
+    let raised = merge("16.0");
+    assert_eq!(raised["MinimumOSVersion"].as_string(), Some("17.4"));
+    assert_eq!(
+        raised["DTPlatformName"].as_string(),
+        Some("iphonesimulator")
+    );
+    assert_eq!(
+        raised["UIDeviceFamily"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_signed_integer().unwrap())
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
+    assert_eq!(
+        raised["CFBundleSupportedPlatforms"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(raised["NSExtension"].as_dictionary().unwrap().len(), 1);
+    assert_eq!(
+        merge("17.10")["MinimumOSVersion"].as_string(),
+        Some("17.10")
+    );
+}

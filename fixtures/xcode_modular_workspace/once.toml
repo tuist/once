@@ -1,0 +1,11 @@
+[[target]]
+name = "HarborWorkspace"
+kind = "xcode_workspace"
+srcs = [
+  "Harbor.xcworkspace/contents.xcworkspacedata",
+  "Harbor.xcodeproj/project.pbxproj",
+  "Dependencies/ThirdParty/ThirdParty.xcodeproj/project.pbxproj",
+]
+
+[target.attrs]
+project = "Harbor.xcworkspace"

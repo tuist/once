@@ -44,6 +44,9 @@ def _apple_module_host_roots(swiftc):
         # `swiftinterface` files. Without this root the check rejects any
         # test target that uses Swift Testing or XCTest.
         platform_developer + "/Library/Frameworks",
+        # The XCTest Swift overlay ships outside the framework, under
+        # `Developer/usr/lib/XCTest.swiftmodule`.
+        platform_developer + "/usr/lib/XCTest.swiftmodule",
     ]
 
 def _apple_module_toolchain_identity(swiftc):

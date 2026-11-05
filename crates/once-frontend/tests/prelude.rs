@@ -15138,6 +15138,51 @@ result = repr([len(phase["actions"]), phase["resource_inputs"], phase["structure
 }
 
 #[test]
+fn prelude_xcode_shell_phase_copies_resource_files_without_nesting_them() {
+    let prelude = xcode_prelude_source();
+    let objects = serde_json::json!({
+        "PHASE": {
+            "isa": "PBXShellScriptBuildPhase",
+            "name": "Copy Settings",
+            "shellPath": "/bin/sh",
+            "shellScript": "cp \"${SCRIPT_INPUT_FILE_0}\" \"${SCRIPT_OUTPUT_FILE_0}\"",
+            "inputPaths": ["$(SRCROOT)/Config/Settings.plist"],
+            "outputPaths": ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Settings.plist"],
+        },
+        "TARGET": {"buildPhases": ["PHASE"]},
+    })
+    .to_string();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "/workspace"
+
+def host_file_exists(path):
+    return path == "/workspace/Config/Settings.plist"
+
+objects = json_decode({objects:?})
+phase = _xcode_shell_script_phases(
+    {{"label": {{"package": "", "id": "App"}}, "attr": {{"project": "App.xcodeproj"}}}},
+    objects,
+    objects["TARGET"],
+    {{
+        "PRODUCT_NAME": "App",
+        "CONFIGURATION": "Debug",
+        "UNLOCALIZED_RESOURCES_FOLDER_PATH": "App.app",
+    }},
+    "",
+    "App",
+)
+result = repr([phase["resource_inputs"], phase["structured_resource_inputs"]])
+"#
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["Config/Settings.plist"], []]"#
+    );
+}
+
+#[test]
 fn prelude_xcode_test_attrs_preserve_resources_and_custom_property_list() {
     let prelude = xcode_prelude_source();
     let source = format!(

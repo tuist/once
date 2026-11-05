@@ -1,0 +1,153 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+		ROOT = {isa = PBXProject; buildConfigurationList = PROJECT_CONFIGS; mainGroup = GROUP; targets = (HARBOR, HARBOR_SHARE, HARBOR_WIDGETS, COMPOSITION, CATALOG_FEATURE, CATALOG_MODEL, CATALOG_INTERFACE, CATALOG_FEATURE_TESTS, HARBOR_TESTS); };
+		PROJECT_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (PROJECT_DEBUG); defaultConfigurationName = Debug; };
+		PROJECT_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 16.0; TARGETED_DEVICE_FAMILY = 1; SWIFT_VERSION = 5.0; DEBUG_INFORMATION_FORMAT = dwarf; ENABLE_TESTABILITY = YES; SWIFT_ENABLE_EXPLICIT_MODULES = YES; ENABLE_USER_SCRIPT_SANDBOXING = NO; CODE_SIGN_STYLE = Manual; SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG; GCC_PREPROCESSOR_DEFINITIONS = "DEBUG=1"; FRAMEWORK_SEARCH_PATHS = ("$(inherited)", "$(SRCROOT)/Vendor"); }; };
+
+		GROUP = {isa = PBXGroup; children = (THIRD_PARTY_PROJECT, NETWORKING_REF, ANALYTICS_REF, MACROS_REF, CATALOG_INTERFACE_FILE, CATALOG_MODEL_FILE, CATALOG_FEATURE_FILE, CATALOG_STRINGS, CATALOG_ASSETS, CATALOG_FEATURE_TESTS_FILE, COMPOSITION_FILE, HARBOR_FILE, HARBOR_TESTS_FILE, HARBOR_SHARE_FILE, HARBOR_WIDGETS_FILE, PRODUCTS); sourceTree = "<group>"; };
+		PRODUCTS = {isa = PBXGroup; children = (HARBOR_PRODUCT, HARBOR_SHARE_PRODUCT, HARBOR_WIDGETS_PRODUCT, COMPOSITION_PRODUCT, CATALOG_FEATURE_PRODUCT, CATALOG_MODEL_PRODUCT, CATALOG_INTERFACE_PRODUCT, THIRD_PARTY_BUNDLE_PRODUCT); name = Products; sourceTree = "<group>"; };
+		THIRD_PARTY_PROJECT = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; name = ThirdParty.xcodeproj; path = Dependencies/ThirdParty/ThirdParty.xcodeproj; sourceTree = "<group>"; };
+
+		NETWORKING_REF = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = Networking.xcframework; path = Vendor/Networking.xcframework; sourceTree = "<group>"; };
+		ANALYTICS_REF = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = Analytics.xcframework; path = Vendor/Analytics.xcframework; sourceTree = "<group>"; };
+		MACROS_REF = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = MacroSupport.xcframework; path = Vendor/MacroSupport.xcframework; sourceTree = "<group>"; };
+
+		HARBOR_PRODUCT = {isa = PBXFileReference; explicitFileType = wrapper.application; path = Harbor.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		HARBOR_SHARE_PRODUCT = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; path = HarborShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		HARBOR_WIDGETS_PRODUCT = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; path = HarborWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		COMPOSITION_PRODUCT = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = HarborComposition.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		CATALOG_FEATURE_PRODUCT = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = CatalogFeature.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		CATALOG_MODEL_PRODUCT = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = CatalogModel.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		CATALOG_INTERFACE_PRODUCT = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = CatalogInterface.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		THIRD_PARTY_BUNDLE_PRODUCT = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = ThirdParty_Resources.bundle; sourceTree = BUILT_PRODUCTS_DIR; };
+
+		CATALOG_INTERFACE_FILE = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Catalog/Interface/CatalogInterface.swift; sourceTree = "<group>"; };
+		CATALOG_INTERFACE_BUILD = {isa = PBXBuildFile; fileRef = CATALOG_INTERFACE_FILE; };
+		CATALOG_INTERFACE_SOURCES = {isa = PBXSourcesBuildPhase; files = (CATALOG_INTERFACE_BUILD); };
+		CATALOG_INTERFACE_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (CATALOG_INTERFACE_DEBUG); defaultConfigurationName = Debug; };
+		CATALOG_INTERFACE_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = dev.once.harbor.catalog.interface; GENERATE_INFOPLIST_FILE = YES; SWIFT_VERSION = 6.0; APPLICATION_EXTENSION_API_ONLY = YES; SKIP_INSTALL = YES; }; };
+		CATALOG_INTERFACE = {isa = PBXNativeTarget; buildConfigurationList = CATALOG_INTERFACE_CONFIGS; buildPhases = (CATALOG_INTERFACE_SOURCES); dependencies = (); name = CatalogInterface; productType = "com.apple.product-type.framework"; productName = CatalogInterface; };
+
+		CATALOG_MODEL_FILE = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Catalog/Model/Sources/Item.swift; sourceTree = "<group>"; };
+		CATALOG_MODEL_BUILD = {isa = PBXBuildFile; fileRef = CATALOG_MODEL_FILE; };
+		CATALOG_MODEL_SOURCES = {isa = PBXSourcesBuildPhase; files = (CATALOG_MODEL_BUILD); };
+		CATALOG_MODEL_INTERFACE_LINK = {isa = PBXBuildFile; fileRef = CATALOG_INTERFACE_PRODUCT; };
+		CATALOG_MODEL_FRAMEWORKS = {isa = PBXFrameworksBuildPhase; files = (CATALOG_MODEL_INTERFACE_LINK); };
+		CATALOG_MODEL_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (CATALOG_MODEL_DEBUG); defaultConfigurationName = Debug; };
+		CATALOG_MODEL_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = dev.once.harbor.catalog.model; GENERATE_INFOPLIST_FILE = YES; SWIFT_VERSION = 6.0; APPLICATION_EXTENSION_API_ONLY = YES; SKIP_INSTALL = YES; }; };
+		CATALOG_MODEL_DEP_INTERFACE = {isa = PBXTargetDependency; target = CATALOG_INTERFACE; };
+		CATALOG_MODEL = {isa = PBXNativeTarget; buildConfigurationList = CATALOG_MODEL_CONFIGS; buildPhases = (CATALOG_MODEL_SOURCES, CATALOG_MODEL_FRAMEWORKS); dependencies = (CATALOG_MODEL_DEP_INTERFACE); name = CatalogModel; productType = "com.apple.product-type.framework"; productName = CatalogModel; };
+
+		CATALOG_FEATURE_FILE = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Catalog/Feature/Sources/CatalogFeature.swift; sourceTree = "<group>"; };
+		CATALOG_STRINGS_EN = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = Catalog/Feature/Resources/en.lproj/Localizable.strings; sourceTree = "<group>"; };
+		CATALOG_STRINGS_DE = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = de; path = Catalog/Feature/Resources/de.lproj/Localizable.strings; sourceTree = "<group>"; };
+		CATALOG_STRINGS = {isa = PBXVariantGroup; children = (CATALOG_STRINGS_EN, CATALOG_STRINGS_DE); name = Localizable.strings; sourceTree = "<group>"; };
+		CATALOG_ASSETS = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Catalog/Feature/Resources/Assets.xcassets; sourceTree = "<group>"; };
+		CATALOG_FEATURE_BUILD = {isa = PBXBuildFile; fileRef = CATALOG_FEATURE_FILE; };
+		CATALOG_STRINGS_BUILD = {isa = PBXBuildFile; fileRef = CATALOG_STRINGS; };
+		CATALOG_ASSETS_BUILD = {isa = PBXBuildFile; fileRef = CATALOG_ASSETS; };
+		CATALOG_FEATURE_SOURCES = {isa = PBXSourcesBuildPhase; files = (CATALOG_FEATURE_BUILD); };
+		CATALOG_FEATURE_RESOURCES = {isa = PBXResourcesBuildPhase; files = (CATALOG_STRINGS_BUILD, CATALOG_ASSETS_BUILD); };
+		CATALOG_FEATURE_INTERFACE_LINK = {isa = PBXBuildFile; fileRef = CATALOG_INTERFACE_PRODUCT; };
+		CATALOG_FEATURE_MODEL_LINK = {isa = PBXBuildFile; fileRef = CATALOG_MODEL_PRODUCT; };
+		CATALOG_FEATURE_NETWORKING_LINK = {isa = PBXBuildFile; fileRef = NETWORKING_REF; };
+		CATALOG_FEATURE_MACROS_LINK = {isa = PBXBuildFile; fileRef = MACROS_REF; };
+		CATALOG_FEATURE_FRAMEWORKS = {isa = PBXFrameworksBuildPhase; files = (CATALOG_FEATURE_INTERFACE_LINK, CATALOG_FEATURE_MODEL_LINK, CATALOG_FEATURE_NETWORKING_LINK, CATALOG_FEATURE_MACROS_LINK); };
+		CATALOG_FEATURE_COPY_CONFIG = {isa = PBXShellScriptBuildPhase; name = "Copy Settings"; shellPath = /bin/sh; shellScript = "cp \"${SCRIPT_INPUT_FILE_0}\" \"${SCRIPT_OUTPUT_FILE_0}\""; inputPaths = ("$(SRCROOT)/Config/Settings.plist"); outputPaths = ("$(BUILT_PRODUCTS_DIR)/$(FULL_PRODUCT_NAME)/Settings.plist"); };
+		CATALOG_FEATURE_GENERATE = {isa = PBXShellScriptBuildPhase; name = "Generate Sources"; shellPath = /bin/sh; shellScript = "echo \"generated sources are checked in\""; inputPaths = (); outputPaths = (); };
+		CATALOG_FEATURE_UPLOAD_SYMBOLS = {isa = PBXShellScriptBuildPhase; name = "Upload Symbols"; shellPath = /bin/sh; shellScript = "echo \"symbol upload skipped for ${TARGET_NAME}\""; inputPaths = ("${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Resources/DWARF/${TARGET_NAME}", "$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)"); outputPaths = (); };
+		CATALOG_FEATURE_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (CATALOG_FEATURE_DEBUG); defaultConfigurationName = Debug; };
+		CATALOG_FEATURE_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = dev.once.harbor.catalog.feature; GENERATE_INFOPLIST_FILE = YES; SKIP_INSTALL = YES; SWIFT_LOAD_BINARY_MACROS = "$(SRCROOT)/Vendor/MacroSupportPlugin#MacroSupportPlugin"; OTHER_SWIFT_FLAGS = "$(inherited) -load-plugin-executable $(SWIFT_LOAD_BINARY_MACROS)"; }; };
+		CATALOG_FEATURE_DEP_INTERFACE = {isa = PBXTargetDependency; target = CATALOG_INTERFACE; };
+		CATALOG_FEATURE_DEP_MODEL = {isa = PBXTargetDependency; target = CATALOG_MODEL; };
+		CATALOG_FEATURE = {isa = PBXNativeTarget; buildConfigurationList = CATALOG_FEATURE_CONFIGS; buildPhases = (CATALOG_FEATURE_COPY_CONFIG, CATALOG_FEATURE_GENERATE, CATALOG_FEATURE_SOURCES, CATALOG_FEATURE_RESOURCES, CATALOG_FEATURE_FRAMEWORKS, CATALOG_FEATURE_UPLOAD_SYMBOLS); dependencies = (CATALOG_FEATURE_DEP_INTERFACE, CATALOG_FEATURE_DEP_MODEL); name = CatalogFeature; productType = "com.apple.product-type.framework"; productName = CatalogFeature; };
+
+		CATALOG_FEATURE_TESTS_FILE = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Catalog/Tests/CatalogFeatureTests.swift; sourceTree = "<group>"; };
+		CATALOG_FEATURE_TESTS_BUILD = {isa = PBXBuildFile; fileRef = CATALOG_FEATURE_TESTS_FILE; };
+		CATALOG_FEATURE_TESTS_SOURCES = {isa = PBXSourcesBuildPhase; files = (CATALOG_FEATURE_TESTS_BUILD); };
+		CATALOG_FEATURE_TESTS_FEATURE_LINK = {isa = PBXBuildFile; fileRef = CATALOG_FEATURE_PRODUCT; };
+		CATALOG_FEATURE_TESTS_FRAMEWORKS = {isa = PBXFrameworksBuildPhase; files = (CATALOG_FEATURE_TESTS_FEATURE_LINK); };
+		CATALOG_FEATURE_TESTS_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (CATALOG_FEATURE_TESTS_DEBUG); defaultConfigurationName = Debug; };
+		CATALOG_FEATURE_TESTS_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = dev.once.harbor.catalog.tests; GENERATE_INFOPLIST_FILE = YES; }; };
+		CATALOG_FEATURE_TESTS_DEP_FEATURE = {isa = PBXTargetDependency; target = CATALOG_FEATURE; };
+		CATALOG_FEATURE_TESTS = {isa = PBXNativeTarget; buildConfigurationList = CATALOG_FEATURE_TESTS_CONFIGS; buildPhases = (CATALOG_FEATURE_TESTS_SOURCES, CATALOG_FEATURE_TESTS_FRAMEWORKS); dependencies = (CATALOG_FEATURE_TESTS_DEP_FEATURE); name = CatalogFeatureTests; productType = "com.apple.product-type.bundle.unit-test"; productName = CatalogFeatureTests; };
+
+		COMPOSITION_FILE = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarborComposition/Sources/Composition.swift; sourceTree = "<group>"; };
+		COMPOSITION_BUILD = {isa = PBXBuildFile; fileRef = COMPOSITION_FILE; };
+		COMPOSITION_SOURCES = {isa = PBXSourcesBuildPhase; files = (COMPOSITION_BUILD); };
+		COMPOSITION_FEATURE_LINK = {isa = PBXBuildFile; fileRef = CATALOG_FEATURE_PRODUCT; };
+		COMPOSITION_INTERFACE_LINK = {isa = PBXBuildFile; fileRef = CATALOG_INTERFACE_PRODUCT; };
+		COMPOSITION_ANALYTICS_LINK = {isa = PBXBuildFile; fileRef = ANALYTICS_REF; };
+		COMPOSITION_MACROS_LINK = {isa = PBXBuildFile; fileRef = MACROS_REF; };
+		COMPOSITION_FRAMEWORKS = {isa = PBXFrameworksBuildPhase; files = (COMPOSITION_FEATURE_LINK, COMPOSITION_INTERFACE_LINK, COMPOSITION_ANALYTICS_LINK, COMPOSITION_MACROS_LINK); };
+		COMPOSITION_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (COMPOSITION_DEBUG); defaultConfigurationName = Debug; };
+		COMPOSITION_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = dev.once.harbor.composition; GENERATE_INFOPLIST_FILE = YES; SKIP_INSTALL = YES; SWIFT_LOAD_BINARY_MACROS = "$(SRCROOT)/Vendor/MacroSupportPlugin#MacroSupportPlugin"; OTHER_SWIFT_FLAGS = "$(inherited) -load-plugin-executable $(SWIFT_LOAD_BINARY_MACROS)"; }; };
+		COMPOSITION_DEP_FEATURE = {isa = PBXTargetDependency; target = CATALOG_FEATURE; };
+		COMPOSITION_DEP_INTERFACE = {isa = PBXTargetDependency; target = CATALOG_INTERFACE; };
+		COMPOSITION = {isa = PBXNativeTarget; buildConfigurationList = COMPOSITION_CONFIGS; buildPhases = (COMPOSITION_SOURCES, COMPOSITION_FRAMEWORKS); dependencies = (COMPOSITION_DEP_FEATURE, COMPOSITION_DEP_INTERFACE); name = HarborComposition; productType = "com.apple.product-type.framework"; productName = HarborComposition; };
+
+		HARBOR_SHARE_FILE = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarborShare/Sources/ShareViewController.swift; sourceTree = "<group>"; };
+		HARBOR_SHARE_BUILD = {isa = PBXBuildFile; fileRef = HARBOR_SHARE_FILE; };
+		HARBOR_SHARE_SOURCES = {isa = PBXSourcesBuildPhase; files = (HARBOR_SHARE_BUILD); };
+		HARBOR_SHARE_BUNDLE_RESOURCE = {isa = PBXBuildFile; fileRef = THIRD_PARTY_BUNDLE_PRODUCT; };
+		HARBOR_SHARE_RESOURCES = {isa = PBXResourcesBuildPhase; files = (HARBOR_SHARE_BUNDLE_RESOURCE); };
+		HARBOR_SHARE_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (HARBOR_SHARE_DEBUG); defaultConfigurationName = Debug; };
+		HARBOR_SHARE_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = dev.once.harbor.debug.share; INFOPLIST_FILE = HarborShare/SupportingFiles/Info.plist; CODE_SIGN_ENTITLEMENTS = HarborShare/SupportingFiles/Share.entitlements; APPLICATION_EXTENSION_API_ONLY = YES; SKIP_INSTALL = YES; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks"); }; };
+		HARBOR_SHARE_PROXY_BUNDLE = {isa = PBXContainerItemProxy; containerPortal = THIRD_PARTY_PROJECT; proxyType = 1; remoteGlobalIDString = RESOURCES_BUNDLE; remoteInfo = ThirdParty_Resources; };
+		HARBOR_SHARE_DEP_BUNDLE = {isa = PBXTargetDependency; name = ThirdParty_Resources; targetProxy = HARBOR_SHARE_PROXY_BUNDLE; };
+		HARBOR_SHARE = {isa = PBXNativeTarget; buildConfigurationList = HARBOR_SHARE_CONFIGS; buildPhases = (HARBOR_SHARE_SOURCES, HARBOR_SHARE_RESOURCES); dependencies = (HARBOR_SHARE_DEP_BUNDLE); name = HarborShare; productType = "com.apple.product-type.app-extension"; productName = HarborShare; };
+
+		HARBOR_WIDGETS_FILE = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarborWidgets/Sources/HarborWidgets.swift; sourceTree = "<group>"; };
+		HARBOR_WIDGETS_BUILD = {isa = PBXBuildFile; fileRef = HARBOR_WIDGETS_FILE; };
+		HARBOR_WIDGETS_SOURCES = {isa = PBXSourcesBuildPhase; files = (HARBOR_WIDGETS_BUILD); };
+		HARBOR_WIDGETS_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (HARBOR_WIDGETS_DEBUG); defaultConfigurationName = Debug; };
+		HARBOR_WIDGETS_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = dev.once.harbor.debug.widgets; INFOPLIST_FILE = HarborWidgets/SupportingFiles/Info.plist; CODE_SIGN_ENTITLEMENTS = HarborWidgets/SupportingFiles/Widgets.entitlements; IPHONEOS_DEPLOYMENT_TARGET = 17.0; TARGETED_DEVICE_FAMILY = "1,2"; APPLICATION_EXTENSION_API_ONLY = YES; SKIP_INSTALL = YES; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks"); }; };
+		HARBOR_WIDGETS = {isa = PBXNativeTarget; buildConfigurationList = HARBOR_WIDGETS_CONFIGS; buildPhases = (HARBOR_WIDGETS_SOURCES); dependencies = (); name = HarborWidgets; productType = "com.apple.product-type.app-extension"; productName = HarborWidgets; };
+
+		HARBOR_FILE = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Harbor/Sources/AppDelegate.swift; sourceTree = "<group>"; };
+		HARBOR_BUILD = {isa = PBXBuildFile; fileRef = HARBOR_FILE; };
+		HARBOR_SOURCES = {isa = PBXSourcesBuildPhase; files = (HARBOR_BUILD); };
+		HARBOR_BUNDLE_RESOURCE = {isa = PBXBuildFile; fileRef = THIRD_PARTY_BUNDLE_PRODUCT; };
+		HARBOR_RESOURCES = {isa = PBXResourcesBuildPhase; files = (HARBOR_BUNDLE_RESOURCE); };
+		HARBOR_COMPOSITION_LINK = {isa = PBXBuildFile; fileRef = COMPOSITION_PRODUCT; };
+		HARBOR_NETWORKING_LINK = {isa = PBXBuildFile; fileRef = NETWORKING_REF; };
+		HARBOR_ANALYTICS_LINK = {isa = PBXBuildFile; fileRef = ANALYTICS_REF; };
+		HARBOR_MACROS_LINK = {isa = PBXBuildFile; fileRef = MACROS_REF; };
+		HARBOR_FRAMEWORKS = {isa = PBXFrameworksBuildPhase; files = (HARBOR_COMPOSITION_LINK, HARBOR_NETWORKING_LINK, HARBOR_ANALYTICS_LINK, HARBOR_MACROS_LINK); };
+		HARBOR_EMBED_COMPOSITION = {isa = PBXBuildFile; fileRef = COMPOSITION_PRODUCT; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy); }; };
+		HARBOR_EMBED_FEATURE = {isa = PBXBuildFile; fileRef = CATALOG_FEATURE_PRODUCT; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy); }; };
+		HARBOR_EMBED_MODEL = {isa = PBXBuildFile; fileRef = CATALOG_MODEL_PRODUCT; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy); }; };
+		HARBOR_EMBED_INTERFACE = {isa = PBXBuildFile; fileRef = CATALOG_INTERFACE_PRODUCT; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy); }; };
+		HARBOR_EMBED_NETWORKING = {isa = PBXBuildFile; fileRef = NETWORKING_REF; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy); }; };
+		HARBOR_EMBED_ANALYTICS = {isa = PBXBuildFile; fileRef = ANALYTICS_REF; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy); }; };
+		HARBOR_EMBED_MACROS = {isa = PBXBuildFile; fileRef = MACROS_REF; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy); }; };
+		HARBOR_EMBED_FRAMEWORKS = {isa = PBXCopyFilesBuildPhase; dstPath = ""; dstSubfolderSpec = 10; name = "Embed Frameworks"; files = (HARBOR_EMBED_COMPOSITION, HARBOR_EMBED_FEATURE, HARBOR_EMBED_MODEL, HARBOR_EMBED_INTERFACE, HARBOR_EMBED_NETWORKING, HARBOR_EMBED_ANALYTICS, HARBOR_EMBED_MACROS); };
+		HARBOR_EMBED_SHARE = {isa = PBXBuildFile; fileRef = HARBOR_SHARE_PRODUCT; settings = {ATTRIBUTES = (RemoveHeadersOnCopy); }; };
+		HARBOR_EMBED_WIDGETS = {isa = PBXBuildFile; fileRef = HARBOR_WIDGETS_PRODUCT; settings = {ATTRIBUTES = (RemoveHeadersOnCopy); }; };
+		HARBOR_EMBED_EXTENSIONS = {isa = PBXCopyFilesBuildPhase; dstPath = ""; dstSubfolderSpec = 13; name = "Embed Foundation Extensions"; files = (HARBOR_EMBED_SHARE, HARBOR_EMBED_WIDGETS); };
+		HARBOR_COPY_CONFIG = {isa = PBXShellScriptBuildPhase; name = "Copy Settings"; shellPath = /bin/sh; shellScript = "cp \"${SCRIPT_INPUT_FILE_0}\" \"${SCRIPT_OUTPUT_FILE_0}\""; inputPaths = ("$(SRCROOT)/Config/Settings.plist"); outputPaths = ("$(BUILT_PRODUCTS_DIR)/$(FULL_PRODUCT_NAME)/Settings.plist"); };
+		HARBOR_VALIDATE = {isa = PBXShellScriptBuildPhase; name = "Lint"; shellPath = /bin/sh; shellScript = "echo \"lint ok\""; inputPaths = (); outputPaths = (); };
+		HARBOR_UPLOAD_SYMBOLS = {isa = PBXShellScriptBuildPhase; name = "Upload Symbols"; shellPath = /bin/sh; shellScript = "echo \"symbol upload skipped for ${TARGET_NAME}\""; inputPaths = ("${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Resources/DWARF/${TARGET_NAME}", "$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)"); outputPaths = (); };
+		HARBOR_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (HARBOR_DEBUG); defaultConfigurationName = Debug; };
+		HARBOR_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = dev.once.harbor.debug; INFOPLIST_FILE = Harbor/SupportingFiles/Info.plist; CODE_SIGN_ENTITLEMENTS = Harbor/SupportingFiles/Harbor.entitlements; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks"); OTHER_LDFLAGS = "$(inherited) -ObjC"; SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG"; GCC_PREPROCESSOR_DEFINITIONS = ("$(inherited)", "DEBUG=1"); }; };
+		HARBOR_DEP_COMPOSITION = {isa = PBXTargetDependency; target = COMPOSITION; };
+		HARBOR_DEP_SHARE = {isa = PBXTargetDependency; target = HARBOR_SHARE; };
+		HARBOR_DEP_WIDGETS = {isa = PBXTargetDependency; target = HARBOR_WIDGETS; };
+		HARBOR_PROXY_BUNDLE = {isa = PBXContainerItemProxy; containerPortal = THIRD_PARTY_PROJECT; proxyType = 1; remoteGlobalIDString = RESOURCES_BUNDLE; remoteInfo = ThirdParty_Resources; };
+		HARBOR_DEP_BUNDLE = {isa = PBXTargetDependency; name = ThirdParty_Resources; targetProxy = HARBOR_PROXY_BUNDLE; };
+		HARBOR = {isa = PBXNativeTarget; buildConfigurationList = HARBOR_CONFIGS; buildPhases = (HARBOR_COPY_CONFIG, HARBOR_VALIDATE, HARBOR_SOURCES, HARBOR_RESOURCES, HARBOR_FRAMEWORKS, HARBOR_EMBED_FRAMEWORKS, HARBOR_EMBED_EXTENSIONS, HARBOR_UPLOAD_SYMBOLS); dependencies = (HARBOR_DEP_COMPOSITION, HARBOR_DEP_SHARE, HARBOR_DEP_WIDGETS, HARBOR_DEP_BUNDLE); name = Harbor; productType = "com.apple.product-type.application"; productName = Harbor; };
+
+		HARBOR_TESTS_FILE = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarborTests/Sources/HarborTests.swift; sourceTree = "<group>"; };
+		HARBOR_TESTS_BUILD = {isa = PBXBuildFile; fileRef = HARBOR_TESTS_FILE; };
+		HARBOR_TESTS_SOURCES = {isa = PBXSourcesBuildPhase; files = (HARBOR_TESTS_BUILD); };
+		HARBOR_TESTS_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (HARBOR_TESTS_DEBUG); defaultConfigurationName = Debug; };
+		HARBOR_TESTS_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = dev.once.harbor.tests; GENERATE_INFOPLIST_FILE = YES; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Harbor.app/Harbor"; BUNDLE_LOADER = "$(TEST_HOST)"; }; };
+		HARBOR_TESTS_DEP_APP = {isa = PBXTargetDependency; target = HARBOR; };
+		HARBOR_TESTS = {isa = PBXNativeTarget; buildConfigurationList = HARBOR_TESTS_CONFIGS; buildPhases = (HARBOR_TESTS_SOURCES); dependencies = (HARBOR_TESTS_DEP_APP); name = HarborTests; productType = "com.apple.product-type.bundle.unit-test"; productName = HarborTests; };
+	};
+	rootObject = ROOT;
+}

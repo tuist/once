@@ -80,6 +80,17 @@ Describe 'apple graph'
     cp -R "$REPO_ROOT/fixtures/xcode_signal_app/." "$WORKSPACE/"
   }
 
+  copy_xcode_modular_workspace_fixture() {
+    if apple_toolchain_unavailable; then
+      return 0
+    fi
+    cp -R "$REPO_ROOT/fixtures/xcode_modular_workspace/." "$WORKSPACE/"
+    if ! vendor_log="$(sh "$WORKSPACE/tools/build_vendors.sh" "$WORKSPACE/Vendor" 2>&1)"; then
+      printf '%s\n' "$vendor_log" >&2
+      return 1
+    fi
+  }
+
   copy_xcode_prebuilt_cache_app_fixture() {
     if apple_toolchain_unavailable; then
       return 0
@@ -474,6 +485,37 @@ TOML
     The stdout should include '"target":"ClientTests"'
     The stdout should include '"status":"completed"'
     The contents of file "$WORKSPACE/.once/out/ClientTests/test/test_results.json" should include '"status":"passed"'
+  End
+
+  It 'builds a modular workspace app with extensions, binary macros and script phases'
+    Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+    copy_xcode_modular_workspace_fixture
+
+    When call once --format json build Harbor
+    The status should be success
+    The stdout should include '"target":"Harbor"'
+    The stdout should include '"status":"completed"'
+    The path "$WORKSPACE/.once/out/Harbor/Harbor.app/Harbor" should be file
+    The path "$WORKSPACE/.once/out/Harbor/Harbor.app/Settings.plist" should be file
+    The path "$WORKSPACE/.once/out/Harbor/Harbor.app/ThirdParty_Resources.bundle/PrivacyInfo.xcprivacy" should be file
+    The path "$WORKSPACE/.once/out/Harbor/Harbor.app/PlugIns/HarborShare.appex/HarborShare" should be file
+    The path "$WORKSPACE/.once/out/Harbor/Harbor.app/PlugIns/HarborWidgets.appex/HarborWidgets" should be file
+    The path "$WORKSPACE/.once/out/Harbor/Harbor.app/Frameworks/CatalogFeature.framework/Settings.plist" should be file
+    The path "$WORKSPACE/.once/out/Harbor/Harbor.app/Frameworks/CatalogFeature.framework/de.lproj/Localizable.strings" should be file
+    The path "$WORKSPACE/.once/out/Harbor/Harbor.app/Frameworks/Networking.framework/Networking" should be file
+  End
+
+  It 'tests a modular workspace hosted and unhosted on a simulator'
+    Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+    Skip if 'no iOS simulator available on this host' ios_simulator_unavailable
+    copy_xcode_modular_workspace_fixture
+
+    When call once --format json test
+    The status should be success
+    The stdout should include '"target":"CatalogFeatureTests"'
+    The stdout should include '"target":"HarborTests"'
+    The contents of file "$WORKSPACE/.once/out/CatalogFeatureTests/test/test_results.json" should include '"status":"passed"'
+    The contents of file "$WORKSPACE/.once/out/HarborTests/test/test_results.json" should include '"status":"passed"'
   End
 
   It 'lists the cache-substituted style targets with their Once kinds'

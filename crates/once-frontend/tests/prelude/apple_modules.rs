@@ -402,6 +402,36 @@ result = _apple_check_module_inputs(
 }
 
 #[test]
+fn platform_xctest_overlay_is_a_trusted_module_input() {
+    let developer = "/Xcode/Platforms/iPhoneSimulator.platform/Developer";
+    let check = |input: &str| {
+        evaluate(&format!(
+            r#"
+result = _apple_check_module_inputs(
+    {{"args": {{"host_roots": _apple_module_host_roots({{
+        "sdk_path": "{developer}/SDKs/iPhoneSimulator.sdk",
+        "swiftc_path": "/Xcode/Toolchains/Default.xctoolchain/usr/bin/swiftc",
+    }})}}, "label": {{"id": "AppTests"}}}},
+    _apple_scan_records({{"modules": [{{"swift": "XCTest"}}, {{"details": {{"swift": {{"moduleInterfacePath": {input:?}}}}}}}]}}),
+)
+"#
+        ))
+        .1
+        .unwrap()
+    };
+    assert_eq!(
+        check(&format!(
+            "{developer}/usr/lib/XCTest.swiftmodule/arm64-apple-ios-simulator.swiftinterface"
+        )),
+        "None"
+    );
+    assert!(check(&format!(
+        "{developer}/usr/lib/Other.swiftmodule/arm64.swiftinterface"
+    ))
+    .contains("untracked_host_module_input"));
+}
+
+#[test]
 fn same_named_modules_with_different_inputs_have_distinct_output_paths() {
     let first = plan(&scan_fixture(), "off", "{}").0;
     let mut scan = scan_fixture();

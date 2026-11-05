@@ -241,6 +241,32 @@ result = repr(_xcode_shell_phase_paths({{"inputPaths": ["${{UNKNOWN}}/a", "$(UNK
 }
 
 #[test]
+fn native_scripts_do_not_declare_dsym_inputs_for_any_debug_format() {
+    for format in [
+        "",
+        r#", "DEBUG_INFORMATION_FORMAT": "dwarf""#,
+        r#", "DEBUG_INFORMATION_FORMAT": "dwarf-with-dsym""#,
+    ] {
+        let source = format!(
+            r#"{}
+def workspace_root():
+    return "/workspace"
+phase = {{"isa": "PBXShellScriptBuildPhase", "shellScript": "upload", "inputPaths": ["${{DWARF_DSYM_FOLDER_PATH}}/${{DWARF_DSYM_FILE_NAME}}/Contents/Resources/DWARF/${{TARGET_NAME}}", "$(SRCROOT)/App.app/Info.plist", "$(SRCROOT)/App.app.dSYM.txt"]}}
+phases = _xcode_shell_script_phases({{"label": {{"package": "", "id": "Seed"}}, "attr": {{"project": "App.xcodeproj"}}}}, {{"phase": phase}}, {{"buildPhases": ["phase"]}}, {{"FULL_PRODUCT_NAME": "App.app", "TARGET_NAME": "App"{format}}}, "", "App")
+action = json_decode(phases["actions"][0])
+result = repr([sorted(action["inputs"]), action["env"]["SCRIPT_INPUT_FILE_0"].removeprefix("/workspace/")])
+"#,
+            xcode_prelude_source()
+        );
+        assert_eq!(
+            eval_prelude_source_to_repr(source).unwrap(),
+            r#"[["App.app.dSYM.txt", "App.app/Info.plist"], ".once/out/App/App.app.dSYM/Contents/Resources/DWARF/App"]"#,
+            "{format}"
+        );
+    }
+}
+
+#[test]
 fn native_scripts_resolve_dsym_defaults_and_overrides() {
     for (settings, folder, filename) in [
         ("", "/workspace/.once/out/App", "App.app.dSYM"),
@@ -257,17 +283,11 @@ def workspace_root():
 phase = {{"isa": "PBXShellScriptBuildPhase", "shellScript": "verify", "inputPaths": ["${{DWARF_DSYM_FOLDER_PATH}}/${{DWARF_DSYM_FILE_NAME}}"]}}
 phases = _xcode_shell_script_phases({{"label": {{"package": "", "id": "Seed"}}, "attr": {{"project": "App.xcodeproj"}}}}, {{"phase": phase}}, {{"buildPhases": ["phase"]}}, {{"FULL_PRODUCT_NAME": "App.app"{settings}}}, "", "App")
 action = json_decode(phases["actions"][0])
-result = repr([action["inputs"], action["env"]["DWARF_DSYM_FOLDER_PATH"], action["env"]["DWARF_DSYM_FILE_NAME"]])
+result = repr([action["env"]["DWARF_DSYM_FOLDER_PATH"], action["env"]["DWARF_DSYM_FILE_NAME"]])
 "#,
             xcode_prelude_source()
         );
         let result = eval_prelude_source_to_repr(source).unwrap();
-        assert_eq!(
-            result,
-            format!(
-                r#"[["{}"], "{folder}", "{filename}"]"#,
-                format!("{folder}/{filename}").trim_start_matches("/workspace/")
-            )
-        );
+        assert_eq!(result, format!(r#"["{folder}", "{filename}"]"#));
     }
 }

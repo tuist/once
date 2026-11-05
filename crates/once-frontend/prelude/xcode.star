@@ -2012,6 +2012,12 @@ def _xcode_script_path(value, subs):
         path = source_root + "/" + path
     return _xcode_workspace_relative(_xcode_normalize_path(path))
 
+def _xcode_is_dsym_bundle_path(path, subs):
+    # Once never writes symbol bundles, and Xcode runs script phases whose
+    # inputs are missing, so a dSYM input must not become a declared input.
+    bundle = _xcode_script_path("$(DWARF_DSYM_FOLDER_PATH)/$(DWARF_DSYM_FILE_NAME)", subs)
+    return bool(bundle) and (path == bundle or path.startswith(bundle + "/"))
+
 def _xcode_shell_phase_paths(phase, paths_key, file_lists_key, subs):
     paths = []
     for value in phase.get(paths_key) or []:
@@ -2257,8 +2263,11 @@ def _xcode_shell_script_phases(ctx, objects, target, subs, project_dir, target_n
                     for input in script_inputs:
                         if _basename(input) == _basename(output) and input not in resource_inputs:
                             resource_inputs.append(input)
-                            structured_resource_inputs.append(input)
-        inputs = [path for path in script_inputs if not path.startswith("/")]
+                            # Structured resources are directory roots; a copied
+                            # file packaged that way lands inside a folder of its name.
+                            if not host_file_exists(_xcode_abs(input)):
+                                structured_resource_inputs.append(input)
+        inputs = [path for path in script_inputs if not path.startswith("/") and not _xcode_is_dsym_bundle_path(path, script_subs)]
         env = {}
         for key, value in script_subs.items():
             resolved = _xcode_resolve_vars(value, script_subs)
@@ -5390,6 +5399,12 @@ def _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_
         subs["EXECUTABLE_PATH"] = subs["EXECUTABLE_FOLDER_PATH"] + "/" + product_name_seed
         subs["FRAMEWORKS_FOLDER_PATH"] = contents + "/Frameworks"
         subs["PLUGINS_FOLDER_PATH"] = contents + "/PlugIns"
+        if not subs.get("PRODUCT_BUNDLE_PACKAGE_TYPE"):
+            subs["PRODUCT_BUNDLE_PACKAGE_TYPE"] = {
+                "com.apple.product-type.system-extension": "SYSX",
+                "com.apple.product-type.driver-extension": "DEXT",
+                "com.apple.product-type.spotlight-importer": "BNDL",
+            }.get(product_type) or {"application": "APPL", "watch_app": "APPL", "extension": "XPC!", "framework": "FMWK"}.get(kind) or "BNDL"
     else:
         subs["FULL_PRODUCT_NAME"] = product_name_seed + ".a" if static_library else product_name_seed
         subs["EXECUTABLE_NAME"] = subs["FULL_PRODUCT_NAME"]
