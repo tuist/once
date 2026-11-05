@@ -232,6 +232,7 @@ def clean_environment():
     env.update(
         CARGO_INCREMENTAL="0",
         CARGO_TERM_COLOR="never",
+        ONCE_CACHE_PROVIDER="local",
         NO_COLOR="1",
         RUST_TEST_THREADS="1",
         MISE_AUTO_INSTALL="false",

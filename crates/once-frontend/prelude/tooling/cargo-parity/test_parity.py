@@ -9,6 +9,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import parity
 
@@ -32,6 +33,11 @@ class ComparisonTest(unittest.TestCase):
 
 
 class CommandBoundaryTest(unittest.TestCase):
+    def test_inherited_remote_provider_is_overridden(self):
+        with patch.dict(os.environ, {"ONCE_CACHE_PROVIDER": "remote"}):
+            self.assertEqual(parity.clean_environment()["ONCE_CACHE_PROVIDER"], "local")
+
+    @unittest.skipUnless(sys.platform == "linux", "requires Linux procps pkill")
     def test_timeout_stops_descendants(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
