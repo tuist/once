@@ -1,0 +1,27 @@
+[package]
+name = "e7_complex"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+members = [".", "deps/normal", "deps/generator", "deps/checker"]
+default-members = ["."]
+resolver = "2"
+
+[features]
+default = []
+extra = []
+
+[dependencies]
+normal = { path = "deps/normal" }
+
+[build-dependencies]
+generator = { path = "deps/generator" }
+
+[dev-dependencies]
+checker = { path = "deps/checker" }
+
+[profile.dev]
+opt-level = 0
+debug = 2
+incremental = false
