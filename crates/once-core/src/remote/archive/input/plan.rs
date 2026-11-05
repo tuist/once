@@ -7,16 +7,16 @@ use crate::remote::http::check_size;
 use crate::remote::path::Directory;
 use crate::{RemoteIoLimits, Result, WorkspacePath};
 
-pub(super) struct InputPlan {
-    pub(super) workspace: Directory,
-    pub(super) entries: BTreeMap<PathBuf, PathBuf>,
-    pub(super) declared_roots: Vec<PathBuf>,
+pub(in crate::remote) struct InputPlan {
+    pub(in crate::remote) workspace: Directory,
+    pub(in crate::remote) entries: BTreeMap<PathBuf, PathBuf>,
+    pub(in crate::remote) declared_roots: Vec<PathBuf>,
     pub(super) archive_bytes: u64,
     metadata_bytes: u64,
 }
 
 impl InputPlan {
-    pub(super) fn collect(
+    pub(in crate::remote) fn collect(
         workspace: &Path,
         inputs: &[WorkspacePath],
         provider: &'static str,

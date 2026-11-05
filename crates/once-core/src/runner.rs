@@ -86,7 +86,8 @@ impl Runner {
                 executor.unsupported("execution permit does not match the resolved executor")
             );
         }
-        if executor != Executor::Docker && !post_setup_inputs.is_empty() {
+        if !matches!(executor, Executor::Docker | Executor::Tuist) && !post_setup_inputs.is_empty()
+        {
             return Err(executor.unsupported("restoring inputs after command filesystem setup"));
         }
         if matches!(action, Action::RunCommand { sandbox, .. } if executor == Executor::Local && *sandbox != crate::SandboxMode::Off)

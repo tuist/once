@@ -4,7 +4,7 @@ use tempfile::TempPath;
 
 use crate::{Error, Result};
 
-mod input;
+pub(super) mod input;
 mod limits;
 mod output;
 

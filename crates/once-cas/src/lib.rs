@@ -38,6 +38,14 @@ pub use model::{ActionResult, Stats};
 pub use provider::{ActionCacheHit, CacheProvider};
 pub use store::{Cas, StagedBlob, StagedBlobReader};
 pub use tuist::{
-    ProjectCreateError, RemoteProject, TuistAuth, TuistAuthPrompt, TuistCacheConfig, TuistProjects,
-    TUIST_APP_OAUTH_CLIENT_ID, TUIST_OAUTH_CLIENT_ID_ENV,
+    ProjectCreateError, RemoteProject, TuistAuth, TuistAuthPrompt, TuistCacheConfig,
+    TuistExecution, TuistProjects, DEFAULT_EXECUTION_TIMEOUT, TUIST_APP_OAUTH_CLIENT_ID,
+    TUIST_OAUTH_CLIENT_ID_ENV,
 };
+
+/// Remote Execution API messages exchanged with execution services.
+pub use bazel_remote_apis::build::bazel::remote::execution::v2 as reapi;
+/// Well-known protobuf types [`reapi`] messages embed, such as `Duration`.
+pub use bazel_remote_apis::google::protobuf as reapi_protobuf;
+/// Protobuf encoding for [`reapi`] messages.
+pub use prost::Message as ReapiMessage;

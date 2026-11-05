@@ -17,6 +17,8 @@ mod path;
 mod phase;
 #[cfg(test)]
 mod test_server;
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
+mod tuist;
 
 pub(crate) struct PreparedCommand<'a> {
     pub lease: Option<ExecutionPermit>,
@@ -72,7 +74,7 @@ pub(crate) async fn execute_command(
     stream_to_parent: bool,
     setup: CommandFilesystemSetup<'_>,
 ) -> Result<ActionResult> {
-    if executor != Executor::Docker
+    if !matches!(executor, Executor::Docker | Executor::Tuist)
         && (!setup.clean_paths.is_empty()
             || !setup.create_dirs.is_empty()
             || !setup.post_setup_inputs.is_empty())
@@ -123,6 +125,20 @@ pub(crate) async fn execute_command(
             ))
             .await
         }
+        #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+        Executor::Tuist => {
+            Box::pin(tuist::execute_command(
+                remote,
+                command,
+                workspace_root,
+                cache,
+                stream_to_parent,
+                setup,
+            ))
+            .await
+        }
+        #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+        Executor::Tuist => Err(executor.unsupported("Tuist remote execution on this host")),
         Executor::Local => unreachable!("local execution does not use a remote transport"),
     }
 }

@@ -18,6 +18,8 @@ pub enum Executor {
     E2b,
     Daytona,
     Docker,
+    /// A Tuist project's Remote Execution API service.
+    Tuist,
 }
 
 impl Executor {
@@ -66,11 +68,13 @@ impl Executor {
             "e2b" => Ok(Self::E2b),
             "daytona" => Ok(Self::Daytona),
             "docker" => Ok(Self::Docker),
+            "tuist" => Ok(Self::Tuist),
             adapter => Err(Error::UnsupportedRemoteProvider {
                 provider: adapter.to_string(),
             }),
         }?;
-        if binding.account.is_some() || binding.project.is_some() {
+        // Tuist scopes execution to the project its credential is granted.
+        if executor != Self::Tuist && (binding.account.is_some() || binding.project.is_some()) {
             return Err(executor.unsupported("explicit account/project execution scoping"));
         }
         if executor == Self::Docker
@@ -83,6 +87,17 @@ impl Executor {
             return Err(Error::RemoteProviderConfig {
                 provider: binding.provider.clone(),
                 message: "Docker requires an explicit immutable sha256:<64 hex digits> image ID in environment; warm the image first, then resolve it with: docker image inspect --format '{{.Id}}' IMAGE".into(),
+            });
+        }
+        if executor == Self::Tuist
+            && binding
+                .environment
+                .as_deref()
+                .is_none_or(|image| image.trim().is_empty())
+        {
+            return Err(Error::RemoteProviderConfig {
+                provider: binding.provider.clone(),
+                message: "Tuist remote execution requires an explicit worker image; set `execution_image` on the Tuist infrastructure to the image the project's execution service runs, such as sha-<commit>".into(),
             });
         }
         Self::validate_default_environment(binding, executor, |name| {
@@ -99,7 +114,7 @@ impl Executor {
         let variable = match executor {
             Self::E2b => Some("ONCE_E2B_TEMPLATE"),
             Self::Microsandbox => Some("ONCE_MICROSANDBOX_IMAGE"),
-            Self::Local | Self::Daytona | Self::Docker => None,
+            Self::Local | Self::Daytona | Self::Docker | Self::Tuist => None,
         };
         if binding.environment.is_none() && variable.is_some_and(overridden) {
             return Err(Error::RemoteProviderConfig {
@@ -113,7 +128,7 @@ impl Executor {
     pub fn resource_domain(self) -> ResourceDomain {
         match self {
             Self::Local | Self::Microsandbox | Self::Docker => ResourceDomain::Host,
-            Self::E2b | Self::Daytona => ResourceDomain::Remote,
+            Self::E2b | Self::Daytona | Self::Tuist => ResourceDomain::Remote,
         }
     }
 
@@ -124,6 +139,7 @@ impl Executor {
             Self::E2b => "e2b",
             Self::Daytona => "daytona",
             Self::Docker => "docker",
+            Self::Tuist => "tuist",
         }
     }
 }
@@ -184,8 +200,21 @@ mod tests {
     }
 
     #[test]
+    fn tuist_execution_requires_a_pinned_image() {
+        let mut binding = RemoteExecution::provider("tuist");
+        binding.account = Some("acme".into());
+        binding.project = Some("app".into());
+        assert!(matches!(
+            Executor::from_binding(&binding),
+            Err(Error::RemoteProviderConfig { .. })
+        ));
+        binding.environment = Some("sha-0123abc".into());
+        assert_eq!(Executor::from_binding(&binding).unwrap(), Executor::Tuist);
+    }
+
+    #[test]
     fn unknown_adapters_fail_closed() {
-        for name in ["unknown", "tuist", ""] {
+        for name in ["unknown", "kura", ""] {
             assert!(matches!(
                 Executor::from_binding(&RemoteExecution::provider(name)),
                 Err(Error::UnsupportedRemoteProvider { .. })

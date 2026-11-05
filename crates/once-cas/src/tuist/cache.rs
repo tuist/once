@@ -37,6 +37,7 @@ use crate::{ActionCacheHit, ActionResult, Cas, Digest, Error, ErrorKind, Result,
 mod batch_download;
 mod batch_rpc;
 mod download;
+mod execution;
 mod stream_limits;
 
 #[path = "cache_download.rs"]
@@ -108,7 +109,10 @@ pub struct TuistCache {
     auth: TuistAuth,
     auth_token_cache: Arc<Recovering<String>>,
     endpoint_override: Option<String>,
+    execution_cache: Arc<Recovering<execution::TuistExecution>>,
 }
+
+pub use execution::{TuistExecution, DEFAULT_EXECUTION_TIMEOUT};
 
 /// Both channels reach the same endpoint. `ByteStream` writes get their own
 /// because tonic's request timeout lasts until response headers arrive, which
@@ -163,6 +167,7 @@ impl TuistCache {
             auth,
             auth_token_cache: Arc::default(),
             endpoint_override: env_token(TUIST_CACHE_ENDPOINT_ENV),
+            execution_cache: Arc::default(),
         })
     }
 
