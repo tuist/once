@@ -5,7 +5,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::event::{AccessKind, AccessMode};
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use once_cas::Digest;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
@@ -308,11 +309,19 @@ impl TrackerState {
             self.record_output_changes(None);
             return;
         };
-        if event.paths.is_empty() {
+        let unknown_changes = event.need_rescan() || event.paths.is_empty();
+        if unknown_changes {
             self.record_source_changes(None);
             self.record_output_changes(None);
-            return;
         }
+        let nonmutating_access = matches!(
+            event.kind,
+            EventKind::Access(
+                AccessKind::Read
+                    | AccessKind::Open(_)
+                    | AccessKind::Close(AccessMode::Read | AccessMode::Execute)
+            )
+        );
         let mut source_changes = BTreeSet::new();
         let mut output_changes = BTreeSet::new();
         let mut fence_tokens = Vec::new();
@@ -325,6 +334,9 @@ impl TrackerState {
                 }
                 FenceClass::Directory => continue,
                 FenceClass::NotFence => {}
+            }
+            if unknown_changes || nonmutating_access {
+                continue;
             }
             match tracked_area(relative) {
                 TrackedArea::Source => {
@@ -1035,5 +1047,104 @@ mod tests {
 
         push_record(&mut records, 5, None);
         assert_eq!(changes_since(&records, 4, 5), None);
+    }
+
+    #[test]
+    fn access_filter_preserves_mutations_unknown_events_and_rescans() {
+        use notify::event::{CreateKind, Flag, MetadataKind, ModifyKind, RemoveKind, RenameMode};
+
+        let state = || TrackerState {
+            workspace: PathBuf::from("workspace"),
+            instance_id: "events".into(),
+            source_generation: AtomicU64::new(0),
+            output_generation: AtomicU64::new(0),
+            journal: Mutex::new(ChangeJournal::default()),
+            fences: Mutex::new(BTreeMap::new()),
+            source_watcher: Mutex::new(None),
+            watched_outputs: Mutex::new(BTreeMap::new()),
+            root_fingerprint: Mutex::new(Digest::of_bytes(b"")),
+        };
+        let event = |kind| {
+            Event::new(kind)
+                .add_path(PathBuf::from("workspace/input"))
+                .add_path(PathBuf::from("workspace/.once/out/product"))
+                .add_path(PathBuf::from("workspace/.once/watch-fences/token"))
+        };
+        for (kind, changed) in [
+            (EventKind::Access(AccessKind::Read), false),
+            (EventKind::Access(AccessKind::Open(AccessMode::Any)), false),
+            (
+                EventKind::Access(AccessKind::Open(AccessMode::Write)),
+                false,
+            ),
+            (
+                EventKind::Access(AccessKind::Close(AccessMode::Read)),
+                false,
+            ),
+            (
+                EventKind::Access(AccessKind::Close(AccessMode::Execute)),
+                false,
+            ),
+            (
+                EventKind::Access(AccessKind::Close(AccessMode::Write)),
+                true,
+            ),
+            (EventKind::Access(AccessKind::Close(AccessMode::Any)), true),
+            (
+                EventKind::Access(AccessKind::Close(AccessMode::Other)),
+                true,
+            ),
+            (EventKind::Access(AccessKind::Any), true),
+            (EventKind::Access(AccessKind::Other), true),
+            (EventKind::Any, true),
+            (EventKind::Other, true),
+            (EventKind::Create(CreateKind::File), true),
+            (EventKind::Remove(RemoveKind::File), true),
+            (
+                EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any)),
+                true,
+            ),
+            (EventKind::Modify(ModifyKind::Name(RenameMode::Both)), true),
+        ] {
+            let state = state();
+            let initial = state.snapshot_since(None).position;
+            let (send, mut receive) = oneshot::channel();
+            state.fences.lock().unwrap().insert("token".into(), send);
+            state.handle_event(Ok(event(kind)));
+            receive.try_recv().expect("fence was not released");
+            let snapshot = state.snapshot_since(Some(&initial));
+            assert_eq!(
+                snapshot.source_changes,
+                Some(if changed {
+                    vec!["input".into()]
+                } else {
+                    vec![]
+                }),
+                "{kind:?}"
+            );
+            assert_eq!(
+                snapshot.output_changes,
+                Some(if changed {
+                    vec![".once/out/product".into()]
+                } else {
+                    vec![]
+                }),
+                "{kind:?}"
+            );
+        }
+        for event in [
+            Ok(event(EventKind::Access(AccessKind::Read)).set_flag(Flag::Rescan)),
+            Ok(Event::new(EventKind::Access(AccessKind::Read))),
+            Err(notify::Error::generic("watcher failed")),
+        ] {
+            let state = state();
+            let initial = state.snapshot_since(None).position;
+            state.handle_event(event);
+            let snapshot = state.snapshot_since(Some(&initial));
+            assert_eq!(snapshot.source_changes, None);
+            assert_eq!(snapshot.output_changes, None);
+            assert_eq!(snapshot.position.source_generation, 1);
+            assert_eq!(snapshot.position.output_generation, 1);
+        }
     }
 }

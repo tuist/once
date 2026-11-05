@@ -288,45 +288,9 @@ async fn request(
     response.snapshot.ok_or(SnapshotError::Empty)
 }
 
-/// Shell prologue that closes every descriptor above stderr and then replaces
-/// itself with the daemon.
-///
-/// The ceiling comes from the process's own descriptor limit rather than a
-/// fixed number, because a pipe can sit above any guess and one left open is
-/// enough to hang a harness. It is capped so a host with an enormous limit
-/// does not spend the daemon's startup closing descriptors that cannot exist.
-///
-/// The standard library marks the descriptors it opens close-on-exec, but one
-/// this process inherited from its own parent carries no such mark, and the
-/// daemon is meant to outlive the build that started it. A harness that reads
-/// the build's output through a pipe would then wait forever for an end of
-/// file the daemon still holds open: `shellspec` finished every example and
-/// hung before its summary, because the daemon had inherited two duplicates of
-/// the harness's output file. Closing the range needs `close` on each
-/// descriptor, which the standard library does not expose without unsafe code,
-/// so the shell does it instead.
-const DETACH_AND_EXEC: &str = r#"limit=$(ulimit -n 2>/dev/null || echo 256)
-case "$limit" in
-  unlimited|*[!0-9]*) limit=4096 ;;
-esac
-if [ "$limit" -gt 4096 ]; then limit=4096; fi
-fd=3
-while [ "$fd" -lt "$limit" ]; do
-  eval "exec $fd>&-" 2>/dev/null || true
-  fd=$((fd + 1))
-done
-exec "$@"
-"#;
-
 fn spawn_tracker(workspace: &Path, socket: &Path) -> std::io::Result<()> {
     let launcher = tracker_launcher(socket)?;
-    std::process::Command::new("/bin/sh")
-        .arg("-c")
-        .arg(DETACH_AND_EXEC)
-        // `sh -c script name args...` binds `name` to `$0`, so the daemon and
-        // its arguments start at `$1` where `exec "$@"` picks them up.
-        .arg("once-change-tracker")
-        .arg(&launcher)
+    std::process::Command::new(launcher)
         .arg("-C")
         .arg(workspace)
         .arg("__change-tracker")
