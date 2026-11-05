@@ -35,16 +35,39 @@ type Stream<T> = Pin<Box<dyn futures::Stream<Item = Result<T, Status>> + Send>>;
 
 pub const IMAGE: &str = "sha-test";
 
+pub enum Fault {
+    /// Run the action, then break its stream and forget the operation, the
+    /// way Tuist loses an operation when a scheduler restarts.
+    Lose,
+    /// Run the action, then break its stream; `WaitExecution` for its
+    /// operation returns the finished result.
+    Break,
+    /// Drop every stored blob, then report the action's inputs missing, the
+    /// way an evicted CAS answers.
+    Evict,
+    /// Report the action as stopped at its timeout, with its logs.
+    TimeOut,
+}
+
 #[derive(Default)]
 pub struct State {
     blobs: HashMap<String, Vec<u8>>,
     actions: HashMap<String, reapi::ActionResult>,
     /// Commands each execution ran, in order.
     pub executed: Vec<Vec<String>>,
-    /// Run the next action, then break its stream and forget the operation,
-    /// the way Tuist loses an operation when a scheduler restarts.
-    pub lose_next: bool,
+    /// Faults the next answered submissions hit, one each, in order.
+    pub faults: std::collections::VecDeque<Fault>,
+    /// `Execute` calls refused as a full queue before any is accepted.
+    pub refuse_queue: usize,
     pub platforms: Vec<Vec<(String, String)>>,
+    /// Hashes of every uploaded blob, in order, including repeats.
+    pub uploads: Vec<String>,
+    /// Actions submitted and not yet answered, and the most seen at once.
+    in_flight: usize,
+    pub max_in_flight: usize,
+    /// Submissions refused because the client exceeded `max_concurrency`.
+    pub over_limit: usize,
+    operations: HashMap<String, reapi::ExecuteResponse>,
 }
 
 #[derive(Clone)]
@@ -56,6 +79,9 @@ pub struct Service {
     /// Image of a `linux/amd64` container that runs each action the way a
     /// Tuist worker does; actions run on this machine when absent.
     worker: Option<String>,
+    /// Advertised account concurrency. More actions in flight than this are
+    /// refused, stricter than Tuist's queue so a client that ignores it fails.
+    max_concurrency: usize,
 }
 
 pub struct Server {
@@ -68,16 +94,17 @@ pub struct Server {
 const WORKER_ROOT: &str = "/workspace/action";
 
 pub async fn start() -> Server {
-    start_with(None).await
+    start_with(None, 4).await
 }
 
-pub async fn start_with(worker: Option<String>) -> Server {
+pub async fn start_with(worker: Option<String>, max_concurrency: usize) -> Server {
     let root = tempfile::tempdir().unwrap();
     let service = Service {
         state: Arc::default(),
         root: root.path().join("action"),
         serial: Arc::default(),
         worker,
+        max_concurrency,
     };
     let execution_root = if service.worker.is_some() {
         PathBuf::from(WORKER_ROOT)
@@ -107,7 +134,7 @@ pub async fn start_with(worker: Option<String>) -> Server {
         "image": IMAGE,
         "endpoint": grpc,
         "cas_endpoint": grpc,
-        "max_concurrency": 4,
+        "max_concurrency": max_concurrency,
         "leases": false,
         "execution_root": execution_root,
     })
@@ -237,9 +264,13 @@ impl Service {
         digest(&bytes)
     }
 
-    fn spawn(&self, command: &reapi::Command, working: &Path) -> std::process::Output {
-        match &self.worker {
-            None => std::process::Command::new(&command.arguments[0])
+    fn spawn(
+        &self,
+        command: &reapi::Command,
+        working: &Path,
+    ) -> Result<std::process::Output, Status> {
+        Ok(match &self.worker {
+            None => std::process::Command::new(worker_program(command, working)?)
                 .args(&command.arguments[1..])
                 .current_dir(working)
                 .env_clear()
@@ -276,7 +307,7 @@ impl Service {
                 docker.arg(image).args(&command.arguments);
                 docker.output().unwrap()
             }
-        }
+        })
     }
 
     async fn run(&self, action_digest: &reapi::Digest) -> Result<reapi::ExecuteResponse, Status> {
@@ -315,7 +346,7 @@ impl Service {
         for output in &command.output_paths {
             std::fs::create_dir_all(working.join(output).parent().unwrap()).unwrap();
         }
-        let output = self.spawn(&command, &working);
+        let output = self.spawn(&command, &working)?;
         self.state
             .lock()
             .await
@@ -379,17 +410,119 @@ impl Execution for Service {
         let request = request.into_inner();
         assert_eq!(request.instance_name, "app");
         let digest = request.action_digest.unwrap();
-        let _serial = self.serial.lock().await;
-        let response = self.run(&digest).await;
-        let lose = std::mem::take(&mut self.state.lock().await.lose_next);
-        let updates: Vec<Result<Operation, Status>> = match response {
-            _ if lose => vec![
+        {
+            let mut state = self.state.lock().await;
+            if state.refuse_queue > 0 {
+                state.refuse_queue -= 1;
+                return Err(Status::resource_exhausted("execution queue is full"));
+            }
+            if state.in_flight >= self.max_concurrency {
+                state.over_limit += 1;
+                return Err(Status::resource_exhausted("execution queue is full"));
+            }
+            state.in_flight += 1;
+            state.max_in_flight = state.max_in_flight.max(state.in_flight);
+        }
+        let response = {
+            let _serial = self.serial.lock().await;
+            self.answer(&digest).await
+        };
+        self.state.lock().await.in_flight -= 1;
+        Ok(Response::new(futures::stream::iter(response).boxed()))
+    }
+
+    async fn wait_execution(
+        &self,
+        request: Request<reapi::WaitExecutionRequest>,
+    ) -> Rpc<Self::WaitExecutionStream> {
+        let name = request.into_inner().name;
+        let response = self
+            .state
+            .lock()
+            .await
+            .operations
+            .remove(&name)
+            .ok_or_else(|| Status::not_found("operation not found"))?;
+        Ok(Response::new(
+            futures::stream::iter([Ok(done(&response))]).boxed(),
+        ))
+    }
+}
+
+/// `PreconditionFailure { violations: [{ type: "MISSING" }] }`, encoded.
+const MISSING_PRECONDITION: &[u8] = b"\x0a\x09\x0a\x07MISSING";
+
+/// Resolve the program the way the worker does: a bare name only through the
+/// action's own `PATH`.
+fn worker_program(command: &reapi::Command, working: &Path) -> Result<PathBuf, Status> {
+    let program = &command.arguments[0];
+    if program.contains('/') {
+        return Ok(working.join(program));
+    }
+    let path = command
+        .environment_variables
+        .iter()
+        .find(|variable| variable.name == "PATH")
+        .map_or("", |variable| variable.value.as_str());
+    std::env::split_paths(path)
+        .map(|directory| directory.join(program))
+        .find(|candidate| candidate.is_file())
+        .ok_or_else(|| Status::invalid_argument("executable is absent from action PATH"))
+}
+
+impl Service {
+    async fn answer(&self, digest: &reapi::Digest) -> Vec<Result<Operation, Status>> {
+        let fault = {
+            let mut state = self.state.lock().await;
+            let fault = state.faults.pop_front();
+            if matches!(fault, Some(Fault::Evict)) {
+                state.blobs.clear();
+            }
+            fault
+        };
+        if matches!(fault, Some(Fault::Evict)) {
+            return vec![Ok(done(&reapi::ExecuteResponse {
+                status: Some(RpcStatus {
+                    code: tonic::Code::FailedPrecondition as i32,
+                    details: vec![Any {
+                        type_url: "type.googleapis.com/google.rpc.PreconditionFailure".into(),
+                        value: MISSING_PRECONDITION.to_vec(),
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }))];
+        }
+        let response = self.run(digest).await;
+        match response {
+            _ if matches!(fault, Some(Fault::Lose)) => vec![
                 Ok(Operation {
                     name: "operations/lost".into(),
                     ..Default::default()
                 }),
                 Err(Status::unavailable("scheduler restarted")),
             ],
+            Ok(response) if matches!(fault, Some(Fault::Break)) => {
+                self.state
+                    .lock()
+                    .await
+                    .operations
+                    .insert("operations/broken".into(), response);
+                vec![
+                    Ok(Operation {
+                        name: "operations/broken".into(),
+                        ..Default::default()
+                    }),
+                    Err(Status::unavailable("stream reset")),
+                ]
+            }
+            Ok(mut response) if matches!(fault, Some(Fault::TimeOut)) => {
+                response.status = Some(RpcStatus {
+                    code: tonic::Code::DeadlineExceeded as i32,
+                    ..Default::default()
+                });
+                vec![Ok(done(&response))]
+            }
             Ok(response) => vec![Ok(done(&response))],
             Err(status) => vec![Ok(done(&reapi::ExecuteResponse {
                 status: Some(RpcStatus {
@@ -398,15 +531,7 @@ impl Execution for Service {
                 }),
                 ..Default::default()
             }))],
-        };
-        Ok(Response::new(futures::stream::iter(updates).boxed()))
-    }
-
-    async fn wait_execution(
-        &self,
-        _: Request<reapi::WaitExecutionRequest>,
-    ) -> Rpc<Self::WaitExecutionStream> {
-        Err(Status::not_found("operation not found"))
+        }
     }
 }
 
@@ -437,6 +562,7 @@ impl ContentAddressableStorage for Service {
         let mut responses = Vec::new();
         for item in request.into_inner().requests {
             let digest = self.put(item.data).await;
+            self.state.lock().await.uploads.push(digest.hash.clone());
             assert_eq!(
                 Some(&digest),
                 item.digest.as_ref(),
@@ -600,6 +726,7 @@ impl ByteStream for Service {
             data.extend(chunk.data);
         }
         let committed = i64::try_from(data.len()).unwrap();
+        self.state.lock().await.uploads.push(hash.clone());
         assert_eq!(
             self.put(data).await.hash,
             hash,

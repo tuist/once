@@ -11,9 +11,10 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use futures::{StreamExt as _, TryStreamExt as _};
+use futures::{FutureExt as _, StreamExt as _, TryStreamExt as _};
 use once_cas::{
     reapi, reapi_protobuf, ActionResult, CacheProvider, ReapiMessage as _, TuistExecution,
+    DEFAULT_EXECUTION_TIMEOUT,
 };
 
 use super::output_install::OutputStaging;
@@ -32,6 +33,9 @@ const PARALLEL_TRANSFERS: usize = 8;
 const MAX_TIMEOUT: Duration = Duration::from_mins(10);
 /// Largest output tree a Tuist worker returns.
 const MAX_OUTPUT_TREE_BYTES: u64 = 4 * 1024 * 1024;
+/// Search path for commands whose environment declares none. Workers resolve
+/// a bare program name only through the action's own `PATH`.
+const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 pub(super) async fn execute_command(
     remote: &RemoteExecution,
@@ -49,15 +53,33 @@ pub(super) async fn execute_command(
     let cwd = command.cwd.map_or("", WorkspacePath::as_str);
     let (action_digest, input_tree, timeout) =
         prepare(&execution, remote, &command, setup, workspace, limits).await?;
-    upload_missing(&execution, input_tree, workspace, command.lease.as_ref()).await?;
+    let lease = command.lease.as_ref();
+    let capture = lease.map(crate::ExecutionPermit::capture_budget);
+    if let Some(capture) = &capture {
+        capture.reserve_upfront().await?;
+    }
+    let _slot = execution.admit().await;
+    upload_missing(&execution, &input_tree, workspace, lease).await?;
     tracing::debug!(executor = PROVIDER, action_digest = %action_digest.hash, "executing remote action");
 
-    let result = execution.execute(&action_digest, timeout).await?;
+    let executed = match execution.execute(&action_digest, timeout).await {
+        Err(error) if error.is_not_found() => {
+            tracing::debug!(
+                executor = PROVIDER,
+                "inputs left the execution CAS before the action ran; uploading them again"
+            );
+            upload_missing(&execution, &input_tree, workspace, lease).await?;
+            execution.execute(&action_digest, timeout).await?
+        }
+        executed => executed?,
+    };
+    let result = executed.result;
     let stdout = mirror_log(
         &execution,
         cache,
         result.stdout_digest.as_ref(),
         &result.stdout_raw,
+        limits,
     )
     .await?;
     let stderr = mirror_log(
@@ -65,14 +87,18 @@ pub(super) async fn execute_command(
         cache,
         result.stderr_digest.as_ref(),
         &result.stderr_raw,
+        limits,
     )
     .await?;
-    if parent {
+    if parent || executed.timed_out {
         for (digest, stream) in [(&stdout, Stream::Stdout), (&stderr, Stream::Stderr)] {
             if let Some(digest) = digest {
-                forward(cache, workspace, digest, stream, limits).await?;
+                forward(cache, workspace, digest, stream).await?;
             }
         }
+    }
+    if executed.timed_out {
+        return Err(Error::Timeout(timeout.unwrap_or(DEFAULT_EXECUTION_TIMEOUT)));
     }
     if command.accepts_exit_code(result.exit_code) && !command.outputs.is_empty() {
         install_outputs(&execution, cache, workspace, &command, cwd, &result, limits).await?;
@@ -149,9 +175,13 @@ async fn prepare(
     if arguments.is_empty() {
         return Err(Error::EmptyArgv);
     }
+    let mut environment = resolve_execution_env(command.env, root);
+    environment
+        .entry("PATH".into())
+        .or_insert_with(|| DEFAULT_PATH.into());
     let remote_command = reapi::Command {
         arguments,
-        environment_variables: resolve_execution_env(command.env, root)
+        environment_variables: environment
             .into_iter()
             .map(|(name, value)| reapi::command::EnvironmentVariable { name, value })
             .collect(),
@@ -246,7 +276,7 @@ fn relative_to(cwd: &str, output: &str) -> Result<String> {
 
 async fn upload_missing(
     execution: &TuistExecution,
-    tree: tree::InputTree,
+    tree: &tree::InputTree,
     workspace: &Path,
     lease: Option<&crate::ExecutionPermit>,
 ) -> Result<()> {
@@ -256,10 +286,11 @@ async fn upload_missing(
         .map(|(digest, _)| digest.clone())
         .collect();
     let missing = execution.find_missing(digests).await?;
-    let mut blobs = tree.blobs;
     let pending = missing
         .iter()
-        .filter_map(|digest| blobs.remove(&tree::key(digest)))
+        .filter_map(|digest| tree.blobs.get(&tree::key(digest)))
+        // Directory and command blobs are small; files are only paths.
+        .map(|(digest, blob)| (digest.clone(), blob.clone()))
         .collect::<Vec<_>>();
     tracing::debug!(
         executor = PROVIDER,
@@ -267,16 +298,19 @@ async fn upload_missing(
         "uploading missing remote inputs"
     );
     futures::stream::iter(pending)
-        .map(|(digest, blob)| async move {
-            match blob {
-                tree::Blob::File(relative) => {
-                    let size = u64::try_from(digest.size_bytes).unwrap_or(u64::MAX);
-                    let _phase = super::phase_permit(lease, size).await?;
-                    let copy = verified_copy(workspace, relative, &digest).await?;
-                    Ok(execution.upload_file(&digest, copy.path()).await?)
+        .map(|(digest, blob)| {
+            async move {
+                match blob {
+                    tree::Blob::File(relative) => {
+                        let size = u64::try_from(digest.size_bytes).unwrap_or(u64::MAX);
+                        let _phase = super::phase_permit(lease, size).await?;
+                        let copy = verified_copy(workspace, relative, &digest).await?;
+                        Ok(execution.upload_file(&digest, copy.path()).await?)
+                    }
+                    tree::Blob::Bytes(bytes) => Ok(execution.upload_blob(&digest, &bytes).await?),
                 }
-                tree::Blob::Bytes(bytes) => Ok(execution.upload_blob(&digest, &bytes).await?),
             }
+            .boxed()
         })
         .buffer_unordered(PARALLEL_TRANSFERS)
         .try_collect::<()>()
@@ -332,7 +366,18 @@ async fn mirror_log(
     cache: &CacheProvider,
     digest: Option<&reapi::Digest>,
     raw: &[u8],
+    limits: RemoteIoLimits,
 ) -> Result<Option<once_cas::Digest>> {
+    let size = digest.map_or(raw.len() as u64, |digest| {
+        u64::try_from(digest.size_bytes).unwrap_or(u64::MAX)
+    });
+    if size > limits.max_capture_bytes {
+        return Err(Error::ExecutorResourceLimit {
+            executor: PROVIDER.into(),
+            resource: "captured output",
+            limit: limits.max_capture_bytes,
+        });
+    }
     if let Some(digest) = digest {
         return Ok(Some(execution.mirror_blob(digest).await?));
     }
@@ -353,15 +398,7 @@ async fn forward(
     workspace: &Path,
     digest: &once_cas::Digest,
     stream: Stream,
-    limits: RemoteIoLimits,
 ) -> Result<()> {
-    if cache.blob_size(digest).await? > limits.max_capture_bytes {
-        return Err(Error::ExecutorResourceLimit {
-            executor: PROVIDER.into(),
-            resource: "captured output",
-            limit: limits.max_capture_bytes,
-        });
-    }
     let scratch = workspace.join(".once/tmp");
     tokio::fs::create_dir_all(&scratch)
         .await
@@ -388,15 +425,16 @@ enum Entry {
     Link(PathBuf, String),
 }
 
-async fn install_outputs(
+/// Every entry the result's outputs contain, refusing undeclared paths and
+/// reporting a declared output the worker did not produce.
+async fn output_entries(
     execution: &TuistExecution,
     cache: &CacheProvider,
-    workspace: &Path,
     command: &PreparedCommand<'_>,
     cwd: &str,
     result: &reapi::ActionResult,
     limits: RemoteIoLimits,
-) -> Result<()> {
+) -> Result<Vec<Entry>> {
     let at = |path: &str| -> Result<PathBuf> {
         let joined = if cwd.is_empty() {
             path.to_string()
@@ -416,6 +454,28 @@ async fn install_outputs(
         }
         Ok(PathBuf::from(joined.as_str()))
     };
+    let produced = result
+        .output_files
+        .iter()
+        .map(|file| &file.path)
+        .chain(
+            result
+                .output_directories
+                .iter()
+                .map(|directory| &directory.path),
+        )
+        .chain(result.output_symlinks.iter().map(|link| &link.path))
+        .map(|path| at(path))
+        .collect::<Result<std::collections::BTreeSet<_>>>()?;
+    if let Some(missing) = command
+        .outputs
+        .iter()
+        .find(|output| !produced.contains(Path::new(output.as_str())))
+    {
+        return Err(Error::MissingOutput {
+            path: missing.as_str().to_string(),
+        });
+    }
     let mut entries = Vec::new();
     for file in &result.output_files {
         let digest = file
@@ -443,19 +503,59 @@ async fn install_outputs(
             .map_err(|_| tree::api_error("malformed output tree".into()))?;
         tree_entries(&output_tree, at(&directory.path)?, &mut entries, limits)?;
     }
+    Ok(entries)
+}
 
-    let phase = super::phase_permit(
-        command.lease.as_ref(),
-        limits.max_archive_bytes.saturating_mul(2),
-    )
-    .await?;
+async fn install_outputs(
+    execution: &TuistExecution,
+    cache: &CacheProvider,
+    workspace: &Path,
+    command: &PreparedCommand<'_>,
+    cwd: &str,
+    result: &reapi::ActionResult,
+    limits: RemoteIoLimits,
+) -> Result<()> {
+    let entries = output_entries(execution, cache, command, cwd, result, limits).await?;
+    // Download every file into the local store before reserving staging, so
+    // the reservation covers what this result needs and is not held across
+    // the network.
+    let entries = futures::stream::iter(entries)
+        .map(|entry| {
+            async move {
+                let local = match &entry {
+                    Entry::File(_, digest, _) => Some(execution.mirror_blob(digest).await?),
+                    Entry::Directory(_) | Entry::Link(..) => None,
+                };
+                Ok::<_, Error>((entry, local))
+            }
+            .boxed()
+        })
+        .buffer_unordered(PARALLEL_TRANSFERS)
+        .try_collect::<Vec<_>>()
+        .await?;
+    let bytes = entries
+        .iter()
+        .map(|(entry, _)| match entry {
+            Entry::File(_, digest, _) => u64::try_from(digest.size_bytes).unwrap_or(u64::MAX),
+            Entry::Directory(_) | Entry::Link(..) => 0,
+        })
+        .fold(0_u64, u64::saturating_add);
+    if bytes > limits.max_archive_bytes {
+        return Err(Error::ExecutorResourceLimit {
+            executor: PROVIDER.into(),
+            resource: "output bytes",
+            limit: limits.max_archive_bytes,
+        });
+    }
+    // The staged copy and the backup of any outputs it replaces.
+    let phase = super::phase_permit(command.lease.as_ref(), bytes.saturating_mul(2)).await?;
     let staging = OutputStaging::create_limited(workspace, limits)?;
     let files = staging.files_directory().clone();
     let scratch = workspace.join(".once/tmp");
     futures::stream::iter(entries)
-        .map(|entry| {
+        .map(|(entry, local)| {
             let (files, scratch) = (files.clone(), scratch.clone());
-            async move { write_entry(execution, cache, files, &scratch, entry).await }
+            async move { write_entry(cache, files, &scratch, entry, local).await }.boxed()
         })
         .buffer_unordered(PARALLEL_TRANSFERS)
         .try_collect::<()>()
@@ -536,18 +636,15 @@ fn name(value: &str) -> Result<&str> {
 }
 
 async fn write_entry(
-    execution: &TuistExecution,
     cache: &CacheProvider,
     files: Directory,
     scratch: &Path,
     entry: Entry,
+    local: Option<once_cas::Digest>,
 ) -> Result<()> {
-    let reader = match &entry {
-        Entry::File(_, digest, _) => {
-            let local = execution.mirror_blob(digest).await?;
-            Some(cache.stage_blob(&local, scratch).await?.into_reader()?)
-        }
-        Entry::Directory(_) | Entry::Link(..) => None,
+    let reader = match &local {
+        Some(local) => Some(cache.stage_blob(local, scratch).await?.into_reader()?),
+        None => None,
     };
     tokio::task::spawn_blocking(move || {
         let (path, written) = match entry {

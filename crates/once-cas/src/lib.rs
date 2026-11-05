@@ -38,7 +38,7 @@ pub use model::{ActionResult, Stats};
 pub use provider::{ActionCacheHit, CacheProvider};
 pub use store::{Cas, StagedBlob, StagedBlobReader};
 pub use tuist::{
-    ProjectCreateError, RemoteProject, TuistAuth, TuistAuthPrompt, TuistCacheConfig,
+    Executed, ProjectCreateError, RemoteProject, TuistAuth, TuistAuthPrompt, TuistCacheConfig,
     TuistExecution, TuistProjects, DEFAULT_EXECUTION_TIMEOUT, TUIST_APP_OAUTH_CLIENT_ID,
     TUIST_OAUTH_CLIENT_ID_ENV,
 };

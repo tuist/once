@@ -127,7 +127,7 @@ pub(crate) async fn execute_command(
         }
         #[cfg(any(target_os = "linux", target_vendor = "apple"))]
         Executor::Tuist => {
-            Box::pin(tuist::execute_command(
+            futures::FutureExt::boxed(tuist::execute_command(
                 remote,
                 command,
                 workspace_root,

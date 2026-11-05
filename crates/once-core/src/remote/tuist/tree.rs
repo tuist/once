@@ -14,6 +14,7 @@ use crate::{Error, RemoteIoLimits, Result, WorkspacePath};
 use super::PROVIDER;
 
 /// A blob the input root references and where its bytes come from.
+#[derive(Clone)]
 pub(super) enum Blob {
     /// A workspace-relative file, reopened without following links to upload.
     File(PathBuf),

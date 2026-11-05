@@ -13,6 +13,7 @@ use bazel_remote_apis::build::bazel::remote::execution::v2::execution_client::Ex
 use bazel_remote_apis::google::longrunning::{operation, Operation};
 use futures::StreamExt;
 use prost::Message as _;
+use tokio::sync::OwnedSemaphorePermit;
 use tonic::Status;
 
 use super::*;
@@ -26,6 +27,9 @@ const EXECUTE_REATTACHMENTS: u32 = 5;
 const EXECUTE_SLACK: Duration = Duration::from_mins(5);
 /// Workers apply this timeout when an action declares none.
 pub const DEFAULT_EXECUTION_TIMEOUT: Duration = Duration::from_mins(10);
+/// Wait before resubmitting to a full queue, doubling up to the maximum.
+const QUEUE_BACKOFF: Duration = Duration::from_millis(500);
+const MAX_QUEUE_BACKOFF: Duration = Duration::from_secs(10);
 const PRECONDITION_FAILURE_TYPE: &str = "type.googleapis.com/google.rpc.PreconditionFailure";
 
 /// A connection to the project's remote execution service and the CAS its
@@ -36,6 +40,19 @@ pub struct TuistExecution {
     executor: Channel,
     image: String,
     root: String,
+    /// Actions in flight, bounded by the account's advertised concurrency so
+    /// a wide build waits here instead of overflowing the service's queue.
+    slots: Arc<Semaphore>,
+}
+
+/// The result of an action the service ran to completion or to its timeout.
+#[derive(Debug)]
+pub struct Executed {
+    /// What the worker reported for the command.
+    pub result: reapi::ActionResult,
+    /// The worker stopped the command at its timeout; `result` holds what it
+    /// captured until then.
+    pub timed_out: bool,
 }
 
 #[derive(serde::Deserialize)]
@@ -43,6 +60,8 @@ struct Capabilities {
     image: String,
     endpoint: String,
     cas_endpoint: String,
+    #[serde(default)]
+    max_concurrency: usize,
     #[serde(default)]
     execution_root: Option<String>,
 }
@@ -152,6 +171,11 @@ impl TuistCache {
             executor,
             image: capabilities.image,
             root,
+            slots: Arc::new(Semaphore::new(
+                capabilities
+                    .max_concurrency
+                    .clamp(1, Semaphore::MAX_PERMITS),
+            )),
         })
     }
 
@@ -191,8 +215,28 @@ impl TuistExecution {
         &self.root
     }
 
-    /// The subset of `digests` the execution CAS does not hold.
+    /// Wait for one of the account's execution slots. Hold it from upload
+    /// through execution.
+    pub async fn admit(&self) -> OwnedSemaphorePermit {
+        Arc::clone(&self.slots)
+            .acquire_owned()
+            .await
+            .expect("execution slots are never closed")
+    }
+
+    /// The subset of `digests` the execution CAS does not hold. A rejected
+    /// credential is resolved again once.
     pub async fn find_missing(&self, digests: Vec<reapi::Digest>) -> Result<Vec<reapi::Digest>> {
+        match self.find_missing_once(&digests).await {
+            Err(error) if error.kind() == ErrorKind::Refused => {
+                self.cas.refresh_auth_token().await?;
+                self.find_missing_once(&digests).await
+            }
+            outcome => outcome,
+        }
+    }
+
+    async fn find_missing_once(&self, digests: &[reapi::Digest]) -> Result<Vec<reapi::Digest>> {
         let operation = "find missing execution inputs";
         let channel = self.cas.grpc_channel().await?;
         let client = ContentAddressableStorageClient::new(channel)
@@ -260,58 +304,33 @@ impl TuistExecution {
     /// Run `action`, which must already be in the execution CAS with every
     /// blob it references, and return its result.
     ///
-    /// A broken stream reattaches to the operation; a lost operation is
-    /// submitted again. A failure the service reports for the action itself is
-    /// classified: missing inputs are [`ErrorKind::NotFound`], a rejected
-    /// platform or request is [`ErrorKind::Misconfigured`], and an exhausted
-    /// queue or worker outage is [`ErrorKind::Unavailable`].
+    /// A full queue is waited out with backoff, a broken stream reattaches to
+    /// the operation, and a lost operation or failed worker is submitted
+    /// again. A rejected credential is resolved again once. A failure the
+    /// service reports for the action itself is classified: missing inputs
+    /// are [`ErrorKind::NotFound`], a rejected platform or request is
+    /// [`ErrorKind::Misconfigured`], and a worker limit the action exceeded is
+    /// [`ErrorKind::Exhausted`].
     pub async fn execute(
         &self,
         action: &reapi::Digest,
         timeout: Option<Duration>,
-    ) -> Result<reapi::ActionResult> {
+    ) -> Result<Executed> {
         let deadline =
             Instant::now() + timeout.unwrap_or(DEFAULT_EXECUTION_TIMEOUT) + EXECUTE_SLACK;
         let client = ExecutionClient::new(self.executor.clone())
             .max_decoding_message_size(METADATA_RESPONSE_LIMIT);
         let mut operation_name = None::<String>;
         let (mut submissions, mut reattachments) = (0, 0);
+        let mut refreshed = false;
+        let mut backoff = QUEUE_BACKOFF;
         loop {
             if operation_name.is_none() {
                 submissions += 1;
             } else {
                 reattachments += 1;
             }
-            let attempt = async {
-                let mut client = client.clone();
-                let stream = match &operation_name {
-                    None => {
-                        let request = reapi::ExecuteRequest {
-                            instance_name: self.cas.instance_name(),
-                            skip_cache_lookup: false,
-                            action_digest: Some(action.clone()),
-                            execution_policy: None,
-                            results_cache_policy: None,
-                            digest_function: SHA256_DIGEST_FUNCTION,
-                            inline_stdout: false,
-                            inline_stderr: false,
-                            inline_output_files: Vec::new(),
-                        };
-                        client
-                            .execute(self.cas.authorized_grpc_request(request, "execute").await?)
-                            .await
-                    }
-                    Some(name) => {
-                        let request = reapi::WaitExecutionRequest { name: name.clone() };
-                        client
-                            .wait_execution(
-                                self.cas.authorized_grpc_request(request, "execute").await?,
-                            )
-                            .await
-                    }
-                };
-                follow(stream, &mut operation_name).await
-            };
+            let attempt = self.attempt(&client, action, &mut operation_name);
             let outcome = tokio::time::timeout_at(deadline, attempt)
                 .await
                 .map_err(|_| {
@@ -322,9 +341,51 @@ impl TuistExecution {
                     )
                 })??;
             let status = match outcome {
-                Ok(response) => return response_result(response),
+                Ok(response) => {
+                    let worker_failed = response
+                        .status
+                        .as_ref()
+                        .is_some_and(|status| Code::from_i32(status.code) == Code::Unavailable);
+                    if worker_failed && submissions < EXECUTE_SUBMISSIONS {
+                        tracing::debug!(
+                            "submitting the remote action again after a worker failure"
+                        );
+                        operation_name = None;
+                        continue;
+                    }
+                    return response_result(response);
+                }
                 Err(status) => status,
             };
+            if status.code() == Code::ResourceExhausted && operation_name.is_none() {
+                // The service refused to queue the action; nothing ran yet.
+                submissions -= 1;
+                if Instant::now() + backoff >= deadline {
+                    return Err(status::remote(
+                        "execute",
+                        ErrorKind::Unavailable,
+                        "the project's execution queue stayed full until the action's deadline",
+                    ));
+                }
+                tracing::debug!(?backoff, "execution queue is full; waiting");
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(MAX_QUEUE_BACKOFF);
+                continue;
+            }
+            if matches!(
+                status.code(),
+                Code::Unauthenticated | Code::PermissionDenied
+            ) && !refreshed
+            {
+                refreshed = true;
+                if operation_name.is_none() {
+                    submissions -= 1;
+                } else {
+                    reattachments -= 1;
+                }
+                self.cas.refresh_auth_token().await?;
+                continue;
+            }
             let lost = status.code() == Code::NotFound && operation_name.is_some();
             let broken = matches!(
                 status.code(),
@@ -346,6 +407,40 @@ impl TuistExecution {
             }
             return Err(status::grpc_error("execute", &status));
         }
+    }
+    /// Submit the action, or reattach to its operation once it has a name.
+    async fn attempt(
+        &self,
+        client: &ExecutionClient<Channel>,
+        action: &reapi::Digest,
+        operation_name: &mut Option<String>,
+    ) -> Result<std::result::Result<reapi::ExecuteResponse, Status>> {
+        let mut client = client.clone();
+        let stream = match &*operation_name {
+            None => {
+                let request = reapi::ExecuteRequest {
+                    instance_name: self.cas.instance_name(),
+                    skip_cache_lookup: false,
+                    action_digest: Some(action.clone()),
+                    execution_policy: None,
+                    results_cache_policy: None,
+                    digest_function: SHA256_DIGEST_FUNCTION,
+                    inline_stdout: false,
+                    inline_stderr: false,
+                    inline_output_files: Vec::new(),
+                };
+                client
+                    .execute(self.cas.authorized_grpc_request(request, "execute").await?)
+                    .await
+            }
+            Some(name) => {
+                let request = reapi::WaitExecutionRequest { name: name.clone() };
+                client
+                    .wait_execution(self.cas.authorized_grpc_request(request, "execute").await?)
+                    .await
+            }
+        };
+        follow(stream, operation_name).await
     }
 }
 
@@ -391,21 +486,28 @@ async fn follow(
     )))
 }
 
-fn response_result(response: reapi::ExecuteResponse) -> Result<reapi::ActionResult> {
-    if let Some(error) = response
+fn response_result(response: reapi::ExecuteResponse) -> Result<Executed> {
+    let code = response
         .status
         .as_ref()
-        .filter(|status| status.code != REAPI_STATUS_OK)
-    {
-        return Err(action_failure(error));
+        .map_or(REAPI_STATUS_OK, |status| status.code);
+    let timed_out = Code::from_i32(code) == Code::DeadlineExceeded;
+    if code != REAPI_STATUS_OK && !(timed_out && response.result.is_some()) {
+        return Err(action_failure(
+            response
+                .status
+                .as_ref()
+                .expect("a failing status is present"),
+        ));
     }
-    response.result.ok_or_else(|| {
+    let result = response.result.ok_or_else(|| {
         status::remote(
             "execute",
             ErrorKind::Protocol,
             "the execute response carried no action result",
         )
-    })
+    })?;
+    Ok(Executed { result, timed_out })
 }
 
 /// Describe a failure the service reports for the action. The server's text
@@ -436,8 +538,8 @@ fn action_failure(error: &bazel_remote_apis::google::rpc::Status) -> Error {
         ),
         Code::DeadlineExceeded => (ErrorKind::Other, "the action exceeded its timeout"),
         Code::ResourceExhausted => (
-            ErrorKind::Unavailable,
-            "the project's execution queue or worker resources are exhausted",
+            ErrorKind::Exhausted,
+            "the action exceeded a worker limit, such as 64 MiB of logs or the size of its outputs",
         ),
         _ => (status::grpc_kind(code), "the remote action failed"),
     };
@@ -480,7 +582,7 @@ mod tests {
         );
         assert_eq!(
             failure(Code::ResourceExhausted, false).kind(),
-            ErrorKind::Unavailable
+            ErrorKind::Exhausted
         );
         assert!(!failure(Code::InvalidArgument, false)
             .to_string()

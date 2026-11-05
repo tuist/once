@@ -14,7 +14,9 @@ Set `execution_image` on the Tuist infrastructure to the worker image the
 project's execution service runs. Mismatched images, missing capacity, and
 mismatched projects fail before any upload. A lost operation is submitted
 again, and a broken stream reattaches to its operation, because the service may
-run an action more than once.
+run an action more than once. Once keeps no more actions in flight than the
+account's execution concurrency and waits when the service's queue is full.
+This needs a Tuist server that advertises where its workers run actions.
 
 Workers run `linux/amd64`, so commands must find their tools inside the worker
 image. See [Tuist](/docs/guide/infrastructure/tuist#run-actions-on-tuist-workers).

@@ -32,6 +32,86 @@ distributed = target_kind(
 )
 "#;
 
+const PARALLEL: &str = r#"
+def _piece_impl(ctx):
+    stem = ctx["attr"]["stem"]
+    out = declare_output(stem + ".txt")
+    run_action(
+        argv = ["sh", "-c", "tr a-z A-Z < \"$1\" > \"$2\"", "sh", stem + ".in", out],
+        inputs = [stem + ".in"],
+        outputs = [out],
+        identifier = stem,
+    )
+    return {}
+
+piece = target_kind(
+    attrs = [attr("stem", "string", required = True)],
+    providers = ["piece"],
+    capabilities = [capability("build", ["default"])],
+    impl = _piece_impl,
+)
+
+distributed = target_kind(
+    deps = [dep("pieces", ["piece"])],
+    capabilities = [capability("build", ["default"])],
+    impl = lambda ctx: {},
+)
+"#;
+
+/// Independent targets, so their actions can run at the same time.
+const PIECES: &str = r#"
+[target.dependencies]
+pieces = ["./a", "./b", "./c"]
+[[target]]
+name = "a"
+kind = "piece"
+[target.attrs]
+stem = "a"
+[[target]]
+name = "b"
+kind = "piece"
+[target.attrs]
+stem = "b"
+[[target]]
+name = "c"
+kind = "piece"
+[target.attrs]
+stem = "c"
+"#;
+
+const ABSENT: &str = r#"
+def _impl(ctx):
+    out = declare_output("never.txt")
+    run_action(
+        argv = ["/bin/sh", "-c", "true", "sh", out],
+        outputs = [out],
+        identifier = "absent",
+    )
+    return {}
+
+distributed = target_kind(
+    capabilities = [capability("build", ["default"])],
+    impl = _impl,
+)
+"#;
+
+fn workspace(url: &str, module: &str, targets: &str) -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("modules")).unwrap();
+    std::fs::write(root.path().join("modules/distributed.star"), module).unwrap();
+    std::fs::write(
+        root.path().join("once.toml"),
+        manifest(url, tuist_execution::IMAGE) + targets,
+    )
+    .unwrap();
+    root
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    use sha2::Digest as _;
+    hex::encode(sha2::Sha256::digest(bytes))
+}
+
 fn manifest(url: &str, image: &str) -> String {
     format!(
         r#"
@@ -92,7 +172,13 @@ async fn graph_actions_run_on_the_tuist_execution_service_and_restore_from_its_c
     std::fs::write(root.path().join("prune/stale"), b"host copy").unwrap();
     // The first action runs, then its operation is lost: Once must submit it
     // again rather than fail or run it locally.
-    server.service.state.lock().await.lose_next = true;
+    server
+        .service
+        .state
+        .lock()
+        .await
+        .faults
+        .push_back(tuist_execution::Fault::Lose);
 
     let first = build(root.path(), home.path()).await;
     assert!(first.status.success(), "{}", stderr(&first));
@@ -176,6 +262,134 @@ async fn a_mismatched_worker_image_fails_before_anything_runs() {
     assert!(server.service.state.lock().await.executed.is_empty());
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn parallel_actions_respect_the_advertised_concurrency_and_upload_only_changed_inputs() {
+    let server = tuist_execution::start_with(None, 1).await;
+    let root = workspace(&server.url, PARALLEL, PIECES);
+    let home = tempfile::tempdir().unwrap();
+    for name in ["a", "b", "c"] {
+        std::fs::write(
+            root.path().join(format!("{name}.in")),
+            format!("input {name}"),
+        )
+        .unwrap();
+    }
+    // A full queue is backpressure: Once waits for room instead of failing.
+    server.service.state.lock().await.refuse_queue = 2;
+
+    let first = build(root.path(), home.path()).await;
+    assert!(first.status.success(), "{}", stderr(&first));
+    {
+        let state = server.service.state.lock().await;
+        assert_eq!(state.executed.len(), 3);
+        assert_eq!(state.over_limit, 0, "Once never exceeds max_concurrency");
+        assert_eq!(state.max_in_flight, 1);
+        assert_eq!(
+            state.executed[0][0], "sh",
+            "a bare program resolves on the worker PATH"
+        );
+    }
+
+    let uploaded = server.service.state.lock().await.uploads.len();
+    std::fs::write(root.path().join("b.in"), b"changed b").unwrap();
+    let second = build(root.path(), home.path()).await;
+    assert!(second.status.success(), "{}", stderr(&second));
+    let state = server.service.state.lock().await;
+    assert_eq!(
+        state.executed.len(),
+        4,
+        "only the changed action runs again: {:?}",
+        state.executed
+    );
+    let fresh = &state.uploads[uploaded..];
+    assert!(fresh.contains(&sha256(b"changed b")));
+    for unchanged in [b"input a".as_slice(), b"input c", b"input b"] {
+        assert!(
+            !fresh.contains(&sha256(unchanged)),
+            "{} is uploaded again",
+            String::from_utf8_lossy(unchanged)
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_broken_stream_reattaches_and_an_evicted_input_is_uploaded_again() {
+    let server = tuist_execution::start().await;
+    let root = workspace(&server.url, MODULE, "");
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("input.txt"), b"asymmetric Input").unwrap();
+    std::fs::create_dir(root.path().join("prune")).unwrap();
+    server
+        .service
+        .state
+        .lock()
+        .await
+        .faults
+        .extend([tuist_execution::Fault::Evict, tuist_execution::Fault::Break]);
+
+    let output = build(root.path(), home.path()).await;
+    assert!(output.status.success(), "{}", stderr(&output));
+    let state = server.service.state.lock().await;
+    assert_eq!(
+        state.executed.len(),
+        2,
+        "a reattached action is not submitted again"
+    );
+    assert_eq!(
+        state
+            .uploads
+            .iter()
+            .filter(|hash| **hash == sha256(b"asymmetric Input"))
+            .count(),
+        2,
+        "the evicted input is uploaded once more"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_timed_out_action_fails_as_a_timeout() {
+    let server = tuist_execution::start().await;
+    let root = workspace(&server.url, PARALLEL, PIECES);
+    let home = tempfile::tempdir().unwrap();
+    for name in ["a", "b", "c"] {
+        std::fs::write(
+            root.path().join(format!("{name}.in")),
+            format!("input {name}"),
+        )
+        .unwrap();
+    }
+    server
+        .service
+        .state
+        .lock()
+        .await
+        .faults
+        .push_back(tuist_execution::Fault::TimeOut);
+
+    let output = build(root.path(), home.path()).await;
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("exceeded its timeout"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_declared_output_the_worker_did_not_produce_fails_the_action() {
+    let server = tuist_execution::start().await;
+    let root = workspace(&server.url, ABSENT, "");
+    let home = tempfile::tempdir().unwrap();
+
+    let output = build(root.path(), home.path()).await;
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("was not produced"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 fn worker_image() -> String {
     std::env::var("ONCE_TUIST_WORKER_IMAGE").expect(
         "set ONCE_TUIST_WORKER_IMAGE to a linux/amd64 image with /bin/sh, cat, tr and mkdir",
@@ -185,7 +399,7 @@ fn worker_image() -> String {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires Docker and ONCE_TUIST_WORKER_IMAGE"]
 async fn graph_actions_run_in_a_simulated_linux_tuist_worker() {
-    let server = tuist_execution::start_with(Some(worker_image())).await;
+    let server = tuist_execution::start_with(Some(worker_image()), 4).await;
     let root = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("modules")).unwrap();

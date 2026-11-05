@@ -97,7 +97,7 @@ impl Executor {
         {
             return Err(Error::RemoteProviderConfig {
                 provider: binding.provider.clone(),
-                message: "Tuist remote execution requires an explicit worker image; set `execution_image` on the Tuist infrastructure to the image the project's execution service runs, such as sha-<commit>".into(),
+                message: "Tuist remote execution requires an explicit worker image; set `execution_image` on a `kind = \"tuist\"` infrastructure in the workspace once.toml to the image the project's execution service runs, such as sha-<commit>; Tuist providers from user configuration cannot carry an execution image".into(),
             });
         }
         Self::validate_default_environment(binding, executor, |name| {

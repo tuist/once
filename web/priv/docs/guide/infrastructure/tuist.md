@@ -256,9 +256,24 @@ and execution name different projects, or when `execution_image` differs from
 the image the service advertises. Changing the image partitions build
 configuration and cached results.
 
+The Tuist server must advertise the worker image, the cache endpoint, the
+account's execution concurrency, and the absolute directory where workers run
+actions. Once fails before uploading anything against a server that omits the
+execution directory, because it cannot place outputs and working directories
+safely without it.
+
+Once keeps at most as many actions in flight as the account's advertised
+concurrency. When the service answers that its queue is full, Once waits with
+backoff and submits again instead of failing. If the service rejects the
+credential during a long build, Once refreshes it once and retries.
+
 Workers run `linux/amd64`. Commands must resolve their tools inside the worker
 image, not on the computer that started the build, and declared outputs must
-sit beneath the command's working directory. The service may run an action
+sit beneath the command's working directory. Workers look up a bare program
+name such as `sh` only through the action's `PATH`. When an action declares no
+`PATH`, Once sends `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
+the default of most Linux images. An action that times out on a worker fails as
+a timeout and its logs are still shown. The service may run an action
 more than once, for example after it loses an operation during a restart, so
 place only actions that are safe to repeat on it. Unsupported requirements,
 such as network denial or a timeout longer than ten minutes, fail instead of
