@@ -34,6 +34,33 @@ pub struct ChangeSnapshot {
 /// fast path validates from what the receipt recorded instead.
 const TRACKER_ENV: &str = "ONCE_CHANGE_TRACKER";
 
+#[cfg(unix)]
+pub fn close_inherited_descriptors() -> std::io::Result<()> {
+    #[cfg(target_os = "linux")]
+    let directory = "/proc/self/fd";
+    #[cfg(not(target_os = "linux"))]
+    let directory = "/dev/fd";
+    let mut descriptors = Vec::new();
+    // Finish enumeration before closing its descriptor or opening runtime/log files.
+    for entry in std::fs::read_dir(directory)? {
+        if let Some(fd) = entry?
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<std::os::fd::RawFd>().ok())
+            .filter(|fd| *fd > 2)
+        {
+            descriptors.push(fd);
+        }
+    }
+    for fd in descriptors {
+        match nix::unistd::close(fd) {
+            Ok(()) | Err(nix::errno::Errno::EBADF) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
 #[must_use]
 pub fn tracker_enabled() -> bool {
     !matches!(

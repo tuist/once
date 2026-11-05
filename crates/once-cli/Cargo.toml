@@ -49,6 +49,7 @@ walkdir.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
+nix = "0.30"
 signal-hook = "0.3"
 
 [target.'cfg(windows)'.dependencies]

@@ -7,7 +7,7 @@ use usage::Error;
 use crate::cli::{self, Cli};
 use crate::{dispatch, errors, logging, sound};
 
-pub(crate) async fn run() -> ExitCode {
+pub(crate) fn run() -> ExitCode {
     let process_args = std::env::args_os().collect::<Vec<_>>();
     let argv = process_args
         .iter()
@@ -20,6 +20,21 @@ pub(crate) async fn run() -> ExitCode {
     if let Some(path) = cli.incomplete_command_help_path() {
         return handle_incomplete_command(path);
     }
+    #[cfg(unix)]
+    if matches!(cli.command, Some(cli::Cmd::ChangeTracker)) && !cli.list {
+        if let Err(error) = crate::commands::change_tracker::close_inherited_descriptors() {
+            errors::write_dispatch_error(cli.format, cli.verbose, &error.into());
+            return ExitCode::from(2);
+        }
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("creating CLI runtime")
+        .block_on(run_cli(cli))
+}
+
+async fn run_cli(cli: Cli) -> ExitCode {
     let command = cli.surface_path().join(" ");
     let format = cli.format;
     let verbose = cli.verbose;
