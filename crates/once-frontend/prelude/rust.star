@@ -1184,9 +1184,9 @@ def _rust_build_script_tool_identity(tool_paths):
 
 # The value of the last `-C <name>=<value>` codegen flag, or "" when none sets
 # it. rustc accepts `-C name=value`, `-Cname=value`, `--codegen name=value`
-# and `--codegen=name=value`, and a later flag overrides an earlier one.
+# and `--codegen=name=value`, underscore aliases, bare boolean options and
+# `-O` for `opt-level=3`. A later flag overrides an earlier one.
 def _rust_codegen_flag(flags, name):
-    prefix = name + "="
     value = ""
     index = 0
     for _ in range(len(flags) + 1):
@@ -1199,13 +1199,16 @@ def _rust_codegen_flag(flags, name):
                 option = flags[index + 1]
             index += 2
         else:
-            if flag.startswith("-C"):
+            if flag == "-O":
+                option = "opt-level=3"
+            elif flag.startswith("-C"):
                 option = flag[len("-C"):]
             elif flag.startswith("--codegen="):
                 option = flag[len("--codegen="):]
             index += 1
-        if option.startswith(prefix):
-            value = option[len(prefix):]
+        parts = option.split("=", 1)
+        if parts[0].replace("_", "-") == name:
+            value = parts[1] if len(parts) == 2 else "yes"
     return value
 
 # Cargo tells a build script how the package itself is compiled, and the `cc`
@@ -1332,11 +1335,16 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
     out_dir = declare_output(_rust_declared_output(ctx, "build"))
     stdout = declare_output(_rust_declared_output(ctx, "build-script.stdout"))
     linker_args, linker_identity = _rust_linker(ctx, "bin", "", host_triple)
+    flags = _rust_user_flags(ctx)
+    debug_assertions = _rust_codegen_flag(flags, "debug-assertions")
+    if not debug_assertions:
+        debug_assertions = "yes" if _rust_codegen_flag(flags, "opt-level") in ("", "0") else "no"
     compile_args = [
         "--crate-name", "build_script_build",
         "--crate-type", "bin",
         "--edition", edition,
         "-C", "metadata=" + _rust_metadata_suffix(ctx) + "_BUILD",
+        "-C", "debug-assertions=" + debug_assertions,
         "-o", runner,
     ]
     compile_args.extend(feature_flags)

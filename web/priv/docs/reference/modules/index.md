@@ -87,6 +87,16 @@ the expanded signing identity from imported targets. Once still seals bundles
 ad hoc for local integrity checks. This configuration disables capabilities
 that require authorized signing; it does not grant access to those capabilities.
 
+Rust build scripts compile for the execution host with the same effective
+`debug_assertions` setting as their consuming crate. An explicit
+`-C debug-assertions` setting takes precedence; otherwise assertions are enabled
+at optimization level `0` and disabled at other levels, including `-O`.
+Repeated settings use the last value, matching `rustc`. Only this derived setting
+is passed to the build-script compiler, not arbitrary target compiler flags;
+host target selection and the default unwind panic strategy are preserved.
+Build-script `OPT_LEVEL` and `DEBUG` environment variables describe the crate's
+optimization and debug information, not the build-script executable's profile.
+
 ## Loading Project Modules
 
 Project modules are listed from the root manifest:

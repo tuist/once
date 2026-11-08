@@ -35,6 +35,10 @@ mod elixir_test_results;
 #[path = "prelude/rust_test_results.rs"]
 mod rust_test_results;
 
+#[cfg(unix)]
+#[path = "prelude/rust_build_script.rs"]
+mod rust_build_script;
+
 #[path = "prelude/test_result_adapters.rs"]
 mod test_result_adapters;
 
