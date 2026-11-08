@@ -628,6 +628,19 @@ input, including non-Rust files embedded at compile time. `compile_data` adds
 compile-time files outside those source patterns. Source-file presentation
 remains limited to Rust sources.
 
+Cargo seeds expose `build_script_sources`, a map from an external consumer
+package selector to sibling destination paths and locked package source files.
+The built-in resolver emits `_cargo_build_script_sources` output-to-host-file
+mappings and an isolated materialized package root. Analysis snapshots each
+mapped file with `materialize_host_file` and includes it in the build-script
+action inputs. These are source dependencies, not compiled provider edges.
+Destination overlap and the reserved package root are checked case-insensitively.
+Consumer selectors must uniquely match Cargo.lock; mappings for consumers absent
+from both selected host and target metadata are inactive. The lock inventory is
+passed internally without changing metadata snapshot provenance requirements.
+See [sibling package sources](/guide/graph/rust/#build-scripts-that-read-sibling-packages)
+for the public manifest contract and path restrictions.
+
 A resolver or implementation reports an actionable failure by calling `fail` with the text
 `once.diagnostic.v1 ` followed by one JSON object holding `code`, `message`,
 and optionally `attribute` and `repairs`. The engine attaches the target and

@@ -1491,6 +1491,14 @@ async fn build_one(
             &changes,
             &available_inputs,
             &producers,
+            |observations| {
+                analyzer.observations_hold(
+                    &workspace,
+                    observations,
+                    CommandPolicy::Rerun,
+                    &unchanged,
+                )
+            },
         ) {
             Some(outcome) if intermediate_outputs_cached(&outcome, &workspace, &cache).await => {
                 Some(outcome)

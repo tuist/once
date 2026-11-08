@@ -83,10 +83,9 @@ impl AnalysisMemo {
                 actions: record.actions,
                 provider: record.provider,
                 declared_outputs: record.declared_outputs,
-                // A replayed analysis observed nothing: its answers were
-                // checked before it was handed back, and re-recording them
-                // would claim this run asked the questions.
-                observations: AnalysisObservations::default(),
+                // Target outcomes must retain the same validation obligations
+                // even when the analysis itself came from a memo.
+                observations: record.observations.clone(),
             },
             record.observations,
         ))

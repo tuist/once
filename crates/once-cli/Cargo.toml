@@ -15,6 +15,7 @@ once-cas.workspace = true
 once-core = { workspace = true, features = ["remote-microsandbox"] }
 once-events-client = { version = "0.0.0", path = "../once-events-client" }
 once-frontend.workspace = true
+once-host-tree.workspace = true
 
 anyhow.workspace = true
 base64.workspace = true

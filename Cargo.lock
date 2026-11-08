@@ -3747,6 +3747,7 @@ dependencies = [
  "once-core",
  "once-events-client",
  "once-frontend",
+ "once-host-tree",
  "reqwest 0.13.5",
  "rodio",
  "rustix 1.1.4",

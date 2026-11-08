@@ -43,6 +43,7 @@ dependencies outside that list remain ordinary dependency targets.
 | `metadata_file` | string | no |  | Optional checked Cargo metadata snapshot |
 | `host_metadata_file` | string | no |  | Optional host metadata snapshot for cross-compilation |
 | `vendor_dir` | string | no | Once-managed | Optional package-relative pre-vendored external sources |
+| `build_script_sources` | map&lt;string, map&lt;string, string&gt;&gt; | no | `{}` | External consumer selector to sibling destination to locked package source file; see [sibling sources](/guide/graph/rust/#build-scripts-that-read-sibling-packages) |
 | `features` | list&lt;string&gt; | no | `[]` | Selected Cargo features |
 | `all_features` | bool | no | `false` | Select every Cargo feature |
 | `no_default_features` | bool | no | `false` | Disable default Cargo features |

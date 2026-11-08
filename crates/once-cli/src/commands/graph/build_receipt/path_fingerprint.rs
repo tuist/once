@@ -12,6 +12,8 @@ pub(super) struct PathFingerprint {
     file_type: u8,
     link_target: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    tree: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     resolved: Option<Box<PathFingerprint>>,
     #[cfg(unix)]
     changed_seconds: i64,
@@ -25,14 +27,15 @@ pub(super) struct PathFingerprint {
     mode: u32,
 }
 
-pub(super) fn capture(paths: &BTreeSet<PathBuf>) -> BTreeMap<String, Option<PathFingerprint>> {
+pub(super) fn capture(
+    paths: &BTreeSet<PathBuf>,
+) -> Option<BTreeMap<String, Option<PathFingerprint>>> {
     paths
         .iter()
         .map(|path| {
-            (
-                path.to_string_lossy().into_owned(),
-                PathFingerprint::capture(path),
-            )
+            PathFingerprint::capture(path)
+                .ok()
+                .map(|fingerprint| (path.to_string_lossy().into_owned(), fingerprint))
         })
         .collect()
 }
@@ -40,18 +43,27 @@ pub(super) fn capture(paths: &BTreeSet<PathBuf>) -> BTreeMap<String, Option<Path
 pub(super) fn changed(expected: &BTreeMap<String, Option<PathFingerprint>>) -> Vec<String> {
     expected
         .iter()
-        .filter(|(path, fingerprint)| PathFingerprint::capture(Path::new(path)) != **fingerprint)
+        .filter(
+            |(path, fingerprint)| match PathFingerprint::capture(Path::new(path)) {
+                Ok(actual) => actual != **fingerprint,
+                Err(_) => true,
+            },
+        )
         .map(|(path, _)| path.clone())
         .collect()
 }
 
 pub(super) fn fingerprint(path: &Path) -> Option<PathFingerprint> {
-    PathFingerprint::capture(path)
+    PathFingerprint::capture(path).ok().flatten()
 }
 
 impl PathFingerprint {
-    fn capture(path: &Path) -> Option<Self> {
-        let metadata = std::fs::symlink_metadata(path).ok()?;
+    fn capture(path: &Path) -> std::io::Result<Option<Self>> {
+        let metadata = match std::fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
         let is_symlink = metadata.file_type().is_symlink();
         let link_target = is_symlink
             .then(|| std::fs::read_link(path).ok())
@@ -70,10 +82,14 @@ impl PathFingerprint {
             })
             .flatten()
             .map(Box::new);
-        let mut fingerprint = Self::from_metadata(&metadata)?;
+        let mut fingerprint = Self::from_metadata(&metadata)
+            .ok_or_else(|| std::io::Error::other("path modification time unavailable"))?;
         fingerprint.link_target = link_target;
         fingerprint.resolved = resolved;
-        Some(fingerprint)
+        if path.is_dir() {
+            fingerprint.tree = Some(once_host_tree::tree_stat_fingerprint(path)?);
+        }
+        Ok(Some(fingerprint))
     }
 
     fn from_metadata(metadata: &std::fs::Metadata) -> Option<Self> {
@@ -90,6 +106,7 @@ impl PathFingerprint {
                 | (u8::from(metadata.is_dir()) << 1)
                 | (u8::from(metadata.file_type().is_symlink()) << 2),
             link_target: None,
+            tree: None,
             resolved: None,
             #[cfg(unix)]
             changed_seconds: std::os::unix::fs::MetadataExt::ctime(metadata),
@@ -111,6 +128,48 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
+    fn failed_tree_traversal_is_not_a_missing_path_or_a_reusable_fingerprint() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let root = directory.path().join("observed");
+        let paths = BTreeSet::from([root.clone()]);
+        let missing = capture(&paths).unwrap();
+        assert!(changed(&missing).is_empty());
+        std::fs::create_dir(&root).unwrap();
+        let baseline = capture(&paths).unwrap();
+        let mut nested = root.clone();
+        for _ in 0..66 {
+            nested = nested.join("d");
+        }
+        std::fs::create_dir_all(nested).unwrap();
+        assert!(capture(&paths).is_none());
+        assert_eq!(changed(&baseline).len(), 1);
+        assert_eq!(changed(&missing).len(), 1);
+        std::fs::write(root.join("new-entry"), b"changed").unwrap();
+        assert!(capture(&paths).is_none());
+        assert_eq!(changed(&missing).len(), 1);
+    }
+
+    #[test]
+    fn directory_fingerprint_tracks_nested_edits_additions_and_deletions() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let nested = directory.path().join("src/nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        let file = nested.join("source.rs");
+        std::fs::write(&file, b"before").unwrap();
+        let paths = BTreeSet::from([directory.path().to_path_buf()]);
+        let baseline = capture(&paths).unwrap();
+        assert!(changed(&baseline).is_empty());
+        std::fs::write(&file, b"after!").unwrap();
+        assert_eq!(changed(&baseline).len(), 1);
+        let baseline = capture(&paths).unwrap();
+        std::fs::write(nested.join("new.rs"), b"new").unwrap();
+        assert_eq!(changed(&baseline).len(), 1);
+        let baseline = capture(&paths).unwrap();
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(changed(&baseline).len(), 1);
+    }
+
+    #[test]
     fn symlink_fingerprint_tracks_in_place_target_changes() {
         let directory = tempfile::TempDir::new().unwrap();
         let target = directory.path().join("gcc-real");
@@ -119,7 +178,7 @@ mod tests {
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
         let observed = BTreeSet::from([link.clone()]);
-        let baseline = capture(&observed);
+        let baseline = capture(&observed).unwrap();
         // The link itself is untouched; only the resolved binary is replaced in
         // place. Without binding the resolved target this would look unchanged.
         std::fs::write(&target, b"compiler two has more bytes").unwrap();

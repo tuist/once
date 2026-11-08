@@ -64,8 +64,8 @@ pub struct AnalysisResult {
     pub provider: JsonValue,
     /// Workspace-relative outputs declared during this analysis.
     pub declared_outputs: Vec<String>,
-    /// Everything the impl read from outside itself. Empty when the result was
-    /// replayed rather than computed, since the answers were just checked.
+    /// Everything the impl read from outside itself, retained on replay so
+    /// downstream caches can validate the same host observations.
     #[serde(skip)]
     pub observations: AnalysisObservations,
 }

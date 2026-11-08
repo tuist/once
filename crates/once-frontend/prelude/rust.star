@@ -193,7 +193,11 @@ def _rust_materialized_cargo_sources(ctx):
     if not host_root or not output_root:
         return []
     materialize_host_tree(host_root, output_root)
-    return [output_root]
+    inputs = [output_root]
+    for destination, source in _rust_attr(ctx, "_cargo_build_script_sources", {}).items():
+        materialize_host_file(source, destination)
+        inputs.append(destination)
+    return inputs
 
 def _rust_sources(ctx, crate_root, materialized_sources = []):
     if materialized_sources:
@@ -2744,12 +2748,17 @@ def _cargo_resolved_metadata(ctx, default_vendor_dir = "third_party/rust/vendor"
     if host_metadata != None:
         _cargo_attach_locked_checksums(host_metadata, lock)
     split_host = _cargo_requires_host_variants(ctx, target, host_triple)
-    resolver_attrs = {"vendor_dir": vendor_dir, "split_host_variants": split_host}
+    resolver_attrs = {
+        "vendor_dir": vendor_dir,
+        "split_host_variants": split_host,
+        "build_script_sources": _rust_attr(ctx, "build_script_sources", {}),
+    }
     if target:
         resolver_attrs["target"] = target
     resolver_ctx = {
         "label": ctx["label"],
         "attrs": resolver_attrs,
+        "locked_packages": lock.get("package") or [],
     }
     resolution = _cargo_metadata_resolution(resolver_ctx, metadata, host_metadata, materialize_sources)
     return {
@@ -3556,8 +3565,18 @@ def _cargo_merge_aliases(left, right):
         out[key] = value
     return out
 
-def _cargo_metadata_target_spec(ctx, package, target, node, source_root, crate_root, name, kind, deps, build_deps, aliases, rust_target, host_tool = False, host_source_root = ""):
+def _cargo_metadata_target_spec(ctx, package, target, node, source_root, crate_root, name, kind, deps, build_deps, aliases, rust_target, host_tool = False, host_source_root = "", source_files = {}):
+    if source_files:
+        original_source_root = source_root
+        source_root = _cargo_materialized_source_root(ctx, name) + "-layout/__package"
+        crate_root = source_root + "/" + _cargo_source_rel(package, target)
+        if not host_source_root:
+            package_path = (ctx.get("label") or {}).get("package") or ""
+            host_source_root = _workspace_absolute((package_path + "/" if package_path else "") + original_source_root)
     attrs = _cargo_metadata_attrs(ctx, package, target, node, source_root, crate_root, aliases, host_source_root)
+    if source_files:
+        layout = _parent_dir(source_root)
+        attrs["_cargo_build_script_sources"] = {layout + "/" + path: source for path, source in source_files.items()}
     attrs["_cargo_host_tool"] = host_tool
     if rust_target:
         attrs["target"] = rust_target
@@ -3583,6 +3602,53 @@ def _cargo_materialized_source_root(ctx, target_name):
     target_id = package + "/" + target_name if package else target_name
     return ".once/out/" + target_id + "/source"
 
+def _cargo_source_fail(message):
+    _diagnostic_fail("cargo.build_script_sources", "build_script_sources", message, "Map a unique locked external consumer to ../sibling/path = package@version/path source files.")
+
+def _cargo_source_package(selector, packages):
+    matches = [package for package in packages if selector in [package["name"], package["name"] + "@" + package["version"]]]
+    if len(matches) != 1:
+        _cargo_source_fail("Package selector `" + selector + "` must match exactly one locked package; use name@version to disambiguate")
+    return matches[0]
+
+def _cargo_build_script_source_files(ctx, packages, workspace_member_ids, materialize_sources, vendor_dir, duplicate_counts):
+    result = {}
+    for selector, mappings in (ctx["attrs"].get("build_script_sources") or {}).items():
+        locked = _cargo_source_package(selector, ctx.get("locked_packages", packages))
+        selected = [package for package in packages if package["name"] == locked["name"] and package["version"] == locked["version"] and (package.get("source") or "") == (locked.get("source") or "")]
+        if not selected:
+            continue
+        consumer = _cargo_source_package(selector, selected)
+        if workspace_member_ids.get(consumer["id"]):
+            _cargo_source_fail("Consumer `" + selector + "` must be an external package")
+        if _cargo_build_script_target(consumer) == None:
+            _cargo_source_fail("Consumer `" + selector + "` has no build script")
+        if consumer["id"] in result:
+            _cargo_source_fail("Multiple selectors name the same consumer `" + selector + "`")
+        files = {}
+        destinations = {}
+        for destination, source in mappings.items():
+            parts = destination.split("/")
+            if len(parts) < 3 or parts[0] != ".." or parts[1].lower() == "__package" or any([part in ["", ".", ".."] or "\\" in part or ":" in part for part in parts[1:]]):
+                _cargo_source_fail("Destination `" + destination + "` must be ../sibling/path without further traversal")
+            normalized = "/".join(parts[1:]).lower()
+            for previous, original in destinations.items():
+                if normalized == previous or normalized.startswith(previous + "/") or previous.startswith(normalized + "/"):
+                    _cargo_source_fail("Destination `" + destination + "` overlaps `" + original + "` after case normalization")
+            destinations[normalized] = destination
+            source_parts = source.split("/")
+            if len(source_parts) < 2 or any([part in ["", ".", ".."] or "\\" in part or ":" in part for part in source_parts]):
+                _cargo_source_fail("Source `" + source + "` must be package@version/path without traversal")
+            provider = _cargo_source_package(source_parts[0], packages)
+            root = _cargo_package_root(provider)
+            if not materialize_sources and not workspace_member_ids.get(provider["id"]):
+                vendor_root = _cargo_vendor_source_root(ctx, vendor_dir, provider, _cargo_target_name(provider, duplicate_counts))
+                package_path = (ctx.get("label") or {}).get("package") or ""
+                root = _workspace_absolute((package_path + "/" if package_path else "") + vendor_root)
+            files["/".join(parts[1:])] = root + "/" + "/".join(source_parts[1:])
+        result[consumer["id"]] = files
+    return result
+
 def _cargo_metadata_resolution(ctx, metadata, host_metadata = None, materialize_sources = False):
     target_packages = metadata.get("packages") or []
     host_packages = host_metadata.get("packages") if host_metadata != None else []
@@ -3600,6 +3666,7 @@ def _cargo_metadata_resolution(ctx, metadata, host_metadata = None, materialize_
         split_host = True
     host_dependency_ids = _cargo_host_dependency_ids(packages, nodes, host_nodes, workspace_member_ids) if split_host else {}
     vendor_dir = _trim_trailing_slash(ctx["attrs"].get("vendor_dir") or "vendor")
+    source_files = _cargo_build_script_source_files(ctx, packages, workspace_member_ids, materialize_sources, vendor_dir, duplicate_counts)
     rust_target = ctx["attrs"].get("target") or ""
     id_to_target_name, id_to_host_name = _cargo_dependency_name_maps(packages, duplicate_counts, host_dependency_ids, rust_target, workspace_member_ids, split_host)
     workspace_names = _cargo_workspace_library_names([
@@ -3631,20 +3698,20 @@ def _cargo_metadata_resolution(ctx, metadata, host_metadata = None, materialize_
         if kind == "rust_proc_macro":
             deps, aliases = _cargo_metadata_deps(host_node, id_to_host_name, False, True)
             build_deps, build_aliases = _cargo_metadata_build_deps(host_node, id_to_host_name, True) if has_build_script else ([], {})
-            targets.append(_cargo_metadata_target_spec(ctx, package, target, host_node, source_root, crate_root, name, kind, deps, build_deps, _cargo_merge_aliases(aliases, build_aliases), "", host_source_root = host_source_root))
+            targets.append(_cargo_metadata_target_spec(ctx, package, target, host_node, source_root, crate_root, name, kind, deps, build_deps, _cargo_merge_aliases(aliases, build_aliases), "", host_source_root = host_source_root, source_files = source_files.get(package_id) or {}))
             continue
 
         if target_package_ids.get(package_id):
             deps, aliases = _cargo_metadata_deps(node, id_to_target_name, False, True)
             build_deps, build_aliases = _cargo_metadata_build_deps(node, id_to_host_name, True) if has_build_script else ([], {})
-            targets.append(_cargo_metadata_target_spec(ctx, package, target, node, source_root, crate_root, name, kind, deps, build_deps, _cargo_merge_aliases(aliases, build_aliases), rust_target, host_source_root = host_source_root))
+            targets.append(_cargo_metadata_target_spec(ctx, package, target, node, source_root, crate_root, name, kind, deps, build_deps, _cargo_merge_aliases(aliases, build_aliases), rust_target, host_source_root = host_source_root, source_files = source_files.get(package_id) or {}))
 
         host_name = id_to_host_name.get(package_id)
         if host_name and host_name != name:
             host_materialized_source_root = _cargo_materialized_source_root(ctx, host_name) if materialize_sources else source_root
             host_deps, host_aliases = _cargo_metadata_deps(host_node, id_to_host_name, False, True)
             host_build_deps, host_build_aliases = _cargo_metadata_build_deps(host_node, id_to_host_name, True) if has_build_script else ([], {})
-            targets.append(_cargo_metadata_target_spec(ctx, package, target, host_node, host_materialized_source_root, host_materialized_source_root + "/" + rel_root, host_name, kind, host_deps, host_build_deps, _cargo_merge_aliases(host_aliases, host_build_aliases), "", host_tool = True, host_source_root = host_source_root))
+            targets.append(_cargo_metadata_target_spec(ctx, package, target, host_node, host_materialized_source_root, host_materialized_source_root + "/" + rel_root, host_name, kind, host_deps, host_build_deps, _cargo_merge_aliases(host_aliases, host_build_aliases), "", host_tool = True, host_source_root = host_source_root, source_files = source_files.get(package_id) or {}))
     workspace = _cargo_workspace_dependency_names(metadata, id_to_target_name, id_to_host_name)
     return {
         "specs": targets,
@@ -4034,6 +4101,7 @@ _RUST_COMMON_ATTRS = [
     attr("_cargo_host_tool", "bool", default = "false", docs = "Resolver-owned host-tool output role used for action presentation and logical history.", configurable = False),
     attr("_cargo_resolver", "string", default = "", docs = "Resolver-owned logical label scopes action history independently of package versions and execution/cache identity.", configurable = False),
     attr("_cargo_materialized_source_root", "string", docs = "Resolver-owned Once output directory for one materialized Cargo package.", configurable = False),
+    attr("_cargo_build_script_sources", "map<string, string>", default = "{}", docs = "Resolver-owned output paths mapped to absolute host source files for a package's isolated build-script layout.", configurable = False),
     attr("_build_script_inputs", "list<string>", default = "[]", docs = "Resolver-owned source inputs made available to a generated Cargo build script.", configurable = False),
     attr("default_deps", "string", docs = "Reserved Buck-compatible default dependency mode.", configurable = False),
     attr("doc_deps", "list<string>", default = "[]", docs = "Reserved for Rust documentation-only dependencies.", configurable = False, implemented = False),
@@ -4098,6 +4166,7 @@ cargo_workspace = target_kind(
         attr("metadata_file", "string", docs = "Optional checked-in JavaScript Object Notation output from cargo metadata.", configurable = False),
         attr("host_metadata_file", "string", docs = "Optional checked-in host Cargo metadata snapshot.", configurable = False),
         attr("vendor_dir", "string", docs = "Optional package-relative directory containing pre-vendored crate sources. When omitted, Once snapshots locked sources from Cargo's local cache into target outputs.", configurable = False),
+        attr("build_script_sources", "map<string, map<string, string>>", default = "{}", docs = "External build-script consumer package selector to sibling destination (../sibling/path) to locked source (package@version/path). Package names must resolve uniquely. Files are content-addressed inputs in a per-target layout, not Rust link dependencies.", configurable = False),
         attr("features", "list<string>", default = "[]", docs = "Cargo features passed to `cargo metadata --features`.", configurable = True),
         attr("all_features", "bool", default = "false", docs = "Pass `--all-features` to Cargo metadata.", configurable = True),
         attr("no_default_features", "bool", default = "false", docs = "Pass `--no-default-features` to Cargo metadata.", configurable = True),
@@ -4146,6 +4215,7 @@ cargo_dependencies = target_kind(
         attr("metadata_file", "string", docs = "Optional checked-in JavaScript Object Notation output from cargo metadata with once_snapshot input, selection, and compiler host provenance.", configurable = False),
         attr("host_metadata_file", "string", docs = "Checked-in Cargo metadata snapshot with host selection provenance for the execution host. Required when metadata_file is combined with an explicit target.", configurable = False),
         attr("vendor_dir", "string", default = "third_party/rust/vendor", docs = "Package-relative directory containing vendored crate sources.", configurable = False),
+        attr("build_script_sources", "map<string, map<string, string>>", default = "{}", docs = "External build-script consumer package selector to sibling destination (../sibling/path) to locked source (package@version/path). Package names must resolve uniquely. Files are content-addressed inputs in a per-target layout, not Rust link dependencies.", configurable = False),
         attr("packages", "list<string>", default = "[]", docs = "Optional package names to expose from this dependency set. Defaults to all resolved external packages.", configurable = True),
         attr("features", "list<string>", default = "[]", docs = "Cargo features passed to `cargo metadata --features`.", configurable = True),
         attr("all_features", "bool", default = "false", docs = "Pass `--all-features` to Cargo metadata.", configurable = True),
