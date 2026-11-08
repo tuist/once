@@ -115,6 +115,55 @@ package appears only when it would actually differ: when a destination target
 is requested, or when `dep_rustc_flags` carries a panic strategy that
 procedural macros and build scripts must not inherit.
 
+### Build Scripts That Read Sibling Packages
+
+An external package's build script sometimes reads another package's source
+instead of linking its compiled library. Declare those files on the
+`cargo_workspace` or `cargo_dependencies` seed:
+
+```toml
+[[target]]
+name = "cargo"
+kind = "cargo_workspace"
+
+[target.attrs.build_script_sources."shader-backend@0.1.0"]
+"../graphics/src/scene.rs" = "graphics@0.2.2/src/scene.rs"
+"../graphics/src/color.rs" = "graphics@0.2.2/src/color.rs"
+```
+
+The outer key selects an external package with a build script. Each entry maps
+a destination relative to that package's `CARGO_MANIFEST_DIR` to a file in a
+resolved Cargo package. Selectors accept `name` or `name@version` and must match
+exactly one package in the locked graph. Ambiguous versions or origins are
+rejected rather than guessed. A uniquely locked consumer absent from both the
+selected target and execution-host metadata is inactive, so its mapping is
+skipped. Unknown consumer selectors still fail. This lets one manifest declare
+platform-specific build-script inputs without enabling those packages on other
+platforms. The source package can be a workspace member,
+but the consumer must be external. These declarations do not change features,
+dependency aliases, Cargo identities, or Rust linking edges.
+
+Destinations must have the form `../sibling/path`. Further traversal, absolute
+paths, backslashes, and the reserved sibling name `__package` (in any case) are
+rejected. Destination components use ASCII letters, digits, `.`, `_`, and `-`,
+cannot end in `.`, and cannot use Windows device basenames such as `NUL` or
+`COM1`, including with an extension. This prevents Unicode, short-name, and
+Windows filename aliases across supported filesystems.
+Destination files cannot overlap after case normalization, including
+a file that would also be another destination's parent directory.
+Sources must have the form `package@version/path`, without traversal. Declare
+individual files, not directories or globs. Source filenames may be Unicode.
+
+Once snapshots the consumer's complete package tree and only the explicitly
+mapped sibling files into an isolated per-target layout. Its own build-script
+inputs remain available. Changing the mapping set selects a new layout, so
+removed destinations cannot remain readable beside the active package.
+Each mapped file is a content-addressed action input,
+so edits invalidate the build script even on a warm build. Host and destination
+variants have separate layouts. With `vendor_dir`, the same mapping reads the
+selected vendored package, including version-suffixed directories. Neither
+Cargo's source cache nor the vendor tree is modified.
+
 ### Build, Run, and Test
 
 The targetless commands are the quickest whole-workspace path. Use a generated

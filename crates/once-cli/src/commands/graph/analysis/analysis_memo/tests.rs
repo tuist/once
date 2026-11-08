@@ -52,6 +52,9 @@ fn a_stored_analysis_comes_back_with_the_answers_it_recorded() {
     );
     assert_eq!(result.provider, json!({"binary": "app"}));
     assert_eq!(read_back, observations);
+    assert_eq!(result.observations, observations);
+    memo.write("abcdef", &result);
+    assert_eq!(memo.read("abcdef").unwrap().1, observations);
 }
 
 #[test]

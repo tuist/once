@@ -49,6 +49,7 @@ package without synthetic target collisions.
 | `metadata_file` | string | no |  | Checked-in [JavaScript Object Notation](https://www.json.org/json-en.html) output from Cargo metadata with `once_snapshot` input and selection provenance |
 | `host_metadata_file` | string | no |  | Cargo metadata snapshot with host selection provenance for the execution host. Required when `metadata_file` is combined with an explicit `target` |
 | `vendor_dir` | string | no | `third_party/rust/vendor` | Package-relative directory containing vendored crate sources |
+| `build_script_sources` | map&lt;string, map&lt;string, string&gt;&gt; | no | `{}` | External consumer selector to sibling destination to locked package source file; see [sibling sources](/guide/graph/rust/#build-scripts-that-read-sibling-packages) |
 | `packages` | list&lt;string&gt; | no | `[]` | Optional package names to expose from this dependency set. Defaults to all resolved external packages |
 | `features` | list&lt;string&gt; | no | `[]` | Cargo features passed to `cargo metadata --features` |
 | `all_features` | bool | no | `false` | Pass `--all-features` to Cargo metadata |

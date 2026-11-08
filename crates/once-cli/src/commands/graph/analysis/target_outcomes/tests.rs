@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod content_keys;
 mod fingerprint_inputs;
+mod host_observations;
 
 use once_cas::{ActionResult, Digest};
 use once_core::{EvidenceCacheState, SandboxMode};

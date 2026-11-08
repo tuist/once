@@ -811,6 +811,7 @@ impl HostCache {
     where
         F: FnOnce() -> Result<String>,
     {
+        self.observe_path(path);
         self.host_file_digests
             .get_or_compute(path.to_path_buf(), hash)
     }
@@ -819,6 +820,7 @@ impl HostCache {
     where
         F: FnOnce() -> Result<String>,
     {
+        self.observe_path(path);
         self.host_tree_digests
             .get_or_compute(path.to_path_buf(), hash)
     }

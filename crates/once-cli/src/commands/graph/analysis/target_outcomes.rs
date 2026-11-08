@@ -35,8 +35,8 @@ use super::source_digest_cache::KnownChanges;
 use super::{AvailableInput, BuildOutcome};
 use crate::commands::change_tracker::ChangePosition;
 
-// Prior normalized outcomes may include rejected zero exits or stale tree identities.
-const SCHEMA: &str = "once.target-outcomes.v6";
+// Older outcomes did not retain host observations for validation on reuse.
+const SCHEMA: &str = "once.target-outcomes.v7";
 
 /// A pattern set one target's analysis expanded, and where it was anchored.
 ///
@@ -58,6 +58,7 @@ struct Record {
     /// Workspace paths the target's actions declared as inputs, excluding
     /// dependency outputs, which the name already accounts for.
     sources: Vec<String>,
+    observations: AnalysisObservations,
     /// What its analysis expanded, so a file that appears where one of these
     /// patterns would have selected it counts as a change.
     expansions: Vec<Expansion>,
@@ -151,6 +152,7 @@ impl TargetOutcomes {
         changes: &KnownChanges,
         dependency_inputs: &BTreeMap<String, AvailableInput>,
         producers: &super::actions::Producers,
+        observations_hold: impl FnOnce(&AnalysisObservations) -> bool,
     ) -> Option<BuildOutcome> {
         if dependency_inputs
             .iter()
@@ -159,7 +161,13 @@ impl TargetOutcomes {
             tracing::debug!(target = %target.label.id, "fingerprint-only dependency prevents target-outcome reuse");
             return None;
         }
-        self.reuse(target, key, changes)
+        let outcome = self.reuse(target, key, changes)?;
+        let record = self.stored.get(&target.label.id)?;
+        if !observations_hold(&record.observations) {
+            tracing::debug!(target = %target.label.id, "host observations prevent target-outcome reuse");
+            return None;
+        }
+        Some(outcome)
     }
 
     fn reuse(
@@ -263,6 +271,7 @@ impl TargetOutcomes {
         outcome: &BuildOutcome,
     ) {
         if !self.enabled
+            || !observations.is_complete()
             || super::has_uncached_actions(outcome.cache_state, &outcome.per_action_outcomes)
         {
             return;
@@ -270,6 +279,7 @@ impl TargetOutcomes {
         let out_prefix = ".once/out/";
         let record = Record {
             key,
+            observations: observations.clone(),
             sources: declared_inputs
                 .iter()
                 .filter(|input| !input.starts_with(out_prefix))

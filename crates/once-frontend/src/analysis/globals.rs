@@ -2482,7 +2482,10 @@ fn observation_holds(
             };
             actual == *found
         }
-        Observation::ReadDir { path, names } => &read_host_dir_names(path) == names,
+        Observation::ReadDir { path, names } => {
+            host_cache.observe_path(Path::new(path));
+            &read_host_dir_names(path) == names
+        }
         Observation::Paths {
             expansion,
             package,

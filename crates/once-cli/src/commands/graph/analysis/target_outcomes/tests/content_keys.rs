@@ -86,7 +86,14 @@ fn intermediate_replacement_cannot_hide_changed_contents_from_historical_target_
         "produce",
     );
     assert!(reopened
-        .reuse_with_inputs(&target, &old_key, &changed(&[], &[]), &poisoned, &producers)
+        .reuse_with_inputs(
+            &target,
+            &old_key,
+            &changed(&[], &[]),
+            &poisoned,
+            &producers,
+            |_| true
+        )
         .is_some());
     let corrected = BTreeMap::from([(
         "gen".to_string(),
@@ -101,7 +108,8 @@ fn intermediate_replacement_cannot_hide_changed_contents_from_historical_target_
             &new_key,
             &changed(&[], &[]),
             &corrected,
-            &producers
+            &producers,
+            |_| true,
         )
         .is_none());
 }

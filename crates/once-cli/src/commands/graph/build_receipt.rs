@@ -12,7 +12,7 @@ use crate::commands::change_tracker::{ChangePosition, ChangeSnapshot};
 
 use self::path_fingerprint::PathFingerprint;
 
-const SCHEMA: &str = "once.build-receipt.v6";
+const SCHEMA: &str = "once.build-receipt.v7";
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(super) struct BuildReceipt {
@@ -179,6 +179,14 @@ pub(super) async fn store(
     let Some(executable_fingerprint) = executable_fingerprint() else {
         return;
     };
+    let Some(host_paths) = path_fingerprint::capture(observations.host_paths) else {
+        tracing::debug!(
+            target,
+            "host path fingerprint failed; build receipt not stored"
+        );
+        clear(workspace, target, sandbox, configuration_path_suffix).await;
+        return;
+    };
     let receipt = BuildReceipt {
         schema: SCHEMA.to_string(),
         target: target.to_string(),
@@ -186,7 +194,7 @@ pub(super) async fn store(
         configuration: configuration_digest.to_hex(),
         environment: observations.environment.clone(),
         inherited_environment_sha256: once_frontend::analysis::inherited_environment_sha256(),
-        host_paths: path_fingerprint::capture(observations.host_paths),
+        host_paths,
         source_digests: observations.source_digests.clone(),
         produced: observations.produced.clone(),
         deferred: observations.deferred.clone(),

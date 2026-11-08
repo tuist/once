@@ -41,7 +41,8 @@ fn historical_target_outcome_cannot_bypass_fingerprint_dependency_checks() {
             "key",
             &changed(&[], &[]),
             &dependency_inputs,
-            &producers
+            &producers,
+            |_| true,
         )
         .is_none());
     assert!(reopened
@@ -50,7 +51,8 @@ fn historical_target_outcome_cannot_bypass_fingerprint_dependency_checks() {
             "key",
             &changed(&[], &[]),
             &dependency_inputs,
-            &Producers::default()
+            &Producers::default(),
+            |_| true,
         )
         .is_some());
     assert!(reopened
@@ -59,7 +61,8 @@ fn historical_target_outcome_cannot_bypass_fingerprint_dependency_checks() {
             "key",
             &changed(&[], &[]),
             &BTreeMap::new(),
-            &producers
+            &producers,
+            |_| true,
         )
         .is_some());
 }
