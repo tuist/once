@@ -3568,7 +3568,8 @@ def _cargo_merge_aliases(left, right):
 def _cargo_metadata_target_spec(ctx, package, target, node, source_root, crate_root, name, kind, deps, build_deps, aliases, rust_target, host_tool = False, host_source_root = "", source_files = {}):
     if source_files:
         original_source_root = source_root
-        source_root = _cargo_materialized_source_root(ctx, name) + "-layout/__package"
+        layout_identity = content_sha256(_json_encode(source_files))
+        source_root = _cargo_materialized_source_root(ctx, name) + "-layout/" + layout_identity + "/__package"
         crate_root = source_root + "/" + _cargo_source_rel(package, target)
         if not host_source_root:
             package_path = (ctx.get("label") or {}).get("package") or ""
@@ -3611,6 +3612,13 @@ def _cargo_source_package(selector, packages):
         _cargo_source_fail("Package selector `" + selector + "` must match exactly one locked package; use name@version to disambiguate")
     return matches[0]
 
+def _cargo_source_destination_component_valid(part):
+    if not part or part.endswith(".") or any([character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-" for character in part.elems()]):
+        return False
+    stem = part.split(".")[0].lower()
+    reserved = ["con", "prn", "aux", "nul"] + ["com" + str(index) for index in range(1, 10)] + ["lpt" + str(index) for index in range(1, 10)]
+    return stem not in reserved
+
 def _cargo_build_script_source_files(ctx, packages, workspace_member_ids, materialize_sources, vendor_dir, duplicate_counts):
     result = {}
     for selector, mappings in (ctx["attrs"].get("build_script_sources") or {}).items():
@@ -3629,8 +3637,8 @@ def _cargo_build_script_source_files(ctx, packages, workspace_member_ids, materi
         destinations = {}
         for destination, source in mappings.items():
             parts = destination.split("/")
-            if len(parts) < 3 or parts[0] != ".." or parts[1].lower() == "__package" or any([part in ["", ".", ".."] or "\\" in part or ":" in part for part in parts[1:]]):
-                _cargo_source_fail("Destination `" + destination + "` must be ../sibling/path without further traversal")
+            if len(parts) < 3 or parts[0] != ".." or parts[1].lower() == "__package" or not all([_cargo_source_destination_component_valid(part) for part in parts[1:]]):
+                _cargo_source_fail("Destination `" + destination + "` must be ../sibling/path using ASCII letters, digits, ._- without trailing dots, reserved device names, or __package")
             normalized = "/".join(parts[1:]).lower()
             for previous, original in destinations.items():
                 if normalized == previous or normalized.startswith(previous + "/") or previous.startswith(normalized + "/"):
@@ -3639,7 +3647,11 @@ def _cargo_build_script_source_files(ctx, packages, workspace_member_ids, materi
             source_parts = source.split("/")
             if len(source_parts) < 2 or any([part in ["", ".", ".."] or "\\" in part or ":" in part for part in source_parts]):
                 _cargo_source_fail("Source `" + source + "` must be package@version/path without traversal")
-            provider = _cargo_source_package(source_parts[0], packages)
+            locked_provider = _cargo_source_package(source_parts[0], ctx.get("locked_packages", packages))
+            selected_providers = [package for package in packages if package["name"] == locked_provider["name"] and package["version"] == locked_provider["version"] and (package.get("source") or "") == (locked_provider.get("source") or "")]
+            if not selected_providers:
+                _cargo_source_fail("Source package `" + source_parts[0] + "` is not selected for this consumer's platform")
+            provider = _cargo_source_package(source_parts[0], selected_providers)
             root = _cargo_package_root(provider)
             if not materialize_sources and not workspace_member_ids.get(provider["id"]):
                 vendor_root = _cargo_vendor_source_root(ctx, vendor_dir, provider, _cargo_target_name(provider, duplicate_counts))

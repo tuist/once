@@ -634,9 +634,14 @@ The built-in resolver emits `_cargo_build_script_sources` output-to-host-file
 mappings and an isolated materialized package root. Analysis snapshots each
 mapped file with `materialize_host_file` and includes it in the build-script
 action inputs. These are source dependencies, not compiled provider edges.
+The mapping set identifies the layout, preventing obsolete sibling files from
+remaining beside the active package after a declaration changes.
 Destination overlap and the reserved package root are checked case-insensitively.
-Consumer selectors must uniquely match Cargo.lock; mappings for consumers absent
-from both selected host and target metadata are inactive. The lock inventory is
+Destination components admit only ASCII letters, digits, `._-`, with no trailing
+dots or Windows device basenames; source filenames retain Unicode support.
+Consumer and provider selectors must uniquely match Cargo.lock; an active
+consumer's provider must also be present in selected metadata. Mappings for
+consumers absent from both selected host and target metadata are inactive. The lock inventory is
 passed internally without changing metadata snapshot provenance requirements.
 See [sibling package sources](/guide/graph/rust/#build-scripts-that-read-sibling-packages)
 for the public manifest contract and path restrictions.

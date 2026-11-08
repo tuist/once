@@ -145,14 +145,20 @@ dependency aliases, Cargo identities, or Rust linking edges.
 
 Destinations must have the form `../sibling/path`. Further traversal, absolute
 paths, backslashes, and the reserved sibling name `__package` (in any case) are
-rejected. Destination files cannot overlap after case normalization, including
+rejected. Destination components use ASCII letters, digits, `.`, `_`, and `-`,
+cannot end in `.`, and cannot use Windows device basenames such as `NUL` or
+`COM1`, including with an extension. This prevents Unicode, short-name, and
+Windows filename aliases across supported filesystems.
+Destination files cannot overlap after case normalization, including
 a file that would also be another destination's parent directory.
 Sources must have the form `package@version/path`, without traversal. Declare
-individual files, not directories or globs.
+individual files, not directories or globs. Source filenames may be Unicode.
 
 Once snapshots the consumer's complete package tree and only the explicitly
 mapped sibling files into an isolated per-target layout. Its own build-script
-inputs remain available. Each mapped file is a content-addressed action input,
+inputs remain available. Changing the mapping set selects a new layout, so
+removed destinations cannot remain readable beside the active package.
+Each mapped file is a content-addressed action input,
 so edits invalidate the build script even on a warm build. Host and destination
 variants have separate layouts. With `vendor_dir`, the same mapping reads the
 selected vendored package, including version-suffixed directories. Neither

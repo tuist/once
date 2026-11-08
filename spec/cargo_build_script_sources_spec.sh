@@ -128,6 +128,37 @@ TOML
     test "$(cat "$SPEC_ROOT/packages/backend/src/shaders.metal")" = shader
   }
 
+  exercise_removed_destination() {
+    create_source_fixture
+    once build backend-0.1.0 --quiet >/dev/null || return
+    cat > "$WORKSPACE/once.toml" <<'TOML'
+[[target]]
+name = "cargo"
+kind = "cargo_workspace"
+srcs = ["Cargo.toml", "Cargo.lock"]
+[target.attrs.build_script_sources."backend@0.1.0"]
+"../graphics/src/other.rs" = "graphics@0.2.2/src/scene.rs"
+TOML
+    for state in warm cold; do
+      if [ "$state" = cold ]; then
+        rm -rf "$WORKSPACE/.once"
+      fi
+      if once build backend-0.1.0 --quiet > "$SPEC_ROOT/failure.log" 2>&1; then
+        return 1
+      fi
+      renamed="$(find "$WORKSPACE/.once/out/backend-0.1.0/source-layout" -name other.rs)"
+      test -f "$renamed" || return
+      test ! -e "$(dirname "$renamed")/scene.rs" || return
+      grep -q 'No such file or directory' "$SPEC_ROOT/failure.log" || return
+    done
+  }
+
+  It 'does not reuse removed destinations in warm layouts or cache restores'
+    When call exercise_removed_destination
+    The status should be success
+    The output should equal ''
+  End
+
   It 'snapshots explicit sibling files and invalidates warm cargo_workspace builds'
     When call exercise_source_inputs cargo_workspace
     The status should be success

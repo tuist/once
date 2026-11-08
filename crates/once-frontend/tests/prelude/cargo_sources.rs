@@ -60,14 +60,30 @@ result = repr(specs())
     assert_eq!(result.matches("./build-dep").count(), 2);
     assert_eq!(result.matches("./dep").count(), 2);
     for target in ["backend-0.1.0", "backend-0.1.0-host"] {
-        assert!(result.contains(&format!(
-            ".once/out/desktop/{target}/source-layout/__package"
-        )));
-        assert!(result.contains(&format!(
-            ".once/out/desktop/{target}/source-layout/graphics/src/scene.rs"
-        )));
+        assert!(result.contains(&format!(".once/out/desktop/{target}/source-layout/")));
     }
     assert_eq!(result.matches("/cargo/graphics/src/scene.rs").count(), 2);
+}
+
+#[test]
+fn cargo_sources_resolve_provider_origins_against_the_complete_lock() {
+    for (locked, selected) in [
+        ("[backend, graphics, other]", "[backend, graphics]"),
+        ("[backend, graphics, other]", "[backend, other]"),
+        ("[backend, other]", "[backend, graphics]"),
+    ] {
+        let error = eval_prelude_source_to_repr(format!(
+            r#"{}
+other = dict(graphics, id = "other", source = "git+https://example.com/other#locked")
+ctx["locked_packages"] = {locked}
+_cargo_build_script_source_files(ctx, {selected}, {{}}, True, "vendor", {{}})
+result = repr(None)
+"#,
+            fixture()
+        ))
+        .unwrap_err();
+        assert!(error.contains("cargo.build_script_sources"), "{error}");
+    }
 }
 
 #[test]
@@ -97,13 +113,28 @@ fn cargo_sources_reject_case_aliases_and_overlapping_destinations() {
     for destinations in [
         vec!["../__PACKAGE/build.rs"],
         vec!["../__Package/src/lib.rs"],
+        vec!["../__package./build.rs"],
+        vec!["../__package /build.rs"],
+        vec!["../__PACK~1/build.rs"],
+        vec!["../graphics/src/scene.rs."],
+        vec!["../graphics/src/scene.rs "],
+        vec!["../graphics/NUL.rs"],
+        vec!["../graphics/com1/scene.rs"],
+        vec!["../graphics/LPT9.rs"],
+        vec!["../graphics/é.rs", "../graphics/e\u{301}.rs"],
+        vec!["../graphics/s.rs", "../graphics/ſ.rs"],
         vec!["../graphics/src/scene.rs", "../Graphics/SRC/SCENE.rs"],
         vec!["../graphics/src", "../GRAPHICS/SRC/scene.rs"],
         vec!["../graphics/src/scene.rs", "../GRAPHICS/SRC"],
     ] {
         let mappings = destinations
             .iter()
-            .map(|destination| format!("{destination:?}: \"graphics/src/scene.rs\""))
+            .map(|destination| {
+                format!(
+                    "{}: \"graphics/src/scene.rs\"",
+                    serde_json::to_string(destination).unwrap()
+                )
+            })
             .collect::<Vec<_>>()
             .join(", ");
         let error = eval_prelude_source_to_repr(format!(
@@ -113,6 +144,16 @@ fn cargo_sources_reject_case_aliases_and_overlapping_destinations() {
         .unwrap_err();
         assert!(error.contains("cargo.build_script_sources"), "{error}");
     }
+    let result = eval_prelude_source_to_repr(format!(
+        r#"{}
+ctx["attrs"]["build_script_sources"] = {{"backend": {{"../graphics/src/scene.rs": "graphics/src/é.rs"}}}}
+files = _cargo_build_script_source_files(ctx, packages, {{}}, True, "vendor", {{}})
+result = repr(files["backend-id"]["graphics/src/scene.rs"] == "/cargo/graphics/src/é.rs")
+"#,
+        fixture()
+    ))
+    .unwrap();
+    assert_eq!(result, "True");
 }
 
 #[test]
