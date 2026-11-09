@@ -15,6 +15,8 @@ runtime-only classpaths.
 | --- | --- | --- | --- | --- |
 | `module_name` | string | no | target name | Kotlin module name |
 | `output` | string | no | `<target>.jar` | Output Java archive file name |
+| `manifest` | string | no | none | Package-relative JAR manifest input |
+| `jar` | string | no | resolved JDK tool | Override the JDK archive tool used with `manifest` |
 | `jvm_target` | string | no | `17` | Java virtual machine bytecode target |
 | `language_version` | string | no | compiler default | Kotlin language version |
 | `api_version` | string | no | compiler default | Kotlin application programming interface version |
@@ -64,6 +66,13 @@ The target emits `kotlin_jvm_library` and `java_library`.
 | Output | Location |
 | --- | --- |
 | Java archive | `.once/out/<target>/<output>` |
+
+With `manifest`, compilation emits a declared classes tree and a separate
+archive action packages it with the supplied manifest using JDK 17 or newer
+`jar`. Archive entry timestamps are fixed, and the manifest contents and archive
+tool identity participate in caching. Without `manifest`, `kotlinc` continues
+to emit the archive directly. Once does not infer publication metadata or
+invent library versions.
 
 ## Example
 

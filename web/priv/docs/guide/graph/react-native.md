@@ -111,6 +111,11 @@ module metadata, and native application products are independently cacheable.
 Device installation, application launch, port forwarding, and the Metro server
 are runtime effects and always execute.
 
+Dependency cache replay preserves lifecycle-generated files throughout the
+staged installation workspace, not only `node_modules`. Declare lifecycle
+scripts and their local inputs in the dependency target's `srcs`. Consumers
+still need an explicit source boundary for generated application sources.
+
 Native projects are staged from clean sources on an action miss. This prevents
 stale generated files from changing results. Unchanged builds use the Once
 action cache, while a native source change starts from a clean CocoaPods or

@@ -873,6 +873,9 @@ def _elixir_interpreter_opts(ctx):
 def _elixir_validate_test_mode(ctx, mix_config):
     if mix_config and _elixir_interpreter_opts(ctx):
         fail(ctx["label"]["id"] + ": `elixir_opts` applies to direct ExUnit mode only; use `test_args` with `mix_config`")
+    if _elixir_attr(ctx, "staged_workspace", False):
+        if _elixir_attr(ctx, "setup", ""):
+            fail(ctx["label"]["id"] + ": staged_workspace does not support shell setup; use setup_tasks")
 
 def _elixir_reject_unsupported_attrs(ctx, keys):
     for key in keys:
@@ -1240,8 +1243,21 @@ Mix.Project.in_project(:once_test_runner, ".", [compilers: []], fn _project ->
 end)
 """
 
-def _elixir_test_runner_source(setup_tasks, setup_runner):
-    return """
+def _elixir_test_runner_source(setup_tasks, setup_runner, staged_workspace = ""):
+    validation = ""
+    if staged_workspace:
+        validation = """
+check = fn check, path ->
+  case File.lstat!(path).type do
+    :symlink -> raise "staged_workspace does not support symbolic links: #{path}"
+    :directory -> Enum.each(File.ls!(path), &check.(check, Path.join(path, &1)))
+    :regular -> :ok
+    type -> raise "staged_workspace does not support #{type}: #{path}"
+  end
+end
+check.(check, """ + _json_string(staged_workspace) + """)
+"""
+    return validation + """
 [runner, args_file, results, log, native_results, target, runner_type, log_artifact, native_artifact] = System.argv()
 args = args_file |> File.read!() |> :json.decode()
 setup_tasks = """ + _elixir_command_plan(setup_tasks) + """
@@ -1347,7 +1363,7 @@ File.rm(summary_file)
 System.halt(status)
 """
 
-def _elixir_stage_apps(ctx, apps, build_root, mix_env, identifier, stage_inputs = []):
+def _elixir_stage_apps(ctx, apps, build_root, mix_env, identifier, stage_inputs = [], cacheable = True):
     staged = []
     for app in apps:
         app_name = app.get("app_name", "")
@@ -1362,11 +1378,12 @@ def _elixir_stage_apps(ctx, apps, build_root, mix_env, identifier, stage_inputs 
                 kind = "tree",
                 inputs = [app_dir] + stage_inputs,
                 identifier = identifier + ":" + app_name,
+                cacheable = cacheable,
                 source_files = _action_source_files([app_dir]),
             )
     return staged
 
-def _elixir_stage_consumer(ctx, root_app, apps, build_root, mix_env, identifier):
+def _elixir_stage_consumer(ctx, root_app, apps, build_root, mix_env, identifier, cacheable = True):
     staged = []
     root_build_env = root_app.get("build_env_dir", "")
     if root_build_env:
@@ -1377,12 +1394,37 @@ def _elixir_stage_consumer(ctx, root_app, apps, build_root, mix_env, identifier)
             kind = "tree",
             inputs = [root_build_env],
             identifier = identifier + ":build-tree",
+            cacheable = cacheable,
             source_files = _action_source_files([root_build_env]),
         )
         staged.append(destination)
     # Restore the enclosing build tree before overlaying dependency applications.
-    apps_staged = _elixir_stage_apps(ctx, apps, build_root, mix_env, identifier, stage_inputs = staged)
+    apps_staged = _elixir_stage_apps(ctx, apps, build_root, mix_env, identifier, stage_inputs = staged, cacheable = cacheable)
     return staged + apps_staged
+
+def _elixir_test_cwd(ctx):
+    if _elixir_attr(ctx, "staged_workspace", False):
+        root = ctx["scratch_dir"] + "/test_workspace"
+        return root + "/" + ctx["label"]["package"] if ctx["label"]["package"] else root
+    return _elixir_package_cwd(ctx)
+
+def _elixir_stage_test_workspace(ctx, inputs):
+    root = ctx["scratch_dir"] + "/test_workspace"
+    prepare_path(root, "remove")
+    prepare_path(_elixir_test_cwd(ctx), "directory")
+    staged = []
+    for source in inputs:
+        if not _elixir_is_workspace_input(source):
+            fail(ctx["label"]["id"] + ": staged_workspace input must stay inside the workspace: " + source)
+        path = workspace_root()
+        for component in source.split("/"):
+            path += "/" + component
+            if host_symlink_target(path):
+                fail(ctx["label"]["id"] + ": staged_workspace does not support symbolic links: " + source)
+        destination = root + "/" + source
+        copy_path(source, destination, cacheable = False)
+        staged.append(destination)
+    return staged
 
 def _elixir_test_runner_command(ctx, toolchain, apps, srcs, mix_config):
     test_paths = _elixir_test_paths(ctx, srcs)
@@ -1448,9 +1490,14 @@ def _elixir_test_info(ctx, runner_type, runner_display_name, runner, args, resul
 def _elixir_test_info_for(ctx, runner, mix_config, apps, srcs, results, log, native_results):
     test_paths = [] if _elixir_attr(ctx, "_mix_test_defaults", False) else _elixir_test_paths(ctx, srcs)
     _elixir_validate_test_mode(ctx, mix_config)
-    if mix_config:
+    if mix_config or _elixir_attr(ctx, "staged_workspace", False):
         no_start = ["--no-start"] if _elixir_attr(ctx, "no_start", False) else []
-        return _elixir_test_info(ctx, "mix_test", "Mix test", runner, ["test", "--no-compile", "--no-deps-check"] + no_start + test_paths + _elixir_test_args(ctx), results, log, native_results)
+        info = _elixir_test_info(ctx, "mix_test", "Mix test", runner, ["test", "--no-compile", "--no-deps-check"] + no_start + test_paths + _elixir_test_args(ctx), results, log, native_results)
+        if _elixir_attr(ctx, "staged_workspace", False):
+            info["command"]["cwd"] = _elixir_test_cwd(ctx)
+            info["execution"]["run_from_workspace_root"] = False
+            info["metadata"]["staged_workspace"] = True
+        return info
     start_args = []
     if "test/test_helper.exs" not in test_paths:
         start_args = ["-e", "ExUnit.start()"]
@@ -1544,17 +1591,17 @@ exit "$status"
         runner_type = _shell_quote("mix_test" if mix_config else "elixir_exunit"),
     )
 
-def _elixir_test_env(ctx, toolchain, home_dir, build_root):
+def _elixir_test_env(ctx, toolchain, home_dir, build_root, cwd = None):
     mix_home = toolchain.get("mix_home")
     env = {
-        "HOME": _elixir_from_package(ctx, home_dir),
+        "HOME": _elixir_from_action_cwd(ctx, cwd, home_dir),
         "MIX_ENV": "test",
-        "MIX_BUILD_ROOT": _elixir_from_package(ctx, build_root),
-        "MIX_BUILD_PATH": _elixir_from_package(ctx, build_root + "/test"),
-        "MIX_HOME": mix_home or _elixir_from_package(ctx, home_dir + "/mix"),
-        "HEX_HOME": _elixir_from_package(ctx, home_dir + "/hex"),
+        "MIX_BUILD_ROOT": _elixir_from_action_cwd(ctx, cwd, build_root),
+        "MIX_BUILD_PATH": _elixir_from_action_cwd(ctx, cwd, build_root + "/test"),
+        "MIX_HOME": mix_home or _elixir_from_action_cwd(ctx, cwd, home_dir + "/mix"),
+        "HEX_HOME": _elixir_from_action_cwd(ctx, cwd, home_dir + "/hex"),
         "HEX_OFFLINE": "true",
-        "ERL_LIBS": _elixir_from_package(ctx, build_root + "/test/lib"),
+        "ERL_LIBS": _elixir_from_action_cwd(ctx, cwd, build_root + "/test/lib"),
     }
     if mix_home:
         # `mix test` loads dependencies before running, and a Hex dependency
@@ -1564,6 +1611,8 @@ def _elixir_test_env(ctx, toolchain, home_dir, build_root):
         env["MIX_ARCHIVES"] = mix_home + "/archives"
     if not _elixir_attr(ctx, "cacheable", True):
         env = _elixir_inherit_runtime_env(env, toolchain)
+    if _elixir_attr(ctx, "staged_workspace", False):
+        env["HOME"] = _elixir_from_action_cwd(ctx, cwd, home_dir)
     return env
 
 def _elixir_test_impl(ctx):
@@ -1594,6 +1643,9 @@ def _elixir_test_impl(ctx):
     if lib.get("mix_env") != "test":
         fail(ctx["label"]["id"] + ": elixir_test dependency must be compiled with mix_env = \"test\"")
     mix_config = lib.get("mix_config") or mix_config
+    if _elixir_attr(ctx, "staged_workspace", False) and not mix_config:
+        fail(ctx["label"]["id"] + ": staged_workspace requires Mix mode")
+    _elixir_validate_test_mode(ctx, mix_config)
     toolchain = _elixir_mix_toolchain() if mix_config else _elixir_compiler_toolchain()
     apps = _elixir_collect_apps([lib])
     provider["affected_inputs"] = _unique(_elixir_optional_inputs(input_srcs + config + data + tools + [mix_config]) + _elixir_app_inputs(apps))
@@ -1611,7 +1663,10 @@ def _elixir_test_impl(ctx):
             identifier = ctx["label"]["id"] + (":mix-test" if mix_config else ":elixir-test"),
         )
         return provider
-    build_root = ctx["scratch_dir"] + "/test_build"
+    staged_workspace = _elixir_attr(ctx, "staged_workspace", False)
+    cwd = _elixir_test_cwd(ctx)
+    action_cwd = cwd if staged_workspace else None
+    build_root = cwd + "/_build" if staged_workspace else ctx["scratch_dir"] + "/test_build"
     home_dir = ctx["scratch_dir"] + "/test_home"
     runner_dir = ctx["scratch_dir"] + "/test_runner"
     runner_script = runner_dir + "/runner.exs"
@@ -1620,7 +1675,7 @@ def _elixir_test_impl(ctx):
     setup_tasks = _elixir_attr(ctx, "setup_tasks", [])
     if setup_tasks and not mix_config:
         fail(ctx["label"]["id"] + ": setup_tasks requires Mix mode through an elixir_app provider with mix_config")
-    write_path(runner_script, _elixir_test_runner_source(setup_tasks, toolchain["mix"] if mix_config else runner))
+    write_path(runner_script, _elixir_test_runner_source(setup_tasks, toolchain["mix"] if mix_config else runner, _elixir_abs_workspace_path(ctx["scratch_dir"] + "/test_workspace") if staged_workspace else ""))
     write_path(args_file, _json_encode(args))
     project_inputs = []
     if mix_config:
@@ -1636,18 +1691,19 @@ def _elixir_test_impl(ctx):
             [mix_config] +
             lockfile_input
         )
-    staged_inputs = _elixir_stage_consumer(ctx, lib, apps, build_root, "test", ctx["label"]["id"] + ":test-apps")
+    staged_inputs = _elixir_stage_test_workspace(ctx, project_inputs) if staged_workspace else []
+    staged_inputs += _elixir_stage_consumer(ctx, lib, apps, build_root, "test", ctx["label"]["id"] + ":test-apps", cacheable = not staged_workspace)
     run_action(
         display_name = "Run Elixir tests · " + ctx["label"]["name"],
         source_files = _action_source_files(_unique(provider["affected_inputs"] + project_inputs + staged_inputs + [runner_script, args_file])),
         argv = [
             toolchain["elixir"],
-            _elixir_from_package(ctx, runner_script),
+            _elixir_from_action_cwd(ctx, action_cwd, runner_script),
             runner,
-            _elixir_from_package(ctx, args_file),
-            _elixir_from_package(ctx, results),
-            _elixir_from_package(ctx, log),
-            _elixir_from_package(ctx, native_results),
+            _elixir_from_action_cwd(ctx, action_cwd, args_file),
+            _elixir_from_action_cwd(ctx, action_cwd, results),
+            _elixir_from_action_cwd(ctx, action_cwd, log),
+            _elixir_from_action_cwd(ctx, action_cwd, native_results),
             ctx["label"]["id"],
             "mix_test" if mix_config else "elixir_exunit",
             log,
@@ -1657,8 +1713,8 @@ def _elixir_test_impl(ctx):
         outputs = [results, log, native_results],
         clean_paths = [home_dir, results, log, native_results],
         create_dirs = [home_dir, test_dir],
-        cwd = _elixir_package_cwd(ctx),
-        env = _elixir_action_env_with(ctx, toolchain, _elixir_test_env(ctx, toolchain, home_dir, build_root)),
+        cwd = cwd,
+        env = _elixir_action_env_with(ctx, toolchain, _elixir_test_env(ctx, toolchain, home_dir, build_root, action_cwd)),
         cacheable = _elixir_attr(ctx, "cacheable", True),
         inherit_parent_env = not _elixir_attr(ctx, "cacheable", True),
         toolchain_identity = toolchain["identity"] + ("\x00mix_test.v3" if mix_config else "\x00elixir_exunit.v2"),
@@ -2552,7 +2608,7 @@ def _mix_package_impl(ctx):
                 root_config_target,
             ],
             inputs = inputs,
-            outputs = [app_dir, compile_log, compile_warnings],
+            outputs = [app_dir, ebin_dir, priv_dir, include_dir, compile_log, compile_warnings],
             clean_paths = [build_root, home_dir, compile_log, compile_warnings],
             create_dirs = [priv_dir, include_dir, home_dir],
             cwd = _elixir_package_cwd(ctx),
@@ -3350,6 +3406,7 @@ def _mix_workspace_resolver(ctx):
                 "config": config,
                 "data": ["test/**/*"],
                 "_mix_test_defaults": True,
+                "staged_workspace": ctx["attrs"].get("test_staged_workspace") or False,
                 "cacheable": False,
             },
         })
@@ -3368,6 +3425,7 @@ def _mix_workspace_resolver(ctx):
     return {
         "targets": targets,
         "roots": ["./" + applications[_mix_workspace_environment(ctx)]],
+        "attrs": {"_default_test_roots": [target["name"] for target in targets if target["kind"] == "elixir_test"]},
     }
 
 def _mix_workspace_impl(ctx):
@@ -3417,6 +3475,7 @@ _ELIXIR_LIBRARY_ATTRS = [
 
 _ELIXIR_TEST_ATTRS = [
     attr("_mix_test_defaults", "bool", default = "false", docs = "Resolver-owned marker selecting the native Mix project's test paths and patterns instead of passing every input file to the runner.", configurable = False),
+    attr("staged_workspace", "bool", default = "false", docs = "Opt into a fresh private Mix test cwd containing only declared files and copied native _build application trees. Changes cwd but preserves compiled source locations. Rejects symbolic links and shell setup.", configurable = False),
     attr("mix_config", "string", default = "", docs = "Optional package-relative Mix project file. When omitted, tests run through direct ExUnit without requiring a Mix project.", configurable = False),
     attr("lockfile", "string", default = "mix.lock", docs = "Package-relative Mix lockfile staged when present so tests evaluate the compiled dependency identities.", configurable = False),
     attr("config", "list<string>", default = "[\"config/**/*.exs\"]", docs = "Package-relative config file globs included in the test action key.", configurable = False),
@@ -3478,10 +3537,12 @@ _MIX_RELEASE_ATTRS = [
 ]
 
 _MIX_WORKSPACE_ATTRS = [
+    attr("test_staged_workspace", "bool", default = "false", docs = "Enable staged_workspace on this project's generated test target. Keeps the default original-source cwd unless explicitly enabled.", configurable = False),
     attr("mix_env", "string", default = "", docs = "Default build environment. When omitted, follows MIX_ENV or uses dev. Test targets remain in the test environment.", configurable = False),
     attr("manifest", "string", default = "mix.exs", docs = "Package-relative Mix project file adapted into Once targets.", configurable = False),
     attr("lockfile", "string", default = "mix.lock", docs = "Package-relative Mix lockfile used when the project declares external dependencies.", configurable = False),
     attr("resolver_inputs", "list<string>", default = "[]", docs = "Project files supplied to native integration resolution. Defaults to srcs when empty.", configurable = False),
+    attr("_default_test_roots", "list<string>", default = "[]", docs = "Resolver-owned first-party test target names used by targetless test selection.", configurable = False),
 ]
 
 _MIX_DEPENDENCIES_ATTRS = [

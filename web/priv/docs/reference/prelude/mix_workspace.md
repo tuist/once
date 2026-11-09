@@ -30,6 +30,9 @@ Native test targets use Mix's configured test paths and aliases. They run on
 every invocation and inherit the host runtime environment so database setup
 and host tools behave like an ordinary `mix test`. Application and dependency
 compilers run through Once's build actions, not again inside the test alias.
+The resolver reports these targets through `_default_test_roots`, so targetless
+test selection includes them even when development and test applications have
+no shared dependency targets.
 
 Projects with external dependencies must already have a current `mix.lock` and
 materialized dependency sources. A project with only local path dependencies
@@ -53,6 +56,8 @@ or updating the lockfile.
 | `manifest` | string | no | `mix.exs` | Package-relative Mix project manifest |
 | `lockfile` | string | no | `mix.lock` | Package-relative authoritative lockfile |
 | `resolver_inputs` | list&lt;string&gt; | no | `srcs` | Text inputs available while deriving the graph |
+| `test_staged_workspace` | bool | no | `false` | Enable a fresh private native `_build` layout for this project's generated test target |
+| `_default_test_roots` | list&lt;string&gt; | no | `[]` | Resolver-owned first-party test target names for targetless test selection |
 
 ## Dependency Edges
 
@@ -91,6 +96,16 @@ srcs = ["mix.exs"]
 [target.attrs]
 resolver_inputs = ["mix.exs", "mix.lock", ".formatter.exs", "config/**/*.exs"]
 ```
+
+For suites that depend on cwd-relative `_build/test/lib` paths, add
+`test_staged_workspace = true` under `[target.attrs]`. The generated test target
+then runs in a freshly copied private workspace with a native build layout,
+without writing developer `_build` outputs. The default remains the original
+package cwd. The opt-in preserves native compiler metadata and compiled source
+locations, so compiled `__DIR__` can differ from the private runtime cwd.
+It applies to this leaf project's test target, not implicitly to umbrella
+children. See [`elixir_test.staged_workspace`](/reference/prelude/elixir_test)
+for input declarations, symbolic-link restrictions, and setup behavior.
 
 ## Sources
 

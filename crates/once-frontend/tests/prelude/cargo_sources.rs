@@ -1,5 +1,56 @@
 use super::*;
 
+#[test]
+fn cargo_legacy_lockfile_preserves_registry_checksums() {
+    let source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("prelude/examples/rust-binary-with-crate");
+    let workspace = TempDir::new().unwrap();
+    for entry in walkdir::WalkDir::new(&source) {
+        let entry = entry.unwrap();
+        let destination = workspace
+            .path()
+            .join(entry.path().strip_prefix(&source).unwrap());
+        if entry.file_type().is_dir() {
+            std::fs::create_dir_all(destination).unwrap();
+        } else {
+            std::fs::copy(entry.path(), destination).unwrap();
+        }
+    }
+    let lock_path = workspace.path().join("Cargo.lock");
+    std::fs::write(
+        &lock_path,
+        r#"[[package]]
+name = "hello"
+version = "0.0.0"
+dependencies = ["itoa 1.0.14 (registry+https://github.com/rust-lang/crates.io-index)"]
+
+[[package]]
+name = "itoa"
+version = "1.0.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[metadata]
+"checksum itoa 1.0.14 (registry+https://github.com/rust-lang/crates.io-index)" = "d75a2a4b1b190afb6f5425f10f6a8f959d2ea0b9c2b1d79553551850539e4674"
+"#,
+    )
+    .unwrap();
+
+    let graph = once_frontend::load_graph_workspace(workspace.path()).unwrap();
+    for target in &graph {
+        assert!(target.diagnostics.is_empty(), "{:?}", target.diagnostics);
+    }
+    let dependency = graph
+        .iter()
+        .find(|target| target.label.id == "itoa-1.0.14")
+        .unwrap();
+    assert_eq!(
+        dependency.attrs.get("checksum"),
+        Some(&once_frontend::AttrValue::String(
+            "d75a2a4b1b190afb6f5425f10f6a8f959d2ea0b9c2b1d79553551850539e4674".to_string()
+        ))
+    );
+}
+
 fn fixture() -> String {
     format!(
         r#"{}

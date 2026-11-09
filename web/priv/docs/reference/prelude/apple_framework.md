@@ -11,6 +11,10 @@ contain `sdk` configure the
 [Apple software development kit (SDK)](https://developer.apple.com/documentation/xcode)
 used for the build.
 
+On macOS, framework links enable the native linker's reproducible-output mode.
+Independent cold-build verification still compares actual artifacts; stable
+action keys alone are not evidence of bitwise-identical framework bytes.
+
 Linux builds use Swift, xtool's Darwin SDK, and `rcodesign` for ad-hoc signing.
 See [Build iOS Applications on Linux](/guide/graph/apple/linux) for toolchain
 setup and supported workflows.

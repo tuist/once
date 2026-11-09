@@ -35,6 +35,12 @@ mod elixir_test_results;
 #[path = "prelude/rust_test_results.rs"]
 mod rust_test_results;
 
+#[path = "prelude/jvm_test_results.rs"]
+mod jvm_test_results;
+
+#[path = "prelude/android_archives.rs"]
+mod android_archives;
+
 #[cfg(unix)]
 #[path = "prelude/rust_build_script.rs"]
 mod rust_build_script;
@@ -6327,6 +6333,10 @@ result = repr(_kotlin_jvm_test_impl(ctx))
     assert!(out.contains("once.test_info.v1"), "{out}");
     assert!(out.contains("kotlin_jvm"), "{out}");
     assert!(out.contains("unit"), "{out}");
+    assert!(
+        out.contains(".once/out/apps/hello/GreetingTests/test/test_results.json"),
+        "{out}"
+    );
     let compile = action_by_identifier(&store, "kotlin_jvm_test_compile:apps/hello/GreetingTests");
     let classpath = compile
         .argv

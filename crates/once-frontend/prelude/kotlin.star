@@ -294,7 +294,7 @@ def _kotlin_jvm_compile_argv(ctx, tools, sources, compile_jars, output):
     if len(compile_jars) > 0:
         args.extend(["-classpath", _kotlin_jvm_classpath_separator().join(compile_jars)])
     if len(associates) > 0:
-        args.append("-Xfriend-paths=" + _kotlin_jvm_classpath_separator().join(associates))
+        args.append("-Xfriend-paths=" + ",".join(associates))
     for plugin in plugin_jars:
         args.append("-Xplugin=" + plugin)
     for option in _kotlin_jvm_attr(ctx, "compiler_plugin_options", []):
@@ -315,19 +315,39 @@ def _kotlin_jvm_compile(ctx, target_kind):
     runtime_jars = _kotlin_jvm_runtime_jars(runtime_deps)
     plugin_jars = [_package_relative(ctx, path) for path in _kotlin_jvm_attr(ctx, "compiler_plugin_jars", [])]
     output = declare_output(_kotlin_jvm_output_name(ctx))
+    manifest = _kotlin_jvm_attr(ctx, "manifest", "")
+    compile_output = declare_output("classes") if manifest else output
     module_name = _kotlin_jvm_attr(ctx, "module_name", "") or ctx["label"]["name"]
     run_action(
         display_name = "Compile Kotlin JVM classes · " + ctx["label"]["name"],
         history = _action_history(ctx, "kotlin", "jvm.compile"),
         presentation = _action_metadata(context = [_action_context("kotlin.jvm_target", _kotlin_jvm_attr(ctx, "jvm_target", "17"), "JVM " + _kotlin_jvm_attr(ctx, "jvm_target", "17"))]),
         source_files = _action_source_files(_unique(sources + _kotlin_jvm_workspace_inputs(compile_jars + plugin_jars))),
-        argv = _kotlin_jvm_compile_argv(ctx, tools, sources, compile_jars, output),
+        argv = _kotlin_jvm_compile_argv(ctx, tools, sources, compile_jars, compile_output),
         inputs = _unique(sources + _kotlin_jvm_workspace_inputs(compile_jars + plugin_jars)),
-        outputs = [output],
+        outputs = [compile_output],
+        clean_paths = [compile_output] if manifest else [],
         env = _kotlin_jvm_env(ctx),
         toolchain_identity = tools["identity"] + "\x00module\x00" + module_name,
         identifier = "kotlin_jvm_compile:" + ctx["label"]["id"],
     )
+    if manifest:
+        manifest = _package_relative(ctx, manifest)
+        jar = _kotlin_jvm_attr(ctx, "jar", "")
+        if not jar:
+            java_home = _kotlin_jvm_attr(ctx, "java_home", "") or host_env("JAVA_HOME")
+            jar = java_home + "/bin/jar" if java_home else host_which("jar")
+        jar_identity = jar + "\x00" + host_command([jar, "--version"]).strip()
+        run_action(
+            display_name = "Package Kotlin JVM archive · " + ctx["label"]["name"],
+            source_files = _action_source_files(sources + [manifest]),
+            argv = [jar, "--create", "--file", output, "--date=1980-01-01T00:00:02Z", "--manifest", manifest, "-C", compile_output, "."],
+            inputs = [compile_output, manifest],
+            outputs = [output],
+            env = _kotlin_jvm_env(ctx),
+            toolchain_identity = tools["identity"] + "\x00jar\x00" + jar_identity,
+            identifier = "kotlin_jvm_archive:" + ctx["label"]["id"],
+        )
     transitive_compile_jars = _unique([output] + compile_jars)
     transitive_runtime_jars = _unique([output, tools["kotlin_stdlib"]] + runtime_jars)
     return {
@@ -338,7 +358,7 @@ def _kotlin_jvm_compile(ctx, target_kind):
         "transitive_compile_jars": transitive_compile_jars,
         "transitive_runtime_jars": transitive_runtime_jars,
         "transitive_data": _kotlin_jvm_data(ctx),
-        "affected_inputs": _unique(sources + _kotlin_jvm_workspace_inputs(compile_jars + plugin_jars)),
+        "affected_inputs": _unique(sources + _kotlin_jvm_workspace_inputs(compile_jars + plugin_jars) + ([manifest] if manifest else [])),
     }
 
 def _kotlin_jvm_library_impl(ctx):
@@ -490,7 +510,7 @@ def _kotlin_jvm_test_impl(ctx):
     )
     write_tree_digest(classes, classes_hash, identifier = "kotlin_jvm_test_classes_digest:" + ctx["label"]["id"])
     runner_classes, runner_hash = _kotlin_jvm_compile_test_runner(ctx, tools)
-    test_dir = ctx["build_dir"] + "/test-results"
+    test_dir = _test_output_dir(ctx)
     results = test_dir + "/test_results.json"
     log = test_dir + "/kotlin-jvm-test.log"
     native_results = test_dir + "/native_results.txt"
@@ -570,7 +590,10 @@ _JAVA_COMPILER_TOOL = tool("java", ["javac"])
 
 kotlin_jvm_library = target_kind(
     docs = "Compiles Kotlin sources into a Java archive with typed compile, friend, exported, provided, and runtime dependency roles.",
-    attrs = _KOTLIN_JVM_COMMON_ATTRS,
+    attrs = _KOTLIN_JVM_COMMON_ATTRS + [
+        attr("manifest", "string", docs = "Optional package-relative JAR manifest. Packages a declared classes tree with JDK 17 or newer jar and fixed timestamps.", configurable = False),
+        attr("jar", "string", docs = "Override the JDK jar executable used when manifest is declared.", configurable = False),
+    ],
     deps = _KOTLIN_JVM_DEP_EDGES,
     providers = ["kotlin_jvm_library", "java_library"],
     capabilities = [capability("build", ["default", "jar"])],

@@ -31,6 +31,10 @@ test linker uses that application's executable as its bundle loader. This resolv
 under test from the host without copying the host's application objects into
 the test bundle.
 
+The `test_tools` dependency role stages command-line executables beside the
+test bundle. These tools are runtime dependencies, not linked code or test
+host applications.
+
 Interface tests use the platform test-runner application. Once packages and
 signs the runner, nests the interface-test bundle under its `PlugIns`
 directory, stages the required testing frameworks, and launches the declared
@@ -53,9 +57,17 @@ Where results come from the XCTest host, Once translates the host's per-case
 completion records into normalized outcomes and durations. This includes Swift
 Testing cases that the host runs alongside XCTest cases. Once also lists cases
 found in sources so a shard can address them; a case without a completion
-record stays unknown rather than being credited with a pass. A bundle stays
-with the XCTest host when it holds XCTest cases, which only that host runs, and
+record stays unknown rather than being credited with a pass. When XCTest
+reports a completed successful `All tests` or `Selected tests` suite and its total matches the
+observed case records, that native inventory supersedes source declarations,
+excluding platform-conditional cases that were not compiled. Missing or
+inconsistent completion summaries retain unknown cases and fail closed.
+A bundle stays with the XCTest host when it holds XCTest cases, which only that host runs, and
 when it runs anywhere other than macOS.
+
+On macOS, unhosted XCTest bundles also honor `skipped_tests` through the native
+runner's inverted selection. Explicitly requesting an excluded case fails
+instead of silently running it.
 
 ## Attributes
 
@@ -124,6 +136,7 @@ for mapped build settings and file-list variables.
 | Edge | Accepts | Description |
 | --- | --- | --- |
 | `deps` | `apple_linkable`, `apple_application`, `apple_swift_plugin`, `native_linkable`, `apple_generated_files` | Code under test, optional host application, native linkables, compiler plugins, and generated package files |
+| `test_tools` | `apple_application`, `apple_executable` | Command-line executables staged beside the test bundle without linking or selecting a test host |
 
 ## Providers
 

@@ -17,7 +17,10 @@ Only two executor families are runnable natively today:
   on Linux and macOS, or `cmd.exe` on Windows.
 - `nx:run-script`. The resolver reads `metadata.runCommand`, which Nx
   pre-resolves to the package-manager invocation for the requested
-  script.
+  script, and runs it from the project directory.
+
+For `run-commands`, the resolver forwards `options.args` unless the task or
+individual command sets `forwardAllArgs` to false.
 
 Other executors emit a provider-only target that fails the build
 capability with a message naming the executor.
@@ -26,6 +29,18 @@ Most attributes on this target are filled in by the `nx_workspace`
 resolver. Declaring an `nx_task` by hand is only necessary when the
 workspace is not fully covered by the `nx` native project.
 
+Commands can invoke installed tools such as `tsc` and `vitest` by name.
+Once prepends `node_modules/.bin` directories from the command's working
+directory through the workspace root to `PATH`, with the nearest package
+taking precedence.
+
+Nx output declarations are cache patterns, not required products. Once stores
+a required snapshot and a manifest of existing matches, then restores those
+matches to their original workspace paths. An absent coverage directory is
+valid when coverage was not requested. Output patterns use the installed
+Nx version's native matcher. Ordinary Once action outputs remain required.
+Generated Vite caches under `node_modules/.vite` are not source inputs.
+
 ## Attributes
 
 | Attribute | Type | Required | Default | Description |
@@ -33,7 +48,7 @@ workspace is not fully covered by the `nx` native project.
 | `project` | string | yes |  | Nx project name as it appears in the project graph |
 | `task` | string | yes |  | Nx target name for the project, such as `build`, `test`, or `lint` |
 | `project_root` | string | no |  | Workspace-relative directory that holds the project's sources |
-| `outputs` | list&lt;string&gt; | no | `[]` | Workspace-relative output paths declared by the Nx target with `{projectRoot}`, `{workspaceRoot}`, and `{projectName}` tokens already expanded |
+| `outputs` | list&lt;string&gt; | no | `[]` | Workspace-relative Nx output paths or patterns with `{projectRoot}`, `{workspaceRoot}`, and `{projectName}` expanded. Only existing matches are cached; absent outputs are valid |
 | `executor` | string | no |  | Nx executor id, kept for provenance so cache keys segregate between executors |
 | `project_type` | string | no |  | Nx project type reported by the graph: `app`, `lib`, or `e2e` |
 | `runnable` | bool | no | `false` | Resolver-owned flag: true when Once was able to lower the task to a concrete command it can run |
@@ -43,7 +58,6 @@ workspace is not fully covered by the `nx` native project.
 | `node` | string | no | `node` | Node.js executable used to identify the toolchain in the cache key |
 | `dependencies` | list&lt;string&gt; | no | `["node_modules/**/*"]` | Installed package files required at execution time |
 | `config` | list&lt;string&gt; | no | `["nx.json", "package.json", "pnpm-lock.yaml", "yarn.lock", "package-lock.json"]` | Workspace-level configuration inputs |
-| `args` | list&lt;string&gt; | no | `[]` | Additional arguments appended to the underlying command |
 | `env` | map&lt;string, string&gt; | no | `{}` | User-supplied environment variables applied after `command_env` |
 | `env_inherit` | list&lt;string&gt; | no | `[]` | Host environment variables inherited by name |
 

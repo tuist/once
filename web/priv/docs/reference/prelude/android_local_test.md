@@ -15,6 +15,15 @@ name starts with `test`, or methods annotated with `org.junit.Test` or
 [JUnit](https://junit.org/) can be added through `classpath` and
 `runtime_classpath`.
 
+Static nested test classes are discovered as well as top-level classes.
+Public inherited test methods run on the concrete suite, with overridden
+methods selected once.
+Anonymous classes, local classes, abstract classes, and non-static inner
+classes are not independent test suites. Methods or suites annotated with
+`org.junit.Ignore` or `kotlin.test.Ignore` are reported as skipped without
+invoking them or initializing ignored suites. The reflection runner does not
+implement framework lifecycle hooks or custom runners such as Robolectric.
+
 ## Attributes
 
 | Attribute | Type | Required | Default | Description |

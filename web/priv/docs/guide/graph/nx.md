@@ -45,7 +45,11 @@ and the object form.
 
 By default, Once emits the `build`, `test`, and `lint` tasks for every
 project. Adjust the filter through the seed's `targets` attribute, or set
-it to the empty list to include every task in the graph.
+it to the empty list to include every task in the graph. Tasks required
+by `dependsOn` are retained transitively even when their names are outside
+the filter, so a build that depends on `compile` keeps its prerequisite.
+Upstream dependencies traverse projects without the requested task until
+they reach a project that defines it.
 
 ### Build a Target
 
@@ -61,7 +65,15 @@ once build my_app__build
 
 The first run is a cache miss and executes the underlying command. A
 second run with unchanged inputs is a cache hit and completes without
-running Node.js.
+rerunning that command.
+
+Nx declares potential outputs, including coverage directories that may not
+exist unless coverage is enabled. Once caches the existing matches in a
+task-owned snapshot and restores them to their original workspace paths.
+Missing matches are valid for Nx tasks; other Once action outputs remain
+required. Glob patterns use the workspace's installed Nx matcher.
+Generated Vite caches under `node_modules/.vite` are excluded from inputs,
+so a test runner's timing records do not invalidate its next run.
 
 ## Executor Coverage
 
@@ -73,10 +85,12 @@ Coverage falls into three groups today:
   `@nrwl/workspace:run-commands`) run natively. Once extracts the shell
   command from the executor's `options.command` or `options.commands` and
   runs it under a POSIX shell on Linux and macOS, or `cmd.exe` on Windows.
+  `options.args` are forwarded unless `forwardAllArgs` disables forwarding
+  for the task or an individual command.
 - `nx:run-script` runs natively when the graph carries a resolved
   `metadata.runCommand`. Nx populates that field with the exact
   package-manager invocation (for example `pnpm run build`), which Once
-  runs as a single command.
+  runs as a single command from the project directory.
 - Other executors (`@nx/webpack:webpack`, `@nx/jest:jest`,
   `@angular-devkit/build-angular:*`, plugin executors) surface as
   informational `nx_task` targets that fail the build capability with a

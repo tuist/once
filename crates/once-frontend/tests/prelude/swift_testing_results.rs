@@ -120,6 +120,68 @@ struct OtherSuite {
     assert_eq!(named("generated")["status"], "passed");
 }
 
+#[cfg(unix)]
+#[test]
+fn complete_xctest_results_override_conditional_source_declarations() {
+    let script = eval_prelude_string_function(
+        "_apple_test_report_script",
+        r#"(["Suite.swift"], "cases.jsonl", "tests/Bundle", "xctest")"#,
+    )
+    .unwrap();
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("Suite.swift"),
+        "class Suite: XCTestCase {\nfunc testRuns() {}\n#if canImport(UIKit)\nfunc testIOSOnly() {}\n#endif\n}\n",
+    )
+    .unwrap();
+    for (summary, total) in [
+        (
+            "Test Suite 'All tests' passed at now.\n Executed 1 test, with 0 failures\n",
+            1,
+        ),
+        (
+            "Test Suite 'Selected tests' passed at now.\n Executed 1 test, with 0 failures\n",
+            1,
+        ),
+        (
+            "Test Suite 'All tests' passed at now.\n Executed 2 tests, with 0 failures\n",
+            2,
+        ),
+        (
+            "Test Suite 'All tests' passed at now.\n Executed 0 tests, with 0 failures\n",
+            2,
+        ),
+        (
+            "Test Suite 'All tests' failed at now.\n Executed 1 test, with 1 failure\n",
+            2,
+        ),
+        ("", 2),
+    ] {
+        std::fs::write(
+            dir.path().join("run.log"),
+            format!("Test Case '-[Bundle.Suite testRuns]' passed (0.125 seconds).\n{summary}"),
+        )
+        .unwrap();
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "status=0\nlog=run.log\nnative_results=native.txt\nresults=results.json\n{script}"
+            ))
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let results: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join("results.json")).unwrap())
+                .unwrap();
+        assert_eq!(results["summary"]["total"], total, "{results}");
+        assert_eq!(results["summary"]["passed"], 1);
+        if total == 2 {
+            assert_eq!(results["cases"][1]["status"], "unknown");
+        }
+    }
+}
+
 /// Only the `XCTest` host runs `XCTest` cases, so a bundle that has any is left
 /// to it. A bundle without them is free to run through the testing library's own
 /// entry point, which reports every test and what became of it.

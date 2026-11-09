@@ -86,18 +86,22 @@ SWIFT
   }
 
   test_dependency_resources() {
-    mkdir -p "$WORKSPACE/Sources/Data" "$WORKSPACE/Tests/DataTests" \
-      "$WORKSPACE/Sources/CValue/include" "$WORKSPACE/Sources/CValue/Private/nested"
+    mkdir -p "$WORKSPACE/Sources/Data" "$WORKSPACE/Sources/Probe" "$WORKSPACE/Tests/DataTests" \
+      "$WORKSPACE/Sources/CValue/include" "$WORKSPACE/Sources/CValue/Private/nested" \
+      "$WORKSPACE/Tests/DataTests/Processed/Nested" "$WORKSPACE/Tests/DataTests/Copied/Nested"
     cat > "$WORKSPACE/Package.swift" <<'SWIFT'
 // swift-tools-version: 6.0
 import PackageDescription
 let package = Package(name: "ResourcePackage", targets: [
     .target(name: "CValue", cSettings: [.headerSearchPath("Private")]),
     .target(name: "Data", dependencies: ["CValue"], resources: [.copy("value.txt")]),
-    .testTarget(name: "DataTests", dependencies: ["Data"]),
+    .executableTarget(name: "Probe", dependencies: ["Data"]),
+    .testTarget(name: "DataTests", dependencies: ["Data"], resources: [.process("Processed"), .copy("Copied")]),
 ])
 SWIFT
     printf 'resource payload\n' > "$WORKSPACE/Sources/Data/value.txt"
+    printf 'processed payload\n' > "$WORKSPACE/Tests/DataTests/Processed/Nested/processed.txt"
+    printf 'copied payload\n' > "$WORKSPACE/Tests/DataTests/Copied/Nested/copied.txt"
     printf 'int resourceNumber(void);\n' > "$WORKSPACE/Sources/CValue/include/CValue.h"
     printf '#define RESOURCE_NUMBER 17\n' > "$WORKSPACE/Sources/CValue/Private/nested/value.h"
     cat > "$WORKSPACE/Sources/CValue/value.c" <<'C'
@@ -113,16 +117,34 @@ public func resourceValue() throws -> String {
 }
 public func headerValue() -> Int32 { resourceNumber() }
 SWIFT
+    printf 'import Data\nprint(headerValue())\n' > "$WORKSPACE/Sources/Probe/main.swift"
     cat > "$WORKSPACE/Tests/DataTests/DataTests.swift" <<'SWIFT'
+import Foundation
 import XCTest
 import Data
 final class DataTests: XCTestCase {
     func testResource() throws {
         XCTAssertEqual(try resourceValue(), "resource payload\n")
         XCTAssertEqual(headerValue(), 17)
+        let processed = try XCTUnwrap(Bundle.module.url(forResource: "processed", withExtension: "txt"))
+        XCTAssertEqual(try String(contentsOf: processed, encoding: .utf8), "processed payload\n")
+        let copied = try XCTUnwrap(Bundle.module.url(forResource: "copied", withExtension: "txt", subdirectory: "Copied/Nested"))
+        XCTAssertEqual(try String(contentsOf: copied, encoding: .utf8), "copied payload\n")
+        let process = Process()
+        process.executableURL = Bundle(for: type(of: self)).bundleURL.deletingLastPathComponent().appendingPathComponent("Probe")
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        try process.run()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+        XCTAssertEqual(String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8), "17\n")
     }
+    #if canImport(UIKit)
+    func testNotCompiledOnMacOS() { XCTFail("This case must not be discovered on macOS") }
+    #endif
 }
 SWIFT
+    mv "$WORKSPACE/Sources" "$WORKSPACE/Source"
     once --memory-limit 2GiB --cpu-limit 2 test --quiet > "$WORKSPACE/test.out" 2> "$WORKSPACE/test.err" || {
       cat "$WORKSPACE/test.out" "$WORKSPACE/test.err"
       return 1

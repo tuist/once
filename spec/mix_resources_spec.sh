@@ -20,6 +20,9 @@ defmodule Mix.Tasks.Compile.Resource do
     path = Path.join(Mix.Project.app_path(), "priv/native/generated.txt")
     File.mkdir_p!(Path.dirname(path))
     File.write!(path, "generated")
+    manifest = Path.join(Mix.Project.app_path(), ".mix/volatile")
+    File.mkdir_p!(Path.dirname(manifest))
+    File.write!(manifest, Integer.to_string(System.system_time(:nanosecond)))
     {:ok, []}
   end
 end
@@ -55,6 +58,32 @@ EOF
       [ "$(cat "$app_dir/priv/static.txt")" = static ] || return
     fi
     grep -q '"cache":"hit"' "$WORKSPACE/restored.json"
+  }
+
+  compare_independent_dependency_builds() {
+    XDG_CACHE_HOME="$SPEC_ROOT/first-cache" once --format json build greeting > "$SPEC_ROOT/first.json" || return
+    manifest="$WORKSPACE/.once/out/mix-locked-greeting/mix/prod/lib/locked_greeting/.mix/volatile"
+    cp "$manifest" "$SPEC_ROOT/first-manifest" || return
+    rm -rf "$WORKSPACE/.once"
+    XDG_CACHE_HOME="$SPEC_ROOT/second-cache" once --format json build greeting > "$SPEC_ROOT/second.json" || return
+    python3 - "$SPEC_ROOT/first.json" "$SPEC_ROOT/second.json" "$SPEC_ROOT/first-manifest" "$manifest" <<'PY'
+import json, pathlib, sys
+first, second = [json.load(open(path)) for path in sys.argv[1:3]]
+assert first["action_digest"] == second["action_digest"], (first, second)
+assert pathlib.Path(sys.argv[3]).read_bytes() != pathlib.Path(sys.argv[4]).read_bytes()
+PY
+    [ "$?" = 0 ] || return
+    cat > "$WORKSPACE/deps/locked_greeting/lib/locked_greeting.ex" <<'EX'
+defmodule LockedGreeting do
+  def message(name), do: "Changed, #{name}!"
+end
+EX
+    XDG_CACHE_HOME="$SPEC_ROOT/second-cache" once --format json build greeting > "$SPEC_ROOT/changed.json" || return
+    python3 - "$SPEC_ROOT/second.json" "$SPEC_ROOT/changed.json" <<'PY'
+import json, sys
+previous, changed = [json.load(open(path)) for path in sys.argv[1:]]
+assert previous["action_digest"] != changed["action_digest"], (previous, changed)
+PY
   }
 
   prepare_build_root_resources() {
@@ -145,6 +174,14 @@ TOML
     prepare_resource_dependency
 
     When call build_and_restore_resources
+    The status should be success
+  End
+
+  It 'keeps consumer keys stable across independent builds with volatile native manifests'
+    Skip if 'Mix toolchain unavailable on this host' mix_tools_unavailable
+    prepare_resource_dependency
+
+    When call compare_independent_dependency_builds
     The status should be success
   End
 

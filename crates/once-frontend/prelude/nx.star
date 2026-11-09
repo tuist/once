@@ -50,7 +50,7 @@ def _nx_binary(ctx):
         return resolved
     fail(ctx["label"]["id"] + ": nx was not found; install it in the workspace (`npm install`) or make `nx` available on PATH")
 
-def _nx_env_with_path(env, node):
+def _nx_env_with_path(env, node, cwd = None):
     merged = {}
     for name, value in env.items():
         merged[name] = value
@@ -59,6 +59,11 @@ def _nx_env_with_path(env, node):
     # commands that shell out to them. On Windows the corresponding path
     # segments are added.
     path_segments = []
+    if cwd != None:
+        parts = [part for part in cwd.split("/") if part and part != "."]
+        for index in range(len(parts), -1, -1):
+            directory = "/".join(parts[:index])
+            path_segments.append(execution_path((directory + "/" if directory else "") + "node_modules/.bin"))
     node_dir = _parent_dir(node)
     if node_dir:
         path_segments.append(node_dir)
@@ -139,20 +144,39 @@ def _nx_project_dependencies(graph_root):
         out[source] = _unique(upstream)
     return out
 
+def _nx_upstream_tasks(project_name, task_name, nodes, project_dependencies):
+    pending = project_dependencies.get(project_name) or []
+    seen = {project_name: True}
+    out = []
+    for _ in range(len(nodes)):
+        if not pending:
+            break
+        next_projects = []
+        for project in pending:
+            if project in seen:
+                continue
+            seen[project] = True
+            data = (nodes.get(project) or {}).get("data") or {}
+            if task_name in (data.get("targets") or {}):
+                out.append("./" + _nx_task_name(project, task_name))
+            else:
+                next_projects.extend(project_dependencies.get(project) or [])
+        pending = next_projects
+    return out
+
 # Translate one Nx `dependsOn` entry to task labels. Supports:
 #   "build"                        - same project's build
 #   "^build"                       - build on each upstream project
 #   {"target": "build", ...}       - explicit form; `projects` may be
 #                                    "dependencies", "self", or a list of names
-def _nx_dependencies_for_target(project_name, task_name, project_data, project_dependencies):
+def _nx_dependencies_for_target(project_name, task_name, project_data, project_dependencies, nodes):
     depends_on = ((project_data.get("targets") or {}).get(task_name) or {}).get("dependsOn") or []
     out = []
     for entry in depends_on:
         if type(entry) == type(""):
             if entry.startswith("^"):
                 inner = entry[1:]
-                for up in project_dependencies.get(project_name) or []:
-                    out.append("./" + _nx_task_name(up, inner))
+                out.extend(_nx_upstream_tasks(project_name, inner, nodes, project_dependencies))
             else:
                 out.append("./" + _nx_task_name(project_name, entry))
         elif type(entry) == type({}):
@@ -163,8 +187,7 @@ def _nx_dependencies_for_target(project_name, task_name, project_data, project_d
             if projects == None or projects == "self":
                 out.append("./" + _nx_task_name(project_name, target))
             elif projects == "dependencies":
-                for up in project_dependencies.get(project_name) or []:
-                    out.append("./" + _nx_task_name(up, target))
+                out.extend(_nx_upstream_tasks(project_name, target, nodes, project_dependencies))
             elif type(projects) == type([]):
                 for project in projects:
                     if project == "self":
@@ -181,18 +204,23 @@ def _nx_run_commands_from_options(options):
     if not options:
         return []
     command = options.get("command")
-    if type(command) == type("") and command:
-        return [command]
-    commands = options.get("commands") or []
+    if type(command) == type([]):
+        command = " ".join(command)
+    commands = [{"command": command}] if command else (options.get("commands") or [])
+    args = options.get("args") or ""
+    if type(args) == type([]):
+        args = " ".join(args)
     out = []
     for entry in commands:
+        forward = options.get("forwardAllArgs", True)
+        inner = ""
         if type(entry) == type(""):
-            if entry:
-                out.append(entry)
+            inner = entry
         elif type(entry) == type({}):
             inner = entry.get("command") or ""
-            if inner:
-                out.append(inner)
+            forward = entry.get("forwardAllArgs", forward)
+        if inner:
+            out.append(inner + (" " + args if args and forward else ""))
     return out
 
 def _nx_run_commands_attrs(task_config):
@@ -221,9 +249,7 @@ def _nx_workspace_resolver(ctx):
         project_root = data.get("root") or ""
         node_type = node_entry.get("type") or ""
         for task_name, task_config in (data.get("targets") or {}).items():
-            if task_filter_set and not task_filter_set.get(task_name):
-                continue
-            deps = _nx_dependencies_for_target(project_name, task_name, data, project_dependencies)
+            deps = _nx_dependencies_for_target(project_name, task_name, data, project_dependencies, nodes)
             outputs = []
             for template in task_config.get("outputs") or []:
                 expanded = _nx_expand_output(project_root, project_name, template)
@@ -257,7 +283,7 @@ def _nx_workspace_resolver(ctx):
                 if run_command:
                     attrs["runnable"] = True
                     attrs["commands"] = [run_command]
-                    attrs["command_cwd"] = ((task_config.get("options") or {}).get("cwd")) or ""
+                    attrs["command_cwd"] = project_root
                     attrs["command_env"] = (task_config.get("options") or {}).get("env") or {}
             targets.append({
                 "name": _nx_task_name(project_name, task_name),
@@ -268,6 +294,26 @@ def _nx_workspace_resolver(ctx):
             })
             if task_name == "build" and (node_type == "app" or node_type == "e2e"):
                 roots.append(_nx_task_name(project_name, task_name))
+
+    by_name = {target["name"]: target for target in targets}
+    for target in targets:
+        target["deps"] = [dependency for dependency in target["deps"] if dependency.removeprefix("./") in by_name]
+    if task_filter_set:
+        selected = {target["name"]: True for target in targets if task_filter_set.get(target["attrs"]["task"])}
+        pending = selected.keys()
+        for _ in range(len(targets)):
+            if not pending:
+                break
+            dependencies = []
+            for name in pending:
+                for dependency in by_name[name]["deps"]:
+                    dependency_name = dependency.removeprefix("./")
+                    if dependency_name in by_name and dependency_name not in selected:
+                        selected[dependency_name] = True
+                        dependencies.append(dependency_name)
+            pending = dependencies
+        targets = [target for target in targets if target["name"] in selected]
+        roots = [name for name in roots if name in selected]
 
     return {
         "targets": targets,
@@ -291,6 +337,52 @@ def _nx_shell_argv(commands):
     if host_os() == "windows":
         return [host_which("cmd.exe"), "/d", "/s", "/c", joined]
     return [host_which("sh"), "-c", joined]
+
+_NX_SNAPSHOT_OUTPUTS = """
+const fs = require('node:fs');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const spec = JSON.parse(process.argv[1]);
+const root = process.cwd();
+const result = spawnSync(spec.argv[0], spec.argv.slice(1), { cwd: spec.cwd, stdio: 'inherit' });
+if (result.error) throw result.error;
+if (result.signal) process.kill(process.pid, result.signal);
+if (result.status !== 0) process.exit(result.status || 1);
+const patterns = spec.outputs;
+const expanded = patterns.some(p => /[*?{}[\\]!]/.test(p))
+  ? require('nx/src/native').expandOutputs(root, patterns)
+  : patterns.filter(p => fs.existsSync(p));
+const entries = [];
+for (const output of [...new Set(expanded)].sort()) {
+  const source = path.resolve(output);
+  const relative = path.relative(root, source);
+  if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)
+      || relative.split(path.sep)[0] === '.once') {
+    throw new Error('Nx output must be a scoped workspace path: ' + output);
+  }
+  const index = entries.length;
+  const kind = fs.lstatSync(source).isDirectory() ? 'tree' : 'file';
+  fs.mkdirSync(path.join(spec.snapshot, 'files'), { recursive: true });
+  fs.cpSync(source, path.join(spec.snapshot, 'files', String(index)), { recursive: true, verbatimSymlinks: true });
+  entries.push({ path: relative.split(path.sep).join('/'), kind });
+}
+fs.mkdirSync(spec.snapshot, { recursive: true });
+fs.writeFileSync(path.join(spec.snapshot, 'manifest.json'), JSON.stringify(entries));
+"""
+
+def nx_restore_outputs(ctx):
+    snapshot = ctx["args"]["snapshot"]
+    entries = json_decode(host_file_read(workspace_root() + "/" + snapshot + "/manifest.json"))
+    for index in range(len(entries)):
+        entry = entries[index]
+        source = snapshot + "/files/" + str(index)
+        copy_path(
+            source,
+            entry["path"],
+            kind = entry["kind"],
+            inputs = [source],
+            identifier = "nx-restore-" + str(index),
+        )
 
 def _nx_task_impl(ctx):
     project = _nx_attr(ctx, "project", "")
@@ -328,14 +420,18 @@ def _nx_task_impl(ctx):
     if project_root:
         project_source_globs.append(project_root + "/**/*")
 
+    output_patterns = outputs + [output + "/**/*" for output in outputs]
     inputs = _unique(
-        _file_globs(project_source_globs) +
+        glob(project_source_globs, exclude = output_patterns) +
         _file_globs(_nx_attr(ctx, "config", ["nx.json", "package.json", "pnpm-lock.yaml", "yarn.lock", "package-lock.json"])) +
         _file_globs(_nx_attr(ctx, "dependencies", ["node_modules/**/*"])),
     )
+    inputs = [path for path in inputs if "/node_modules/.vite/" not in "/" + path + "/"]
 
+    command_cwd = _nx_attr(ctx, "command_cwd", "")
+    cwd = command_cwd if command_cwd else "."
     node = _nx_node(ctx)
-    env = _nx_env_with_path(_nx_env(), node)
+    env = _nx_env_with_path(_nx_env(), node, cwd)
     for name in _nx_attr(ctx, "env_inherit", []):
         value = host_env(name)
         if value:
@@ -345,33 +441,48 @@ def _nx_task_impl(ctx):
     for name, value in _nx_attr(ctx, "env", {}).items():
         env[name] = value
 
-    # `run_action` requires a workspace-relative cwd. `nx:run-commands`
-    # commands run from the workspace root when `cwd` is unset, and from
-    # `options.cwd` (which is already workspace-relative) otherwise.
-    command_cwd = _nx_attr(ctx, "command_cwd", "")
-    cwd = command_cwd if command_cwd else "."
-
     node_version = host_command([node, "--version"]).strip()
+
+    argv = _nx_shell_argv(commands)
+    action_outputs = outputs
+    snapshot = None
+    if outputs:
+        snapshot = declare_output("nx-outputs")
+        argv = [node, "-e", _NX_SNAPSHOT_OUTPUTS, _json_encode({
+            "argv": argv,
+            "cwd": cwd,
+            "outputs": outputs,
+            "snapshot": snapshot,
+        })]
+        action_outputs = [snapshot]
 
     run_action(
         display_name = "Run Nx task · " + project + ":" + task,
         presentation = _action_metadata(context = [_action_context("nx.task", project + ":" + task)]),
         source_files = _action_source_files(inputs),
-        argv = _nx_shell_argv(commands),
+        argv = argv,
         inputs = inputs,
-        outputs = outputs,
+        outputs = action_outputs,
+        clean_paths = [snapshot] if snapshot else [],
         env = env,
-        cwd = cwd,
-        toolchain_identity = "once.nx.run-commands.v1\x00" + node + "\x00" + node_version,
+        cwd = "." if snapshot else cwd,
+        toolchain_identity = "once.nx.run-commands.v2\x00" + node + "\x00" + node_version,
         identifier = ctx["label"]["id"] + ":nx-run-commands",
     )
+    if snapshot:
+        expand_actions(
+            implementation = "nx_restore_outputs",
+            inputs = [snapshot + "/manifest.json"],
+            outputs = [],
+            args = {"snapshot": snapshot},
+        )
     return provider
 
 nx_workspace = target_kind(
     docs = "Native Nx workspace seed. Its resolver runs `nx graph --print` once during graph load, translates every project and task into a first-class Once target, and hands scheduling, caching, and remote execution to Once instead of `nx run`.",
     attrs = [
         attr("node", "string", default = "\"node\"", docs = "Node.js executable name, absolute path, or workspace-relative path.", configurable = False),
-        attr("targets", "list<string>", default = "[\"build\", \"test\", \"lint\"]", docs = "Nx task names to emit. Defaults to build, test, and lint. Set an empty list to include every task in the graph.", configurable = False),
+        attr("targets", "list<string>", default = "[\"build\", \"test\", \"lint\"]", docs = "Nx task names to emit, together with their transitive task dependencies. Defaults to build, test, and lint. Set an empty list to include every task in the graph.", configurable = False),
         attr("resolver_inputs", "list<string>", default = "[]", docs = "Package-relative text globs supplied to native integration resolution. Defaults to srcs when empty.", configurable = False),
         attr("graph_file", "string", default = "\"\"", docs = "Optional workspace-relative path to a checked-in `nx graph --view=projects` JSON snapshot. When set, Once reads it directly instead of running `nx graph`, which lets a workspace load without an installed Node.js and `node_modules/nx`.", configurable = False),
     ],
@@ -396,7 +507,7 @@ nx_task = target_kind(
         attr("project", "string", required = True, docs = "Nx project name as it appears in the project graph.", configurable = False),
         attr("task", "string", required = True, docs = "Nx target name for this project, such as `build`, `test`, or `lint`.", configurable = False),
         attr("project_root", "string", default = "\"\"", docs = "Workspace-relative directory that holds the project's sources.", configurable = False),
-        attr("outputs", "list<string>", default = "[]", docs = "Workspace-relative output paths declared by the Nx target with `{projectRoot}`, `{workspaceRoot}`, and `{projectName}` tokens already expanded.", configurable = False),
+        attr("outputs", "list<string>", default = "[]", docs = "Workspace-relative Nx output paths or patterns with `{projectRoot}`, `{workspaceRoot}`, and `{projectName}` expanded. Only existing matches are cached; absent outputs are valid.", configurable = False),
         attr("executor", "string", default = "\"\"", docs = "Nx executor id, kept for provenance so cache keys segregate between executors.", configurable = False),
         attr("project_type", "string", default = "\"\"", docs = "Nx project type reported by the graph: `app`, `lib`, or `e2e`.", configurable = False),
         attr("runnable", "bool", default = "false", docs = "True when the resolver was able to lower the task to a concrete command Once can run directly. False for plugin executors that require Nx to expand.", configurable = False),

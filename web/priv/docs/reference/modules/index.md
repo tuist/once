@@ -82,6 +82,15 @@ continue to use XCTest or the Swift Testing runner directly.
 Test settings come from each scheme's default test plan, or its first plan
 when no default is marked. Alternative plans do not add exclusions or arguments.
 
+`apple_test_bundle` accepts runtime executables through `test_tools`, separately
+from linked dependencies and host applications. Swift package imports populate
+this role with first-party executables. Swift package `process` resources
+flatten ordinary files while preserving localized and compiler-managed bundles;
+`copy` directories retain their hierarchy. Xcode imports accept `build_settings`
+overrides after native settings and preserve only test exclusions shared by all
+scheme references to a bundle. Completed successful XCTest inventories supersede
+conditional source declarations only when their totals match observed cases.
+
 On macOS, an explicit `CODE_SIGNING_ALLOWED=NO` omits signing entitlements and
 the expanded signing identity from imported targets. Once still seals bundles
 ad hoc for local integrity checks. This configuration disables capabilities
@@ -1612,8 +1621,46 @@ Suite mode declares listing and sharding unsupported, filtering as
 The built-in pytest kind uses native directory collection restricted to its
 declared source files. Native ignore rules run before exact case selection,
 so filtered execution cannot re-include a module ignored by `collect_ignore`.
+Configuration discovery uses the declared source paths before directory
+collection, preserving package-local settings. The source boundary wraps native
+ignore hooks, so a hook returning `False` cannot admit undeclared test files.
 Declare collection configuration, including nested `conftest.py` files, in
 `config` or `data` to keep discovery and action inputs complete.
+
+Mix tests preserve the original package cwd by default. The explicit
+`elixir_test.staged_workspace` option, also exposed as
+`mix_workspace.test_staged_workspace`, prepares a fresh private cwd from declared
+files and copied native application trees. It retains compiled source locations,
+rejects symbolic links and shell setup, and is not a security sandbox.
+The shared Kotlin and Android JVM runner reports method- and class-level
+`org.junit.Ignore` and `kotlin.test.Ignore` annotations as skipped without
+initializing ignored suites or invoking ignored methods. Public inherited test
+methods run on concrete suites, with overridden methods selected once. Existing
+non-public methods declared on the concrete suite remain discoverable.
+
+`kotlin_jvm_library.manifest` optionally supplies a package-relative JAR manifest.
+With it, compilation emits a declared classes tree and a separate JDK archive
+action fingerprints the manifest and resolved `jar` tool identity. The `jar`
+attribute overrides that tool. Without a manifest, compiler-produced archives
+are unchanged. Kotlin manifest packaging and Android JAR/AAR packaging and APK
+additions use fixed ZIP timestamps with JDK 17 or newer.
+
+Nx output declarations describe potential paths or patterns, not required
+products. Runnable tasks cache a declared snapshot and manifest of existing
+matches, then restore them through deferred copy actions. Missing matches are
+valid; ordinary action outputs remain required. The resolver traverses
+task-less upstream projects, runs package scripts from their project directory,
+and honors command argument forwarding. Generated `node_modules/.vite` caches
+are excluded from task inputs. Plugin executors remain unsupported.
+
+`cmake_project` and `cmake_test` bypass native configure/build caching because
+CMake can select external compilers and toolchains outside declared inputs.
+Product staging remains content-addressed. `cmake_test` rejects relocated
+execution, runs CTest uncached, and reports one normalized suite alongside native
+JUnit results. Its positive `timeout_ms` bounds the suite and retains normalized
+failure on timeout. Case listing, filtering, and sharding are unsupported. Its
+declared job count also bounds nested CMake builds and reserves the corresponding
+action resources.
 
 The provider may also return `test_discovery_inputs`, a list of
 workspace-relative files whose contents can change discovered unit

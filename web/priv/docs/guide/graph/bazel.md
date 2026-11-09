@@ -10,11 +10,11 @@ exposes every rule as a Once target, and runs each target's actions
 itself. Bazel handles analysis (target loading, toolchain resolution,
 external repository download via `bazel fetch`, the action graph via
 `bazel aquery`); Once handles execution, from a shadow execution root
-under `<workspace>/.once/bazel-shadow/<target>/`. `bazel build` is only
-invoked as a fallback when a target's action graph contains a
-Bazel-internal action that has no argv in `aquery` output (`Symlink`,
-`FileWrite`, `RunfilesTree`, `SymlinkTree`, `RepoMappingManifest`). Each
-such mnemonic Once learns to run natively shrinks the fallback set.
+under `<workspace>/.once/bazel-shadow/<target>/`. Unsupported internal
+actions fall back to the corresponding native Bazel command. `TestRunner`
+also delegates because its test environment and runfiles mapping are not
+fully described by `aquery`. Delegated commands bypass the Once action
+cache; Bazel owns their build and test cache reuse.
 
 ## Try an Existing Workspace
 

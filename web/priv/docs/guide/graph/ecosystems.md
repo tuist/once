@@ -81,7 +81,7 @@ query-before-build workflow, current limitations, and follow-up steps:
   application packages, and host or device tests.
 - [C and C++](/guide/graph/c) covers headers, source compilation, static
   libraries, and native consumers.
-- [CMake](/guide/graph/cmake) covers coarse cached execution, exact products,
+- [CMake](/guide/graph/cmake) covers coarse native execution, exact products,
   checked graph snapshots, and incremental adoption.
 - [Container Images](/guide/graph/containers) builds an existing Dockerfile as
   a discovered image target, with optional Once configuration for custom paths

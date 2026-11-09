@@ -59,4 +59,25 @@ Describe 'bazel native project'
     The stdout should include '"id":"bz_support_test"'
     The path "$WORKSPACE/once.toml" should not be exist
   End
+
+  It 'uses the native test strategy when TestRunner argv cannot run on its own'
+    setup_bazel_workspace
+    cat > "$WORKSPACE/tools/bazelisk" <<'SH'
+#!/bin/sh
+case "$1" in
+  --version) printf 'bazel 8.4.2\n' ;;
+  query) printf 'sh_test rule //:support_test\n' ;;
+  aquery) printf '%s\n' '{"actions":[{"mnemonic":"TestRunner","arguments":["/bin/sh","-c","exit 42"]}]}' ;;
+  info) printf '%s\n' "${TMPDIR:-/tmp}/once-bazel-output-base" ;;
+  fetch|test) exit 0 ;;
+  *) exit 2 ;;
+esac
+SH
+
+    When call env PATH="$WORKSPACE/tools:$PATH" "$ONCE_BIN" -C "$WORKSPACE" --format json test bz_support_test
+    The status should be success
+    The stderr should be blank
+    The stdout should include '"status":"completed"'
+    The stdout should include '"cache":"bypass"'
+  End
 End

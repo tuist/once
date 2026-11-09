@@ -1359,13 +1359,14 @@ def _xcode_toolchain_version(ctx):
     _XCODE_TOOLCHAIN_VERSION_STATE["parsed"] = parsed
     return parsed
 
-def _xcode_setting_subs(ctx, target_name, product_name, sdkroot, settings = None, project_dir = "", configuration = ""):
+def _xcode_setting_subs(ctx, target_name, product_name, sdkroot, settings = None, project_dir = "", configuration = "", project_name = ""):
     package = (ctx.get("label") or {}).get("package") or ""
     target_build_dir = ".once/out/" + ((package + "/") if package else "") + _xcode_sanitized_target_name(target_name)
     source_root = project_dir or "."
     subs = {
         "SRCROOT": source_root,
         "PROJECT_DIR": source_root,
+        "PROJECT_NAME": project_name,
         "TARGET_NAME": target_name,
         "PRODUCT_NAME": product_name,
         "PRODUCT_MODULE_NAME": product_name.replace("-", "_"),
@@ -1421,7 +1422,9 @@ def _xcode_effective_settings(ctx, objects, config_list, default_name, project_s
     target_settings = config.get("buildSettings") or {}
     layered = _xcode_merge_settings(project_settings, xcconfig_settings)
     layered = _xcode_merge_settings(layered, target_settings)
-    return layered
+    overrides = ctx["attr"].get("build_settings") or {}
+    layered = {key: value for key, value in layered.items() if key.split("[", 1)[0] not in overrides}
+    return _xcode_merge_settings(layered, overrides)
 
 def _xcode_choose_config(objects, configs, default_name, wanted):
     ids = [c for c in configs]
@@ -2570,6 +2573,42 @@ def _swift_package_metadata(argv, absolute, env = {}, check = True):
     ]
     return host_cached_command(argv, inputs = inputs, env = env, check = check)
 
+def _xcode_swift_package_with_resolved_paths(info, swift, absolute, env = {}):
+    unresolved = [
+        target
+        for target in info.get("targets") or []
+        if not target.get("path") and (target.get("type") or "") != "binary" and not host_path_exists(absolute + "/" + _xcode_swift_package_target_path(target))
+    ]
+    if not unresolved:
+        return info
+    output = _swift_package_metadata([
+        swift,
+        "package",
+        "--package-path",
+        absolute,
+        "--disable-automatic-resolution",
+        "describe",
+        "--type",
+        "json",
+    ], absolute, env = env, check = False).strip()
+    description = json_decode(output) if output.startswith("{") else {}
+    paths = {}
+    for target in description.get("targets") or []:
+        name = target.get("name") or ""
+        path = target.get("path") or ""
+        if name and path:
+            paths[name] = path
+    targets = []
+    for target in info.get("targets") or []:
+        path = paths.get(target.get("name") or "")
+        if not target.get("path") and path:
+            target = dict(target)
+            target["path"] = path
+        targets.append(target)
+    info = dict(info)
+    info["targets"] = targets
+    return info
+
 def _xcode_swift_package_info(ctx, package_dir, identity = "", cache = None, discovery = False):
     # `swift package dump-package` starts Swift and reparses the whole
     # manifest for every call, and a typical Xcode workspace passes the same
@@ -2598,45 +2637,7 @@ def _xcode_swift_package_info(ctx, package_dir, identity = "", cache = None, dis
     if discovery and not output.strip().startswith("{"):
         analysis_warning("skipping unreadable Swift package manifest `" + package_dir + "/Package.swift` during product discovery; run `swift package dump-package --package-path " + absolute + "` to diagnose it")
         return None
-    info = json_decode(output)
-    unresolved = [
-        target
-        for target in info.get("targets") or []
-        if not target.get("path") and (target.get("type") or "") != "binary" and not host_path_exists(absolute + "/" + _xcode_swift_package_target_path(target))
-    ]
-    if unresolved:
-        # `dump-package` preserves manifest details but omits target paths computed
-        # by SwiftPM. `describe` supplies those paths when the computed location
-        # differs from the default `Sources/<target>`, such as `Source/MyLibrary`.
-        # `describe` also validates the package layout and local binary artifacts,
-        # which `dump-package` does not, so a failure keeps the dumped manifest
-        # instead of failing analysis.
-        output = _swift_package_metadata([
-            swift,
-            "package",
-            "--package-path",
-            absolute,
-            "--disable-automatic-resolution",
-            "describe",
-            "--type",
-            "json",
-        ], absolute, check = False).strip()
-        description = json_decode(output) if output.startswith("{") else {}
-        paths = {}
-        for target in description.get("targets") or []:
-            name = target.get("name") or ""
-            path = target.get("path") or ""
-            if name and path:
-                paths[name] = path
-        targets = []
-        for target in info.get("targets") or []:
-            path = paths.get(target.get("name") or "")
-            if not target.get("path") and path:
-                target = dict(target)
-                target["path"] = path
-            targets.append(target)
-        info = dict(info)
-        info["targets"] = targets
+    info = _xcode_swift_package_with_resolved_paths(json_decode(output), swift, absolute)
     info = _xcode_swift_package_with_implicit_resources(package_dir, absolute, info)
     if cache != None:
         cache[absolute] = {"info": info}
@@ -3147,7 +3148,14 @@ def _xcode_swift_package_resource_paths(package_path, target):
     for resource in target.get("resources") or []:
         path = resource.get("path") or ""
         if path:
-            paths.append(root + target_path + "/" + path)
+            candidate = root + target_path + "/" + path
+            if "process" in (resource.get("rule") or {}) and _xcode_host_directory_exists(_xcode_abs(candidate)):
+                for file in _xcode_package_files(candidate):
+                    prefix = root + target_path + "/"
+                    resource_root = _xcode_implicit_resource_root(file[len(prefix):])
+                    paths.append(prefix + resource_root if resource_root else file)
+            else:
+                paths.append(candidate)
     return _unique(paths)
 
 def _xcode_swift_package_structured_resource_paths(package_path, target):
@@ -4861,7 +4869,7 @@ def _xcode_info_plist_file(settings, subs):
         return ""
     return resolved
 
-def _xcode_referenced_test_plan_paths(ctx):
+def _xcode_scheme_paths(ctx):
     paths = []
     entry_path = _xcode_project_path(ctx)
     scheme_roots = [entry_path + "/xcshareddata/xcschemes"]
@@ -4875,28 +4883,54 @@ def _xcode_referenced_test_plan_paths(ctx):
             continue
         schemes = host_command([find, "-L", absolute_root, "-type", "f", "-name", "*.xcscheme"]).split("\n")
         for absolute_scheme in schemes:
-            if not absolute_scheme:
+            if absolute_scheme and absolute_scheme not in paths:
+                paths.append(absolute_scheme)
+    return sorted(paths)
+
+def _xcode_referenced_test_plan_paths(ctx):
+    paths = []
+    for path in _xcode_scheme_paths(ctx):
+        contents = host_file_read(path)
+        selected = ""
+        for block in contents.split("<TestPlanReference")[1:]:
+            attributes = block.split(">", 1)[0].replace(" = ", "=")
+            reference = _xcode_xml_attribute(attributes, "reference")
+            if reference.startswith("container:"):
+                reference = reference[len("container:"):]
+            if not reference or not host_file_exists(_xcode_abs(reference)):
                 continue
-            contents = host_file_read(absolute_scheme)
-            selected = ""
-            for block in contents.split("<TestPlanReference")[1:]:
-                attributes = block.split(">", 1)[0].replace(" = ", "=")
-                reference = _xcode_xml_attribute(attributes, "reference")
-                if reference.startswith("container:"):
-                    reference = reference[len("container:"):]
-                if not reference or not host_file_exists(_xcode_abs(reference)):
-                    continue
-                if not selected:
-                    selected = reference
-                if _xcode_xml_attribute(attributes, "default") == "YES":
-                    selected = reference
-                    break
-            if selected and selected not in paths:
-                paths.append(selected)
+            if not selected:
+                selected = reference
+            if _xcode_xml_attribute(attributes, "default") == "YES":
+                selected = reference
+                break
+        if selected and selected not in paths:
+            paths.append(selected)
     return paths
 
 def _xcode_test_plan_settings(ctx):
     settings = {}
+    for path in _xcode_scheme_paths(ctx):
+        for block in host_file_read(path).split("<TestableReference")[1:]:
+            block = block.split("</TestableReference>", 1)[0]
+            reference = block.split("<BuildableReference", 1)
+            if len(reference) < 2:
+                continue
+            name = _xcode_xml_attribute(reference[1].split(">", 1)[0].replace(" = ", "="), "BlueprintName")
+            if not name:
+                continue
+            skipped = block.split("<SkippedTests>", 1)[1].split("</SkippedTests>", 1)[0] if "<SkippedTests>" in block else ""
+            identifiers = []
+            for entry in skipped.split("<Test")[1:]:
+                identifier = _xcode_xml_attribute(entry.split(">", 1)[0].replace(" = ", "="), "Identifier")
+                if identifier and identifier not in identifiers:
+                    identifiers.append(identifier)
+            current = settings.get(name)
+            if current:
+                current["skipped_tests"] = [identifier for identifier in current["skipped_tests"] if identifier in identifiers]
+            else:
+                current = {"test_env": {}, "test_arguments": [], "skipped_tests": identifiers}
+            settings[name] = current
     for path in _xcode_referenced_test_plan_paths(ctx):
         plan = json_decode(host_file_read(_xcode_abs(path)))
         default_options = plan.get("defaultOptions") or {}
@@ -5110,8 +5144,10 @@ def _xcode_workspace_resolver(ctx):
         # picks up files from an additive membership set. Keeping the raw
         # walk result per base collapses N walks per group down to one.
         group_walk_cache = {}
+        project_bundle = _parent_dir(project_path) if _ends_with(project_path, "/project.pbxproj") or _ends_with(project_path, "/project.xcproj") else project_path
+        project_name = _basename(project_bundle)[:-len(".xcodeproj")]
         for target in native_targets:
-            spec = _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_closure, configuration, file_paths, project_dir, path_maps, test_plan_settings, group_walk_cache = group_walk_cache)
+            spec = _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_closure, configuration, file_paths, project_dir, path_maps, test_plan_settings, group_walk_cache = group_walk_cache, project_name = project_name)
             if spec == None:
                 continue
             package_platform = spec["attrs"].get("platform") or project["platforms"][0]
@@ -5343,7 +5379,7 @@ def _xcode_roots(specs):
         return products
     return [spec["name"] for spec in specs]
 
-def _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_closure, configuration, file_paths, project_dir, path_maps, test_plan_settings = {}, group_walk_cache = None):
+def _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_closure, configuration, file_paths, project_dir, path_maps, test_plan_settings = {}, group_walk_cache = None, project_name = ""):
     product_type = target.get("productType") or ""
     kind = _xcode_product_kind(product_type)
     if not kind:
@@ -5374,11 +5410,11 @@ def _xcode_lower_target(ctx, objects, target, project_settings, name_to_id, dep_
         "sdk": sdk_name,
         "target": target_name,
     })
-    product_name_seed = _xcode_resolve_vars(_xcode_scalar(settings.get("PRODUCT_NAME")), {"TARGET_NAME": target_name}) or target_name
+    product_name_seed = _xcode_resolve_vars(_xcode_scalar(settings.get("PRODUCT_NAME")), {"TARGET_NAME": target_name, "PROJECT_NAME": project_name}) or target_name
     if not product_name_seed or product_name_seed.startswith("$("):
         product_name_seed = target_name
     resolved_sdkroot = host_command([host_which("xcrun"), "--sdk", sdk_name, "--show-sdk-path"], env = _developer_env(ctx["attr"].get("xcode_developer_dir") or "")).strip() if sdk_name else sdkroot
-    subs = _xcode_setting_subs(ctx, target_name, product_name_seed, resolved_sdkroot, settings, project_dir, selected_configuration)
+    subs = _xcode_setting_subs(ctx, target_name, product_name_seed, resolved_sdkroot, settings, project_dir, selected_configuration, project_name)
     wrapper_suffix = {"test": ".xctest", "application": ".app", "extension": ".appex", "watch_app": ".app", "framework": ".framework", "bundle": ".bundle"}.get(kind) or ""
     static_library = kind == "library" or (kind == "framework" and _xcode_framework_is_static(settings, product_type))
     if static_library:
@@ -5550,6 +5586,7 @@ xcode_workspace = target_kind(
     attrs = [
         attr("project", "string", docs = "Package-relative path to the `.xcodeproj` directory, such as `App.xcodeproj`. Inferred from a single `*.xcodeproj` when omitted.", configurable = False),
         attr("configuration", "string", default = "Debug", docs = "Xcode build configuration whose settings drive target lowering.", configurable = False),
+        attr("build_settings", "map<string,string>", default = "{}", docs = "Native command-line build-setting overrides applied after project, target, and xcconfig settings.", configurable = False),
         attr("sdk_variant", "string", default = "simulator", docs = "`simulator` or `device` SDK selection applied to lowered Apple targets on non-macOS platforms.", configurable = False),
         attr("xcode_developer_dir", "string", docs = "Optional `DEVELOPER_DIR` override folded into lowered Apple target cache keys.", configurable = False),
         attr("explicit_modules", "bool", default = "false", docs = "Discover and cache module dependencies for lowered Apple targets.", configurable = False),

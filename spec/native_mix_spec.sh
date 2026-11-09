@@ -100,6 +100,20 @@ EX
     (cd "$WORKSPACE/app" && PATH="$SPEC_ROOT/host-tools:$PATH" ONCE_NATIVE_TEST_VALUE=present "$ONCE_BIN" --format json "$@")
   }
 
+  exercise_dependency_free_tests() {
+    mkdir -p "$WORKSPACE/app"
+    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/mix-workspace-native-project/." "$WORKSPACE/app/"
+    rm "$WORKSPACE/app/once.toml"
+    native_once test > "$SPEC_ROOT/test.json" 2> "$SPEC_ROOT/test.err" || { cat "$SPEC_ROOT/test.err"; return 1; }
+    python3 - "$WORKSPACE/app/.once/out/mix_tests/test/test_results.json" <<'PY'
+import json, sys
+result = json.load(open(sys.argv[1]))
+assert result["status"] == "passed", result
+assert result["summary"]["total"] == 1, result
+assert result["summary"]["passed"] == 1, result
+PY
+  }
+
   exercise_native_commands() {
     native_once build > "$SPEC_ROOT/build.json" 2> "$SPEC_ROOT/build.err" || { cat "$SPEC_ROOT/build.err"; return 1; }
     rm -rf "$WORKSPACE/.once/out"
@@ -206,10 +220,135 @@ PY
     (cd "$WORKSPACE/app" && elixir -pa "$WORKSPACE/.once/out/app/mix_application_dev/mix/dev/lib/app/ebin" -e 'unless App.source_root() == File.cwd!(), do: raise("cached bytecode retained a different source directory")')
   }
 
+  prepare_staged_tests() {
+    prepare_native_workspace
+    mkdir -p "$WORKSPACE/app/_build/test/lib/app" "$WORKSPACE/app/test/fixtures"
+    printf 'developer output' > "$WORKSPACE/app/_build/test/lib/app/developer-sentinel"
+    printf 'not declared' > "$WORKSPACE/app/undeclared-only"
+    printf 'first' > "$WORKSPACE/app/test/fixtures/value"
+    printf '[workspace]\ninclude = ["app/once.toml"]\n' > "$WORKSPACE/once.toml"
+    cat >> "$WORKSPACE/app/mix.exs" <<'EX'
+defmodule Mix.Tasks.PrivateSetup do
+  use Mix.Task
+  def run([argument]), do: File.write!("private-setup-marker", argument)
+end
+EX
+    cat > "$WORKSPACE/app/once.toml" <<'TOML'
+[[target]]
+name = "dependencies"
+kind = "mix_dependencies"
+srcs = ["mix.exs"]
+[target.attrs]
+mix_env = "test"
+_mix_path_only = true
+
+[[target]]
+name = "application"
+kind = "mix_project"
+srcs = ["lib/**/*.ex", "test/support/**/*.ex"]
+deps = ["./dependencies"]
+[target.attrs]
+app_name = "app"
+mix_env = "test"
+data = ["VERSION"]
+
+[[target]]
+name = "staged_tests"
+kind = "elixir_test"
+deps = ["./application"]
+srcs = ["test/staged_test.exs"]
+[target.attrs]
+staged_workspace = true
+cacheable = false
+data = ["test/fixtures/value"]
+setup_tasks = [["private_setup", "private argument with spaces"]]
+TOML
+    cat > "$WORKSPACE/app/test/staged_test.exs" <<'EX'
+defmodule StagedTest do
+  use ExUnit.Case
+  test "private native layout, declared resources and fresh trees" do
+    app = Path.expand("_build/test/lib/app")
+    assert Application.app_dir(:app) == app
+    assert Helper.value() == :ok
+    assert TestSupport.value() == :test
+    assert File.read!(Path.join(app, "priv/compiled")) == "compiled"
+    assert File.regular?(Path.join(app, ".mix/compile.elixir"))
+    assert App.source_root() != File.cwd!()
+    assert File.read!("private-setup-marker") == "private argument with spaces"
+    refute File.exists?("undeclared-only")
+    refute File.exists?(Path.join(app, "developer-sentinel"))
+    refute File.exists?(Path.join(app, "previous-test-write"))
+    refute File.exists?("previous-cwd-write")
+    home = System.user_home!()
+    refute File.exists?(Path.join(home, "previous-home-write"))
+    assert System.get_env("ONCE_NATIVE_TEST_VALUE") == "present"
+    assert System.find_executable("native-test-helper")
+    assert File.read!("../helper/mix.exs") =~ "Helper.MixProject"
+    File.write!(Path.join(app, "previous-test-write"), "private")
+    File.write!("previous-cwd-write", "private")
+    File.write!(Path.join(home, "previous-home-write"), "private")
+    IO.puts("fixture=" <> File.read!("test/fixtures/value"))
+  end
+end
+EX
+  }
+
+  exercise_staged_tests() {
+    native_once -C "$WORKSPACE" test app/staged_tests > "$SPEC_ROOT/staged-first.json" 2> "$SPEC_ROOT/staged-first.err" || { cat "$SPEC_ROOT/staged-first.err"; return 1; }
+    grep -q 'fixture=first' "$WORKSPACE/.once/out/app/staged_tests/test/elixir-test.log" || return
+    native_once -C "$WORKSPACE" test app/staged_tests > "$SPEC_ROOT/staged-repeat.json" 2> "$SPEC_ROOT/staged-repeat.err" || { cat "$SPEC_ROOT/staged-repeat.err"; return 1; }
+    printf 'second' > "$WORKSPACE/app/test/fixtures/value"
+    native_once -C "$WORKSPACE" test app/staged_tests > "$SPEC_ROOT/staged-changed.json" 2> "$SPEC_ROOT/staged-changed.err" || return
+    grep -q 'fixture=second' "$WORKSPACE/.once/out/app/staged_tests/test/elixir-test.log" || return
+    cat >> "$WORKSPACE/app/test/staged_test.exs" <<'EX'
+defmodule StagedFailureTest do
+  use ExUnit.Case
+  test "intentional staged failure", do: flunk("intentional staged failure")
+end
+EX
+    native_once -C "$WORKSPACE" test app/staged_tests > "$SPEC_ROOT/staged-failed.json" 2> "$SPEC_ROOT/staged-failed.err"
+    [ "$?" = 2 ] || return 1
+    grep -q 'intentional staged failure' "$WORKSPACE/.once/out/app/staged_tests/test/elixir-test.log" || return
+    python3 - "$WORKSPACE/.once/out/app/staged_tests/test/test_results.json" <<'PY'
+import json, sys
+result = json.load(open(sys.argv[1]))
+assert result["status"] == "failed", result
+assert result["summary"]["total"] == 2, result
+assert result["summary"]["failed"] == 1, result
+assert result["summary"]["passed"] == 1, result
+PY
+    [ "$?" = 0 ] || return
+    [ "$(cat "$WORKSPACE/app/_build/test/lib/app/developer-sentinel")" = 'developer output' ] || return
+    [ ! -e "$WORKSPACE/app/previous-cwd-write" ] || return
+    [ ! -e "$WORKSPACE/app/private-setup-marker" ] || return
+    [ ! -e "$WORKSPACE/.once/out/app/application/mix/test/lib/app/previous-test-write" ] || return
+    [ ! -e "$HOME/previous-home-write" ] || return
+    ln -s "$WORKSPACE/app/VERSION" "$WORKSPACE/app/test/fixtures/value-link"
+    printf '\n' > "$WORKSPACE/app/test/staged_test.exs"
+    sed 's|data = \["test/fixtures/value"\]|data = ["test/fixtures/*"]|' "$WORKSPACE/app/once.toml" > "$SPEC_ROOT/staged.toml"
+    mv "$SPEC_ROOT/staged.toml" "$WORKSPACE/app/once.toml"
+    native_once -C "$WORKSPACE" test app/staged_tests > "$SPEC_ROOT/staged-link.json" 2> "$SPEC_ROOT/staged-link.err"
+    [ "$?" != 0 ] || return 1
+    grep -q 'staged_workspace does not support symbolic links' "$SPEC_ROOT/staged-link.err"
+  }
+
+  It 'stages declared Mix test inputs in a fresh private native layout without developer writes'
+    Skip if 'Mix toolchain unavailable on this host' mix_tools_unavailable
+    prepare_staged_tests
+    When call exercise_staged_tests
+    The status should be success
+  End
+
   It 'partitions native bytecode containing source locations across checkouts'
     Skip if 'Mix toolchain unavailable on this host' mix_tools_unavailable
     prepare_native_workspace
     When call exercise_source_location
+    The status should be success
+  End
+
+  It 'selects tests without shared development and test dependencies'
+    Skip if 'Mix toolchain unavailable on this host' mix_tools_unavailable
+    When call exercise_dependency_free_tests
     The status should be success
   End
 

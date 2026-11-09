@@ -8,7 +8,7 @@ Runs ExUnit tests against an `elixir_app` provider already compiled with
 `elixir_test` depends on exactly one target that provides a complete
 `elixir_app` record, such as `elixir_library` or `mix_project`. The application
 must compile with `mix_env = "test"`. During the test action, Once creates a
-test layout with links to the compiled application and dependency bytecode,
+test layout with copies of the compiled application and dependency bytecode,
 then runs the tests without recompiling the application.
 
 That split lets a changed test file rerun tests without recompiling the
@@ -18,10 +18,12 @@ A changed library source invalidates both the compiled library and the dependent
 test result.
 By default, tests run through direct ExUnit with `elixir`, so a package does not
 need `mix.exs`. A `mix_project` dependency selects Mix mode automatically.
-Once stages declared project, configuration, data, tool, test, and lockfile
-inputs into an isolated project before running `mix test --no-compile
---no-deps-check`. Library bytecode must already be built by Once in both modes. Mix mode retains
-native test aliases while consuming the already-compiled application. It loads
+Once includes declared project, configuration, data, tool, test, and lockfile
+inputs in the action identity before running `mix test --no-compile
+--no-deps-check`. By default, the command runs in the original package directory,
+with a separate build tree. Library bytecode must already be built by Once in
+both modes. Mix mode retains native test aliases while consuming the
+already-compiled application. It loads
 modules used by Mix's recompilation probes without rerunning project compilers.
 Application resources, compile metadata, and protocol consolidation outputs are
 staged as explicit action inputs, including when a previous scratch directory
@@ -36,6 +38,7 @@ This avoids differences between Elixir versions and summary-looking test output.
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `_mix_test_defaults` | bool | no | `false` | Resolver-owned marker that delegates test path and file-pattern selection to Mix |
+| `staged_workspace` | bool | no | `false` | Run Mix tests in a fresh private copy of declared files with a native `_build/test` layout |
 | `mix_config` | string | no | empty | Optional package-relative Mix project file. When omitted, tests run through direct ExUnit without requiring a Mix project |
 | `lockfile` | string | no | `mix.lock` | Package-relative lockfile staged when present |
 | `config` | list&lt;string&gt; | no | `["config/**/*.exs"]` | Config file globs included in the test action key |
@@ -65,6 +68,39 @@ test suite must exercise an external service on every invocation. Uncacheable
 tests inherit the host environment, home directory, and tool search path.
 Native discovery selects this mode automatically; explicitly declared targets
 retain the cacheable default.
+
+### Private native test layout
+
+Set `staged_workspace = true` for Mix suites that write or read paths relative
+to `_build/test/lib`. Once recreates a private workspace from declared project,
+test, configuration, data, tool, manifest, lockfile, and dependency source inputs.
+Workspace-relative sibling path dependencies keep their layout. Unlisted files,
+developer build outputs, and repository metadata are not copied implicitly.
+Declare every fixture and dynamically loaded script through `srcs`, `data`,
+`config`, or `tools`, as appropriate.
+
+Before each execution, Once removes the previous private workspace and copies
+fresh application and dependency trees, including their native `.mix` metadata,
+to its `_build/test/lib` directory. Mix application lookup and cwd-relative
+`_build` paths use the same tree. Tests cannot contaminate later runs by leaving
+files in that copy, and their cwd-relative writes do not change developer build
+outputs. The test home is fresh and private even for uncached tests; host tools
+and the remaining runtime environment are still inherited for uncached tests.
+
+This opt-in changes `File.cwd!()` and the locations of interpreted test files.
+It does not rewrite compiled `__DIR__`, source paths, or native manifests. Code
+that compares a compiled source directory with runtime cwd should keep the
+default mode. This is not a security sandbox: absolute paths, external services,
+or code that explicitly accesses the original checkout can still have effects.
+Symbolic-link inputs and application trees are rejected rather than permitting
+writes through links outside the private tree. Direct ExUnit mode and shell
+`setup` are unsupported with this option; use exact `setup_tasks` vectors for
+Mix setup. Test discovery reports the staged cwd and a `staged_workspace`
+metadata flag. The private cwd is prepared by Once, not a standalone command
+that can be executed before staging.
+
+For generated native test targets, configure
+[`mix_workspace.test_staged_workspace`](/reference/prelude/mix_workspace).
 
 Each setup task is an exact argument vector. Do not include the `mix`
 executable:

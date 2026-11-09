@@ -334,6 +334,32 @@ SH
     The path "$WORKSPACE/.once/out/Generated/Generated.swift" should be file
   End
 
+  It 'uses the owning project name and explicit native setting overrides'
+    Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+    copy_xcode_generated_source_fixture
+    printf '\n#if !CAMPAIGN_OVERRIDE\n#error("native setting override is missing")\n#endif\n' >> "$WORKSPACE/Hello.swift"
+    mv "$WORKSPACE/Generated.xcodeproj" "$WORKSPACE/Producer.xcodeproj"
+    sed 's/$(TARGET_NAME)/$(PROJECT_NAME)/g' "$WORKSPACE/Producer.xcodeproj/project.pbxproj" > "$WORKSPACE/project.tmp"
+    mv "$WORKSPACE/project.tmp" "$WORKSPACE/Producer.xcodeproj/project.pbxproj"
+    mkdir -p "$WORKSPACE/Campaign.xcworkspace"
+    printf '%s\n' '<Workspace>' '<FileRef location="group:Producer.xcodeproj"/>' '</Workspace>' > "$WORKSPACE/Campaign.xcworkspace/contents.xcworkspacedata"
+    cat > "$WORKSPACE/once.toml" <<'TOML'
+[[target]]
+name = "Campaign"
+kind = "xcode_workspace"
+srcs = ["Producer.xcodeproj/project.pbxproj", "Campaign.xcworkspace/contents.xcworkspacedata"]
+[target.attrs]
+project = "Campaign.xcworkspace"
+build_settings = { SWIFT_ACTIVE_COMPILATION_CONDITIONS = "CAMPAIGN_OVERRIDE" }
+TOML
+
+    When call once --format json build Generated
+    The status should be success
+    The stdout should include '"status":"completed"'
+    The path "$WORKSPACE/.once/out/Generated/Producer.swiftmodule" should be file
+    The path "$WORKSPACE/.once/out/Generated/Generated.swiftmodule" should not be exist
+  End
+
   It 'builds a Swift target that imports an XCFramework from a Copy Files phase'
     Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
     copy_xcode_xcframework_import_fixture
@@ -782,6 +808,17 @@ SWIFT
       The path "$WORKSPACE/.once/out/apps/ios/AppCore/AppCore.swiftmodule" should be file
       The path "$WORKSPACE/.once/out/apps/ios/AppCore/AppCore.swiftdoc" should be file
       The path "$WORKSPACE/.once/out/apps/ios/AppCore/Headers/AppCore/AppCore-Swift.h" should be file
+    End
+
+    It 'produces bitwise-identical static archives in independent cold trials'
+      Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+      copy_apple_library_fixture
+
+      When call once --memory-limit 2GiB --cpu-limit 2 --format json build apps/ios/AppCore --verify-reproducible
+      The status should be success
+      The stdout should include '"execution_succeeded":true'
+      The stdout should include '"artifacts_match":true'
+      The stdout should include '"reproducible":true'
     End
 
     It 'recursively builds apple_library dependencies'

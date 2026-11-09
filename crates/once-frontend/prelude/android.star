@@ -1579,7 +1579,7 @@ def _android_jar_classes(ctx, tools, classes_dir, classes_hash):
     run_action(
         display_name = "Package JVM classes · " + ctx["label"]["name"],
         source_files = _action_source_files([classes_hash]),
-        argv = [tools["jar"], "cf", classes_jar, "-C", classes_dir, "."],
+        argv = [tools["jar"], "--create", "--file", classes_jar, "--date=1980-01-01T00:00:02Z", "-C", classes_dir, "."],
         inputs = [classes_hash],
         outputs = [classes_jar],
         env = _android_env(tools),
@@ -1617,7 +1617,7 @@ def _android_package_aar(ctx, attrs, tools, manifest, classes_jar, r_txt, resour
     run_action(
         display_name = "Package Android archive · " + ctx["label"]["name"],
         source_files = _action_source_files(_unique([manifest, classes_jar, r_txt] + resource_files + asset_files)),
-        argv = [tools["jar"], "cf", aar, "-C", staging, "."],
+        argv = [tools["jar"], "--create", "--file", aar, "--date=1980-01-01T00:00:02Z", "-C", staging, "."],
         inputs = _unique([manifest, classes_jar, r_txt] + resource_files + asset_files),
         outputs = [aar],
         env = _android_env(tools),
@@ -1671,7 +1671,7 @@ def _android_package_unsigned_apk(ctx, tools, resource_apk, dex_dir, dex_hash, n
     run_action(
         display_name = "Package APK bytecode · " + ctx["label"]["name"],
         source_files = _action_source_files([unsigned_apk, dex_hash]),
-        argv = [tools["jar"], "uf", unsigned_apk, "-C", dex_dir, "."],
+        argv = [tools["jar"], "--update", "--file", unsigned_apk, "--date=1980-01-01T00:00:02Z", "-C", dex_dir, "."],
         inputs = [unsigned_apk, dex_hash],
         outputs = [unsigned_apk],
         env = _android_env(tools),
@@ -1697,7 +1697,7 @@ def _android_package_unsigned_apk(ctx, tools, resource_apk, dex_dir, dex_hash, n
             display_name = "Package APK native libraries · " + ctx["label"]["name"],
             presentation = _action_metadata(platforms = [_action_platform("android-abi", abi, "Android · " + abi) for abi in _unique([library.get("abi") or "" for library in native_libraries]) if abi]),
             source_files = _action_source_files(_unique([unsigned_apk] + _android_native_library_paths(native_libraries))),
-            argv = [tools["jar"], "uf", unsigned_apk, "-C", native_staging, "lib"],
+            argv = [tools["jar"], "--update", "--file", unsigned_apk, "--date=1980-01-01T00:00:02Z", "-C", native_staging, "lib"],
             inputs = _unique([unsigned_apk] + _android_native_library_paths(native_libraries)),
             outputs = [unsigned_apk],
             env = _android_env(tools),

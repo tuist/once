@@ -263,6 +263,10 @@ _BAZEL_SYMLINK_TREE_MNEMONICS = ["SymlinkTree", "RunfilesTree"]
 _BAZEL_WRITE_MNEMONICS = ["FileWrite", "RepoMappingManifest", "SourceSymlinkManifest"]
 
 def _bazel_classify_action(action):
+    # aquery omits the test environment and runfiles mapping that Bazel's
+    # test strategy supplies when it invokes test-setup.sh.
+    if action["mnemonic"] == "TestRunner":
+        return "unsupported"
     if action["arguments"]:
         return "spawn"
     mnemonic = action["mnemonic"]

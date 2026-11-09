@@ -11,6 +11,14 @@ the `org.junit.Test` annotation from [JUnit](https://junit.org/junit5/) and the
 `kotlin.test.Test` annotation when their libraries are on the dependency
 classpath.
 
+Static nested test classes are discovered as well as top-level classes.
+Public inherited test methods run on the concrete suite, with overridden
+methods selected once.
+Anonymous classes, local classes, abstract classes, and non-static inner
+classes are not independent test suites.
+Methods or suites annotated with `org.junit.Ignore` or `kotlin.test.Ignore`
+are reported as skipped without invoking them or initializing ignored suites.
+
 ## Test Attributes
 
 | Attribute | Type | Required | Default | Description |
@@ -54,9 +62,9 @@ The target emits `kotlin_jvm_test` and `once_test_info`.
 
 | Output | Location |
 | --- | --- |
-| Normalized results | `.once/out/<target>/test-results/test_results.json` |
-| Test log | `.once/out/<target>/test-results/kotlin-jvm-test.log` |
-| Native results | `.once/out/<target>/test-results/native_results.txt` |
+| Normalized results | `.once/out/<target>/test/test_results.json` |
+| Test log | `.once/out/<target>/test/kotlin-jvm-test.log` |
+| Native results | `.once/out/<target>/test/native_results.txt` |
 
 ## Example
 

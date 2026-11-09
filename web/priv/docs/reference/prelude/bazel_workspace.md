@@ -15,13 +15,11 @@ phase (target loading, toolchain resolution, external repository download
 via `bazel fetch`, the action graph); Once supplies the execution phase.
 `bazel build` is not invoked in the ownership path.
 
-Some Bazel actions are implemented inside Bazel itself and have no argv in
-`aquery` output (`Symlink`, `FileWrite`, `RunfilesTree`, `SymlinkTree`,
-`RepoMappingManifest`). When a target's action graph contains any such
-action, Once falls back to `bazel <capability>` for that target so it still
-builds; the target's provider records which mnemonics forced the fallback
-so users can see the gap. Each mnemonic Once learns to run natively shrinks
-the fallback set until every Bazel rule executes through Once.
+Unsupported internal actions fall back to `bazel <capability>` for the
+target. `TestRunner` also delegates because its runtime test environment
+and runfiles mapping are not fully described by `aquery`. The target's
+provider records which mnemonics forced the fallback. Delegated commands
+bypass the Once action cache; Bazel owns their build and test cache reuse.
 
 Once discovers a Bazel workspace automatically from `MODULE.bazel`,
 `WORKSPACE.bazel`, or `WORKSPACE`. A repository without `once.toml` can

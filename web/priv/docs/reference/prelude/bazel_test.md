@@ -16,10 +16,15 @@ Both capabilities read the action graph for the label through `bazel aquery`
 and run every action themselves from
 `<workspace>/.once/bazel-shadow/<target>/`. Bazel handles analysis and
 external-repository download via `bazel fetch`; Once handles execution.
-When the action graph contains a Bazel-internal action (with no argv in
-`aquery` output), the capability falls back to `bazel test <label>
+When the action graph contains an unsupported Bazel-internal action or a
+`TestRunner` action, the capability falls back to `bazel test <label>
 --test_output=errors` (or `bazel build <label>` for the `build` capability)
 and records the unsupported mnemonics on the target's provider.
+
+`TestRunner` needs the test environment and runfiles mapping supplied by
+Bazel's test strategy, which `aquery` does not fully describe. Delegation
+preserves those semantics and failed-test exit status. These invocations
+bypass the Once action cache; Bazel owns their build and test cache reuse.
 
 Test rules are not roots of the resolver output: `once build` or
 `once bazel build //...` never picks them up implicitly. Invoke the test

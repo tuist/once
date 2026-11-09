@@ -32,6 +32,12 @@ for that dependency. `dependency_mix_env` supplies the fallback when Mix does
 not report one. This matches native Mix behavior, where a test graph may
 contain packages that compile in their own production environment.
 
+Package actions retain the complete native application directory, including
+Mix compiler manifests. They also expose bytecode, private resources, and
+headers as independently fingerprinted outputs. Consumers of those outputs
+therefore do not change cache keys solely because a dependency's compiler
+manifest records a different build timestamp.
+
 When dependency compilation reads root application configuration, declare
 `config_entry` and include that file plus every transitively imported
 configuration file in `config`. Once reads the root configuration with

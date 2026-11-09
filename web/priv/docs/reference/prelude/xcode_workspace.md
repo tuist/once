@@ -10,6 +10,19 @@ directly. The `.xcodeproj` remains the source of truth: targets, build
 settings, and file membership are read from it rather than restated in
 `once.toml`.
 
+`PROJECT_NAME` expands to the owning project's name, including when a workspace
+contains several projects. Products using it retain their native module names.
+
+`build_settings` supplies native command-line overrides after project, target,
+and xcconfig settings. For example, `build_settings = { MACOSX_DEPLOYMENT_TARGET = "13.0" }`
+applies the same deployment target to every lowered native target without
+editing the Xcode project.
+
+Shared schemes contribute their `SkippedTests` exclusions to lowered test
+bundles. When several schemes reference the same bundle, only exclusions common
+to every reference are applied, so one scheme cannot silently suppress another
+scheme's tests. Referenced test plans retain their own test settings.
+
 The resolver converts `project.pbxproj` with `plutil`, flattens layered build
 settings from the project, the target, and any `.xcconfig` includes, resolves
 file references from both classic build phases and Xcode 16 file-system
@@ -55,6 +68,7 @@ for native propagation, dependency errors, and current limitations.
 | --- | --- | --- | --- | --- |
 | `project` | string | no | single `*.xcodeproj` in the package | Package-relative path to the `.xcodeproj` or `.xcworkspace` |
 | `configuration` | string | no | `Debug` | Xcode build configuration whose settings drive target lowering |
+| `build_settings` | map&lt;string,string&gt; | no | `{}` | Native build-setting overrides applied after project, target, and xcconfig settings |
 | `sdk_variant` | string | no | `simulator` | `simulator` or `device` selection applied to lowered targets on non-macOS platforms |
 | `xcode_developer_dir` | string | no | active Xcode | `DEVELOPER_DIR` override folded into lowered targets' cache keys |
 | `binary_artifact_authorization_env` | string | no |  | Environment-variable name that supplies a web Authorization header while downloading private binary package archives. Its value is not recorded. |

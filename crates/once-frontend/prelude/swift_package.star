@@ -17,6 +17,7 @@ def _swift_package_workspace_resolver(ctx):
     # this dict through every info call collapses duplicates to one subprocess.
     swift_info_cache = {}
     info = json_decode(_swift_package_metadata([swift, "package", "dump-package", "--package-path", absolute_package_path], absolute_package_path, env = swiftc["env"]))
+    info = _xcode_swift_package_with_resolved_paths(info, swift, absolute_package_path, env = swiftc["env"])
     info = _xcode_swift_package_with_implicit_resources(package_path, absolute_package_path, info)
     swift_info_cache[absolute_package_path] = {"info": info}
     package = {"identity": _basename(package_path) or info.get("name") or ctx["label"]["name"], "path": package_path, "info": info}
@@ -33,6 +34,12 @@ def _swift_package_workspace_resolver(ctx):
                 spec["attrs"]["dependency_check"] = attrs["dependency_check"]
     roots = []
     test_roots = []
+    test_tools = []
+    for target in info.get("targets") or []:
+        if target.get("type") == "executable":
+            target_id = graph["modules"].get(target.get("name") or "")
+            if target_id:
+                test_tools.append("./" + target_id)
     for product in info.get("products") or []:
         target_ids = graph["products"].get(package["identity"] + "\x1f" + (product.get("name") or ""))
         if target_ids and type(target_ids) != "list":
@@ -46,6 +53,9 @@ def _swift_package_workspace_resolver(ctx):
         target_id = graph["modules"].get(target.get("name") or "")
         if target_id:
             test_roots.append(target_id)
+    for spec in graph["specs"]:
+        if spec.get("name") in test_roots and test_tools:
+            spec["dependencies"] = {"test_tools": test_tools}
     package_name = info.get("name") or ctx["label"]["name"]
     return {"targets": graph["specs"], "roots": roots, "attrs": {"package_name": package_name, "_display_name": package_name, "_default_test_roots": test_roots}}
 

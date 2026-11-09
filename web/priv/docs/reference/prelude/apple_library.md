@@ -10,6 +10,11 @@ triple, ObjC interop header, and (optionally) a clang modulemap and
 binary header map. Multi-arch targets fan out per-arch compiles and
 merge them with `lipo`.
 
+On macOS, static archives use deterministic archive metadata. This removes
+member timestamps from the archive; it does not guarantee that compiler output,
+signatures, or every build artifact is bitwise reproducible. Use
+`once build --verify-reproducible` to compare independent cold executions.
+
 Linux builds use Swift and xtool's Darwin SDK without `xcrun`. See
 [Build iOS Applications on Linux](/guide/graph/apple/linux) for installation,
 architecture defaults, and resource and compiler-plugin limitations.

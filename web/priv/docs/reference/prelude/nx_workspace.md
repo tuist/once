@@ -18,15 +18,17 @@ provider-only targets that fail the build capability with a message that
 names the executor.
 
 The default task filter emits every `build`, `test`, and `lint` task in
-the graph. Set `targets` to the empty list to include every task Nx
-reports.
+the graph, together with their transitive `dependsOn` tasks. For example,
+a build that depends on `compile` retains that task even though `compile`
+is not in the filter. Unrelated tasks remain excluded. Set `targets` to
+the empty list to include every task Nx reports.
 
 ## Attributes
 
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `node` | string | no | `node` | Node.js executable name, absolute path, or workspace-relative path |
-| `targets` | list&lt;string&gt; | no | `["build", "test", "lint"]` | Nx task names to emit; empty list includes every task |
+| `targets` | list&lt;string&gt; | no | `["build", "test", "lint"]` | Nx task names to emit with their transitive task dependencies; empty list includes every task |
 | `resolver_inputs` | list&lt;string&gt; | no | `srcs` | Text inputs available while deriving the graph |
 | `graph_file` | string | no |  | Optional workspace-relative path to a checked-in `nx graph --view=projects` JSON snapshot; when set, Once reads it directly instead of running `nx graph` |
 

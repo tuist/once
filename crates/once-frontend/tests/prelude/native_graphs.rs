@@ -262,6 +262,27 @@ result = repr([[platform, graph["specs"][0]["attrs"]["platform"], graph["modules
 }
 
 #[test]
+fn shared_schemes_preserve_only_common_test_exclusions() {
+    let source = package_source(
+        r#"
+def _xcode_scheme_paths(ctx):
+    return ["first.xcscheme", "second.xcscheme"]
+def _xcode_referenced_test_plan_paths(ctx):
+    return []
+def host_file_read(path):
+    extra = '<Test Identifier="OnlyFirst"/>' if path == "first.xcscheme" else ''
+    return '<TestableReference><BuildableReference BlueprintName = "Tests"/><SkippedTests><Test Identifier = "OfflineSuite"/>' + extra + '</SkippedTests></TestableReference><TestableReference><BuildableReference BlueprintName="OtherTests"/><SkippedTests><Test Identifier="OtherSuite/testCase"/></SkippedTests></TestableReference>'
+settings = _xcode_test_plan_settings({})
+result = repr([settings["Tests"]["skipped_tests"], settings["OtherTests"]["skipped_tests"]])
+"#,
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["OfflineSuite"], ["OtherSuite/testCase"]]"#
+    );
+}
+
+#[test]
 fn generated_only_package_targets_keep_their_build_tool_dependency() {
     let source = package_source(
         r#"

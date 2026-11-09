@@ -16,9 +16,15 @@ renamed dependencies, build scripts, versions, and checksums. By default, Once
 snapshots locked external package trees from Cargo's local cache into each
 target's output. The repository stays unchanged. A pre-existing vendored source
 directory can be selected explicitly.
+Legacy lockfiles retain their checksum metadata without requiring a lockfile
+format upgrade. Registry packages still require a locked checksum.
+Feature resolution ignores Cargo terminal coloring, so presentation settings
+do not change the imported feature set or action keys.
 Targets whose `required-features` are not selected are omitted, matching
 Cargo's target selection. Generated tests, benchmarks, and examples include
-development dependencies. Each generated test runs from its own package root
+development dependencies. Procedural-macro unit tests retain access to the
+compiler-provided `proc_macro` crate. Cargo doctests are not imported; run them
+with Cargo separately. Each generated test runs from its own package root
 and receives a `CARGO_BIN_EXE_<name>` entry for every binary in its package,
 matching what Cargo gives an integration test. Entries in the `[env]` table of
 Cargo configuration reach the compiler, the build scripts, the test processes,
@@ -50,6 +56,9 @@ dependencies outside that list remain ordinary dependency targets.
 | `target` | string | no | host | Destination Rust target triple |
 | `dep_rustc_flags` | list&lt;string&gt; | no | `[]` | Additional flags for external packages |
 | `build_script_tools` | list&lt;string&gt; | no | `cmake`, `nasm`, `perl`, `pkg-config`, `protoc`, `python3` | Host tool names package build scripts may invoke; each is resolved on the search path during graph loading |
+| `test_env` | map&lt;string, string&gt; | no | `{}` | Environment variables applied to generated tests after inherited variables |
+| `test_env_inherit` | list&lt;string&gt; | no | `[]` | Host environment variable names explicitly inherited by generated tests |
+| `test_cacheable` | bool | no | `true` | Cache successful generated test results; disable for tests depending on undeclared host tools or configuration |
 
 ## Providers
 
@@ -92,6 +101,23 @@ complete build. Add explicit targets beside it for exceptional cross-language
 or packaging boundaries. Use a project Starlark module only when those
 exceptions share reusable behavior that the built-in target kinds cannot
 express.
+
+### Host-dependent tests
+
+Generated tests use a restricted environment by default. Tests that invoke
+Cargo or other host tools can opt into the required environment on the seed:
+
+```toml
+[target.attrs]
+test_env_inherit = ["PATH", "CARGO_HOME", "RUSTUP_HOME"]
+test_cacheable = false
+```
+
+Use `test_env` for explicit values, which take precedence over inherited
+variables. Inheriting a tool search path does not declare the tools or their
+external state as inputs, so keep test-result caching disabled for these
+host-dependent suites. Compilation remains cacheable. These settings apply
+to both integration tests and generated unit tests.
 
 ## Sources
 

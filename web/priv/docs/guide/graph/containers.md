@@ -170,6 +170,31 @@ credentials. Keep action caching disabled when publishing a registry cache.
 Mutable cache-mount contents remain on the BuildKit worker and are not included
 in exported layer caches.
 
+## Check cache restoration and image bytes
+
+A successful build does not establish that Once cached it. A result with
+`cache = "bypass"` still runs BuildKit, which can reuse its own layers. A Once
+cache hit restores declared outputs without executing the image build action.
+Delete only the target's generated outputs in your isolated workspace and
+build again to check restoration; compare the restored archive's checksum.
+Do not prune a shared Docker cache to perform this check.
+
+To compare independent builds, use separate, initially empty Once caches and
+set `no_cache = true` to disable BuildKit's instruction cache too. A stable
+action key identifies the same declared inputs and execution contract; it does
+not establish identical artifact bytes. Compare archive checksums separately.
+For recipes that install changing packages, keep action caching disabled. An
+`oci_import` of a previously built archive can instead provide a frozen base
+for testing a network-free configuration or application overlay. That checks
+the overlay, not reproducibility of the original recipe.
+
+`once build server_image --verify-reproducible` compares all declared outputs,
+not only the image archive. Buildx metadata includes per-build references and
+can include provenance with temporary context identifiers. Those metadata
+files can differ even when the image archive and layout match. Inspect the
+reported paths before concluding that the image bytes differ; a metadata-only
+difference still means the complete declared result is not bitwise identical.
+
 ## Execute on a remote worker
 
 Provision a [remote BuildKit builder](https://docs.docker.com/build/builders/drivers/remote/),

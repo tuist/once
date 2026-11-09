@@ -389,7 +389,7 @@ def _react_native_dependencies_impl(ctx):
         source_files = _action_source_files([package_json, lockfile] + configuration_sources),
         argv = argv,
         inputs = install_inputs,
-        outputs = [node_modules],
+        outputs = [install_root],
         clean_paths = [node_modules],
         create_dirs = [action_home] + install["create_dirs"],
         cwd = install_root,

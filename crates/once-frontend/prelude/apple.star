@@ -258,7 +258,7 @@ def _resolve_libtool(platform, sdk_variant, xcode_developer_dir):
         libtool_path = host_command([xcrun, "--sdk", sdk, "--find", "libtool"], env = env).strip()
     identity = "once.apple.libtool.v1\x00" + libtool_path + "\x00" + (xcode_developer_dir or "")
     return {
-        "argv": [libtool_path],
+        "argv": [libtool_path, "-D"],
         "libtool_path": libtool_path,
         "identity": identity,
         "env": env,
@@ -1643,6 +1643,7 @@ function quoted(value, result, i, char, slash) {
 }
 function observe(name, suite, status, duration, key, source_index) {
     key = suite "/" name
+    if (!observed_key[key]++) observed_count++
     source_index = source_by_key[key]
     if (source_index) {
         observed_status[source_index] = status
@@ -1690,6 +1691,14 @@ FILENAME == source_file {
 }
 {
     line = $0
+    if (runner == "xctest" && (index(line, "Test Suite " sprintf("%c", 39) "All tests" sprintf("%c", 39) " passed at ") || index(line, "Test Suite " sprintf("%c", 39) "Selected tests" sprintf("%c", 39) " passed at "))) {
+        complete_suite = 1
+        next
+    }
+    if (complete_suite && $1 == "Executed" && ($3 == "tests," || $3 == "test,")) {
+        complete_count = $2 + 0
+        complete_suite = 0
+    }
     suite_marker = index(line, " Suite ")
     if (suite_marker) {
         suite = substr(line, suite_marker + 7)
@@ -1747,6 +1756,7 @@ END {
     for (i = 1; i <= source_count; i++) {
         record = source_record[i]
         status = observed_status[i]
+        if (status == "" && complete_count > 0 && complete_count == observed_count) continue
         if (status == "") status = "unknown"
         else {
             gsub(/\\"status\\":\\"unknown\\"/, "\\"status\\":\\"" status "\\"", record)
@@ -4010,6 +4020,8 @@ def _apple_mixed_framework_impl(ctx):
         "-o",
         dylib,
     ]
+    if _apple_execution_os() == "macos":
+        link_argv.extend(["-Xlinker", "-reproducible"])
     link_anchor = declare_output(module_name + "-framework-link-anchor.swift")
     write_path(link_anchor, "")
     framework_bundles = library.get("transitive_link_framework_bundles") or []
@@ -4329,6 +4341,8 @@ def _apple_framework_impl(ctx):
         "-o",
         dylib,
     ]
+    if _apple_execution_os() == "macos":
+        swift_argv.extend(["-Xlinker", "-reproducible"])
     if testing_framework_dir:
         # A framework that itself imports XCTest (Quick, Nimble, RxTest, etc.)
         # needs the platform's Developer/Library/Frameworks on the framework
@@ -6003,6 +6017,15 @@ def _apple_test_bundle_impl(ctx):
     runner_xcrun = host_which("xcrun")
     command_argv = [runner_xcrun, "xctest", test_bundle_path]
 
+    test_tool_files = []
+    for tool in (ctx.get("deps_by_role") or {}).get("test_tools") or []:
+        source = tool.get("app_executable") or tool.get("executable_path")
+        if not source:
+            fail(ctx["label"]["id"] + ": test_tools dependency has no executable")
+        destination = declare_output(tool.get("product_name") or _basename(source))
+        copy_path(source, destination, kind = "file", inputs = tool.get("app_files") or tool.get("executable_files") or [source], identifier = "apple_test_tool:" + destination, source_files = _action_source_files([source]))
+        test_tool_files.append(destination)
+
     deps = _apple_native_deps(ctx)
     _validate_apple_native_deps(deps, ctx["label"]["id"])
     host_applications = [
@@ -6557,7 +6580,16 @@ def _apple_test_bundle_impl(ctx):
                 for selector in selectors:
                     runner_argv.extend(["--filter", _apple_swift_testing_filter(selector)])
             else:
-                runner_argv = [runner_xcrun, "xctest", "-XCTest", xctest_spec, test_bundle_path]
+                runner_argv = [runner_xcrun, "xctest"]
+                if skipped_tests:
+                    if selectors:
+                        for selector in selectors:
+                            if selector in skipped_tests or selector.split("/", 1)[0] in skipped_tests:
+                                fail("test selector `" + selector + "` is excluded by skipped_tests")
+                    else:
+                        runner_argv.extend(["-XCTestInvertScope", "YES"])
+                        xctest_spec = ",".join(skipped_tests)
+                runner_argv.extend(["-XCTest", xctest_spec, test_bundle_path])
             runner_command = """cd {workspace}
 DYLD_LIBRARY_PATH={usr_lib}${{DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}} DYLD_FALLBACK_FRAMEWORK_PATH={frameworks}${{DYLD_FALLBACK_FRAMEWORK_PATH:+:$DYLD_FALLBACK_FRAMEWORK_PATH}} {command}""".format(
                 workspace = _shell_literal(workspace_root()),
@@ -6638,6 +6670,7 @@ exit "$status"
             ),
         )
         test_inputs = [test_binary, info_plist, test_cs_stamp]
+        test_inputs.extend(test_tool_files)
         test_inputs.extend(resource_files)
         test_inputs.extend(asset_files)
         test_inputs.extend(runner_files)
@@ -8051,6 +8084,7 @@ apple_test_bundle = target_kind(
     ],
     deps = [
         dep("deps", ["apple_linkable", "apple_application", "apple_swift_plugin", "native_linkable", "apple_generated_files"], "Code under test, optional host application, native linkables, Swift compiler plugins, and generated package files"),
+        dep("test_tools", ["apple_application", "apple_executable"], "Runtime command-line tools staged beside the test bundle, without linking or selecting a test host"),
     ],
     providers = ["apple_test_bundle", "apple_bundle", "once_test_info"],
     capabilities = [

@@ -2989,6 +2989,9 @@ def _cargo_attach_locked_checksums(metadata, lock):
         if locked == None:
             fail("Cargo metadata package `" + (package.get("name") or "") + "` " + (package.get("version") or "") + " from `" + source + "` is absent from the authoritative Cargo.lock")
         checksum = locked.get("checksum")
+        if checksum == None and lock.get("version", 1) == 1:
+            checksum_key = "checksum " + package["name"] + " " + package["version"] + " (" + source + ")"
+            checksum = (lock.get("metadata") or {}).get(checksum_key)
         if source.startswith("registry+") and checksum == None:
             fail("Cargo.lock registry package `" + (package.get("name") or "") + "` " + (package.get("version") or "") + " has no checksum")
         if checksum != None:
@@ -3062,7 +3065,7 @@ def _cargo_metadata_for_platform(ctx, cargo, manifest, platform):
     # per-package feature union replace what metadata reports.
     tree = host_command(
         cargo_argv(
-            ["tree", "--workspace", "--edges", "normal,build,dev", "--prefix", "depth", "--format", "{p}|{f}"],
+            ["tree", "--color", "never", "--workspace", "--edges", "normal,build,dev", "--prefix", "depth", "--format", "{p}|{f}"],
             "--target",
         ),
         env = metadata_env,
@@ -3921,6 +3924,8 @@ def _cargo_workspace_target_spec(package, target, node, kind, source_root, targe
         attrs["target"] = rust_target
     if kind == "test":
         attrs["test_cwd"] = source_root
+        if _cargo_kind_for_target(target) == "rust_proc_macro":
+            attrs["rustc_flags"] = _rust_builtin_extern_args("proc-macro")
     target_kind = {
         "library": "rust_library",
         "proc_macro": "rust_proc_macro",
@@ -4059,6 +4064,12 @@ def _cargo_workspace_resolver(ctx):
                 targets.append(test_spec)
                 test_roots.append(test_spec["name"])
 
+    for spec in targets:
+        if spec["kind"] == "rust_test":
+            spec["attrs"]["test_env"] = _rust_attr(ctx, "test_env", {})
+            spec["attrs"]["env_inherit"] = _rust_attr(ctx, "test_env_inherit", [])
+            spec["attrs"]["cacheable"] = _rust_attr(ctx, "test_cacheable", True)
+
     return {
         "targets": targets,
         "roots": _unique(roots),
@@ -4180,6 +4191,9 @@ cargo_workspace = target_kind(
         attr("target", "string", docs = "Rust target triple passed to Cargo as `--filter-platform`.", configurable = False),
         attr("dep_rustc_flags", "list<string>", default = "[]", docs = "Additional compiler flags applied to resolved external packages.", configurable = False),
         attr("build_script_tools", "list<string>", default = str(_CARGO_BUILD_SCRIPT_TOOLS), docs = "Host tool names that package build scripts may invoke. Each name is resolved on PATH during graph loading and its directory joins the build script's search path; names that resolve to nothing are ignored. Set an empty list to give build scripts nothing beyond the Rust and C toolchains.", configurable = False),
+        attr("test_env", "map<string, string>", default = "{}", docs = "Environment variables passed to generated test targets after inherited variables.", configurable = False),
+        attr("test_env_inherit", "list<string>", default = "[]", docs = "Host environment variable names explicitly inherited by generated test targets. Disable test_cacheable when tests depend on undeclared host tools or configuration.", configurable = False),
+        attr("test_cacheable", "bool", default = "true", docs = "Whether generated test targets may cache successful test results. Set false for host-dependent tests; compilation remains cacheable.", configurable = False),
         attr("_default_test_roots", "list<string>", default = "[]", docs = "Resolver-owned first-party test target names used by targetless test selection.", configurable = False),
     ],
     resolver = _cargo_workspace_resolver,

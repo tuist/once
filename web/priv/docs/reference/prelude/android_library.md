@@ -10,6 +10,9 @@ consume the emitted jars, resource package, and any transitive native library
 providers through the normal `deps` edge. Prefer a separate
 `android_resource` target for reusable resources and assets.
 
+JAR and AAR packaging uses JDK 17 or newer `jar` with fixed entry timestamps,
+so filesystem modification times do not change archive contents.
+
 ## Attributes
 
 | Attribute | Type | Required | Default | Description |

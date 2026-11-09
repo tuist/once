@@ -70,6 +70,13 @@ network or filesystem access by lifecycle scripts. Bun currently offers a
 prefer-offline mode rather than a strict offline install, so a cache miss may
 still reach the registry.
 
+The dependency action caches the complete staged installation workspace,
+including lifecycle-generated files outside `node_modules`. Include script
+programs and their repository-local inputs in `srcs` so changes invalidate the
+installation. Cache replay restores generated files as well as dependencies.
+This does not automatically copy those generated files into consumer source
+workspaces; consumers still need an explicit source boundary.
+
 This target models one application package and does not synthesize package
 manager workspaces. Switching package managers can also change native podspec
 checksums, so regenerate and check in `Podfile.lock` after a switch.

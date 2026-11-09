@@ -2,6 +2,7 @@ def _jvm_test_runner_source():
     return """import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.lang.annotation.Annotation;
+import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
@@ -89,7 +90,7 @@ public final class OnceJvmTestRunner {
     for (String className : classNames) {
       Class<?> type;
       try {
-        type = Class.forName(className);
+        type = Class.forName(className, false, OnceJvmTestRunner.class.getClassLoader());
       } catch (Throwable error) {
         TestCase testCase = new TestCase(target + "::" + className, className, className);
         testCase.status = "failed";
@@ -98,15 +99,31 @@ public final class OnceJvmTestRunner {
         logText.append(testCase.failure);
         continue;
       }
+      if (type.isAnonymousClass() || type.isLocalClass() || type.isSynthetic()
+          || type.isInterface() || Modifier.isAbstract(type.getModifiers())
+          || (type.isMemberClass() && !Modifier.isStatic(type.getModifiers()))) {
+        continue;
+      }
       Method[] methods = type.getDeclaredMethods();
       List<Method> sortedMethods = new ArrayList<>();
       Collections.addAll(sortedMethods, methods);
+      for (Method method : type.getMethods()) {
+        if (method.getDeclaringClass() != type) {
+          sortedMethods.add(method);
+        }
+      }
       sortedMethods.sort(Comparator.comparing(Method::getName));
       for (Method method : sortedMethods) {
         if (!isTestMethod(method) || !matchesFilter(filters, className, method.getName())) {
           continue;
         }
         TestCase testCase = new TestCase(target + "::" + className + "." + method.getName(), method.getName(), className);
+        if (isIgnored(type) || isIgnored(method)) {
+          testCase.status = "skipped";
+          logText.append("skipped ").append(className).append(".").append(method.getName()).append(System.lineSeparator());
+          cases.add(testCase);
+          continue;
+        }
         long started = System.nanoTime();
         try {
           invoke(type, method);
@@ -153,7 +170,6 @@ public final class OnceJvmTestRunner {
           .map(root::relativize)
           .map(Path::toString)
           .filter(path -> path.endsWith(".class"))
-          .filter(path -> !path.contains("$"))
           .filter(path -> !path.endsWith("module-info.class"))
           .filter(path -> !path.endsWith("package-info.class"))
           .map(path -> path.substring(0, path.length() - ".class".length()))
@@ -174,6 +190,16 @@ public final class OnceJvmTestRunner {
     for (Annotation annotation : method.getDeclaredAnnotations()) {
       String name = annotation.annotationType().getName();
       if ("org.junit.Test".equals(name) || "kotlin.test.Test".equals(name)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean isIgnored(AnnotatedElement element) {
+    for (Annotation annotation : element.getDeclaredAnnotations()) {
+      String name = annotation.annotationType().getName();
+      if ("org.junit.Ignore".equals(name) || "kotlin.test.Ignore".equals(name)) {
         return true;
       }
     }
@@ -280,7 +306,7 @@ public final class OnceJvmTestRunner {
     field(out, "failed");
     out.append(failed).append(',');
     field(out, "skipped");
-    out.append(0).append(',');
+    out.append(cases.size() - passed - failed).append(',');
     field(out, "flaky");
     out.append(0).append("},");
     field(out, "cases");

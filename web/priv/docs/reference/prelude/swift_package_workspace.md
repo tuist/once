@@ -10,6 +10,10 @@ tests into the existing Apple target kinds. The package manifest remains
 authoritative for products, target dependencies, source layout, compiler
 settings, resources, and platform constraints.
 
+When a target does not use the default `Sources/<target>` layout, Once asks
+Swift Package Manager for the computed target path, including layouts such as
+`Source/<target>`. Explicit paths remain authoritative.
+
 Asset catalogs, interface files, and Core Data models are discovered without
 explicit resource declarations for Swift tools 5.3 and later. String catalogs
 are discovered for Swift tools 5.9 and later. These resources generate
@@ -17,6 +21,9 @@ are discovered for Swift tools 5.9 and later. These resources generate
 Explicit resource rules, source declarations, and exclusions take precedence.
 Asset catalogs under `process` rules compile into `Assets.car`; directories
 under `copy` rules retain their original contents.
+Ordinary files under `process` directories are flattened into the resource
+bundle, matching Swift Package Manager. Localized files retain their language
+directory and compiled resource bundles retain their own structure.
 
 The resolved package name becomes the display label in generic run reporting.
 The reporting layer reads resolver metadata and does not identify this target
@@ -24,6 +31,8 @@ kind by name.
 
 Executable products are linked into Apple application bundles, so their
 compiled executable is a declared build output alongside the bundle metadata.
+First-party package executables are also built and staged beside test bundles
+as runtime tools, matching SwiftPM tests that locate example commands there.
 
 Once discovers a workspace automatically from `Package.swift`. A repository
 without `once.toml` can therefore query and build its first-party package
