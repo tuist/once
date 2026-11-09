@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use fd_lock::RwLock;
 use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{
     validate_action_contract_with_options, workspace_mise_command, workspace_prepared_tool_env,
@@ -1209,6 +1208,7 @@ async fn resolve_cacheable_declared_action(
     let outcome = recovery::with_action_lock_and_permit(
         context.workspace,
         action_digest,
+        declared.outputs.iter().map(String::as_str),
         context.producers.executors(context.resources)?,
         once_core::Executor::resolve(action)?,
         action.resource_request().clone(),
@@ -1286,19 +1286,42 @@ async fn probe_cached_action(
     }
 }
 
-fn cacheable_action_lock(workspace: &Path, digest: Digest) -> Result<RwLock<std::fs::File>> {
+/// One lock per path the action writes, or one for its digest when it
+/// declares no outputs.
+///
+/// Concurrent processes can compute different digests for the same outputs,
+/// for example after restoring different bytes of a non-reproducible input,
+/// and a tool such as rustc keeps scratch files next to its output. Keying
+/// by path keeps those runs from writing the same files at once.
+fn cacheable_action_locks<'a>(
+    workspace: &Path,
+    digest: Digest,
+    outputs: impl IntoIterator<Item = &'a str>,
+) -> Result<Vec<std::fs::File>> {
     let directory = workspace.join(".once/locks/actions");
     std::fs::create_dir_all(&directory)
         .with_context(|| format!("creating action lock directory `{}`", directory.display()))?;
-    let path = directory.join(format!("{digest}.lock"));
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(&path)
-        .with_context(|| format!("opening action lock `{}`", path.display()))?;
-    Ok(RwLock::new(file))
+    let mut keys = outputs
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|path| Digest::of_bytes(path.as_bytes()))
+        .collect::<Vec<_>>();
+    if keys.is_empty() {
+        keys.push(digest);
+    }
+    keys.into_iter()
+        .map(|key| {
+            let path = directory.join(format!("{key}.lock"));
+            OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(&path)
+                .with_context(|| format!("opening action lock `{}`", path.display()))
+        })
+        .collect()
 }
 
 async fn action_result_blobs_present(
