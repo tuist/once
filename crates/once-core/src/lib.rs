@@ -1,4 +1,4 @@
-//! Action types and cache-aware execution.
+//! Action types and cache-aware execution (release e2e warm run).
 //!
 //! Exposes command actions, portable file actions, and an async
 //! executor ([`Runner`]) that consults a cache provider before doing
