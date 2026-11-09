@@ -477,19 +477,19 @@ jobs:
           shared-key: release-graph-build-windows
           cache-on-failure: true
           cache-bin: false
+      # Signing in first lets the bootstrap build through the remote cache.
+      # Fork pull requests cannot mint an OpenID Connect token, so they fall
+      # back to the local cache.
+      - name: Select Once cache
+        run: ./mise/tasks/release/select-once-cache.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
       - name: Resolve bootstrap Once
         id: bootstrap
         run: echo "bin=$(./mise/tasks/release/bootstrap-once.sh)" >> "$GITHUB_OUTPUT"
-      # Fork pull requests cannot mint an OpenID Connect token, so they
-      # fall back to the local cache and skip run reporting.
-      - name: Authenticate with Tuist
-        id: once-cache-auth
-        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
-        continue-on-error: true
-        run: '"${{ steps.bootstrap.outputs.bin }}" auth login --provider tuist --no-browser'
-      - name: Build Windows release binary with Once
         env:
-          ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
+          GH_TOKEN: ${{ github.token }}
+      - name: Build Windows release binary with Once
         run: |
           set -euo pipefail
 
