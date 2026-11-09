@@ -6618,6 +6618,7 @@ result = repr([provider["transitive_linkopts"], provider["transitive_data"]])
 
 #[cfg(unix)]
 #[test]
+#[allow(clippy::too_many_lines)]
 fn prelude_rust_mobile_library_android_consumer_declares_only_android_variant() {
     let prelude = all_prelude_source();
     let workspace = TempDir::new().unwrap();
