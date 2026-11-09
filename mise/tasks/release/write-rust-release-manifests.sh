@@ -2,12 +2,14 @@
 #MISE description="Inject or clear temporary Once release graph targets"
 #USAGE flag "--target <target>" help="Rust target triple to compile"
 #USAGE flag "--version <version>" help="Version number to embed in final artifacts"
+#USAGE flag "--bootstrap" help="Generate bootstrap targets that optimize dependencies but not Once's own crates"
 #USAGE flag "--clear" help="Remove generated release targets"
 set -euo pipefail
 
 target=""
 version="0.0.0"
 clear=false
+bootstrap=false
 while (($# > 0)); do
   case "$1" in
     --target)
@@ -20,6 +22,10 @@ while (($# > 0)); do
       ;;
     --clear)
       clear=true
+      shift
+      ;;
+    --bootstrap)
+      bootstrap=true
       shift
       ;;
     *)
@@ -73,7 +79,6 @@ if [[ ! "${version}" =~ ^[0-9]+[.][0-9]+[.][0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
 fi
 
 suffix="$(printf '%s' "${target}" | tr '.-' '__')"
-dependency_target="cargo_dependencies_${suffix}"
 
 case "${target}" in
   *-apple-ios*)
@@ -83,6 +88,18 @@ case "${target}" in
     release_flags='["-C", "opt-level=3", "-C", "codegen-units=1", "-C", "panic=abort"]'
     ;;
 esac
+dependency_flags="${release_flags}"
+crate_flags="${release_flags}"
+
+# The bootstrap Once only drives graph builds, so its own crates skip
+# optimization like the Cargo bootstrap profile, while dependencies such
+# as the Starlark interpreter and hashers stay optimized.
+if [[ "${bootstrap}" == true ]]; then
+  suffix="bootstrap_${suffix}"
+  dependency_flags='["-C", "opt-level=3"]'
+  crate_flags='[]'
+fi
+dependency_target="cargo_dependencies_${suffix}"
 
 remove_generated_blocks
 
@@ -103,7 +120,7 @@ manifest = "Cargo.toml"
 lockfile = "Cargo.lock"
 vendor_dir = "third_party/rust/vendor"
 target = "${target}"
-dep_rustc_flags = ${release_flags}
+dep_rustc_flags = ${dependency_flags}
 # once release generated targets end
 EOF
 
@@ -120,7 +137,7 @@ crate_name = "once_cas"
 crate_root = "src/lib.rs"
 edition = "2021"
 target = "${target}"
-rustc_flags = ${release_flags}
+rustc_flags = ${crate_flags}
 cargo_package = "once-cas"
 
 [target.attrs.rustc_env]
@@ -143,7 +160,7 @@ crate_name = "once_host_tree"
 crate_root = "src/lib.rs"
 edition = "2021"
 target = "${target}"
-rustc_flags = ${release_flags}
+rustc_flags = ${crate_flags}
 cargo_package = "once-host-tree"
 
 [target.attrs.rustc_env]
@@ -166,7 +183,7 @@ crate_name = "once_presentation"
 crate_root = "src/lib.rs"
 edition = "2021"
 target = "${target}"
-rustc_flags = ${release_flags}
+rustc_flags = ${crate_flags}
 cargo_package = "once-presentation"
 
 [target.attrs.rustc_env]
@@ -195,7 +212,7 @@ crate_root = "src/lib.rs"
 edition = "2021"
 features = ["default", "remote-microsandbox"]
 target = "${target}"
-rustc_flags = ${release_flags}
+rustc_flags = ${crate_flags}
 cargo_package = "once-core"
 
 [target.attrs.rustc_env]
@@ -222,7 +239,7 @@ crate_root = "src/lib.rs"
 edition = "2021"
 build_script = "build.rs"
 target = "${target}"
-rustc_flags = ${release_flags}
+rustc_flags = ${crate_flags}
 cargo_package = "once-events-client"
 
 [target.attrs.rustc_env]
@@ -250,7 +267,7 @@ crate_name = "once_frontend"
 crate_root = "src/lib.rs"
 edition = "2021"
 target = "${target}"
-rustc_flags = ${release_flags}
+rustc_flags = ${crate_flags}
 cargo_package = "once-frontend"
 
 [target.attrs.rustc_env]
@@ -280,7 +297,7 @@ crate_root = "src/lib.rs"
 edition = "2021"
 crate_type = "cdylib"
 target = "${target}"
-rustc_flags = ${release_flags}
+rustc_flags = ${crate_flags}
 cargo_package = "once"
 
 [target.attrs.rustc_env]
@@ -306,7 +323,7 @@ crate_root = "src/lib.rs"
 edition = "2021"
 crate_type = "staticlib"
 target = "${target}"
-rustc_flags = ${release_flags}
+rustc_flags = ${crate_flags}
 cargo_package = "once"
 
 [target.attrs.rustc_env]
@@ -336,7 +353,7 @@ crate_name = "once"
 crate_root = "src/main.rs"
 edition = "2021"
 target = "${target}"
-rustc_flags = ${release_flags}
+rustc_flags = ${crate_flags}
 cargo_package = "once-cli"
 
 [target.attrs.rustc_env]
