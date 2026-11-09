@@ -41,6 +41,10 @@ structured formatter, converts examples into stable target-qualified
 identifiers, and writes normalized Once results. Exact execution passes the
 native example identifier back to the runner.
 
+Once selects the formatter by its fully qualified RSpec class name, so its
+reporting option does not look like an application's `--format json` option
+to tests that inspect command-line arguments.
+
 The target kind declares Ruby and Ruby Specification as tool requirements.
 The runner does not need to be loadable by an unrelated system Ruby
 installation.

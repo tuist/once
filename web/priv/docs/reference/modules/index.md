@@ -1594,6 +1594,27 @@ Its implementation returns `test_info` with this shape:
 }
 ```
 
+The built-in pytest, Ruby Specification, Minitest, Vitest, and Jest runners
+provide a private `HOME` below their test output directory, including the batch
+directory for batched execution. It resolves to an absolute path at execution
+time through `execution_path`, so tools can expand `~` without embedding a
+checkout location in the action identity. Explicit `env` values take precedence
+over inherited values and these defaults.
+
+The built-in Vitest and Jest kinds default to `unit = "case"`, which requires
+unique file and full-name identities for exact selection. With the explicit
+`unit = "suite"` opt-in, each target reports one `<target>::suite` result and
+retains all assertions, including duplicate names, in its native JSON output.
+Native assertion counts are exposed in `runner.metadata.native_summary`.
+Suite mode declares listing and sharding unsupported, filtering as
+`unsupported`, and granularity as `target`; native failures fail the suite.
+
+The built-in pytest kind uses native directory collection restricted to its
+declared source files. Native ignore rules run before exact case selection,
+so filtered execution cannot re-include a module ignored by `collect_ignore`.
+Declare collection configuration, including nested `conftest.py` files, in
+`config` or `data` to keep discovery and action inputs complete.
+
 The provider may also return `test_discovery_inputs`, a list of
 workspace-relative files whose contents can change discovered unit
 identifiers. Once fingerprints those files before reusing a manifest. When the

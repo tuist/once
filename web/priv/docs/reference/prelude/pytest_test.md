@@ -42,6 +42,17 @@ batching, and exact unit commands.
 stable node identifiers, and writes normalized Once results. A complete run
 discovers cases for exact interactive execution and automatic scheduling.
 
+Pytest collects from the declared source directories using its native ignore
+rules, including `collect_ignore`. Only files matched by `srcs` may be collected;
+exact case selection happens after native collection and cannot re-include an
+ignored module. Include nested `conftest.py` files and other collection inputs
+in `config` or `data` so changes invalidate discovery and cached results.
+
+Configuration discovery uses the declared source paths, so package-local
+pytest settings are preserved. Native ignore hooks run before Once enforces
+the source boundary; returning `False` from a project hook cannot admit an
+undeclared test file.
+
 The target kind declares both Python and pytest as tool requirements. This
 lets schema discovery and toolchain setup explain the complete runtime
 requirement even when pytest is installed outside the workspace.

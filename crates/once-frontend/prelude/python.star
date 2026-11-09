@@ -43,7 +43,7 @@ def _python_executable(ctx):
     fail(ctx["label"]["id"] + ": no Python interpreter capable of loading pytest was found; set the `python` attribute")
 
 def _python_env(ctx, test_dir):
-    env = {"HOME": test_dir + "/home", "PYTHONDONTWRITEBYTECODE": "1"}
+    env = {"HOME": execution_path(test_dir + "/home"), "PYTHONDONTWRITEBYTECODE": "1"}
     for name in _python_attr(ctx, "env_inherit", []):
         value = host_env(name)
         if value:
@@ -61,6 +61,12 @@ import json
 import os
 import sys
 
+try:
+    import pytest
+except Exception as error:
+    print("unable to import pytest: " + str(error), file=sys.stderr)
+    raise SystemExit(2)
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -77,11 +83,38 @@ def parse_args():
 
 
 class OncePlugin:
-    def __init__(self, target):
+    def __init__(self, target, sources, selected):
         self.target = target
+        self.sources = {os.path.abspath(source) for source in sources}
+        self.selected = set(selected)
         self.items = {}
         self.statuses = {}
         self.attempts = {}
+
+    def pytest_sessionstart(self, session):
+        # Configuration comes from source paths; directory traversal preserves native ignores.
+        session.config.args = ["."]
+
+    @pytest.hookimpl(hookwrapper=True, tryfirst=True)
+    def pytest_ignore_collect(self, collection_path):
+        outcome = yield
+        path = os.path.abspath(collection_path)
+        if collection_path.is_dir():
+            if not any(source.startswith(path + os.sep) for source in self.sources):
+                outcome.force_result(True)
+        elif path not in self.sources:
+            outcome.force_result(True)
+
+    def pytest_collection_modifyitems(self, config, items):
+        if not self.selected:
+            return
+        missing = self.selected - {item.nodeid for item in items}
+        deselected = [item for item in items if item.nodeid not in self.selected]
+        items[:] = [item for item in items if item.nodeid in self.selected]
+        config.hook.pytest_deselected(items=deselected)
+        if missing:
+            import pytest
+            raise pytest.UsageError("requested test units were not collected: " + ", ".join(sorted(missing)))
 
     def pytest_collection_finish(self, session):
         for item in session.items:
@@ -148,11 +181,6 @@ class OncePlugin:
 
 def main():
     args = parse_args()
-    try:
-        import pytest
-    except Exception as error:
-        print("unable to import pytest: " + str(error), file=sys.stderr)
-        return 2
     selected = []
     prefix = args.once_target + "::"
     for unit in args.once_test_unit:
@@ -160,8 +188,8 @@ def main():
             print("test unit does not belong to target: " + unit, file=sys.stderr)
             return 2
         selected.append(unit[len(prefix):])
-    plugin = OncePlugin(args.once_target)
-    exit_code = int(pytest.main(args.runner_args + (selected or args.once_source), plugins=[plugin]))
+    plugin = OncePlugin(args.once_target, args.once_source, selected)
+    exit_code = int(pytest.main(args.runner_args + (args.once_source or ["."]), plugins=[plugin]))
     native = plugin.normalized(exit_code)
     native["exit_code"] = exit_code
     os.makedirs(os.path.dirname(args.once_results), exist_ok=True)

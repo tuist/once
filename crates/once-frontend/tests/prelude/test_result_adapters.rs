@@ -10,6 +10,54 @@ use std::process::{Command, Output};
 
 use super::{all_prelude_source, eval_prelude_string_function_in, write_executable};
 
+#[test]
+fn dynamic_runner_home_resolves_at_execution_and_preserves_overrides() {
+    let prelude = all_prelude_source();
+    for kind in [
+        "pytest_test",
+        "rspec_test",
+        "minitest_test",
+        "vitest_test",
+        "jest_test",
+    ] {
+        for override_home in [false, true] {
+            let source = format!(
+                r#"{prelude}
+def _resolve_host_executable(value):
+    return value
+def host_command(argv, cwd = None, merge_stderr = False):
+    return "1.0"
+ctx = {{
+    "label": {{"id": "pkg/tests", "name": "tests", "package": "pkg"}},
+    "attr": {{"python": "python", "env": {env}}},
+    "srcs": [],
+    "build_dir": ".once/out/pkg/tests",
+    "capability": "query",
+    "test": {{"batch_id": "batch-a"}},
+}}
+result = _json_encode({kind}["impl"](ctx)["test_info"]["command"]["env"])
+"#,
+                env = if override_home {
+                    r#"{"HOME": "/custom/home"}"#
+                } else {
+                    "{}"
+                }
+            );
+            let env: std::collections::BTreeMap<String, String> =
+                serde_json::from_str(&super::eval_prelude_source_to_repr(source).unwrap()).unwrap();
+            for root in ["/first-checkout", "/second-checkout"] {
+                let resolved = once_core::resolve_execution_env(&env, Path::new(root));
+                let expected = if override_home {
+                    "/custom/home".to_owned()
+                } else {
+                    format!("{root}/.once/out/pkg/tests/test/batches/batch-a/home")
+                };
+                assert_eq!(resolved["HOME"], expected, "{kind}");
+            }
+        }
+    }
+}
+
 fn runner_source(function: &str) -> String {
     eval_prelude_string_function_in(all_prelude_source(), function, "()").unwrap()
 }
@@ -95,6 +143,117 @@ process.exit(1)
 }
 
 #[test]
+fn javascript_suite_units_preserve_duplicate_assertions_and_propagate_failures() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let adapter = dir.path().join("adapter.mjs");
+    std::fs::write(&adapter, runner_source("_javascript_test_adapter")).unwrap();
+    let runner = dir.path().join("runner.mjs");
+    std::fs::write(&runner, r"import fs from 'node:fs'
+const output = process.argv.find(arg => arg.startsWith('--outputFile=')).slice('--outputFile='.length)
+const failed = process.env.FAIL === 'true'
+fs.writeFileSync(output, JSON.stringify({success: !failed, testResults: [{name: 'duplicate.test.js', assertionResults: [
+  {title: 'same', fullName: 'same', status: 'passed'},
+  {title: 'same', fullName: 'same', status: failed ? 'failed' : 'passed', failureMessages: failed ? ['intentional failure'] : []},
+  {title: 'later', fullName: 'later', status: 'pending'}
+]}]}))
+process.exit(failed ? 1 : 0)
+").unwrap();
+    let results = dir.path().join("results.json");
+    let native = dir.path().join("native.json");
+    for runner_type in ["vitest", "jest"] {
+        for unit in ["case", "suite"] {
+            for failed in [false, true] {
+                let output = run(Command::new("node")
+                    .arg(&adapter)
+                    .args([
+                        "--once-target",
+                        "pkg/tests",
+                        "--once-runner-type",
+                        runner_type,
+                    ])
+                    .args(if unit == "suite" {
+                        &["--once-unit", "suite"][..]
+                    } else {
+                        &[]
+                    })
+                    .args(["--once-runner-via-node", "true"])
+                    .arg("--once-runner")
+                    .arg(&runner)
+                    .arg("--once-native-results")
+                    .arg(&native)
+                    .arg("--once-results")
+                    .arg(&results)
+                    .env("FAIL", failed.to_string())
+                    .current_dir(dir.path()));
+                assert_eq!(
+                    output.status.success(),
+                    unit == "suite" && !failed,
+                    "{output:?}"
+                );
+                let report = read_report(&results);
+                let native_report = read_report(&native);
+                let assertions = native_report["testResults"][0]["assertionResults"]
+                    .as_array()
+                    .unwrap();
+                assert_eq!(assertions.len(), 3);
+                assert_eq!(assertions[0]["fullName"], assertions[1]["fullName"]);
+                assert_eq!(
+                    assertions[1]["status"],
+                    if failed { "failed" } else { "passed" }
+                );
+                if unit == "suite" {
+                    assert_eq!(report["summary"]["total"], 1);
+                    assert_eq!(report["cases"][0]["id"], "pkg/tests::suite");
+                    assert_eq!(
+                        report["cases"][0]["status"],
+                        if failed { "failed" } else { "passed" }
+                    );
+                    assert_eq!(
+                        report["runner"]["metadata"]["native_summary"],
+                        serde_json::json!({"total":3,"passed":2-u8::from(failed),"failed":u8::from(failed),"skipped":1})
+                    );
+                } else {
+                    assert!(String::from_utf8_lossy(&output.stderr)
+                        .contains("duplicate full test names cannot be filtered exactly"));
+                }
+            }
+        }
+        let output = run(Command::new("node").arg(&adapter).args([
+            "--once-unit",
+            "suite",
+            "--once-test-unit",
+            "pkg/tests::suite",
+        ]));
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr)
+            .contains("suite units do not support test-unit filtering"));
+    }
+}
+
+#[test]
+fn javascript_suite_units_declare_unsupported_case_selection() {
+    for runner_type in ["vitest", "jest"] {
+        let source = format!(
+            r#"{}
+def _resolve_host_executable(value):
+    return value
+ctx = {{"label": {{"id": "pkg/tests", "name": "tests", "package": "pkg"}}, "attr": {{"unit": "suite"}}, "srcs": [], "build_dir": ".once/out/pkg/tests", "capability": "query"}}
+result = _json_encode({runner_type}_test["impl"](ctx)["test_info"])
+"#,
+            all_prelude_source()
+        );
+        let info: serde_json::Value =
+            serde_json::from_str(&super::eval_prelude_source_to_repr(source).unwrap()).unwrap();
+        assert_eq!(info["listing"]["supported"], false);
+        assert_eq!(info["filtering"]["case_filtering"], "unsupported");
+        assert_eq!(
+            info["sharding"],
+            serde_json::json!({"supported":false,"granularity":"target"})
+        );
+    }
+}
+
+#[test]
 fn pytest_adapter_reports_one_attempt_per_test_with_failure_text() {
     let dir = tempfile::TempDir::new().unwrap();
     let adapter = dir.path().join("adapter.py");
@@ -121,6 +280,10 @@ class Report:
         self.skipped = outcome == "skipped"
         self.duration = duration
         self.longreprtext = text
+
+
+def hookimpl(**kwargs):
+    return lambda function: function
 
 
 def main(args, plugins):
@@ -168,6 +331,102 @@ def main(args, plugins):
         only_attempt(&report, "test_later"),
         &serde_json::json!({"status": "skipped"})
     );
+}
+
+#[test]
+fn pytest_adapter_preserves_native_ignores_source_boundaries_and_exact_selection() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("adapter.py"),
+        runner_source("_python_pytest_adapter"),
+    )
+    .unwrap();
+    std::fs::create_dir(dir.path().join("tests")).unwrap();
+    std::fs::create_dir(dir.path().join("tests/ignored_dir")).unwrap();
+    std::fs::write(
+        dir.path().join("tests/ignored_dir/test_nested.py"),
+        "raise RuntimeError('ignored directory imported')\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("tests/conftest.py"),
+        "collect_ignore = ['test_ignored.py', 'ignored_dir']\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("tests/test_ignored.py"),
+        "raise RuntimeError('ignored module imported')\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("tests/test_outside.py"),
+        "raise RuntimeError('outside target imported')\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("tests/test_kept.py"), "def test_pass():\n    assert True\ndef test_fail():\n    assert False, 'intentional failure'\n").unwrap();
+    std::fs::write(dir.path().join("check_collection.py"), r"import json
+import subprocess
+import sys
+
+def test_collection():
+    native = subprocess.run([sys.executable, '-m', 'pytest', '-q', 'tests', '--ignore=tests/test_outside.py'], capture_output=True, text=True)
+    assert native.returncode == 1, native.stdout + native.stderr
+    assert '1 failed, 1 passed' in native.stdout
+    explicit = subprocess.run([sys.executable, '-m', 'pytest', '-q', 'tests/test_ignored.py'], capture_output=True, text=True)
+    assert explicit.returncode == 2, explicit.stdout + explicit.stderr
+    assert 'ignored module imported' in explicit.stdout
+    command = [sys.executable, 'adapter.py', '--once-target', 'tests', '--once-source', 'tests/test_ignored.py', '--once-source', 'tests/ignored_dir/test_nested.py', '--once-source', 'tests/test_kept.py', '--once-results', 'out/results.json', '--once-native-results', 'out/native.json']
+    for selected, expected_code, expected_names in [
+        (None, 1, ['test_fail', 'test_pass']),
+        ('tests/test_kept.py::test_pass', 0, ['test_pass']),
+        ('tests/test_kept.py::test_fail', 1, ['test_fail']),
+        ('tests/test_ignored.py::test_any', 4, []),
+    ]:
+        args = command + (['--once-test-unit', 'tests::' + selected] if selected else []) + ['--', '-q']
+        result = subprocess.run(args, capture_output=True, text=True)
+        assert result.returncode == expected_code, result.stdout + result.stderr
+        report = json.load(open('out/results.json'))
+        assert sorted(case['name'] for case in report['cases']) == expected_names, report
+        assert 'ignored module imported' not in result.stdout
+        assert 'ignored directory imported' not in result.stdout
+        assert 'outside target imported' not in result.stdout
+
+    for source in ['tests/test_ignored.py', 'tests/ignored_dir/test_nested.py']:
+        ignored = [sys.executable, 'adapter.py', '--once-target', 'tests', '--once-source', source, '--once-results', 'out/ignored.json', '--once-native-results', 'out/ignored-native.json', '--', '-q']
+        result = subprocess.run(ignored, capture_output=True, text=True)
+        assert result.returncode == 5, result.stdout + result.stderr
+        assert json.load(open('out/ignored.json'))['cases'] == []
+
+    with open('tests/conftest.py', 'a') as file:
+        file.write('\ndef pytest_ignore_collect(collection_path):\n    if collection_path.name == \'test_outside.py\':\n        return False\n')
+    native = subprocess.run([sys.executable, '-m', 'pytest', '-q', 'tests/test_kept.py::test_pass'], capture_output=True, text=True)
+    assert native.returncode == 0, native.stdout + native.stderr
+    result = subprocess.run(command + ['--once-test-unit', 'tests::tests/test_kept.py::test_pass', '--', '-q'], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert [case['name'] for case in json.load(open('out/results.json'))['cases']] == ['test_pass']
+    assert 'outside target imported' not in result.stdout
+
+def test_package_configuration():
+    from pathlib import Path
+    Path('package/src').mkdir(parents=True)
+    Path('package/tests').mkdir()
+    Path('package/pytest.ini').write_text('[pytest]\npythonpath = src\n')
+    Path('package/src/owned_module.py').write_text('VALUE = 42\n')
+    Path('package/tests/test_config.py').write_text('from owned_module import VALUE\ndef test_import():\n    assert VALUE == 42\n')
+    native = subprocess.run([sys.executable, '-m', 'pytest', '-q', 'package/tests/test_config.py'], capture_output=True, text=True)
+    assert native.returncode == 0, native.stdout + native.stderr
+    command = [sys.executable, 'adapter.py', '--once-target', 'tests', '--once-source', 'package/tests/test_config.py', '--once-results', 'out/package.json', '--once-native-results', 'out/package-native.json']
+    for selection in [[], ['--once-test-unit', 'tests::tests/test_config.py::test_import']]:
+        result = subprocess.run(command + selection + ['--', '-q'], capture_output=True, text=True)
+        assert result.returncode == 0, result.stdout + result.stderr
+        report = json.load(open('out/package.json'))
+        assert [case['name'] for case in report['cases']] == ['test_import']
+").unwrap();
+    let output = run(Command::new("pytest")
+        .args(["-q", "check_collection.py"])
+        .env("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+        .current_dir(dir.path()));
+    assert!(output.status.success(), "{output:?}");
 }
 
 #[test]
@@ -226,6 +485,55 @@ exit 1
         only_attempt(&report, "math later"),
         &serde_json::json!({"status": "skipped"})
     );
+}
+
+#[test]
+fn rspec_reporting_preserves_application_cli_format_detection() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let adapter = dir.path().join("adapter.rb");
+    std::fs::write(&adapter, runner_source("_ruby_rspec_adapter")).unwrap();
+    std::fs::write(
+        dir.path().join("cli_spec.rb"),
+        r"RSpec.describe 'application CLI' do
+  it 'keeps text output' do
+    index = ARGV.index('--format')
+    json_output = index && ['json', 'j'].include?(ARGV[index + 1])
+    expect(json_output).to be_falsey
+  end
+  it 'propagates failures' do
+    expect(ENV['INTENTIONAL_FAILURE']).not_to eq('true')
+  end
+end
+",
+    )
+    .unwrap();
+    let results = dir.path().join("results.json");
+    for failed in [false, true] {
+        let output = run(Command::new("ruby")
+            .arg(&adapter)
+            .arg("--once-results")
+            .arg(&results)
+            .arg("--once-native-results")
+            .arg(dir.path().join("native.json"))
+            .args([
+                "--once-runner",
+                "rspec",
+                "--once-target",
+                "tests",
+                "--once-source",
+                "cli_spec.rb",
+            ])
+            .env("INTENTIONAL_FAILURE", failed.to_string())
+            .current_dir(dir.path()));
+        assert_eq!(output.status.success(), !failed, "{output:?}");
+        let report = read_report(&results);
+        assert_eq!(report["summary"]["total"], 2);
+        assert_eq!(
+            only_attempt(&report, "application CLI keeps text output")["status"],
+            "passed"
+        );
+        assert_eq!(report["summary"]["failed"], u8::from(failed));
+    }
 }
 
 #[test]

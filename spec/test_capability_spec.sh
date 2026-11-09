@@ -855,11 +855,13 @@ PY
   It 'fails a batch when runner collection adds unrequested cases'
     create_pytest_workspace
     cat > "$WORKSPACE/tests/conftest.py" <<'PY'
+import os
 import pytest
 
 
+@pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config, items):
-    if items and any("::" in arg for arg in config.args):
+    if items and "/batches/" in os.environ["HOME"]:
         items.append(pytest.Function.from_parent(
             items[0].parent,
             name="test_unrequested",

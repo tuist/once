@@ -13,7 +13,7 @@ def _javascript_node(ctx):
     return resolved
 
 def _javascript_env(ctx, test_dir, node):
-    env = {"HOME": test_dir + "/home", "CI": "1"}
+    env = {"HOME": execution_path(test_dir + "/home"), "CI": "1"}
     node_dir = _parent_dir(node)
     if node_dir:
         env["PATH"] = node_dir
@@ -139,6 +139,7 @@ function relativeFile(value) {
 
 function main() {
   const options = parseArgs(process.argv.slice(2))
+  if (options.unit === "suite" && options.units.length) throw new Error("suite units do not support test-unit filtering")
   const units = decodeUnits(options)
   const files = units.length ? [...new Set(units.map(unit => unit.file))] : options.sources
   const names = units.map(unit => unit.name)
@@ -153,6 +154,7 @@ function main() {
   }
   const command = options.runner_via_node === "true" ? process.execPath : options.runner
   const args = options.runner_via_node === "true" ? [options.runner, ...runnerArgs] : runnerArgs
+  const started = performance.now()
   const execution = spawnSync(command, args, { encoding: "utf8", env: process.env })
   if (execution.stdout) process.stdout.write(execution.stdout)
   if (execution.stderr) process.stderr.write(execution.stderr)
@@ -166,7 +168,7 @@ function main() {
   const cases = []
   const identifiers = new Set()
   let duplicates = false
-  for (const suite of native.testResults || []) {
+  for (const suite of (options.unit === "suite" ? [] : native.testResults || [])) {
     const file = relativeFile(suite.name || "unknown")
     for (const assertion of suite.assertionResults || []) {
       const fullName = assertion.fullName || [...(assertion.ancestorTitles || []), assertion.title].join(" ")
@@ -199,14 +201,37 @@ function main() {
       runner_metadata: {},
     })
   }
+  const metadata = {}
+  if (options.unit === "suite") {
+    const nativeSummary = { total: 0, passed: 0, failed: 0, skipped: 0 }
+    for (const suite of native.testResults || []) {
+      for (const assertion of suite.assertionResults || []) {
+        nativeSummary.total += 1
+        nativeSummary[normalizedStatus(assertion.status)] += 1
+      }
+    }
+    const status = exitCode === 0 && native.success !== false && nativeSummary.failed === 0 && !(native.testResults || []).some(suite => suite.status === "failed") ? "passed" : "failed"
+    const attempt = { status, duration_ms: Math.round(performance.now() - started) }
+    if (status === "failed") attempt.failure = { message: "Native test suite failed; see the native results and runner log" }
+    metadata.unit = "suite"
+    metadata.native_summary = nativeSummary
+    cases.push({
+      id: options.target + "::suite",
+      name: options.target,
+      suite: options.target,
+      status,
+      attempts: [attempt],
+      runner_metadata: { unit: "suite" },
+    })
+  }
   const passed = cases.filter(item => item.status === "passed").length
   const failed = cases.filter(item => item.status === "failed").length
   const skipped = cases.filter(item => item.status === "skipped").length
-  const status = exitCode === 0 && !duplicates ? "passed" : "failed"
+  const status = options.unit === "suite" ? cases[0].status : exitCode === 0 && !duplicates ? "passed" : "failed"
   const normalized = {
     schema: "once.test_results.v1",
     target: options.target,
-    runner: { type: options.runner_type, metadata: {} },
+    runner: { type: options.runner_type, metadata },
     status,
     summary: { total: cases.length, passed, failed, skipped, flaky: 0 },
     cases,
@@ -228,15 +253,16 @@ try {
 '''
 
 def _javascript_test_info(ctx, runner_type, display_name, node, runner, adapter, results, log, native_results, test_dir):
+    suite_unit = _javascript_attr(ctx, "unit", "case") == "suite"
     return {
         "schema": "once.test_info.v1",
         "target": ctx["label"]["id"],
         "runner": {"type": runner_type, "display_name": display_name, "metadata": {}},
         "command": {"argv": [node, adapter], "env": _javascript_env(ctx, test_dir, node), "cwd": "."},
         "outputs": {"results": results, "logs": [log], "native_results": [native_results], "coverage": []},
-        "listing": {"supported": True, "strategy": "normalized_results"},
-        "filtering": {"case_filtering": "runner_args"},
-        "sharding": {"supported": True, "granularity": _javascript_attr(ctx, "batching", "file")},
+        "listing": {"supported": not suite_unit, "strategy": "unsupported" if suite_unit else "normalized_results"},
+        "filtering": {"case_filtering": "unsupported" if suite_unit else "runner_args"},
+        "sharding": {"supported": not suite_unit, "granularity": "target" if suite_unit else _javascript_attr(ctx, "batching", "file")},
         "retries": {"supported": False, "default_attempts": 1},
         "execution": {"cacheable": True, "timeout_ms": _javascript_attr(ctx, "timeout_ms", None), "run_from_workspace_root": True},
         "labels": _javascript_attr(ctx, "labels", []),
@@ -264,7 +290,7 @@ def _javascript_test_impl(ctx, runner_type, display_name, default_runner):
     if ctx["capability"] != "test":
         return provider
     write_path(adapter, _javascript_test_adapter())
-    argv = [node, adapter, "--once-runner-type", runner_type, "--once-runner", runner, "--once-runner-via-node", "true" if runner_via_node else "false", "--once-results", results, "--once-native-results", native_results, "--once-target", ctx["label"]["id"]]
+    argv = [node, adapter, "--once-runner-type", runner_type, "--once-runner", runner, "--once-runner-via-node", "true" if runner_via_node else "false", "--once-unit", _javascript_attr(ctx, "unit", "case"), "--once-results", results, "--once-native-results", native_results, "--once-target", ctx["label"]["id"]]
     for source in glob(ctx["srcs"]):
         argv.extend(["--once-source", source])
     for unit in (ctx.get("test") or {}).get("filters") or []:
@@ -307,6 +333,7 @@ def _javascript_test_attrs(runner, display_name):
         attr("args", "list<string>", default = "[]", docs = "Additional runner arguments.", configurable = False),
         attr("env", "map<string,string>", default = "{}", docs = "Environment variables for test execution.", configurable = True),
         attr("env_inherit", "list<string>", default = "[]", docs = "Host environment variables inherited by name.", configurable = False),
+        attr("unit", "string", default = "\"case\"", docs = "Result unit: `case` requires unique file/full-name identities; `suite` retains the complete native report as one target-level unit without case listing, filtering, or sharding.", configurable = False, allowed_values = ["case", "suite"]),
         attr("batching", "string", default = "\"file\"", docs = "Automatic batch granularity: `file`, `case`, or `target`.", configurable = False),
         attr("labels", "list<string>", default = "[]", docs = "Labels exposed through test discovery."),
         attr("timeout_ms", "int", docs = "Optional test timeout in milliseconds.", configurable = False),

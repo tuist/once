@@ -19,7 +19,7 @@ def _ruby_rspec_executable(ctx):
     return resolved
 
 def _ruby_env(ctx, test_dir):
-    env = {"HOME": test_dir + "/home"}
+    env = {"HOME": execution_path(test_dir + "/home")}
     for name in _ruby_attr(ctx, "env_inherit", []):
         value = host_env(name)
         if value:
@@ -60,7 +60,7 @@ selected = options[:units].map do |unit|
 end
 selection = selected.empty? ? options[:sources] : selected
 native_results = options.fetch(:native_results)
-args = runner_args + selection + ["--format", "json", "--out", native_results]
+args = runner_args + selection + ["--format", "RSpec::Core::Formatters::JsonFormatter", "--out", native_results]
 stdout, stderr, status = Open3.capture3(options.fetch(:runner), *args)
 $stdout.write(stdout)
 $stderr.write(stderr)

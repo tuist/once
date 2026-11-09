@@ -51,6 +51,14 @@ Once disables Vitest's mutable local cache inside the action because the
 installed packages are declared inputs. Once's action cache reuses successful
 test results when those inputs have not changed.
 
+For suites with duplicate full test names, explicitly set `unit = "suite"`.
+Once then records one target-owned suite unit and retains every assertion in
+the native JSON report, including duplicate names. Native assertion totals are
+also available in `runner.metadata.native_summary`. Any native failure fails
+the suite. Case listing, exact unit filtering, and automatic sharding are
+unsupported in this mode; `batching` does not subdivide it. The default
+`unit = "case"` continues to reject ambiguous names rather than inventing IDs.
+
 ## Attributes
 
 | Attribute | Type | Required | Default | Description |
@@ -63,6 +71,7 @@ test results when those inputs have not changed.
 | `args` | list&lt;string&gt; | no | `[]` | Additional Vitest arguments |
 | `env` | map&lt;string, string&gt; | no | `{}` | Explicit test environment variables |
 | `env_inherit` | list&lt;string&gt; | no | `[]` | Host environment variables inherited by name |
+| `unit` | string | no | `case` | `case` for unique case identities; `suite` for one complete target unit without case selection or sharding |
 | `batching` | string | no | `file` | Automatic granularity: `file`, `case`, or `target` |
 | `labels` | list&lt;string&gt; | no | `[]` | Labels exposed through test discovery |
 | `timeout_ms` | int | no | empty | Optional timeout in milliseconds |
