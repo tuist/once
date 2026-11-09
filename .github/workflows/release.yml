@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     branches:
-      - main
+      - ci/release-e2e-after
 
 permissions:
   contents: write
@@ -33,7 +33,7 @@ jobs:
     name: Check for releasable changes
     runs-on: ubuntu-24.04
     outputs:
-      should-release: ${{ steps.detect.outputs.should-release }}
+      should-release: 'true'
       latest-version: ${{ steps.detect.outputs.latest-version }}
       next-version: ${{ steps.detect.outputs.next-version }}
     steps:
@@ -253,7 +253,7 @@ jobs:
       - detect
       - build
       - build-xcframework
-    if: needs.detect.outputs.should-release == 'true'
+    if: false
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -287,7 +287,7 @@ jobs:
       - detect
       - publish
       - build-sdk-libs
-    if: needs.detect.outputs.should-release == 'true' && needs.publish.result == 'success' && needs.build-sdk-libs.result == 'success'
+    if: false
     runs-on: ubuntu-24.04
     permissions:
       contents: read
