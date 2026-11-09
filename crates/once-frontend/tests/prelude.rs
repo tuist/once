@@ -12925,10 +12925,8 @@ fn assert_release_dependency_response_file(store: &AnalysisStore) {
         );
     }
     for input in [
-        ".once/out/crates/once-core/once_core_x86_64_pc_windows_msvc/deps-rlib-search/libonce_cas-CRATES_ONCE_CAS_ONCE_CAS_X86_64_PC_WINDOWS_MSVC.rlib",
-        ".once/out/crates/once-core/once_core_x86_64_pc_windows_msvc/deps-rlib-search/libtokio-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_TOKIO_1_52_3.rlib",
-        ".once/out/crates/once-core/once_core_x86_64_pc_windows_msvc/deps-rlib-search/libserde-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_SERDE_1_0_228.rlib",
-        ".once/out/crates/once-core/once_core_x86_64_pc_windows_msvc/deps-rlib-search/libtracing-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_TRACING_0_1_43.rlib",
+        ".once/out/crates/once-cas/once_cas_x86_64_pc_windows_msvc/libonce_cas-CRATES_ONCE_CAS_ONCE_CAS_X86_64_PC_WINDOWS_MSVC.rlib",
+        ".once/out/cargo_dependencies_x86_64_pc_windows_msvc/tokio-1.52.3/libtokio-CARGO_DEPENDENCIES_X86_64_PC_WINDOWS_MSVC_TOKIO_1_52_3.rlib",
     ] {
         assert!(
             rustc.inputs.iter().any(|candidate| candidate == input),
@@ -12936,6 +12934,13 @@ fn assert_release_dependency_response_file(store: &AnalysisStore) {
             rustc.inputs
         );
     }
+    assert!(
+        !store.actions.iter().any(|action| action
+            .identifier
+            .as_deref()
+            .is_some_and(|identifier| identifier.contains("rlib-search"))),
+        "rlibs should not be copied into per-crate search directories"
+    );
     let crate_root = "crates/once-core/src/lib.rs";
     let root_position = arg_file
         .args
@@ -12959,16 +12964,19 @@ fn assert_release_dependency_response_file(store: &AnalysisStore) {
 }
 
 fn assert_release_dependency_search_path(args: &[String]) {
-    let staged_dependency =
-        "dependency=.once/out/crates/once-core/once_core_x86_64_pc_windows_msvc/deps-rlib-search";
+    for dependency in [
+        "dependency=.once/out/crates/once-cas/once_cas_x86_64_pc_windows_msvc",
+        "dependency=.once/out/cargo_dependencies_x86_64_pc_windows_msvc/tokio-1.52.3",
+    ] {
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == "-L" && pair[1] == dependency),
+            "{dependency} missing from {args:?}"
+        );
+    }
     assert!(
-        args.windows(2)
-            .any(|pair| pair[0] == "-L" && pair[1] == staged_dependency),
-        "{staged_dependency} missing from {args:?}"
-    );
-    assert!(
-        !args.iter().any(|arg| arg.contains("/search/deps")),
-        "rlib-only deps should not create a proc-macro staging directory: {args:?}"
+        !args.iter().any(|arg| arg.contains("rlib-search")),
+        "rlibs should resolve from their own output directories: {args:?}"
     );
 }
 

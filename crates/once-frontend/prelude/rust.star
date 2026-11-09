@@ -999,8 +999,11 @@ def _rust_dep_search_artifacts(deps):
     return _unique(artifacts)
 
 def _rust_raw_search_path_args(deps):
+    return _rust_search_dir_args(_rust_dep_search_artifacts(deps))
+
+def _rust_search_dir_args(artifacts):
     dirs = []
-    for artifact in _rust_dep_search_artifacts(deps):
+    for artifact in artifacts:
         directory = _parent_dir(artifact)
         if directory:
             dirs.append(directory)
@@ -1018,31 +1021,6 @@ def _rust_rlib_search_artifacts(deps):
         for transitive in dep.get("transitive_rlibs") or []:
             artifacts.append(transitive)
     return _unique(artifacts)
-
-def _rust_stage_rlibs_for_search(ctx, deps, tag):
-    artifacts = _rust_rlib_search_artifacts(deps)
-    if not artifacts:
-        return ([], [])
-    search_dir = declare_output(_rust_declared_output(ctx, tag + "-rlib-search"))
-    prepare_path(search_dir, kind = "remove", identifier = _rust_action_identifier(ctx, tag + "-rlib-search-clean"))
-    prepare_path(search_dir, kind = "directory", identifier = _rust_action_identifier(ctx, tag + "-rlib-search-prepare"))
-    staged = []
-    seen = {}
-    for artifact in artifacts:
-        name = _basename(artifact)
-        if name in seen:
-            continue
-        seen[name] = True
-        output = search_dir + "/" + name
-        copy_path(
-            artifact,
-            output,
-            inputs = [artifact],
-            identifier = _rust_action_identifier(ctx, tag + "-rlib-search:" + name),
-            source_files = _action_source_files([artifact]),
-        )
-        staged.append(output)
-    return (["-L", "dependency=" + search_dir], staged)
 
 def _rust_proc_macro_search_artifacts(deps):
     artifacts = []
@@ -1070,7 +1048,7 @@ def _rust_proc_macro_search_path_args(deps):
         args.extend(["-L", "dependency=" + directory])
     return (args, artifacts)
 
-def _rust_search_path_args(ctx, deps, tag):
+def _rust_search_path_args(deps):
     # On windows, the rustc-emitted proc-macro dylib shares its output
     # directory with MSVC sibling files (.dll.lib, .dll.exp, .pdb,
     # incremental data). Pointing `-L dependency=` at that directory exposes
@@ -1082,9 +1060,8 @@ def _rust_search_path_args(ctx, deps, tag):
     # and resolve fine from their original output directories.
     if host_os() != "windows":
         return (_rust_raw_search_path_args(deps), [])
-    rlib_args, staged_rlibs = _rust_stage_rlibs_for_search(ctx, deps, tag)
     proc_macro_args, staged = _rust_proc_macro_search_path_args(deps)
-    return (rlib_args + proc_macro_args, staged_rlibs + staged)
+    return (_rust_search_dir_args(_rust_rlib_search_artifacts(deps)) + proc_macro_args, staged)
 
 def _rust_stage_proc_macro_for_search(ctx, output):
     search_dir = declare_output(_rust_declared_output(ctx, "proc-macro-search"))
@@ -1768,11 +1745,11 @@ def _rust_compile(ctx, crate_type, default_root, output_name, test = False, prov
     aliases = _rust_aliases(ctx)
     deps = _rust_resolved_deps(ctx, include_dev = test)
     dep_args = _rust_dep_args(deps, aliases)
-    dep_search_args, dep_search_inputs = _rust_search_path_args(ctx, deps, "deps")
+    dep_search_args, dep_search_inputs = _rust_search_path_args(deps)
     dep_inputs = _rust_dep_inputs(deps)
     build_deps = _rust_build_deps(ctx)
     build_dep_args = _rust_dep_args(build_deps, aliases)
-    build_dep_search_args, build_dep_search_inputs = _rust_search_path_args(ctx, build_deps, "build-deps")
+    build_dep_search_args, build_dep_search_inputs = _rust_search_path_args(build_deps)
     build_dep_args.extend(build_dep_search_args)
     build_dep_inputs = _unique(_rust_dep_inputs(build_deps) + build_dep_search_inputs)
     feature_flags = _rust_feature_flags(ctx)
