@@ -183,6 +183,7 @@ def _c_library_impl(ctx):
             argv = [ar, "crs", archive] + objects,
             inputs = objects,
             outputs = [archive],
+            clean_paths = [archive],
             env = _c_attr(ctx, "env", {}),
             toolchain_identity = identity,
             identifier = ctx["label"]["id"] + ":c-archive",

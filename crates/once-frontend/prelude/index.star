@@ -106,6 +106,7 @@ PRELUDE_TARGET_KINDS = {
     "c.star": ["c_library"],
     "cmake.star": [
         "cmake_project",
+        "cmake_test",
         "cmake_workspace",
         "cmake_target",
     ],

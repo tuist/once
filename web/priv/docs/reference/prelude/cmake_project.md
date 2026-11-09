@@ -1,6 +1,6 @@
 # `cmake_project`
 
-Cacheable coarse build boundary for an existing CMake project.
+Coarse build boundary for an existing CMake project.
 
 ## Description
 
@@ -8,6 +8,14 @@ The target keeps CMake authoritative. It resolves and probes CMake plus the
 generated-build program, writes a portable CMake driver, and runs configure
 followed by `cmake --build` in one action. It stages only explicitly declared
 product files into the stable target output directory.
+
+Configure and build always bypass the cache and start from a clean generated
+build directory. CMake can select compilers, external toolchain files, SDKs,
+and configuration that Once cannot safely fingerprint from declared inputs.
+This conservative policy prevents changes to those selections from reusing
+stale executables. Native incremental state and build-result cache restoration
+are unavailable. Staging already-built products remains content-addressed;
+a staging cache hit does not mean the native build was skipped.
 
 The target also exposes declared headers, include directories, definitions,
 link options, libraries, and data through the shared native provider shape.

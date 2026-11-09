@@ -14,6 +14,8 @@ kinds can also read the same record fields by convention.
 
 Object outputs preserve the workspace-relative source path under `objects/`, so
 sources with similar names such as `foo-bar.c` and `foo_bar.c` do not collide.
+Archives are recreated from the current object set on each uncached build, so
+removing a source also removes its object from the archive.
 The C compiler is probed for every source-bearing target. The C++ compiler is
 only probed when at least one source uses a C++ extension. Set
 `archiver_identity` when the selected archiver path is mutable and the action

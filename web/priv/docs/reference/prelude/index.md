@@ -241,14 +241,24 @@ you already have.
 
 ## CMake target kinds
 
-- [`cmake_project`](/reference/prelude/cmake_project): coarse cacheable CMake
+- [`cmake_project`](/reference/prelude/cmake_project): coarse uncached CMake
   configure and build boundary with explicitly declared products
+- [`cmake_test`](/reference/prelude/cmake_test): path-bound local CMake build
+  tree and uncached CTest execution with suite-level results and native JUnit
 - [`cmake_workspace`](/reference/prelude/cmake_workspace): checked configured
   graph snapshot imported as queryable targets
 - [`cmake_target`](/reference/prelude/cmake_target): resolver-generated
   logical CMake target metadata
 
 ## Zig target kinds
+
+Compiled Zig targets select LLVM by default and require a compiler with LLVM
+support for the chosen target. Explicit `-fno-llvm` options are preserved but
+disable compilation and documentation caching because self-hosted backend
+outputs may not be byte reproducible. Unstripped compilations also bypass the
+cache because LLVM debug metadata may differ. Enable stripping explicitly to
+permit LLVM caching; debug information is never removed automatically. See the
+[Zig guide](/guide/graph/zig).
 
 - [`zig_dependencies`](/reference/prelude/zig_dependencies): locked Zig
   package graph imported from `build.zig.zon`

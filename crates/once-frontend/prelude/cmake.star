@@ -175,6 +175,7 @@ def _cmake_project_impl(ctx):
         clean_paths = [build_root],
         env = action_env,
         toolchain_identity = "once.cmake.project.v1\x00" + version + "\x00" + generator + "\x00" + build_program + "\x00" + build_program_version + "\x00" + build_type,
+        cacheable = False,
         identifier = ctx["label"]["id"] + ":cmake-build",
     )
 
@@ -233,6 +234,146 @@ def _cmake_project_impl(ctx):
         "affected_inputs": _unique(inputs + transitive_data),
         "default_output": staged_products[0],
     }
+
+_CMAKE_TEST_PATH_GUARD = """
+cmake_minimum_required(VERSION 3.20)
+get_filename_component(_once_expected "${ONCE_EXPECTED_ROOT}" REALPATH)
+get_filename_component(_once_actual "${ONCE_EXECUTION_ROOT}" REALPATH)
+if(NOT _once_expected STREQUAL _once_actual)
+  message(FATAL_ERROR "cmake_test requires execution at its original workspace path; relocated sandbox and remote execution are unsupported")
+endif()
+"""
+
+def _cmake_test_impl(ctx):
+    cmake = _resolve_host_executable(_cmake_attr(ctx, "cmake", "cmake"))
+    ctest = _resolve_host_executable(_cmake_attr(ctx, "ctest", "ctest"))
+    if not cmake or not ctest:
+        fail(ctx["label"]["id"] + ": cmake_test requires CMake and CTest executables")
+    jobs = _cmake_attr(ctx, "jobs", 1)
+    if jobs < 1:
+        fail(ctx["label"]["id"] + ": jobs must be positive")
+    timeout_ms = _cmake_attr(ctx, "timeout_ms", None)
+    if timeout_ms != None and timeout_ms <= 0:
+        fail(ctx["label"]["id"] + ": timeout_ms must be positive")
+    build_root = ctx["build_dir"] + "/cmake-build"
+    test_dir = ctx["build_dir"] + "/test"
+    results = test_dir + "/test_results.json"
+    log = test_dir + "/ctest.log"
+    native_results = test_dir + "/ctest.xml"
+    driver = ctx["scratch_dir"] + "/OnceCTest.cmake"
+    action_env = dict(_cmake_attr(ctx, "env", {}))
+    if not action_env.get("PATH"):
+        action_env["PATH"] = host_env("PATH")
+    if not action_env.get("CMAKE_BUILD_PARALLEL_LEVEL"):
+        action_env["CMAKE_BUILD_PARALLEL_LEVEL"] = str(jobs)
+    path_args = [
+        "-DONCE_EXPECTED_ROOT:PATH=" + workspace_root(),
+        "-DONCE_EXECUTION_ROOT:PATH=" + execution_path("."),
+    ]
+    argv = [cmake] + path_args + [
+        "-DONCE_BUILD_DIR:PATH=" + execution_path(build_root),
+        "-DONCE_TEST_DIR:PATH=" + execution_path(test_dir),
+        "-DONCE_RESULTS:FILEPATH=" + execution_path(results),
+        "-DONCE_LOG:FILEPATH=" + execution_path(log),
+        "-DONCE_JUNIT:FILEPATH=" + execution_path(native_results),
+        "-P", execution_path(driver),
+    ]
+    info = {
+        "schema": "once.test_info.v1",
+        "target": ctx["label"]["id"],
+        "runner": {"type": "cmake_test", "display_name": "CTest suite", "metadata": {}},
+        "command": {"argv": argv, "env": action_env, "cwd": "."},
+        "outputs": {"results": results, "logs": [log], "native_results": [native_results], "coverage": []},
+        "listing": {"supported": False, "strategy": "suite"},
+        "filtering": {"case_filtering": "unsupported"},
+        "sharding": {"supported": False},
+        "retries": {"supported": False, "default_attempts": 1},
+        "execution": {"cacheable": False, "timeout_ms": timeout_ms, "run_from_workspace_root": True},
+        "labels": _cmake_attr(ctx, "labels", []),
+        "metadata": {"counts": "suite", "path_bound": True},
+    }
+    provider = {"label_id": ctx["label"]["id"], "target_kind": "cmake_test", "default_output": build_root, "test_info": info}
+    if ctx["capability"] == "metadata":
+        return provider
+
+    build_type = _cmake_attr(ctx, "build_type", "Debug")
+    generator = _cmake_attr(ctx, "generator", "Ninja")
+    program, program_version = _cmake_build_program(ctx, generator)
+    configure_args = _cmake_attr(ctx, "configure_args", [])
+    if program:
+        configure_args = ["-DCMAKE_MAKE_PROGRAM:FILEPATH=" + program] + configure_args
+    inputs = _unique(glob(ctx["srcs"]) + _cmake_globs(_cmake_attr(ctx, "data", [])))
+    identity = "once.cmake.test.v1\x00" + host_os() + "\x00" + host_arch() + "\x00" + content_sha256(workspace_root()) + "\x00" + host_command([cmake, "--version"]) + "\x00" + program_version
+    build_driver = ctx["scratch_dir"] + "/OnceCTestBuild.cmake"
+    write_path(build_driver, _CMAKE_TEST_PATH_GUARD + _CMAKE_BUILD_DRIVER)
+    run_action(
+        argv = [cmake] + path_args + [
+            "-DONCE_SOURCE_DIR:PATH=" + execution_path(_cmake_package_path(ctx, _cmake_attr(ctx, "source_dir", "."))),
+            "-DONCE_BUILD_DIR:PATH=" + execution_path(build_root),
+            "-DONCE_GENERATOR:STRING=" + generator,
+            "-DONCE_BUILD_TYPE:STRING=" + build_type,
+            "-DONCE_CONFIGURE_ARGS:STRING=" + _cmake_encode_list(configure_args),
+            "-DONCE_BUILD_TARGETS:STRING=" + _cmake_encode_list(_cmake_attr(ctx, "build_targets", [])),
+            "-DONCE_BUILD_ARGS:STRING=" + _cmake_encode_list(["--parallel", str(jobs)]),
+            "-P", execution_path(build_driver),
+        ],
+        inputs = inputs + [build_driver],
+        outputs = [build_root],
+        clean_paths = [build_root],
+        env = action_env,
+        toolchain_identity = identity,
+        cacheable = False,
+        resources = {"cpu_slots": jobs, "memory_bytes": jobs * 1024 * 1024 * 1024},
+        identifier = ctx["label"]["id"] + ":cmake-test-build",
+        display_name = "Build CTest suite · " + ctx["label"]["name"],
+    )
+    ctest_argv = [ctest, "--test-dir", "${ONCE_BUILD_DIR}", "--build-config", build_type, "--parallel", str(jobs), "--output-on-failure", "--no-tests=error", "--output-junit", "${ONCE_JUNIT}"]
+    command = " ".join(['"' + arg.replace("\\", "\\\\").replace('"', '\\"') + '"' for arg in ctest_argv])
+    normalized = '{"schema":"once.test_results.v1","target":' + _json_string(ctx["label"]["id"]) + ',"runner":{"type":"cmake_test","metadata":{}},"status":"@status@","summary":{"total":1,"passed":@passed@,"failed":@failed@,"skipped":0,"flaky":0},"cases":[{"id":' + _json_string(ctx["label"]["id"] + "::suite") + ',"name":' + _json_string(ctx["label"]["name"]) + ',"suite":' + _json_string(ctx["label"]["id"]) + ',"status":"@status@","attempts":[{"status":"@status@"}],"runner_metadata":{}}],"artifacts":{"logs":[' + _json_string(log) + '],"native_results":[' + _json_string(native_results) + ']}}'
+    timeout = " TIMEOUT " + str(timeout_ms) + "e-3" if timeout_ms != None else ""
+    write_path(driver, _CMAKE_TEST_PATH_GUARD + """
+file(MAKE_DIRECTORY "${ONCE_TEST_DIR}")
+execute_process(COMMAND """ + command + """
+  RESULT_VARIABLE code OUTPUT_FILE "${ONCE_LOG}" ERROR_FILE "${ONCE_LOG}"
+  """ + timeout + """
+)
+if(code EQUAL 0)
+  set(status passed)
+  set(passed 1)
+  set(failed 0)
+else()
+  set(status failed)
+  set(passed 0)
+  set(failed 1)
+  file(APPEND "${ONCE_LOG}" "\\nCTest failed: ${code}\\n")
+endif()
+set(normalized [====[""" + normalized + """ ]====])
+string(CONFIGURE "${normalized}" normalized @ONLY)
+file(WRITE "${ONCE_RESULTS}" "${normalized}\\n")
+file(READ "${ONCE_LOG}" output LIMIT 65536)
+message("${output}")
+file(SIZE "${ONCE_LOG}" output_size)
+if(output_size GREATER 65536)
+  message("CTest console output truncated; full output is retained in ${ONCE_LOG}")
+endif()
+if(NOT code EQUAL 0)
+  message(FATAL_ERROR "CTest failed: ${code}")
+endif()
+""")
+    if ctx["capability"] == "test":
+        run_action(
+            argv = argv,
+            inputs = _unique([build_root, driver] + inputs),
+            outputs = [test_dir],
+            clean_paths = [test_dir],
+            env = action_env,
+            toolchain_identity = identity + "\x00" + host_command([ctest, "--version"]),
+            cacheable = False,
+            resources = {"cpu_slots": jobs, "memory_bytes": jobs * 1024 * 1024 * 1024},
+            identifier = ctx["label"]["id"] + ":ctest-run",
+            display_name = "Run CTest suite · " + ctx["label"]["name"],
+        )
+    return provider
 
 def _cmake_resolver_file(ctx, path, description):
     key = path[2:] if path.startswith("./") else path
@@ -420,7 +561,7 @@ _CMAKE_SOURCE_REFERENCES = [
 ]
 
 cmake_project = target_kind(
-    docs = "Coarse bridge that keeps CMake authoritative, runs configure and build in one cached action, stages only declared products, and exposes native link providers.",
+    docs = "Coarse bridge that keeps CMake authoritative, runs uncached configure and build, stages only declared products, and exposes native link providers. Compiler selection remains native to CMake and is not assumed from default host tools.",
     attrs = [
         attr("cmake", "string", default = "\"cmake\"", docs = "CMake executable name, absolute path, or workspace-relative path.", configurable = False),
         attr("source_dir", "string", default = "\".\"", docs = "Package-relative CMake source directory.", configurable = False),
@@ -446,6 +587,31 @@ cmake_project = target_kind(
     examples = _CMAKE_EXAMPLES,
     source_references = _CMAKE_SOURCE_REFERENCES,
     impl = _cmake_project_impl,
+)
+
+cmake_test = target_kind(
+    docs = "Builds and runs a CTest suite uncached at its original local workspace path, preserving native compiler selection. Reports suite-level results with native JUnit and retains normalized failure on timeout.",
+    attrs = [
+        attr("cmake", "string", default = "\"cmake\"", docs = "CMake executable name or path.", configurable = False),
+        attr("ctest", "string", default = "\"ctest\"", docs = "CTest executable name or path, requiring CTest 3.21 or newer.", configurable = False),
+        attr("source_dir", "string", default = "\".\"", docs = "Package-relative CMake source directory.", configurable = False),
+        attr("generator", "string", default = "\"Ninja\"", docs = "CMake generated-build backend.", configurable = False),
+        attr("build_program", "string", docs = "Generated-build executable. Defaults to ninja for Ninja.", configurable = False),
+        attr("build_type", "string", default = "\"Debug\"", docs = "Build configuration, preserving native debug information."),
+        attr("configure_args", "list<string>", default = "[]", docs = "Additional CMake configure arguments. Enable upstream tests here.", configurable = False),
+        attr("build_targets", "list<string>", default = "[]", docs = "Optional native build targets. Defaults to building all targets, including test executables.", configurable = False),
+        attr("jobs", "int", default = "1", docs = "Native build and CTest concurrency, reserved through the action resource pool.", configurable = False),
+        attr("data", "list<string>", default = "[]", docs = "Runtime and configuration input globs.", configurable = False),
+        attr("env", "map<string,string>", default = "{}", docs = "Declared build and test environment.", configurable = False),
+        attr("labels", "list<string>", default = "[]", docs = "Labels exposed through test discovery.", configurable = False),
+        attr("timeout_ms", "int", docs = "Optional positive suite timeout in milliseconds, excluding configure and build. A timeout retains normalized failed results; native JUnit may be incomplete.", configurable = False),
+    ],
+    providers = ["once_test_info"],
+    capabilities = [capability("build", ["default"]), capability("test", ["default"])],
+    tools = [tool("cmake"), tool("ctest")],
+    examples = [example("cmake-test-minimal", name = "CTest suite", use_when = "Keep an existing CMake test suite authoritative and report one normalized suite with native JUnit.")],
+    source_references = _CMAKE_SOURCE_REFERENCES,
+    impl = _cmake_test_impl,
 )
 
 cmake_workspace = target_kind(

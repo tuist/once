@@ -6,7 +6,7 @@ next: false
 # CMake
 
 Once can sit in front of an existing CMake project without replacing CMake.
-The bridge gives the repository a typed, cacheable build boundary and a
+The bridge gives the repository a typed build boundary and a
 queryable view of the configured CMake graph.
 
 The two parts are intentionally separate:
@@ -64,8 +64,9 @@ once build CMakeProject
 ```
 
 The stable product is written under
-`.once/out/CMakeProject/products/`. Running the command again reuses the
-cached coarse build action when its inputs and configuration have not changed.
+`.once/out/CMakeProject/products/`. Running the command again cleans and
+rebuilds the native project. Only staging already-built product bytes can
+reuse a content-addressed cache entry.
 
 ## Declare the Build Boundary
 
@@ -95,6 +96,10 @@ includes = ["include"]
 Configure and build execute together because the generated CMake build tree is
 stateful. The action does not cache that whole tree. Only files listed in
 `products` are outputs and are staged into the stable Once output directory.
+Configure and build bypass caching because CMake can select compilers,
+external toolchain files, SDKs, and configuration that Once cannot safely
+fingerprint. The tradeoff is a clean native rebuild on every invocation,
+rather than potentially reusing an executable from an older toolchain.
 
 Product paths are relative to the generated build directory. The portable
 tokens are:
@@ -209,18 +214,19 @@ reviewable and does not depend on host-specific configured paths.
 
 ## Current Limitations
 
-- Configure and build form one cache boundary. Once does not schedule each
+- Configure and build form one uncached action. Once does not schedule each
   generated compile and link command independently.
 - Imported targets are query-only and cannot be built directly.
 - Exact product paths must be declared. Multi-configuration generators may
   place products under configuration-specific directories.
-- The snapshot records configured CTest tests for inspection, but it does not
-  expose `once test` yet.
+- The snapshot records configured CTest tests for inspection. Declare a
+  separate [`cmake_test`](/reference/prelude/cmake_test) target to run a native
+  suite through `once test`, with suite-level normalized results.
 - Source and header patterns still belong on `cmake_project`; snapshot
   provenance covers workspace CMake configuration inputs, not every
   compilation input or configuration file outside the workspace.
-- The generated build directory is cleaned before an uncached action, so CMake
-  incremental state is not reused across cache misses.
+- The generated build directory is cleaned on every build, so CMake
+  incremental state is not reused.
 
 Use an annotated script when the build does not yet have stable products.
 Adopt `cmake_project` when those products are known, then add

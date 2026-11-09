@@ -156,6 +156,24 @@ The module exposes `build` but does not compile an artifact by itself. Its
 binary and test consumers compile it as part of their whole program. The
 binary exposes `build` and `run`; the test exposes `build` and `test`.
 
+Zig compilation selects the LLVM backend with `-fllvm` by default. The chosen
+compiler must include LLVM support for the requested target. Once propagates
+compiler errors rather than silently falling back to another backend.
+
+Explicit `-fno-llvm` flags in `zigopt`, `zigopts`, or `linkopts` are preserved,
+but compilation and documentation actions bypass the cache. Debug information
+is preserved by default, and these unstripped actions also bypass caching:
+LLVM debugging and symbol metadata can differ between otherwise identical
+compilations. Explicit `strip = true`, `strip_debug_symbols = true`, or a
+root-module `-fstrip` flag permits caching with LLVM; any `-fno-strip` override
+keeps caching disabled. Once never strips debug information automatically.
+
+Zig's self-hosted backend can produce different executable bytes even with
+debug information stripped. A stable action key does not establish byte
+reproducibility. Use `once build --verify-reproducible` to check the declared
+outputs of a particular target and compiler configuration. This remains an
+observation, not a universal determinism guarantee for arbitrary source code.
+
 ## Build and Run
 
 Build the executable and its module:

@@ -1,0 +1,7 @@
+[[target]]
+name = "Tests"
+kind = "cmake_test"
+srcs = ["CMakeLists.txt", "test.c"]
+
+[target.attrs]
+labels = ["unit"]

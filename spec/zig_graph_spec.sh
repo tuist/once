@@ -581,12 +581,179 @@ TOML
     The contents of file "$WORKSPACE/.once/out/native/objects/src/native.c.o" should include 'object'
   End
 
+  c_archive_tools_unavailable() {
+    ! command -v cc >/dev/null 2>&1 || ! command -v ar >/dev/null 2>&1
+  }
+
+  rebuild_c_archive_without_removed_source() {
+    cat > "$WORKSPACE/once.toml" <<'TOML'
+[[target]]
+name = "native"
+kind = "c_library"
+srcs = ["*.c"]
+TOML
+    printf '%s\n' 'int kept(void) { return 7; }' > "$WORKSPACE/kept.c"
+    printf '%s\n' 'int removed(void) { return 11; }' > "$WORKSPACE/removed.c"
+    once --format json build native > /dev/null || return
+    rm "$WORKSPACE/removed.c"
+    once --format json build native > /dev/null || return
+    ar t "$WORKSPACE/.once/out/native/libnative.a"
+  }
+
+  It 'removes obsolete archive members when C sources are removed'
+    Skip if 'C compiler or archiver unavailable' c_archive_tools_unavailable
+
+    When call rebuild_c_archive_without_removed_source
+    The status should be success
+    The stdout should equal 'kept.c.o'
+  End
+
   It 'builds a provider-only C target without probing C tools'
     write_provider_only_c_workspace
 
     When call /bin/sh -c '"$1" -C "$2" --format json build native_headers > /dev/null' sh "$ONCE_BIN" "$WORKSPACE"
     The status should be success
     [ ! -e "$WORKSPACE/.once/out/native_headers/libnative_headers.a" ]
+  End
+
+  build_self_hosted_zig_twice() {
+    write_zig_workspace
+    for flag_attribute in zigopt zigopts linkopts; do
+      cat >> "$WORKSPACE/once.toml" <<TOML
+
+[[target]]
+name = "self_hosted_$flag_attribute"
+kind = "zig_test"
+srcs = ["src/test.zig"]
+[target.attrs]
+main = "src/test.zig"
+$flag_attribute = ["-fno-llvm"]
+strip = true
+zig = "$WORKSPACE/bin/zig"
+TOML
+      once --format json build "self_hosted_$flag_attribute" || return
+      once --format json build "self_hosted_$flag_attribute" || return
+    done
+  }
+
+  It 'does not reuse self-hosted Zig compiler outputs'
+    When call build_self_hosted_zig_twice
+    The status should be success
+    The stdout should include '"cache":"bypass"'
+    The stdout should not include '"cache":"hit"'
+    The contents of file "$WORKSPACE/zig-argv.log" should include '-fno-llvm'
+  End
+
+  build_zig_debug_policy_twice() {
+    write_zig_workspace
+    cat >> "$WORKSPACE/once.toml" <<TOML
+
+[[target]]
+name = "policy"
+kind = "zig_test"
+srcs = ["src/test.zig"]
+[target.attrs]
+main = "src/test.zig"
+strip = $1
+zig = "$WORKSPACE/bin/zig"
+TOML
+    once --format json build policy || return
+    rm "$WORKSPACE/.once/out/policy/policy"
+    once --format json build policy
+  }
+
+  It 'bypasses unstripped Zig compilation without removing debug information'
+    When call build_zig_debug_policy_twice false
+    The status should be success
+    The stdout should include '"cache":"bypass"'
+    The stdout should not include '"cache":"hit"'
+    The contents of file "$WORKSPACE/zig-argv.log" should not include '-fstrip'
+  End
+
+  It 'restores explicitly stripped LLVM outputs from the cache'
+    When call build_zig_debug_policy_twice true
+    The status should be success
+    The stdout should include '"cache":"miss"'
+    The stdout should include '"cache":"hit"'
+    The path "$WORKSPACE/.once/out/policy/policy" should be file
+  End
+
+  build_zig_strip_override_twice() {
+    write_zig_workspace
+    cat >> "$WORKSPACE/once.toml" <<TOML
+
+[[target]]
+name = "policy"
+kind = "zig_test"
+srcs = ["src/test.zig"]
+[target.attrs]
+main = "src/test.zig"
+strip = true
+zigopts = ["-fno-strip"]
+zig = "$WORKSPACE/bin/zig"
+TOML
+    once --format json build policy || return
+    once --format json build policy
+  }
+
+  It 'bypasses caching when explicit no-strip overrides strip=true'
+    When call build_zig_strip_override_twice
+    The status should be success
+    The stdout should include '"cache":"bypass"'
+    The stdout should not include '"cache":"hit"'
+    The contents of file "$WORKSPACE/zig-argv.log" should include '-fno-strip'
+  End
+
+  build_zig_dependency_strip_twice() {
+    write_zig_workspace
+    cat >> "$WORKSPACE/once.toml" <<TOML
+
+[[target]]
+name = "stripped_dependency"
+kind = "zig_library"
+srcs = ["src/math.zig"]
+[target.attrs]
+main = "src/math.zig"
+zigopts = ["-fstrip"]
+zig = "$WORKSPACE/bin/zig"
+
+[[target]]
+name = "policy"
+kind = "zig_test"
+srcs = ["src/test.zig"]
+deps = ["stripped_dependency"]
+[target.attrs]
+main = "src/test.zig"
+zig = "$WORKSPACE/bin/zig"
+TOML
+    once --format json build policy || return
+    once --format json build policy
+  }
+
+  It 'does not treat a dependency module strip flag as stripping the root module'
+    When call build_zig_dependency_strip_twice
+    The status should be success
+    The stdout should include '"cache":"bypass"'
+    The stdout should not include '"cache":"hit"'
+    The contents of file "$WORKSPACE/zig-argv.log" should include '-fstrip'
+  End
+
+  It 'reports LLVM backend failures without silently falling back'
+    write_zig_workspace
+    cat > "$WORKSPACE/bin/zig" <<'SH'
+#!/bin/sh
+if [ "$1" = version ]; then
+  printf '%s\n' '0.16.0'
+  exit 0
+fi
+printf '%s\n' 'LLVM backend unavailable in selected compiler' >&2
+exit 1
+SH
+
+    When call once --format json build tests
+    The status should be failure
+    The stderr should include 'LLVM backend unavailable in selected compiler'
+    The stderr should include '"schema":"once.error.v1"'
   End
 
   It 'builds a C++ provider target with the C++ compiler only when needed'
@@ -605,6 +772,7 @@ TOML
     When call /bin/sh -c '"$1" -C "$2" --format json build app > /dev/null && "$1" -C "$2" --format json build app_release > /dev/null && "$1" -C "$2" --format json build archive > /dev/null && "$1" -C "$2" --format json build archive_release > /dev/null && "$1" -C "$2" --format json build shared > /dev/null && "$1" -C "$2" --format json build shared_release > /dev/null && "$1" -C "$2" --format json build shared_named > /dev/null && "$1" -C "$2" --format json build native_zig > /dev/null' sh "$ONCE_BIN" "$WORKSPACE"
     The status should be success
     The path "$WORKSPACE/.once/out/app/app" should be file
+    The contents of file "$WORKSPACE/zig-argv.log" should include 'build-exe -fllvm'
     The contents of file "$WORKSPACE/.once/out/app/app" should include 'zig executable mock'
     The path "$WORKSPACE/.once/out/app_release/app_release" should be file
     The contents of file "$WORKSPACE/.once/out/app_release/app_release" should include 'zig executable mock'

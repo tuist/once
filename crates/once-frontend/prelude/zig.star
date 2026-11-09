@@ -385,7 +385,7 @@ def _zig_compiler_runtime_args(ctx):
     return []
 
 def _zig_common_args(ctx):
-    args = _zig_target_common_args(ctx)
+    args = ["-fllvm"] + _zig_target_common_args(ctx)
     args.extend(_zig_compiler_runtime_args(ctx))
     args.extend(_zig_strip_and_zigopts_args(ctx))
     return args
@@ -704,6 +704,16 @@ def _zig_compile_inputs(ctx, root, c_module_context, cinfo):
         inputs.append(c_module_context["main"])
     return _unique(inputs)
 
+def _zig_compile_cacheable(argv):
+    if "-fno-llvm" in argv or "-fno-strip" in argv:
+        return False
+    for arg in argv:
+        if arg.startswith("-M"):
+            return False
+        if arg == "-fstrip":
+            return True
+    return False
+
 def _zig_docs_action(ctx, command, root, c_module_context, cinfo, inputs, zig, identity):
     docs_output = declare_output(_zig_docs_name(ctx))
     docs_command = command
@@ -720,6 +730,7 @@ def _zig_docs_action(ctx, command, root, c_module_context, cinfo, inputs, zig, i
         outputs = [docs_output],
         env = _zig_build_env(ctx),
         toolchain_identity = identity + "\x00zig-docs",
+        cacheable = _zig_compile_cacheable(argv),
         identifier = ctx["label"]["id"] + ":zig-docs",
     )
     return docs_output
@@ -757,6 +768,7 @@ def _zig_compile(ctx, kind, default_main, command, provider_kind):
         outputs = ([primary_output] if primary_output else []) + aux_outputs,
         env = _zig_build_env(ctx),
         toolchain_identity = identity,
+        cacheable = _zig_compile_cacheable(argv),
         identifier = ctx["label"]["id"] + ":zig-" + command,
     )
     provider = _zig_provider(ctx, provider_kind, root, primary_output, cinfo, kind)
