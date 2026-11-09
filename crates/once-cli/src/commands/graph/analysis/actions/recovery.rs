@@ -35,7 +35,7 @@ use once_cas::{ActionResult, CacheProvider, Digest};
 use once_core::{Action, ResourcePool, ResourceRequest, RunEvent, RunEventBus, TargetResult};
 
 use super::legacy_outputs::{self, FingerprintKind};
-use super::{cacheable_action_lock, restore_outputs, SourceDigestCache};
+use super::{cacheable_action_locks, restore_outputs, SourceDigestCache};
 
 /// The attempt a repair reports: the producer's first attempt was the run or
 /// cache hit that recorded it.
@@ -628,6 +628,7 @@ impl Repair<'_> {
         let result = with_action_lock_and_permit(
             self.workspace,
             digest,
+            producer.outputs.keys().map(String::as_str),
             self.producers.executors(self.resources)?,
             once_core::Executor::resolve(&producer.action)?,
             producer.action.resource_request().clone(),
@@ -796,17 +797,19 @@ fn single_output(path: &str, digest: Digest) -> ActionResult {
     }
 }
 
-/// Hold an action's lock and an admission permit together, never waiting for
+/// Hold an action's locks and an admission permit together, never waiting for
 /// one while holding the other.
 ///
-/// Waiting for admission while holding the lock would stall every other
+/// Waiting for admission while holding the locks would stall every other
 /// process waiting for the same action behind this one's queue position;
-/// waiting for the lock while holding a permit would pin capacity behind work
-/// that may already be done. `work` learns whether another holder was seen, in
-/// which case the action may have finished in the meantime.
-pub(super) async fn with_action_lock_and_permit<T, F, Fut>(
+/// waiting for a lock while holding a permit or another lock would pin
+/// capacity behind work that may already be done. `work` learns whether
+/// another holder was seen, in which case the action may have finished in the
+/// meantime.
+pub(super) async fn with_action_lock_and_permit<'a, T, F, Fut>(
     workspace: &Path,
     digest: Digest,
+    outputs: impl IntoIterator<Item = &'a str>,
     resources: &once_core::ExecutorResources,
     executor: once_core::Executor,
     request: ResourceRequest,
@@ -816,27 +819,39 @@ where
     F: FnOnce(bool, once_core::ExecutionPermit) -> Fut,
     Fut: Future<Output = Result<T>>,
 {
-    let lock = Arc::new(cacheable_action_lock(workspace, digest)?.into_inner());
+    let locks = Arc::new(cacheable_action_locks(workspace, digest, outputs)?);
     let mut work = Some(work);
     let mut contended = false;
     loop {
         let permit = resources.acquire(executor, &request).await;
-        match lock.try_lock() {
-            Ok(()) => {
-                let permit = permit.with_lifetime_owner(Arc::clone(&lock));
-                let work = work.take().context("action work already ran")?;
-                return work(contended, permit).await;
-            }
-            Err(std::fs::TryLockError::WouldBlock) => {}
-            Err(error) => {
-                return Err(anyhow::Error::msg(error.to_string()))
-                    .with_context(|| format!("locking action {digest}"));
-            }
-        }
+        let busy = try_lock_all(&locks).with_context(|| format!("locking action {digest}"))?;
+        let Some(busy) = busy else {
+            let permit = permit.with_lifetime_owner(Arc::clone(&locks));
+            let work = work.take().context("action work already ran")?;
+            return work(contended, permit).await;
+        };
         drop(permit);
         contended = true;
-        wait_for_action_lock(&lock, digest).await?;
+        wait_for_action_lock(&locks[busy], digest).await?;
     }
+}
+
+/// Lock every file, or none of them and return the first one another holder
+/// has.
+fn try_lock_all(locks: &[std::fs::File]) -> Result<Option<usize>> {
+    for (index, lock) in locks.iter().enumerate() {
+        match lock.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => {
+                for held in &locks[..index] {
+                    held.unlock()?;
+                }
+                return Ok(Some(index));
+            }
+            Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
+        }
+    }
+    Ok(None)
 }
 
 async fn wait_for_action_lock(lock: &std::fs::File, digest: Digest) -> Result<()> {

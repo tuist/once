@@ -315,6 +315,34 @@ async fn an_output_replaced_by_a_later_action_is_restored_for_its_reader() {
 }
 
 #[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn actions_with_different_digests_for_the_same_output_never_run_at_once() {
+    let workspace = Workspace::new();
+    let writer = |content: &str| AnalysisResult {
+        actions: vec![action(serde_json::json!({
+            "identifier": "produce",
+            "argv": ["/bin/sh", "-c", format!(
+                "mkdir .once/out/running && sleep 0.5 && printf {content} > {PRODUCED} && rmdir .once/out/running"
+            )],
+            "outputs": [PRODUCED],
+            "create_dirs": [".once/out"],
+            "cacheable": true,
+        }))],
+        provider: serde_json::json!({}),
+        declared_outputs: Vec::new(),
+        observations: AnalysisObservations::default(),
+    };
+
+    let (first, second) = tokio::join!(
+        workspace.build(writer("first")),
+        workspace.build(writer("second")),
+    );
+
+    first.unwrap();
+    second.unwrap();
+}
+
+#[cfg(unix)]
 #[tokio::test]
 async fn a_blob_evicted_after_the_probe_reruns_its_producer_once() {
     let workspace = Workspace::new();
