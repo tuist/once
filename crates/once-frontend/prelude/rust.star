@@ -3276,18 +3276,24 @@ def _cargo_target_name(package, duplicate_counts, target = ""):
         base += "-" + _cargo_source_suffix(target)
     return base
 
-def _cargo_normalized_path(path):
-    return path.replace("\\", "/")
+def _cargo_comparison_path(path):
+    path = path.replace("\\", "/")
+    # Only comparisons discard verbatim prefixes; filesystem paths keep them.
+    if path.startswith("//?/UNC/"):
+        return "//" + path[len("//?/UNC/"):]
+    if path.startswith("//?/") and path[5:7] == ":/" and path[4] in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ":
+        return path[4:]
+    return path
 
 def _cargo_package_root(package):
-    manifest = _cargo_normalized_path(package.get("manifest_path") or "")
+    manifest = (package.get("manifest_path") or "").replace("\\", "/")
     if manifest:
         return _parent_dir(manifest)
     return ""
 
 def _cargo_source_rel(package, target):
-    src = _cargo_normalized_path(target.get("src_path") or "")
-    root = _cargo_normalized_path(_cargo_package_root(package))
+    src = _cargo_comparison_path(target.get("src_path") or "")
+    root = _cargo_comparison_path(_cargo_package_root(package))
     prefix = root + "/"
     if root and src.startswith(prefix):
         return src[len(prefix):]
@@ -3778,8 +3784,8 @@ def _cargo_package_version_matches(manifest, version):
     return False
 
 def _cargo_workspace_source_root(ctx, package):
-    package_root = _cargo_normalized_path(_cargo_package_root(package))
-    workspace_package = _cargo_normalized_path(workspace_root())
+    package_root = _cargo_comparison_path(_cargo_package_root(package))
+    workspace_package = _cargo_comparison_path(workspace_root())
     label_package = (ctx.get("label") or {}).get("package") or ""
     if label_package:
         workspace_package += "/" + label_package
