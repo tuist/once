@@ -95,7 +95,7 @@ jobs:
       # checkout: Once rejects resolver sources that resolve outside it.
       - name: Attach cache volume
         if: startsWith(matrix.runner, 'tuist-')
-        uses: tuist/cache-volume@v1
+        uses: tuist/cache-volume@dff0b58204ceca89edd5c89a333f7687c92c5576 # v1.13.0
         with:
           key: release-${{ matrix.target }}
           path: target
@@ -190,7 +190,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Attach cache volume
-        uses: tuist/cache-volume@v1
+        uses: tuist/cache-volume@dff0b58204ceca89edd5c89a333f7687c92c5576 # v1.13.0
         with:
           key: release-${{ matrix.target }}
           path: target
