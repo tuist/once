@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
 #MISE description="Build and package the Once XCFramework"
 #USAGE flag "--version <version>" help="Version number to validate the release input"
+#USAGE flag "--slices <dir>" help="Directory of prebuilt <target>/libonce.a slices; builds them when omitted"
 set -Eeuo pipefail
 
 release_tasks_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 version=""
+slices_dir=""
 while (($# > 0)); do
   case "$1" in
     --version)
       version="${2}"
+      shift 2
+      ;;
+    --slices)
+      slices_dir="${2}"
       shift 2
       ;;
     *)
@@ -68,30 +74,11 @@ require_lipo_archs() {
   done
 }
 
-target_suffix() {
-  printf '%s' "$1" | tr '.-' '__'
-}
-
 staticlib_path() {
-  local target="$1"
-  local suffix
-  suffix="$(target_suffix "${target}")"
-  printf '.once/out/crates/once/once_staticlib_%s/libonce.a\n' "${suffix}"
+  printf '%s/%s/libonce.a\n' "${slices_dir}" "$1"
 }
 
-build_target() {
-  local target="$1"
-  local suffix target_id
-  suffix="$(target_suffix "${target}")"
-  target_id="crates/once/once_staticlib_${suffix}"
-  "${release_tasks_dir}/write-rust-release-manifests.sh" --target "${target}" --version "${version}"
-  if ! "${once_bin}" build "${target_id}" --format json --quiet; then
-    echo "once build failed for ${target}" >&2
-    exit 1
-  fi
-}
-
-for tool in cargo ditto lipo rustup swiftc xcodebuild; do
+for tool in ditto lipo swiftc xcodebuild; do
   require_tool "${tool}"
 done
 
@@ -107,7 +94,6 @@ stage_dir=""
 keychain_path=""
 certificate_path=""
 cleanup() {
-  "${release_tasks_dir}/write-rust-release-manifests.sh" --clear >/dev/null 2>&1 || true
   if [[ -n "${certificate_path}" ]]; then
     rm -f "${certificate_path}"
   fi
@@ -120,13 +106,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-rustup target add "${targets[@]}"
-once_bin="$("${release_tasks_dir}/bootstrap-once.sh")"
-"${release_tasks_dir}/prepare-rust-graph-deps.sh"
-
-for target in "${targets[@]}"; do
-  build_target "${target}"
-done
+if [[ -z "${slices_dir}" ]]; then
+  slices_dir="dist/xcframework-slices"
+  for target in "${targets[@]}"; do
+    "${release_tasks_dir}/package-xcframework-slice.sh" --target "${target}" --version "${version}" --output "${slices_dir}"
+  done
+fi
 
 for target in "${targets[@]}"; do
   require_file "$(staticlib_path "${target}")"

@@ -6436,11 +6436,13 @@ def host_which(name):
         return "/toolchains/rust/bin/rustc"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None, merge_stderr = None):
+def host_command(argv, env = None, merge_stderr = None, check = True):
     if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "sysroot":
         return "/toolchains/rust\n"
     if len(argv) >= 2 and argv[1] == "--version":
         return "rustc test\nhost: x86_64-unknown-linux-gnu\n"
+    if len(argv) == 2 and argv[1] == "GNU_LIBC_VERSION":
+        return "glibc 2.35\n"
     fail("unexpected host_command: " + str(argv))
 
 android_ctx = {{
@@ -6533,11 +6535,13 @@ def host_which(name):
         return "/toolchains/rust/bin/rustc"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None, merge_stderr = None):
+def host_command(argv, env = None, merge_stderr = None, check = True):
     if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "sysroot":
         return "/toolchains/rust\n"
     if len(argv) >= 2 and argv[1] == "--version":
         return "rustc test\nhost: x86_64-unknown-linux-gnu\n"
+    if len(argv) == 2 and argv[1] == "GNU_LIBC_VERSION":
+        return "glibc 2.35\n"
     fail("unexpected host_command: " + str(argv))
 
 ctx = {{
@@ -6614,6 +6618,7 @@ result = repr([provider["transitive_linkopts"], provider["transitive_data"]])
 
 #[cfg(unix)]
 #[test]
+#[allow(clippy::too_many_lines)]
 fn prelude_rust_mobile_library_android_consumer_declares_only_android_variant() {
     let prelude = all_prelude_source();
     let workspace = TempDir::new().unwrap();
@@ -6647,11 +6652,13 @@ def host_which(name):
         return "/toolchains/rust/bin/rustc"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None, merge_stderr = None):
+def host_command(argv, env = None, merge_stderr = None, check = True):
     if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "sysroot":
         return "/toolchains/rust\n"
     if len(argv) >= 2 and argv[1] == "--version":
         return "rustc test\nhost: x86_64-unknown-linux-gnu\n"
+    if len(argv) == 2 and argv[1] == "GNU_LIBC_VERSION":
+        return "glibc 2.35\n"
     fail("unexpected host_command: " + str(argv))
 
 mobile_ctx = {{
@@ -6736,11 +6743,13 @@ def host_which(name):
         return "/toolchains/rust/bin/rustc"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None, merge_stderr = None):
+def host_command(argv, env = None, merge_stderr = None, check = True):
     if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "sysroot":
         return "/toolchains/rust\n"
     if len(argv) >= 2 and argv[1] == "--version":
         return "rustc test\nhost: x86_64-unknown-linux-gnu\n"
+    if len(argv) == 2 and argv[1] == "GNU_LIBC_VERSION":
+        return "glibc 2.35\n"
     fail("unexpected host_command: " + str(argv))
 
 mobile_ctx = {{
@@ -6819,11 +6828,13 @@ def host_which(name):
         return "/toolchains/rust/bin/rustc"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None, merge_stderr = None):
+def host_command(argv, env = None, merge_stderr = None, check = True):
     if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "sysroot":
         return "/toolchains/rust\n"
     if len(argv) >= 2 and argv[1] == "--version":
         return "rustc test\nhost: x86_64-unknown-linux-gnu\n"
+    if len(argv) == 2 and argv[1] == "GNU_LIBC_VERSION":
+        return "glibc 2.35\n"
     fail("unexpected host_command: " + str(argv))
 
 def mobile(name, deps):
@@ -7001,11 +7012,13 @@ def host_which(name):
         return "/toolchains/rust/bin/rustc"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None, merge_stderr = None):
+def host_command(argv, env = None, merge_stderr = None, check = True):
     if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "sysroot":
         return "/toolchains/rust\n"
     if len(argv) >= 2 and argv[1] == "--version":
         return "rustc test\nhost: x86_64-unknown-linux-gnu\n"
+    if len(argv) == 2 and argv[1] == "GNU_LIBC_VERSION":
+        return "glibc 2.35\n"
     fail("unexpected host_command: " + str(argv))
 
 def _rust_c_tool_env(target, host_triple):
@@ -7121,11 +7134,13 @@ def host_which(name):
         return "/toolchains/rust/bin/rustc"
     fail("unexpected host_which: " + name)
 
-def host_command(argv, env = None, merge_stderr = None):
+def host_command(argv, env = None, merge_stderr = None, check = True):
     if len(argv) >= 3 and argv[1] == "--print" and argv[2] == "sysroot":
         return "/toolchains/rust\n"
     if len(argv) >= 2 and argv[1] == "--version":
         return "rustc test\nhost: x86_64-unknown-linux-gnu\n"
+    if len(argv) == 2 and argv[1] == "GNU_LIBC_VERSION":
+        return "glibc 2.35\n"
     fail("unexpected host_command: " + str(argv))
 
 def _rust_c_tool_env(target, host_triple):
@@ -11942,6 +11957,41 @@ result = repr("ok")
         .and_then(|action| action.argv.get(2))
         .unwrap();
     assert_eq!(script.matches("done <").count(), 1, "{script}");
+}
+
+#[test]
+fn prelude_rustc_toolchain_identity_includes_the_linux_host_c_library() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+host = {{"libc": "glibc 2.35"}}
+
+def host_os():
+    return "linux"
+
+def host_which(name):
+    return "/toolchains/rust/bin/" + name
+
+def host_which_optional(name):
+    return "/usr/bin/" + name
+
+def host_command(argv, env = None, merge_stderr = None, check = True):
+    if argv[-1] == "GNU_LIBC_VERSION":
+        return host["libc"] + "\n"
+    return "rustc test\nhost: x86_64-unknown-linux-gnu\n"
+
+older = _rustc_toolchain("")[1]
+host["libc"] = "glibc 2.39"
+newer = _rustc_toolchain("")[1]
+result = repr([older.endswith("\x00host-libc\x00glibc 2.35"), older != newer])
+"#
+    );
+    let workspace = TempDir::new().unwrap();
+    let store = store_for(workspace.path(), "crates/app");
+
+    let (_, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    assert_eq!(out.unwrap(), "[True, True]");
 }
 
 #[cfg(unix)]

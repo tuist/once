@@ -283,6 +283,9 @@ def _rustc_toolchain(target):
     version = host_command([rustc, "--version", "--verbose"]).strip()
     host_triple = _rust_host_triple_from_version(version)
     identity = "once.rust.rustc.v3\x00" + rustc + "\x00" + version + "\x00target\x00" + target
+    host_libc = _once_host_libc()
+    if host_libc:
+        identity += "\x00host-libc\x00" + host_libc
     return (rustc, identity, host_triple)
 
 def _rust_host_triple_from_version(version):

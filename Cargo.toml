@@ -89,3 +89,16 @@ must_use_candidate = "allow"
 lto = "thin"
 codegen-units = 1
 panic = "abort"
+
+# The source-built Once that CI uses to drive graph builds and tests. It
+# only orchestrates rustc and other tools, so its own crates skip
+# optimization, LTO, and single-unit codegen to compile faster, while
+# dependencies such as the Starlark interpreter and hashers stay optimized.
+[profile.bootstrap]
+inherits = "release"
+opt-level = 0
+lto = false
+codegen-units = 16
+
+[profile.bootstrap.package."*"]
+opt-level = 3

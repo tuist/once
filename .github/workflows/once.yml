@@ -445,6 +445,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust_ci == 'true'
     runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write
     defaults:
       run:
         shell: bash
@@ -456,7 +459,6 @@ jobs:
       MISE_NOT_FOUND_AUTO_INSTALL: "false"
       MISE_EXEC_AUTO_INSTALL: "false"
       ONCE_BOOTSTRAP_SOURCE: source
-      ONCE_CACHE_PROVIDER: local
     steps:
       - uses: actions/checkout@v7
       - name: Set HOME for mise templates
@@ -475,11 +477,23 @@ jobs:
           shared-key: release-graph-build-windows
           cache-on-failure: true
           cache-bin: false
+      - name: Resolve bootstrap Once
+        id: bootstrap
+        run: echo "bin=$(./mise/tasks/release/bootstrap-once.sh)" >> "$GITHUB_OUTPUT"
+      # Fork pull requests cannot mint an OpenID Connect token, so they
+      # fall back to the local cache and skip run reporting.
+      - name: Authenticate with Tuist
+        id: once-cache-auth
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
+        run: '"${{ steps.bootstrap.outputs.bin }}" auth login --provider tuist --no-browser'
       - name: Build Windows release binary with Once
+        env:
+          ONCE_CACHE_PROVIDER: ${{ steps.once-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
         run: |
           set -euo pipefail
 
-          once_bin="$(./mise/tasks/release/bootstrap-once.sh)"
+          once_bin="${{ steps.bootstrap.outputs.bin }}"
           target="x86_64-pc-windows-msvc"
           suffix="$(printf '%s' "${target}" | tr '.-' '__')"
           target_id="crates/once-cli/once_cli_${suffix}"
