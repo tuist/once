@@ -63,16 +63,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Ubuntu 22.04 keeps the binaries loadable on glibc 2.35. Once's
-          # action keys do not capture the host glibc, so the remote cache
-          # can serve build scripts linked on newer Ubuntu hosts; these
-          # builds stay on the local cache.
+          # Ubuntu 22.04 keeps the binaries loadable on glibc 2.35.
           - runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            local-cache: true
           - runner: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
-            local-cache: true
           - runner: tuist-macos
             target: x86_64-apple-darwin
           - runner: tuist-macos
@@ -123,16 +118,16 @@ jobs:
           key: release-deps-${{ matrix.runner }}-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', 'mise/tasks/release/prepare-rust-graph-deps.sh') }}
       - name: Add Rust target
         run: rustup target add ${{ matrix.target }}
+      - name: Select Once cache
+        run: ./mise/tasks/release/select-once-cache.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
       - name: Resolve bootstrap Once
         run: |
           once_bin="$(./mise/tasks/release/bootstrap-once.sh)"
           echo "ONCE_BIN=${once_bin}" >> "$GITHUB_ENV"
-      - name: Select Once cache
-        if: ${{ !matrix.local-cache }}
-        run: ./mise/tasks/release/select-once-cache.sh
-      - name: Use the local Once cache
-        if: ${{ matrix.local-cache }}
-        run: echo "ONCE_CACHE_PROVIDER=local" >> "$GITHUB_ENV"
+        env:
+          GH_TOKEN: ${{ github.token }}
       - name: Package release archive
         run: mise run release:package --target "${{ matrix.target }}" --version "${{ needs.detect.outputs.next-version }}"
         env:
@@ -198,12 +193,16 @@ jobs:
         with:
           version: ${{ env.MISE_VERSION }}
           install_args: "rust jq"
+      - name: Select Once cache
+        run: ./mise/tasks/release/select-once-cache.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
       - name: Resolve bootstrap Once
         run: |
           once_bin="$(./mise/tasks/release/bootstrap-once.sh)"
           echo "ONCE_BIN=${once_bin}" >> "$GITHUB_ENV"
-      - name: Select Once cache
-        run: ./mise/tasks/release/select-once-cache.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
       - name: Package XCFramework slice
         run: mise run release:package-xcframework-slice --target "${{ matrix.target }}" --version "${{ needs.detect.outputs.next-version }}"
         env:

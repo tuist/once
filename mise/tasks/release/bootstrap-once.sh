@@ -2,6 +2,8 @@
 #MISE description="Resolve a released Once binary for bootstrapping graph builds"
 set -euo pipefail
 
+release_tasks_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 host_triple() {
   local os arch
   os="$(uname -s)"
@@ -99,56 +101,99 @@ if [[ -n "${ONCE_BIN:-}" ]]; then
   exit 0
 fi
 
+released_once() {
+  local target version exe cache_dir binary asset archive checksum url
+  target="$(host_triple)"
+  version="$(latest_release)"
+  version="${version#v}"
+  if [[ -z "${version}" ]]; then
+    echo "could not determine latest Once release" >&2
+    return 1
+  fi
+
+  exe="once"
+  case "${target}" in
+    *-windows-*)
+      exe="once.exe"
+      ;;
+  esac
+
+  cache_dir="target/once-bootstrap/${version}-${target}"
+  binary="${cache_dir}/${exe}"
+  if [[ -x "${binary}" ]]; then
+    printf '%s\n' "${binary}"
+    return 0
+  fi
+
+  mkdir -p "${cache_dir}"
+  asset="once-${version}-${target}.tar.gz"
+  archive="${cache_dir}/${asset}"
+  checksum="${cache_dir}/${asset}.sha256"
+  url="https://github.com/tuist/once/releases/download/${version}/${asset}"
+  if command -v curl >/dev/null 2>&1 && curl -fL "${url}" -o "${archive}" >&2; then
+    if curl -fL "${url}.sha256" -o "${checksum}" >&2 && verify_checksum "${cache_dir}" "${asset}.sha256"; then
+      tar -C "${cache_dir}" -xzf "${archive}"
+      if [[ -x "${binary}" ]]; then
+        printf '%s\n' "${binary}"
+        return 0
+      fi
+    else
+      echo "could not verify Once release archive checksum" >&2
+    fi
+  fi
+  return 1
+}
+
+# Builds the bootstrap from this checkout with the latest released Once, so
+# dependencies come from the remote cache instead of a cold Cargo build. The
+# released Once may not understand this checkout's graph; callers fall back
+# to Cargo when it fails.
+graph_bootstrap() {
+  local stage0 host suffix target_id exe built output status=0
+  stage0="$(released_once)" || return 1
+  host="$(mise exec -- rustc -vV | sed -n 's/^host: //p')"
+  if [[ -z "${host}" ]]; then
+    return 1
+  fi
+  "${release_tasks_dir}/prepare-rust-graph-deps.sh" --target "${host}" >&2 || return 1
+  "${release_tasks_dir}/write-rust-release-manifests.sh" --bootstrap --target "${host}" >&2 || return 1
+  suffix="$(printf '%s' "${host}" | tr '.-' '__')"
+  target_id="crates/once-cli/once_cli_bootstrap_${suffix}"
+  "${stage0}" build "${target_id}" --format json --quiet >&2 || status=$?
+  "${release_tasks_dir}/write-rust-release-manifests.sh" --clear >&2
+  if ((status != 0)); then
+    echo "the released Once could not build the bootstrap, falling back to Cargo" >&2
+    return 1
+  fi
+
+  exe="once"
+  case "${host}" in
+    *-windows-*)
+      exe="once.exe"
+      ;;
+  esac
+  built=".once/out/${target_id}/${exe}"
+  output="target/bootstrap-graph/${exe}"
+  mkdir -p "$(dirname "${output}")"
+  cp "${built}" "${output}"
+  printf '%s\n' "${output}"
+}
+
 case "${ONCE_BOOTSTRAP_SOURCE:-release}" in
   release)
+    released_once || fallback_cargo_build
     ;;
   source)
-    fallback_cargo_build
-    exit 0
+    # A graph build only beats Cargo when the remote cache already holds
+    # the dependencies; with a cold local cache both compile everything.
+    if [[ "${ONCE_CACHE_PROVIDER:-}" == "tuist" ]]; then
+      graph_bootstrap || fallback_cargo_build
+    else
+      fallback_cargo_build
+    fi
     ;;
   *)
     echo "ONCE_BOOTSTRAP_SOURCE must be 'release' or 'source'" >&2
     exit 1
     ;;
 esac
-
-target="$(host_triple)"
-version="$(latest_release)"
-version="${version#v}"
-if [[ -z "${version}" ]]; then
-  echo "could not determine latest Once release" >&2
-  exit 1
-fi
-
-exe="once"
-case "${target}" in
-  *-windows-*)
-    exe="once.exe"
-    ;;
-esac
-
-cache_dir="target/once-bootstrap/${version}-${target}"
-binary="${cache_dir}/${exe}"
-if [[ -x "${binary}" ]]; then
-  printf '%s\n' "${binary}"
-  exit 0
-fi
-
-mkdir -p "${cache_dir}"
-asset="once-${version}-${target}.tar.gz"
-archive="${cache_dir}/${asset}"
-checksum="${cache_dir}/${asset}.sha256"
-url="https://github.com/tuist/once/releases/download/${version}/${asset}"
-if command -v curl >/dev/null 2>&1 && curl -fL "${url}" -o "${archive}" >&2; then
-  if curl -fL "${url}.sha256" -o "${checksum}" >&2 && verify_checksum "${cache_dir}" "${asset}.sha256"; then
-    tar -C "${cache_dir}" -xzf "${archive}"
-    if [[ -x "${binary}" ]]; then
-      printf '%s\n' "${binary}"
-      exit 0
-    fi
-  else
-    echo "could not verify Once release archive checksum" >&2
-  fi
-fi
-
-fallback_cargo_build

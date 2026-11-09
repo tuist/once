@@ -6,7 +6,11 @@ set -uo pipefail
 # Tuist outage must not block a release. Signing in and one cache lookup
 # prove the remote cache answers; otherwise the build uses the local cache.
 
-once_bin="${ONCE_BIN:?ONCE_BIN must point at the bootstrap Once}"
+release_tasks_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# The latest released Once signs in before the bootstrap exists, so the
+# bootstrap can already build through the remote cache.
+once_bin="${ONCE_BIN:-$(ONCE_BOOTSTRAP_SOURCE=release "${release_tasks_dir}/bootstrap-once.sh")}"
 probe_digest="0000000000000000000000000000000000000000000000000000000000000000"
 
 provider=local
