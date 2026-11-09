@@ -165,3 +165,37 @@ result = repr("ok")
         .iter()
         .any(|arg| arg == "-Ctarget-cpu=cortex-a76"));
 }
+
+#[test]
+fn processes_launched_from_rust_artifacts_keep_windows_system_root() {
+    let env = |os: &str| {
+        let source = format!(
+            r#"{prelude}
+def host_os():
+    return {os:?}
+def host_env(name):
+    return {{"Path": "C:\\Windows\\system32", "SystemRoot": "C:\\Windows", "INCLUDE": "C:\\sdk\\include"}}.get(name, "")
+ctx = {{
+    "label": {{"package": "", "name": "app", "id": "app"}},
+    "attr": {{"crate_root": "main.rs"}},
+    "deps": [],
+    "srcs": ["*.rs"],
+}}
+result = repr([
+    {{key: value for key, value in env.items() if key in ["PATH", "SystemRoot", "INCLUDE"]}}
+    for env in [_rust_test_env(ctx, ""), _rust_binary_run_env(ctx, ".once/run")]
+])
+"#,
+            prelude = all_prelude_source(),
+        );
+        let workspace = TempDir::new().unwrap();
+        let store = store_for(workspace.path(), "");
+        with_active_store(store, || eval_prelude_source_to_repr(source))
+            .1
+            .unwrap()
+    };
+    let windows = r#"{"PATH": "C:\\Windows\\system32", "SystemRoot": "C:\\Windows"}"#;
+    assert_eq!(env("windows"), format!("[{windows}, {windows}]"));
+    let linux = r#"{"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"}"#;
+    assert_eq!(env("linux"), format!("[{linux}, {linux}]"));
+}
