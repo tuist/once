@@ -545,11 +545,14 @@ def _rust_unix_tool_dirs():
 # inheriting the host's PATH would make the action depend on whatever happens
 # to be installed. The standard system directories are the same everywhere the
 # platform runs, so they stay part of the action key without importing the
-# host's configuration.
-def _rust_process_path():
+# host's configuration. Windows processes also need `SystemRoot`: without it
+# Winsock cannot initialize and every socket fails with os error 10106.
+def _rust_process_env():
     if host_os() == "windows":
-        return _rust_windows_tool_env().get("PATH") or ""
-    return ":".join(_rust_unix_tool_dirs())
+        tools = _rust_windows_tool_env()
+        return {key: tools[key] for key in ["PATH", "SystemRoot"] if tools.get(key)}
+    path = ":".join(_rust_unix_tool_dirs())
+    return {"PATH": path} if path else {}
 
 def _rust_tool_path(tools):
     dirs = []
@@ -2032,9 +2035,8 @@ def _rust_run_args(ctx):
 
 def _rust_binary_run_env(ctx, run_dir):
     env = {"HOME": execution_path(run_dir + "/home")}
-    process_path = _rust_process_path()
-    if process_path:
-        env["PATH"] = process_path
+    for key, value in _rust_process_env().items():
+        env[key] = value
     _rust_merge_env_lower_precedence(env, _rust_cargo_config_env(ctx))
     for key, value in _rust_host_env(_rust_attr(ctx, "env_inherit", [])).items():
         env[key] = value
@@ -2102,9 +2104,8 @@ def _rust_cargo_runtime_env(ctx):
 
 def _rust_test_env(ctx, test_dir):
     env = {"HOME": execution_path(_rust_scratch_dir(ctx) + "/test-home")}
-    process_path = _rust_process_path()
-    if process_path:
-        env["PATH"] = process_path
+    for key, value in _rust_process_env().items():
+        env[key] = value
     for key, value in _rust_cargo_runtime_env(ctx).items():
         env[key] = value
     for key, value in _rust_bin_exe_env(ctx).items():
