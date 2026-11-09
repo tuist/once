@@ -290,6 +290,20 @@ def _once_normalize_os(value):
         "win32": "windows",
     }.get(value) or value
 
+# Host binaries and anything linked on the host carry the host C library's
+# symbol versions: a build script linked against glibc 2.39 does not load on
+# a glibc 2.35 host. Toolchain identities include this so a shared cache
+# never hands such outputs to an older host. Hosts that select their C
+# library ABI through deployment targets, and hosts without `getconf`,
+# report an empty string.
+def _once_host_libc():
+    if host_os() != "linux":
+        return ""
+    getconf = host_which_optional("getconf")
+    if not getconf:
+        return ""
+    return host_command([getconf, "GNU_LIBC_VERSION"], check = False).strip()
+
 def _configuration_tokens(ctx, extra = []):
     configured = (ctx.get("configuration") or {}).get("tokens") or []
     return _unique(extra + configured + ["default"])
