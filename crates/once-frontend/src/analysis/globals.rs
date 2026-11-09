@@ -139,7 +139,8 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         Ok(sha256)
     }
 
-    /// Active workspace root as an absolute path. Schema parsing
+    /// Active workspace root as an absolute path, spelled for command
+    /// lines (without a Windows verbatim prefix). Schema parsing
     /// returns `""`.
     fn workspace_root() -> anyhow::Result<String> {
         if !analysis_active() {
@@ -147,7 +148,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         }
         with_store(|store| -> Result<String> {
             let store = store.ok_or_else(|| anyhow!("workspace_root called outside analysis"))?;
-            Ok(store.workspace_root.to_string_lossy().into_owned())
+            Ok(once_core::command_path(&store.workspace_root))
         })
     }
 
