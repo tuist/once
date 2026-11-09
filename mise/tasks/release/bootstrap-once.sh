@@ -55,7 +55,7 @@ fallback_cargo_build() {
   local attempt=1
   local max_attempts="${ONCE_BOOTSTRAP_CARGO_ATTEMPTS:-3}"
   while true; do
-    if mise exec -- cargo build --locked --release --package once-cli >&2; then
+    if mise exec -- cargo build --locked --profile bootstrap --package once-cli >&2; then
       break
     fi
     if (( attempt >= max_attempts )); then
@@ -67,10 +67,10 @@ fallback_cargo_build() {
   done
   case "$(uname -s)" in
     MINGW* | MSYS* | CYGWIN*)
-      printf '%s\n' "target/release/once.exe"
+      printf '%s\n' "target/bootstrap/once.exe"
       ;;
     *)
-      printf '%s\n' "target/release/once"
+      printf '%s\n' "target/bootstrap/once"
       ;;
   esac
 }
