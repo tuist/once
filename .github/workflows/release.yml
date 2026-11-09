@@ -63,11 +63,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Ubuntu 22.04 keeps the binaries loadable on glibc 2.35.
+          # Ubuntu 22.04 keeps the binaries loadable on glibc 2.35. Once's
+          # action keys do not capture the host glibc, so the remote cache
+          # can serve build scripts linked on newer Ubuntu hosts; these
+          # builds stay on the local cache.
           - runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+            local-cache: true
           - runner: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
+            local-cache: true
           - runner: tuist-macos
             target: x86_64-apple-darwin
           - runner: tuist-macos
@@ -123,7 +128,11 @@ jobs:
           once_bin="$(./mise/tasks/release/bootstrap-once.sh)"
           echo "ONCE_BIN=${once_bin}" >> "$GITHUB_ENV"
       - name: Select Once cache
+        if: ${{ !matrix.local-cache }}
         run: ./mise/tasks/release/select-once-cache.sh
+      - name: Use the local Once cache
+        if: ${{ matrix.local-cache }}
+        run: echo "ONCE_CACHE_PROVIDER=local" >> "$GITHUB_ENV"
       - name: Package release archive
         run: mise run release:package --target "${{ matrix.target }}" --version "${{ needs.detect.outputs.next-version }}"
         env:
