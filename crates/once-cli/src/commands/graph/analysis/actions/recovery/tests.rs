@@ -406,6 +406,47 @@ async fn a_producer_that_writes_different_bytes_fails_closed() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn an_action_queued_behind_its_own_run_reuses_that_result() {
+    let mut workspace = Workspace::new();
+    workspace.resources = Arc::new(ResourcePool::new(once_core::ResourceLimits::new(
+        1,
+        1 << 30,
+    )));
+    let command = format!("printf run >> runs.log; sleep 0.5; printf first > {PRODUCED}");
+    let produce = || AnalysisResult {
+        actions: vec![action(serde_json::json!({
+            "identifier": "produce",
+            "argv": ["/bin/sh", "-c", command],
+            "outputs": [PRODUCED],
+            "create_dirs": [".once/out"],
+            "cacheable": true,
+        }))],
+        provider: serde_json::json!({}),
+        declared_outputs: Vec::new(),
+        observations: AnalysisObservations::default(),
+    };
+    // The second build probes the cache while the first holds the only
+    // execution slot, then waits for that slot, which the first releases
+    // together with the action lock once it has stored its result.
+    let queued = async {
+        while workspace.runs() == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        workspace.build(produce()).await
+    };
+
+    let (first, second) = tokio::join!(workspace.build(produce()), queued);
+
+    first.unwrap();
+    assert_eq!(workspace.runs(), 1, "the queued build ran the action again");
+    assert_eq!(
+        second.unwrap().per_action_outcomes[0].cache_state,
+        EvidenceCacheState::Hit
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn a_cancelled_waiter_leaves_the_repair_running_and_it_is_not_run_twice() {
     let workspace = Workspace::new();
     let producers = Producers::default();

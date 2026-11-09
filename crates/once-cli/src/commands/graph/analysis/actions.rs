@@ -1212,10 +1212,11 @@ async fn resolve_cacheable_declared_action(
         context.producers.executors(context.resources)?,
         once_core::Executor::resolve(action)?,
         action.resource_request().clone(),
-        |contended, lease| async move {
-            // Another process held the action, so it may have produced the
-            // result while this one waited.
-            if contended && reusable {
+        |lease| async move {
+            // Another task or process may have produced the result since the
+            // probe above, and may have released the lock before this one
+            // tried it while this one waited for capacity.
+            if reusable {
                 if let Some(outcome) = probe_cached_action(context, action_digest).await? {
                     context.claim_worker().await;
                     return Ok(outcome);
