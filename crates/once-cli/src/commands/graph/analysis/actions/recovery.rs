@@ -632,7 +632,7 @@ impl Repair<'_> {
             self.producers.executors(self.resources)?,
             once_core::Executor::resolve(&producer.action)?,
             producer.action.resource_request().clone(),
-            |_contended, lease| async move {
+            |lease| async move {
                 let attempt = match reporting {
                     Some(reporting) => Some(AttemptReport::start(reporting, producer).await),
                     None => None,
@@ -803,9 +803,7 @@ fn single_output(path: &str, digest: Digest) -> ActionResult {
 /// Waiting for admission while holding the locks would stall every other
 /// process waiting for the same action behind this one's queue position;
 /// waiting for a lock while holding a permit or another lock would pin
-/// capacity behind work that may already be done. `work` learns whether
-/// another holder was seen, in which case the action may have finished in the
-/// meantime.
+/// capacity behind work that may already be done.
 pub(super) async fn with_action_lock_and_permit<'a, T, F, Fut>(
     workspace: &Path,
     digest: Digest,
@@ -816,22 +814,20 @@ pub(super) async fn with_action_lock_and_permit<'a, T, F, Fut>(
     work: F,
 ) -> Result<T>
 where
-    F: FnOnce(bool, once_core::ExecutionPermit) -> Fut,
+    F: FnOnce(once_core::ExecutionPermit) -> Fut,
     Fut: Future<Output = Result<T>>,
 {
     let locks = Arc::new(cacheable_action_locks(workspace, digest, outputs)?);
     let mut work = Some(work);
-    let mut contended = false;
     loop {
         let permit = resources.acquire(executor, &request).await;
         let busy = try_lock_all(&locks).with_context(|| format!("locking action {digest}"))?;
         let Some(busy) = busy else {
             let permit = permit.with_lifetime_owner(Arc::clone(&locks));
             let work = work.take().context("action work already ran")?;
-            return work(contended, permit).await;
+            return work(permit).await;
         };
         drop(permit);
-        contended = true;
         wait_for_action_lock(&locks[busy], digest).await?;
     }
 }
