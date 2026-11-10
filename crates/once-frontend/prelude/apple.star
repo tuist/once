@@ -120,9 +120,11 @@ def _apple_linker_dir(xcode_developer_dir, env):
         return xcode_developer_dir + "/" + _XCTOOLCHAIN_BIN_REL
     return _parent_dir(host_command([host_which("xcrun"), "--find", "ld"], env = env).strip())
 
-def _apple_compiler_env(xcode_developer_dir, env):
+def _apple_compiler_env(xcode_developer_dir, env, sdk_path):
     action_env = dict(env)
     action_env["PATH"] = _apple_linker_dir(xcode_developer_dir, env) + ":/usr/bin:/bin"
+    # Swift's link driver needs SDKROOT even when the frontend receives -sdk.
+    action_env["SDKROOT"] = sdk_path
     return action_env
 
 # When a target sets `xcode_developer_dir`, the build resolves tools and
@@ -189,7 +191,7 @@ def _resolve_swiftc(platform, sdk_variant, xcode_developer_dir):
         swiftc_path = host_command([xcrun, "--sdk", sdk, "--find", "swiftc"], env = env).strip()
         sdk_path = host_command([xcrun, "--sdk", sdk, "--show-sdk-path"], env = env).strip()
     version = host_command([swiftc_path, "--version"], env = env).strip()
-    action_env = _apple_compiler_env(xcode_developer_dir, env)
+    action_env = _apple_compiler_env(xcode_developer_dir, env, sdk_path)
     # Identity folds in the developer dir override so different Xcode
     # installations partition the action cache cleanly.
     identity = "once.apple.swiftc.v1\x00" + swiftc_path + "\x00" + version + "\x00" + (xcode_developer_dir or "") + "\x00" + action_env["PATH"]
@@ -235,7 +237,7 @@ def _resolve_clang(platform, sdk_variant, xcode_developer_dir):
         clangxx_path = host_command([xcrun, "--sdk", sdk, "--find", "clang++"], env = env).strip()
         sdk_path = host_command([xcrun, "--sdk", sdk, "--show-sdk-path"], env = env).strip()
     version = host_command([clang_path, "--version"], env = env).strip()
-    action_env = _apple_compiler_env(xcode_developer_dir, env)
+    action_env = _apple_compiler_env(xcode_developer_dir, env, sdk_path)
     identity = "once.apple.clang.v1\x00" + clang_path + "\x00" + version + "\x00" + (xcode_developer_dir or "") + "\x00" + action_env["PATH"]
     return {
         "clang_path": clang_path,

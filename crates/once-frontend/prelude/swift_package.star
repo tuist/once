@@ -8,7 +8,9 @@ def _swift_package_workspace_resolver(ctx):
     manifest = _swiftpm_manifest_file(attrs)
     if not ctx["files"].get(manifest):
         fail(ctx["label"]["id"] + ": Swift package manifest `" + manifest + "` is missing; include it in resolver_inputs, or srcs when resolver_inputs is omitted")
-    swiftc = _resolve_swiftc(attrs.get("platform") or "macos", attrs.get("sdk_variant") or "simulator", attrs.get("xcode_developer_dir") or "")
+    # macOS manifests need the host SDK; Linux Darwin SDKs may only contain iOS.
+    manifest_platform = (attrs.get("platform") or "macos") if _apple_execution_os() == "linux" else "macos"
+    swiftc = _resolve_swiftc(manifest_platform, attrs.get("sdk_variant") or "simulator", attrs.get("xcode_developer_dir") or "")
     swift = _swiftpm_swift_executable(attrs.get("swift") or "swift", attrs.get("xcode_developer_dir") or "", swiftc["swiftc_path"])
     absolute_package_path = _swiftpm_absolute_package_path(ctx, attrs.get("package_path") or ".")
     # Shared manifest-dedupe map: each `swift package dump-package` invocation

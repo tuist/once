@@ -25,6 +25,9 @@ that differ between shared schemes do not silently suppress tests.
 
 Static libraries built on macOS now use deterministic archive metadata rather
 than recording the current time in archive members. Framework links also use
-the native linker's reproducible-output mode. Stable action keys and
-bitwise-identical artifacts remain separate properties; independent cold-build
-verification reports the artifacts it actually observes.
+the native linker's reproducible-output mode. Compiler actions explicitly
+select the resolved SDK so linked binaries retain its SDK version instead of
+falling back to their minimum deployment target. On macOS, Swift package
+manifests use the host SDK independently of the package's destination platform.
+Stable action keys and bitwise-identical artifacts remain separate properties;
+independent cold-build verification reports the artifacts it actually observes.

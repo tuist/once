@@ -360,6 +360,75 @@ TOML
     The path "$WORKSPACE/.once/out/Generated/Generated.swiftmodule" should not be exist
   End
 
+  It 'records the selected SDK separately from deployment targets in framework binaries'
+    Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+
+    verify_framework_sdk_versions() {
+      cat > "$WORKSPACE/once.toml" <<'TOML'
+[[target]]
+name = "SwiftFramework"
+kind = "apple_framework"
+srcs = ["Value.swift"]
+[target.attrs]
+platform = "macos"
+minimum_os = "13.0"
+
+[[target]]
+name = "MixedFramework"
+kind = "apple_framework"
+srcs = ["value.c"]
+[target.attrs]
+platform = "macos"
+minimum_os = "14.0"
+TOML
+      printf '%s\n' 'public func value() -> Int { 37 }' > "$WORKSPACE/Value.swift"
+      printf '%s\n' 'int value(void) { return 41; }' > "$WORKSPACE/value.c"
+      sdk_version=$(xcrun --sdk macosx --show-sdk-version) || return
+      for target in SwiftFramework MixedFramework; do
+        once --memory-limit 2GiB build "$target" > "$WORKSPACE/$target.out" 2> "$WORKSPACE/$target.err" || { cat "$WORKSPACE/$target.err"; return 1; }
+        binary="$WORKSPACE/.once/out/$target/$target.framework/$target"
+        build_version=$(xcrun vtool -show-build "$binary") || return
+        version=$(printf '%s\n' "$build_version" | awk '$1 == "sdk" {print $2}')
+        [ "$version" = "$sdk_version" ] || { printf 'Expected SDK %s, got %s for %s\n' "$sdk_version" "$version" "$target"; return 1; }
+        case "$target" in SwiftFramework) minimum=13.0 ;; MixedFramework) minimum=14.0 ;; esac
+        version=$(printf '%s\n' "$build_version" | awk '$1 == "minos" {print $2}')
+        [ "$version" = "$minimum" ] || return 1
+      done
+    }
+
+    When call verify_framework_sdk_versions
+    The status should be success
+  End
+
+  It 'evaluates package manifests with the host SDK when building for iOS'
+    Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
+    ios_sdk_unavailable() { ! xcrun --sdk iphonesimulator --show-sdk-path >/dev/null 2>&1; }
+    Skip if 'iOS SDK unavailable on this host' ios_sdk_unavailable
+
+    mkdir -p "$WORKSPACE/Source/SDKProbe"
+    cat > "$WORKSPACE/Package.swift" <<'SWIFT'
+// swift-tools-version: 6.0
+import PackageDescription
+let package = Package(name: "SDKProbe", products: [.library(name: "SDKProbe", targets: ["SDKProbe"])], targets: [.target(name: "SDKProbe")])
+SWIFT
+    printf '%s\n' 'public func value() -> Int { 37 }' > "$WORKSPACE/Source/SDKProbe/Value.swift"
+    cat > "$WORKSPACE/once.toml" <<'TOML'
+[[target]]
+name = "package"
+kind = "swift_package_workspace"
+srcs = ["Package.swift", "Source/**/*.swift"]
+[target.attrs]
+platform = "ios"
+minimum_os = "13.0"
+sdk_variant = "simulator"
+TOML
+
+    When call once --format json --memory-limit 2GiB --cpu-limit 2 build package
+    The status should be success
+    The stdout should include '"status":"completed"'
+    The path "$WORKSPACE/.once/out/SwiftPackage_SDKProbe_SDKProbe/SDKProbe.swiftmodule" should be file
+  End
+
   It 'builds a Swift target that imports an XCFramework from a Copy Files phase'
     Skip if 'apple toolchain unavailable on this host' apple_toolchain_unavailable
     copy_xcode_xcframework_import_fixture

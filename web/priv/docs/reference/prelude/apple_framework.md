@@ -11,7 +11,10 @@ contain `sdk` configure the
 [Apple software development kit (SDK)](https://developer.apple.com/documentation/xcode)
 used for the build.
 
-On macOS, framework links enable the native linker's reproducible-output mode.
+On macOS, compiler actions explicitly select the resolved SDK through `SDKROOT`
+as well as compiler arguments, so linked binaries record the selected SDK
+version independently of their minimum deployment target.
+Framework links enable the native linker's reproducible-output mode.
 Independent cold-build verification still compares actual artifacts; stable
 action keys alone are not evidence of bitwise-identical framework bytes.
 

@@ -103,6 +103,32 @@ fn simulator_selection_preserves_the_requested_destination() {
 }
 
 #[test]
+fn swift_package_resolution_accepts_an_ios_only_linux_sdk() {
+    let source = format!(
+        "{}\n{}\n{LINUX_HOST}\n{}",
+        xcode_prelude_source(),
+        include_str!("../../prelude/swift_package.star"),
+        r#"
+def _swiftpm_absolute_package_path(ctx, path):
+    return "/workspace"
+def _swift_package_metadata(argv, absolute, env = {}, check = True):
+    return '{"name":"Root","dependencies":[],"products":[],"targets":[]}'
+def _xcode_local_swift_package_specs(ctx, packages, platform, minimum_os, variant, root_identities = None):
+    return {"specs": [], "products": {}, "modules": {}}
+result = repr(_swift_package_workspace_resolver({
+    "attrs": {"platform": "ios", "sdk_variant": "device"},
+    "files": {"Package.swift": "manifest"},
+    "label": {"id": "root", "name": "root", "package": ""},
+}))
+"#,
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"{"targets": [], "roots": [], "attrs": {"package_name": "Root", "_display_name": "Root", "_default_test_roots": []}}"#
+    );
+}
+
+#[test]
 fn llvm_lipo_fallback_and_missing_resource_tools_have_actionable_repairs() {
     let result = evaluate(
         r#"

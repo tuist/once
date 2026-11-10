@@ -14,6 +14,10 @@ When a target does not use the default `Sources/<target>` layout, Once asks
 Swift Package Manager for the computed target path, including layouts such as
 `Source/<target>`. Explicit paths remain authoritative.
 
+On macOS, package manifests are evaluated with the host SDK, even when package
+targets are compiled for another Apple platform. Compilation actions select
+the destination SDK independently.
+
 Asset catalogs, interface files, and Core Data models are discovered without
 explicit resource declarations for Swift tools 5.3 and later. String catalogs
 are discovered for Swift tools 5.9 and later. These resources generate
