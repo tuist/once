@@ -99,6 +99,7 @@ kind = "rust_test"
 deps = [
   "crates/once-frontend/once_frontend",
   "crates/once-host-tree/once_host_tree",
+  "crates/once-core/once_core",
   "cargo_dependencies",
 ]
 srcs = [
