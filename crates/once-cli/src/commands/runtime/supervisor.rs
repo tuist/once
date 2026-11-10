@@ -1,4 +1,5 @@
 use std::fs::{self, File, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -234,7 +235,15 @@ fn read_session_record(session_dir: &Path) -> Result<RuntimeSessionRecord> {
 fn write_session_record(session_dir: &Path, record: &RuntimeSessionRecord) -> Result<()> {
     let path = session_dir.join("session.json");
     let raw = serde_json::to_vec_pretty(record)?;
-    fs::write(&path, raw).with_context(|| format!("writing {}", path.display()))
+    let mut temporary = tempfile::NamedTempFile::new_in(session_dir)
+        .with_context(|| format!("creating a runtime record in {}", session_dir.display()))?;
+    temporary
+        .write_all(&raw)
+        .with_context(|| format!("writing {}", path.display()))?;
+    temporary
+        .persist(&path)
+        .with_context(|| format!("publishing {}", path.display()))?;
+    Ok(())
 }
 
 fn session_id(target: &str) -> String {
@@ -296,6 +305,56 @@ mod tests {
             resolve_session_dir(workspace, "safe-session_1").unwrap(),
             Path::new("/workspace/.once/runtime/safe-session_1")
         );
+    }
+
+    #[test]
+    fn status_reads_complete_records_during_concurrent_updates() {
+        let tmp = TempDir::new().unwrap();
+        let workspace = tmp.path();
+        let session_dir = workspace.join(CACHE_DIR).join("runtime").join("s1");
+        fs::create_dir_all(&session_dir).unwrap();
+        let record = RuntimeSessionRecord {
+            session_id: "s1".to_string(),
+            target: "tool".to_string(),
+            status: "running".to_string(),
+            workspace: ".".to_string(),
+            session_dir: ".once/runtime/s1".to_string(),
+            stdout: ".once/runtime/s1/stdout.log".to_string(),
+            stderr: ".once/runtime/s1/stderr.log".to_string(),
+            supervisor_pid: None,
+            pid: Some(0),
+            started_at_ms: 0,
+            finished_at_ms: None,
+            exit_code: None,
+        };
+        write_session_record(&session_dir, &record).unwrap();
+        let barrier = std::sync::Barrier::new(3);
+        thread::scope(|scope| {
+            for writer in 0..2 {
+                let mut record = record.clone();
+                let session_dir = &session_dir;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    for index in 1..=2_000 {
+                        let value = writer * 2_000 + index;
+                        record.pid = Some(value);
+                        record.started_at_ms = u128::from(value);
+                        write_session_record(session_dir, &record).unwrap();
+                    }
+                });
+            }
+            barrier.wait();
+            for _ in 0..4_000 {
+                let current = status_session(workspace, "s1").unwrap();
+                assert_eq!(current.session_id, "s1");
+                assert_eq!(current.target, "tool");
+                assert_eq!(current.status, "running");
+                assert_eq!(current.started_at_ms, u128::from(current.pid.unwrap()));
+            }
+        });
+        let current = status_session(workspace, "s1").unwrap();
+        assert_eq!(current.started_at_ms, u128::from(current.pid.unwrap()));
     }
 
     #[test]
