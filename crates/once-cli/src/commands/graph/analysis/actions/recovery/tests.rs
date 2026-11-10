@@ -406,6 +406,63 @@ async fn a_producer_that_writes_different_bytes_fails_closed() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn restoring_a_cached_directory_waits_for_its_running_writer() {
+    let workspace = Workspace::new();
+    let produce = |command: &str| AnalysisResult {
+        actions: vec![action(serde_json::json!({
+            "identifier": "produce",
+            "argv": ["/bin/sh", "-ec", command],
+            "outputs": [".once/out/build"],
+            "clean_paths": [".once/out/build"],
+            "create_dirs": [".once/out/build"],
+            "cacheable": true,
+        }))],
+        provider: serde_json::json!({}),
+        declared_outputs: Vec::new(),
+        observations: AnalysisObservations::default(),
+    };
+    let cached = workspace
+        .build(produce("printf cached > .once/out/build/value"))
+        .await
+        .unwrap();
+    let writing = produce(
+        "printf fresh > .once/out/build/value.part; touch started; \
+         while [ ! -f release ]; do sleep 0.01; done; \
+         mv .once/out/build/value.part .once/out/build/value",
+    );
+    let mut writer = Box::pin(workspace.build(writing));
+    tokio::select! {
+        result = &mut writer => panic!("writer finished before release: {result:?}"),
+        () = async {
+            while !workspace.path().join("started").exists() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        } => {}
+    }
+    let producers = Producers::default();
+    let repair = Repair {
+        workspace: workspace.path(),
+        cache: &workspace.cache,
+        source_digest_cache: Some(&workspace.digests),
+        resources: &workspace.resources,
+        producers: &producers,
+    };
+    let mut restore = Box::pin(repair.restore(&cached.result));
+    let early = tokio::time::timeout(Duration::from_millis(100), &mut restore).await;
+    std::fs::write(workspace.path().join("release"), b"").unwrap();
+    let (written, restored) = tokio::join!(writer, async {
+        match early {
+            Ok(result) => result,
+            Err(_) => restore.await,
+        }
+    });
+    written.expect("cache restoration deleted a running writer's temporary file");
+    restored.unwrap();
+    assert_eq!(workspace.read(".once/out/build/value"), "cached");
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn an_action_queued_behind_its_own_run_reuses_that_result() {
     let mut workspace = Workspace::new();
     workspace.resources = Arc::new(ResourcePool::new(once_core::ResourceLimits::new(

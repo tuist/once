@@ -32,7 +32,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use futures::future::{BoxFuture, FutureExt as _, Shared};
 use once_cas::{ActionResult, CacheProvider, Digest};
-use once_core::{Action, ResourcePool, ResourceRequest, RunEvent, RunEventBus, TargetResult};
+#[cfg(test)]
+use once_core::ResourceRequest;
+use once_core::{Action, ResourcePool, RunEvent, RunEventBus, TargetResult};
 
 use super::legacy_outputs::{self, FingerprintKind};
 use super::{cacheable_action_locks, restore_outputs, SourceDigestCache};
@@ -450,38 +452,43 @@ impl Repair<'_> {
     }
 
     async fn restore_attempt(&self, result: &ActionResult) -> Result<()> {
-        let lease = self
-            .producers
-            .executors(self.resources)?
-            .acquire_materialization()
-            .await;
-        let fingerprints = self
-            .producers
-            .verify_fingerprints(self.workspace, result, &lease)
-            .await?;
-        if fingerprints.is_empty() {
-            return restore_outputs(
-                self.workspace,
-                self.cache,
-                result,
-                self.source_digest_cache,
-                lease,
-            )
-            .await;
-        }
-        let mut restorable = result.clone();
-        for path in fingerprints {
-            restorable.outputs.remove(&path);
-        }
-        if restorable.outputs.is_empty() {
-            return Ok(());
-        }
-        restore_outputs(
+        let resources = self.producers.executors(self.resources)?;
+        with_action_lock_and_permit(
             self.workspace,
-            self.cache,
-            &restorable,
-            self.source_digest_cache,
-            lease,
+            Digest::of_bytes(b"output-restoration"),
+            result.outputs.keys().map(String::as_str),
+            || resources.acquire_materialization(),
+            |lease| async move {
+                let fingerprints = self
+                    .producers
+                    .verify_fingerprints(self.workspace, result, &lease)
+                    .await?;
+                if fingerprints.is_empty() {
+                    return restore_outputs(
+                        self.workspace,
+                        self.cache,
+                        result,
+                        self.source_digest_cache,
+                        lease,
+                    )
+                    .await;
+                }
+                let mut restorable = result.clone();
+                for path in fingerprints {
+                    restorable.outputs.remove(&path);
+                }
+                if restorable.outputs.is_empty() {
+                    return Ok(());
+                }
+                restore_outputs(
+                    self.workspace,
+                    self.cache,
+                    &restorable,
+                    self.source_digest_cache,
+                    lease,
+                )
+                .await
+            },
         )
         .await
     }
@@ -625,13 +632,13 @@ impl Repair<'_> {
             .context("restoring the producer's inputs")?;
         }
         let reporting = self.producers.inner.reporting.get();
+        let resources = self.producers.executors(self.resources)?;
+        let executor = once_core::Executor::resolve(&producer.action)?;
         let result = with_action_lock_and_permit(
             self.workspace,
             digest,
             producer.outputs.keys().map(String::as_str),
-            self.producers.executors(self.resources)?,
-            once_core::Executor::resolve(&producer.action)?,
-            producer.action.resource_request().clone(),
+            || resources.acquire(executor, producer.action.resource_request()),
             |lease| async move {
                 let attempt = match reporting {
                     Some(reporting) => Some(AttemptReport::start(reporting, producer).await),
@@ -804,23 +811,23 @@ fn single_output(path: &str, digest: Digest) -> ActionResult {
 /// process waiting for the same action behind this one's queue position;
 /// waiting for a lock while holding a permit or another lock would pin
 /// capacity behind work that may already be done.
-pub(super) async fn with_action_lock_and_permit<'a, T, F, Fut>(
+pub(super) async fn with_action_lock_and_permit<'a, T, A, Admit, F, Fut>(
     workspace: &Path,
     digest: Digest,
     outputs: impl IntoIterator<Item = &'a str>,
-    resources: &once_core::ExecutorResources,
-    executor: once_core::Executor,
-    request: ResourceRequest,
+    acquire: A,
     work: F,
 ) -> Result<T>
 where
+    A: Fn() -> Admit,
+    Admit: Future<Output = once_core::ExecutionPermit>,
     F: FnOnce(once_core::ExecutionPermit) -> Fut,
     Fut: Future<Output = Result<T>>,
 {
     let locks = Arc::new(cacheable_action_locks(workspace, digest, outputs)?);
     let mut work = Some(work);
     loop {
-        let permit = resources.acquire(executor, &request).await;
+        let permit = acquire().await;
         let busy = try_lock_all(&locks).with_context(|| format!("locking action {digest}"))?;
         let Some(busy) = busy else {
             let permit = permit.with_lifetime_owner(Arc::clone(&locks));

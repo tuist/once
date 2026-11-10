@@ -1205,13 +1205,13 @@ async fn resolve_cacheable_declared_action(
     // Inputs go on disk before admission: restoring one can mean running its
     // producer again, which needs capacity of its own.
     let restored_outputs = preparation::restore(context, declared).await?;
+    let resources = context.producers.executors(context.resources)?;
+    let executor = once_core::Executor::resolve(action)?;
     let outcome = recovery::with_action_lock_and_permit(
         context.workspace,
         action_digest,
         declared.outputs.iter().map(String::as_str),
-        context.producers.executors(context.resources)?,
-        once_core::Executor::resolve(action)?,
-        action.resource_request().clone(),
+        || resources.acquire(executor, action.resource_request()),
         |lease| async move {
             // Another task or process may have produced the result since the
             // probe above, and may have released the lock before this one
