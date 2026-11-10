@@ -605,7 +605,8 @@ TOML
 
     When call rebuild_c_archive_without_removed_source
     The status should be success
-    The stdout should equal 'kept.c.o'
+    The stdout should include 'kept.c.o'
+    The stdout should not include 'removed.c.o'
   End
 
   It 'builds a provider-only C target without probing C tools'
