@@ -8622,7 +8622,7 @@ result = repr(provider["test_bundle_path"])
     clippy::too_many_lines,
     reason = "the inline Starlark fixture keeps this test runner contract in one test"
 )]
-fn prelude_apple_test_bundle_runs_ios_hosted_tests_with_xctestrun() {
+fn prelude_apple_test_bundle_runs_native_tests_with_xctestrun() {
     let prelude = macos_prelude_source();
     let workspace = TempDir::new().unwrap();
     let package_dir = workspace.path().join("tests/Sources");
@@ -8632,9 +8632,10 @@ fn prelude_apple_test_bundle_runs_ios_hosted_tests_with_xctestrun() {
         "import XCTest\nfinal class HostedTests: XCTestCase { func testHost() {} }\n",
     )
     .unwrap();
-    for (platform, sdk, contents_dir, binary_dir) in [
-        ("ios", "iPhoneSimulator", "", ""),
-        ("macos", "MacOSX", "Contents/", "Contents/MacOS/"),
+    for (platform, sdk, contents_dir, binary_dir, hosted) in [
+        ("ios", "iPhoneSimulator", "", "", true),
+        ("macos", "MacOSX", "Contents/", "Contents/MacOS/", true),
+        ("macos", "MacOSX", "Contents/", "Contents/MacOS/", false),
     ] {
         let app_executable = format!(".once/out/app/App/App.app/{binary_dir}App");
         let app_plist = format!(".once/out/app/App/App.app/{contents_dir}Info.plist");
@@ -8692,9 +8693,11 @@ ctx = {{
     "build_dir": ".once/out/tests/HostedTests",
     "capability": "test",
 }}
+ctx["deps"] = ctx["deps"] if {hosted} else []
 provider = _apple_test_bundle_impl(ctx)
 result = repr(provider["test_info"]["command"]["argv"])
-"#
+"#,
+            hosted = if hosted { "True" } else { "False" },
         );
         let store = AnalysisStore::new(
             workspace.path().to_path_buf(),
@@ -8715,9 +8718,20 @@ result = repr(provider["test_info"]["command"]["argv"])
             panic!("xctestrun action must write its property list");
         };
         let contents = std::str::from_utf8(bytes).unwrap();
-        assert!(contents.contains("<key>IsAppHostedTestBundle</key><true/>"));
-        assert!(contents.contains(&app_executable), "{contents}");
-        assert!(contents.contains("libXCTestBundleInject.dylib"));
+        assert_eq!(
+            contents.contains("<key>IsAppHostedTestBundle</key><true/>"),
+            hosted
+        );
+        assert_eq!(contents.contains(&app_executable), hosted, "{contents}");
+        assert_eq!(contents.contains("libXCTestBundleInject.dylib"), hosted);
+        if !hosted {
+            assert!(
+                contents
+                    .contains("/Platforms/MacOSX.platform/Developer/Library/Xcode/Agents/xctest"),
+                "{contents}"
+            );
+        }
+        assert!(xctestrun.cacheable);
         assert!(contents.contains("<key>AppleLanguages</key><string>(en)</string>"));
         assert!(contents.contains("<key>AppleLocale</key><string>en_US</string>"));
         assert!(contents.contains("<key>TZ</key><string>America/New_York</string>"));
@@ -8747,7 +8761,7 @@ result = repr(provider["test_info"]["command"]["argv"])
             );
             assert!(script.contains("simctl bootstatus"), "{script}");
         }
-        assert!(run.inputs.contains(&app_plist));
+        assert_eq!(run.inputs.contains(&app_plist), hosted);
         assert!(run
             .inputs
             .iter()
@@ -8880,6 +8894,8 @@ fn apple_test_bundle_source(capability: &str, test_block: &str) -> String {
 def host_which(name):
     if name == "xcrun":
         return "/usr/bin/xcrun"
+    if name == "xcodebuild":
+        return "/usr/bin/xcodebuild"
     if name == "codesign":
         return "/usr/bin/codesign"
     if name == "sh":
@@ -8953,18 +8969,16 @@ fn prelude_apple_test_bundle_manifest_advertises_case_sharding() {
 
 #[test]
 fn prelude_apple_test_bundle_shard_filters_select_specific_cases() {
-    // With no shard filters the runner selects every case (`-XCTest All`); with
-    // a shard's unit ids it selects exactly those `Suite/method` cases, so each
-    // shard runs only its slice of the bundle.
     let (store, _workspace) = apple_test_bundle_store();
     let full = apple_test_bundle_source("test", "");
-    let (store, _) = with_active_store(store, || eval_prelude_source_to_repr(full));
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(full));
+    result.unwrap();
     let runner = action_by_identifier(&store, "apple_xctest:tests/PluginTests");
     let script = runner.argv.last().expect("runner script");
-    assert!(script.contains("-XCTest"), "{script}");
+    assert!(script.contains("test-without-building"), "{script}");
     assert!(
-        script.contains("All"),
-        "unfiltered run selects All: {script}"
+        !script.contains("-only-testing:"),
+        "unfiltered run selects every case: {script}"
     );
 
     let (store2, _workspace2) = apple_test_bundle_store();
@@ -8972,7 +8986,8 @@ fn prelude_apple_test_bundle_shard_filters_select_specific_cases() {
         "test",
         "\n    \"test\": {\"batch_id\": \"stable-batch\", \"filters\": [\"tests/PluginTests::NetworkTests/testTimeout\", \"tests/PluginTests::NetworkTests/testRetry\"]},",
     );
-    let (store2, _) = with_active_store(store2, || eval_prelude_source_to_repr(sharded));
+    let (store2, result) = with_active_store(store2, || eval_prelude_source_to_repr(sharded));
+    result.unwrap();
     let runner2 = action_by_identifier(&store2, "apple_xctest:tests/PluginTests");
     assert_eq!(
         runner2.outputs,
@@ -8981,11 +8996,12 @@ fn prelude_apple_test_bundle_shard_filters_select_specific_cases() {
     let script2 = runner2.argv.last().expect("runner script");
     assert!(script2.contains("/test/batches/stable-batch/test_results.json"));
     assert!(
-        script2.contains("NetworkTests/testTimeout,NetworkTests/testRetry"),
+        script2.contains("-only-testing:PluginTests/NetworkTests/testTimeout")
+            && script2.contains("-only-testing:PluginTests/NetworkTests/testRetry"),
         "shard must select only its cases: {script2}"
     );
     assert!(
-        !script2.contains("-XCTest All"),
+        !script2.contains("'-XCTest' 'All'"),
         "sharded run must not select All: {script2}"
     );
     assert!(

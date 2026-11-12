@@ -10,6 +10,12 @@ the
 [Apple software development kit (SDK)](https://developer.apple.com/documentation/xcode)
 used for the build.
 
+On macOS, XCTest bundles run through Xcode's `test-without-building` harness
+using a generated test-run configuration and the bundle compiled by Once.
+This applies with or without an application host. Compilation, linking, and
+configuration materialization remain cacheable; test execution still runs fresh.
+Swift Testing-only bundles continue to use their structured event-stream runner.
+
 Tests do not need to repeat framework dependencies that belong to a plugin or
 library in their dependency graph. Once links only the direct framework
 boundary and stages the full runtime framework closure inside the test bundle
@@ -58,16 +64,15 @@ completion records into normalized outcomes and durations. This includes Swift
 Testing cases that the host runs alongside XCTest cases. Once also lists cases
 found in sources so a shard can address them; a case without a completion
 record stays unknown rather than being credited with a pass. When XCTest
-reports a completed successful `All tests` or `Selected tests` suite and its total matches the
+reports a completed `All tests` or `Selected tests` suite, passed or failed, and its total matches the
 observed case records, that native inventory supersedes source declarations,
 excluding platform-conditional cases that were not compiled. Missing or
 inconsistent completion summaries retain unknown cases and fail closed.
 A bundle stays with the XCTest host when it holds XCTest cases, which only that host runs, and
 when it runs anywhere other than macOS.
 
-On macOS, unhosted XCTest bundles also honor `skipped_tests` through the native
-runner's inverted selection. Explicitly requesting an excluded case fails
-instead of silently running it.
+On macOS, XCTest bundles honor `skipped_tests` and exact case filters through
+the Xcode harness's native selection arguments.
 
 ## Attributes
 

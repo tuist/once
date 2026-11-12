@@ -1693,7 +1693,7 @@ FILENAME == source_file {
 }
 {
     line = $0
-    if (runner == "xctest" && (index(line, "Test Suite " sprintf("%c", 39) "All tests" sprintf("%c", 39) " passed at ") || index(line, "Test Suite " sprintf("%c", 39) "Selected tests" sprintf("%c", 39) " passed at "))) {
+    if (runner == "xctest" && (index(line, "Test Suite " sprintf("%c", 39) "All tests" sprintf("%c", 39) " ") || index(line, "Test Suite " sprintf("%c", 39) "Selected tests" sprintf("%c", 39) " ")) && line ~ / (passed|failed) at /) {
         complete_suite = 1
         next
     }
@@ -3639,21 +3639,22 @@ def _apple_resource_bundle_target_impl(ctx):
 def _xml_escape(value):
     return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&apos;")
 
-def _apple_hosted_xctestrun(module_name, test_bundle_path, host_application, xctest_framework_dir, xctest_usr_lib_dir, test_env = {}, test_arguments = [], skipped_tests = []):
-    host_path = workspace_root() + "/" + host_application["app_path"]
-    host_executable = workspace_root() + "/" + host_application["app_executable"]
+def _apple_xctestrun(module_name, test_bundle_path, host_application, xctest_framework_dir, xctest_usr_lib_dir, test_env = {}, test_arguments = [], skipped_tests = []):
+    host_path = workspace_root() + "/" + host_application["app_path"] if host_application else xctest_framework_dir[:-len("/Frameworks")] + "/Xcode/Agents/xctest"
     bundle_path = workspace_root() + "/" + test_bundle_path
     values = {
         "module": _xml_escape(module_name),
         "bundle": _xml_escape(bundle_path),
         "host": _xml_escape(host_path),
-        "host_executable": _xml_escape(host_executable),
-        "bundle_id": _xml_escape(host_application.get("bundle_id") or ""),
         "frameworks": _xml_escape(xctest_framework_dir),
         "libraries": _xml_escape(xctest_usr_lib_dir),
-        "inject": _xml_escape(xctest_usr_lib_dir + "/libXCTestBundleInject.dylib"),
         "products": _xml_escape(workspace_root() + "/.once/out"),
+        "host_settings": "",
+        "host_environment": "",
     }
+    if host_application:
+        values["host_settings"] = "<key>IsAppHostedTestBundle</key><true/><key>TestHostBundleIdentifier</key><string>" + _xml_escape(host_application.get("bundle_id") or "") + "</string>"
+        values["host_environment"] = "<key>DYLD_INSERT_LIBRARIES</key><string>" + _xml_escape(xctest_usr_lib_dir + "/libXCTestBundleInject.dylib") + "</string><key>XCInjectBundleInto</key><string>" + _xml_escape(workspace_root() + "/" + host_application["app_executable"]) + "</string>"
     environment_entries = []
     for key in sorted(test_env.keys()):
         environment_entries.append("      <key>" + _xml_escape(key) + "</key><string>" + _xml_escape(test_env[key]) + "</string>")
@@ -3673,9 +3674,8 @@ def _apple_hosted_xctestrun(module_name, test_bundle_path, host_application, xct
     <key>ProductModuleName</key><string>{module}</string>
     <key>TestBundlePath</key><string>{bundle}</string>
     <key>TestExecutionOrdering</key><string>ordered</string>
-    <key>IsAppHostedTestBundle</key><true/>
+    {host_settings}
     <key>TestHostPath</key><string>{host}</string>
-    <key>TestHostBundleIdentifier</key><string>{bundle_id}</string>
     <key>IsUITestBundle</key><false/>
     <key>IsXCTRunnerHostedTestBundle</key><false/>
     <key>CommandLineArguments</key><array>{command_line_arguments}</array>
@@ -3684,10 +3684,9 @@ def _apple_hosted_xctestrun(module_name, test_bundle_path, host_application, xct
     <array><string>{bundle}</string><string>{host}</string></array>
     <key>TestingEnvironmentVariables</key>
     <dict>
-      <key>DYLD_INSERT_LIBRARIES</key><string>{inject}</string>
+      {host_environment}
       <key>DYLD_LIBRARY_PATH</key><string>{libraries}</string>
       <key>DYLD_FRAMEWORK_PATH</key><string>{frameworks}</string>
-      <key>XCInjectBundleInto</key><string>{host_executable}</string>
       <key>__XCODE_BUILT_PRODUCTS_DIR_PATHS</key><string>{products}</string>
 {test_environment}
     </dict>
@@ -6084,12 +6083,13 @@ def _apple_test_bundle_impl(ctx):
     if ui_testing and (platform == "macos" or platform == "macosx" or sdk_variant != "simulator"):
         fail(ctx["label"]["id"] + ": user-interface test execution currently supports simulator targets")
     runner_application_path = ctx["build_dir"] + "/" + runner_bundle_dir if ui_testing else ""
-    if ctx["capability"] == "test" and host_application and (platform in ["macos", "macosx"] or sdk_variant == "simulator"):
+    native_macos_xctest = platform in ["macos", "macosx"] and (not swift_testing or _apple_sources_import_xctest(swift_srcs + objc_srcs))
+    if ctx["capability"] == "test" and (host_application or native_macos_xctest) and (platform in ["macos", "macosx"] or sdk_variant == "simulator"):
         runner_xcodebuild = host_which("xcodebuild")
         xctestrun_file = declare_output("runner/tests.xctestrun")
         write_path(
             xctestrun_file,
-            _apple_ui_xctestrun(module_name, test_bundle_path, runner_application_path, runner_bundle_id, host_application, xctest_framework_dir, xctest_usr_lib_dir, test_env, test_arguments, skipped_tests) if ui_testing else _apple_hosted_xctestrun(module_name, test_bundle_path, host_application, xctest_framework_dir, xctest_usr_lib_dir, test_env, test_arguments, skipped_tests),
+            _apple_ui_xctestrun(module_name, test_bundle_path, runner_application_path, runner_bundle_id, host_application, xctest_framework_dir, xctest_usr_lib_dir, test_env, test_arguments, skipped_tests) if ui_testing else _apple_xctestrun(module_name, test_bundle_path, host_application, xctest_framework_dir, xctest_usr_lib_dir, test_env, test_arguments, skipped_tests),
         )
         command_argv = [runner_xcodebuild, "test-without-building", "-xctestrun", xctestrun_file]
     affected_inputs = list(all_srcs)
@@ -6529,10 +6529,6 @@ def _apple_test_bundle_impl(ctx):
 
     if ctx["capability"] == "test":
         cases_file = test_dir + "/cases.jsonl"
-        # When a shard runs, the planner passes the batch's unit ids as
-        # `ctx["test"]["filters"]`. Each id is `<target>::<Suite>/<method>`, so
-        # dropping the `<target>::` prefix yields the `-XCTest` selector. With no
-        # filters the runner selects `All`, matching a plain full-bundle run.
         case_filters = (ctx.get("test") or {}).get("filters") or []
         selector_prefix = ctx["label"]["id"] + "::"
         selectors = []
@@ -6541,6 +6537,9 @@ def _apple_test_bundle_impl(ctx):
                 selectors.append(case_filter[len(selector_prefix):])
             else:
                 selectors.append(case_filter)
+        for selector in selectors:
+            if selector in skipped_tests or selector.split("/", 1)[0] in skipped_tests:
+                fail("test selector `" + selector + "` is excluded by skipped_tests")
         xctest_spec = ",".join(selectors) if selectors else "All"
         # The XCTest host reports what it chooses to; the testing library's own
         # entry point reports through the event stream, which names every test
@@ -6561,7 +6560,7 @@ def _apple_test_bundle_impl(ctx):
             action_env["ONCE_TEST_LOG"] = log
             action_env["ONCE_TEST_NATIVE_RESULTS"] = native_results
         if platform == "macos" or platform == "macosx":
-            if host_application:
+            if xctestrun_file:
                 runner_argv = [runner_xcodebuild, "test-without-building", "-xctestrun", xctestrun_file, "-destination", "platform=macOS,arch=" + arch, "-parallel-testing-enabled", "NO"]
                 for skipped_test in skipped_tests:
                     runner_argv.append("-skip-testing:" + module_name + "/" + skipped_test)
@@ -6583,14 +6582,9 @@ def _apple_test_bundle_impl(ctx):
                     runner_argv.extend(["--filter", _apple_swift_testing_filter(selector)])
             else:
                 runner_argv = [runner_xcrun, "xctest"]
-                if skipped_tests:
-                    if selectors:
-                        for selector in selectors:
-                            if selector in skipped_tests or selector.split("/", 1)[0] in skipped_tests:
-                                fail("test selector `" + selector + "` is excluded by skipped_tests")
-                    else:
-                        runner_argv.extend(["-XCTestInvertScope", "YES"])
-                        xctest_spec = ",".join(skipped_tests)
+                if skipped_tests and not selectors:
+                    runner_argv.extend(["-XCTestInvertScope", "YES"])
+                    xctest_spec = ",".join(skipped_tests)
                 runner_argv.extend(["-XCTest", xctest_spec, test_bundle_path])
             runner_command = """cd {workspace}
 DYLD_LIBRARY_PATH={usr_lib}${{DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}} DYLD_FALLBACK_FRAMEWORK_PATH={frameworks}${{DYLD_FALLBACK_FRAMEWORK_PATH:+:$DYLD_FALLBACK_FRAMEWORK_PATH}} {command}""".format(

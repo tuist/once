@@ -76,9 +76,11 @@ symbols; catalogs inside localized variant directories do not generate symbols.
 AppleScript resources compile from `.applescript` into `.scpt` files with
 `osacompile` on macOS. Scripting dictionaries remain `.sdef` bundle resources.
 
-Application-hosted macOS tests run through Xcode's `test-without-building`
-runner, using the application and test bundle built by Once. Hostless tests
-continue to use XCTest or the Swift Testing runner directly.
+macOS XCTest bundles run through Xcode's `test-without-building` harness,
+with or without an application host, using the binaries built by Once.
+Swift Testing-only bundles continue to use the structured event-stream runner.
+The generated test-run configuration is cacheable and deterministic; test
+execution continues to run fresh.
 Test settings come from each scheme's default test plan, or its first plan
 when no default is marked. Alternative plans do not add exclusions or arguments.
 
@@ -88,7 +90,7 @@ this role with first-party executables. Swift package `process` resources
 flatten ordinary files while preserving localized and compiler-managed bundles;
 `copy` directories retain their hierarchy. Xcode imports accept `build_settings`
 overrides after native settings and preserve only test exclusions shared by all
-scheme references to a bundle. Completed successful XCTest inventories supersede
+scheme references to a bundle. Completed passing or failed XCTest inventories supersede
 conditional source declarations only when their totals match observed cases.
 
 On macOS, an explicit `CODE_SIGNING_ALLOWED=NO` omits signing entitlements and

@@ -153,19 +153,29 @@ fn complete_xctest_results_override_conditional_source_declarations() {
         ),
         (
             "Test Suite 'All tests' failed at now.\n Executed 1 test, with 1 failure\n",
-            2,
+            1,
+        ),
+        (
+            "Test Suite 'Selected tests' failed at now.\n Executed 1 test, with 1 failure\n",
+            1,
         ),
         ("", 2),
     ] {
+        let status = if summary.contains("failed at") {
+            "failed"
+        } else {
+            "passed"
+        };
         std::fs::write(
             dir.path().join("run.log"),
-            format!("Test Case '-[Bundle.Suite testRuns]' passed (0.125 seconds).\n{summary}"),
+            format!("Test Case '-[Bundle.Suite testRuns]' {status} (0.125 seconds).\n{summary}"),
         )
         .unwrap();
         let output = std::process::Command::new("sh")
             .arg("-c")
             .arg(format!(
-                "status=0\nlog=run.log\nnative_results=native.txt\nresults=results.json\n{script}"
+                "status={}\nlog=run.log\nnative_results=native.txt\nresults=results.json\n{script}",
+                u8::from(status == "failed")
             ))
             .current_dir(dir.path())
             .output()
@@ -175,7 +185,11 @@ fn complete_xctest_results_override_conditional_source_declarations() {
             serde_json::from_slice(&std::fs::read(dir.path().join("results.json")).unwrap())
                 .unwrap();
         assert_eq!(results["summary"]["total"], total, "{results}");
-        assert_eq!(results["summary"]["passed"], 1);
+        assert_eq!(results["status"], status);
+        assert_eq!(results["summary"]["passed"], u8::from(status == "passed"));
+        assert_eq!(results["summary"]["failed"], u8::from(status == "failed"));
+        assert_eq!(results["cases"][0]["status"], status);
+        once_core::validate_test_results(&results, "tests/Bundle").unwrap();
         if total == 2 {
             assert_eq!(results["cases"][1]["status"], "unknown");
         }
