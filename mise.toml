@@ -1,5 +1,5 @@
 [tools]
-cmake = "4.4.4"
+cmake = "4.5.0"
 ninja = "1.13.2"
 erlang = "29.1.1"
 elixir = "1.20.4"
