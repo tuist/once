@@ -42,6 +42,7 @@ fn aggregate(target: &str, batches: &[&TestBatch], runs: &BTreeMap<&str, &Value>
     let mut native_results = BTreeSet::new();
     let mut coverage = BTreeSet::new();
     let mut all_passed = true;
+    let mut selection_supported = true;
     let mut summary_only = [0_u64; 5];
 
     for batch in batches {
@@ -67,6 +68,8 @@ fn aggregate(target: &str, batches: &[&TestBatch], runs: &BTreeMap<&str, &Value>
         once_core::validate_test_results_for_units(result, target, &batch.test_filters)
             .with_context(|| format!("validating result for test batch `{}`", batch.id))?;
         all_passed &= result.get("status").and_then(Value::as_str) == Some("passed");
+        selection_supported &=
+            result.get("selection_supported").and_then(Value::as_bool) != Some(false);
         if runner.is_none() {
             runner = result.get("runner").cloned();
         }
@@ -123,6 +126,7 @@ fn aggregate(target: &str, batches: &[&TestBatch], runs: &BTreeMap<&str, &Value>
         "schema": TEST_RESULTS_SCHEMA,
         "target": target,
         "runner": runner.unwrap_or_else(|| json!({"type": "unknown", "metadata": {}})),
+        "selection_supported": selection_supported,
         "status": status,
         "summary": {
             "total": u64::try_from(cases.len())?.checked_add(summary_only[0])

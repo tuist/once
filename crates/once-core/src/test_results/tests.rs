@@ -30,11 +30,18 @@ fn valid_results() -> Value {
 #[test]
 fn accepts_the_generic_normalized_shape() {
     validate_test_results(&valid_results(), "tests/example").unwrap();
+    let mut results = valid_results();
+    for supported in [true, false] {
+        results["selection_supported"] = json!(supported);
+        validate_test_results(&results, "tests/example").unwrap();
+    }
+    results["selection_supported"] = json!("false");
+    assert!(validate_test_results(&results, "tests/example").is_err());
 }
 
 #[test]
 fn requires_every_requested_test_unit() {
-    let results = valid_results();
+    let mut results = valid_results();
     validate_test_results_for_units(
         &results,
         "tests/example",
@@ -52,6 +59,17 @@ fn requires_every_requested_test_unit() {
     assert!(error
         .to_string()
         .contains("missing requested test unit `tests/example::missing`"));
+    results["selection_supported"] = json!(false);
+    validate_test_results_for_units(&results, "tests/example", &[]).unwrap();
+    let error = validate_test_results_for_units(
+        &results,
+        "tests/example",
+        &["tests/example::case-name".to_string()],
+    )
+    .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("do not support exact test-unit selection"));
 }
 
 #[test]

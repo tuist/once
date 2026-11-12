@@ -932,6 +932,34 @@ PY
     The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'tests/string.test.js'
   End
 
+  Describe 'JavaScript duplicate test names'
+    Parameters
+      vitest
+      jest
+    End
+
+    It "keeps $1 as a cacheable whole target without exact selection"
+      "create_$1_workspace"
+      cat >> "$WORKSPACE/tests/math.test.js" <<'JS'
+test("duplicate", () => expect(1).toBe(1));
+test("duplicate", () => expect(2).toBe(2));
+JS
+      once --format json test tests >/dev/null
+      once --format json query test-manifest tests > "$WORKSPACE/first-manifest.json"
+      once --format json test --jobs 2 tests > "$WORKSPACE/cached.json"
+      once --format json query test-manifest tests > "$WORKSPACE/manifest.json"
+
+      When call /bin/sh -ec '
+        cmp "$1/first-manifest.json" "$1/manifest.json"
+        jq -e '\''.listing_supported == false and .case_filtering == "unsupported" and .sharding == {supported:false,granularity:"target"} and [.units[].id] == ["tests::suite"]'\'' "$1/manifest.json"
+        jq -e '\''(.plan.batches | length == 1) and (.runs | length == 1) and all(.runs[]; .success and .record.cache == "hit")'\'' "$1/cached.json"
+      ' sh "$WORKSPACE"
+      The status should be success
+      The stdout should include 'true'
+      The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include '"selection_supported":false'
+    End
+  End
+
   It 'discovers and runs one stable Rust test unit'
     create_multi_rust_test_workspace
     once --format json test hello_tests >/dev/null

@@ -1611,12 +1611,22 @@ checkout location in the action identity. Explicit `env` values take precedence
 over inherited values and these defaults.
 
 The built-in Vitest and Jest kinds default to `unit = "case"`, which requires
-unique file and full-name identities for exact selection. With the explicit
-`unit = "suite"` opt-in, each target reports one `<target>::suite` result and
-retains all assertions, including duplicate names, in its native JSON output.
-Native assertion counts are exposed in `runner.metadata.native_summary`.
-Suite mode declares listing and sharding unsupported, filtering as
-`unsupported`, and granularity as `target`; native failures fail the suite.
+unique file and full-name identities for exact selection. An unfiltered run
+with duplicate identities falls back to one `<target>::suite` result and
+retains all assertions in its native JSON output. Explicit `unit = "suite"`
+always uses this whole-target mode. Native assertion counts are exposed in
+`runner.metadata.native_summary`. Suite mode disables listing, filtering, and
+sharding; native failures still fail the suite. Explicitly filtered runs reject
+duplicate identities rather than silently broadening the selection.
+
+Normalized results may set the optional boolean `selection_supported` to
+`false` when the observed inventory cannot be selected exactly. Manifest
+derivation then restricts listing and sharding to unsupported, filtering to
+`unsupported`, and granularity to `target`. The scheduler keeps the entire
+target as one batch. Omission preserves the provider's declared capabilities;
+`true` cannot enable capabilities the provider does not declare. This
+restriction is retained with cached results and participates in manifest
+identity, without changing action identity based on test output.
 
 The built-in pytest kind uses native directory collection restricted to its
 declared source files. Native ignore rules run before exact case selection,

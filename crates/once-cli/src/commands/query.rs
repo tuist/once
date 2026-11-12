@@ -984,18 +984,18 @@ fn derive_test_manifest_for_target(
         .and_then(|info| info.pointer("/runner/type"))
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
-    let listing_supported = test_info
+    let mut listing_supported = test_info
         .as_ref()
         .and_then(|info| info.pointer("/listing/supported"))
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    let case_filtering = test_info
+    let mut case_filtering = test_info
         .as_ref()
         .and_then(|info| info.pointer("/filtering/case_filtering"))
         .and_then(serde_json::Value::as_str)
         .unwrap_or("unsupported")
         .to_string();
-    let sharding = once_core::TestSharding {
+    let mut sharding = once_core::TestSharding {
         supported: test_info
             .as_ref()
             .and_then(|info| info.pointer("/sharding/supported"))
@@ -1011,6 +1011,15 @@ fn derive_test_manifest_for_target(
     let path = workspace.join(test_results_path(target_id)?);
     let (source, units) = if path.is_file() {
         let results = test_results_value(workspace, target_id)?;
+        if results
+            .get("selection_supported")
+            .and_then(serde_json::Value::as_bool)
+            == Some(false)
+        {
+            listing_supported = false;
+            case_filtering = "unsupported".to_string();
+            sharding = once_core::TestSharding::default();
+        }
         (
             "normalized_results",
             test_units_from_results(target_id, &results)?,

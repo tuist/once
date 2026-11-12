@@ -156,6 +156,7 @@ fs.writeFileSync(output, JSON.stringify({success: !failed, testResults: [{name: 
   {title: 'same', fullName: 'same', status: failed ? 'failed' : 'passed', failureMessages: failed ? ['intentional failure'] : []},
   {title: 'later', fullName: 'later', status: 'pending'}
 ]}]}))
+fs.writeSync(1, 'x'.repeat(1100000))
 process.exit(failed ? 1 : 0)
 ").unwrap();
     let results = dir.path().join("results.json");
@@ -185,11 +186,8 @@ process.exit(failed ? 1 : 0)
                     .arg(&results)
                     .env("FAIL", failed.to_string())
                     .current_dir(dir.path()));
-                assert_eq!(
-                    output.status.success(),
-                    unit == "suite" && !failed,
-                    "{output:?}"
-                );
+                assert_eq!(output.status.success(), !failed);
+                assert_eq!(output.stdout.len(), 1_100_000);
                 let report = read_report(&results);
                 let native_report = read_report(&native);
                 let assertions = native_report["testResults"][0]["assertionResults"]
@@ -201,37 +199,60 @@ process.exit(failed ? 1 : 0)
                     assertions[1]["status"],
                     if failed { "failed" } else { "passed" }
                 );
-                if unit == "suite" {
-                    assert_eq!(report["summary"]["total"], 1);
-                    assert_eq!(report["cases"][0]["id"], "pkg/tests::suite");
-                    assert_eq!(
-                        report["cases"][0]["status"],
-                        if failed { "failed" } else { "passed" }
-                    );
-                    assert_eq!(
-                        report["runner"]["metadata"]["native_summary"],
-                        serde_json::json!({"total":3,"passed":2-u8::from(failed),"failed":u8::from(failed),"skipped":1})
-                    );
-                } else {
-                    assert!(String::from_utf8_lossy(&output.stderr)
-                        .contains("duplicate full test names cannot be filtered exactly"));
-                }
+                once_core::validate_test_results(&report, "pkg/tests").unwrap();
+                assert_eq!(report["selection_supported"], false);
+                assert_eq!(report["summary"]["total"], 1);
+                assert_eq!(report["cases"][0]["id"], "pkg/tests::suite");
+                assert_eq!(
+                    report["cases"][0]["status"],
+                    if failed { "failed" } else { "passed" }
+                );
+                assert_eq!(
+                    report["runner"]["metadata"]["native_summary"],
+                    serde_json::json!({"total":3,"passed":2-u8::from(failed),"failed":u8::from(failed),"skipped":1})
+                );
             }
         }
-        let output = run(Command::new("node").arg(&adapter).args([
-            "--once-unit",
-            "suite",
-            "--once-test-unit",
-            "pkg/tests::suite",
-        ]));
-        assert!(!output.status.success());
+        let output = run(Command::new("node")
+            .arg(&adapter)
+            .args([
+                "--once-target",
+                "pkg/tests",
+                "--once-runner-type",
+                runner_type,
+            ])
+            .args(["--once-runner-via-node", "true"])
+            .arg("--once-runner")
+            .arg(&runner)
+            .arg("--once-native-results")
+            .arg(&native)
+            .arg("--once-results")
+            .arg(&results)
+            .args([
+                "--once-test-unit",
+                "pkg/tests::%5B%22duplicate.test.js%22%2C%22same%22%5D",
+            ])
+            .current_dir(dir.path()));
+        assert_eq!(output.status.code(), Some(2));
         assert!(String::from_utf8_lossy(&output.stderr)
-            .contains("suite units do not support test-unit filtering"));
+            .contains("selected full test names are ambiguous; run the whole target"));
     }
 }
 
 #[test]
 fn javascript_suite_units_declare_unsupported_case_selection() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let adapter = dir.path().join("adapter.mjs");
+    std::fs::write(&adapter, runner_source("_javascript_test_adapter")).unwrap();
+    let output = run(Command::new("node").arg(&adapter).args([
+        "--once-unit",
+        "suite",
+        "--once-test-unit",
+        "pkg/tests::suite",
+    ]));
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("suite units do not support test-unit filtering"));
     for runner_type in ["vitest", "jest"] {
         let source = format!(
             r#"{}

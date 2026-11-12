@@ -15,6 +15,12 @@ pub fn validate_test_results(value: &Value, expected_target: &str) -> Result<()>
     )?;
     exact_string(root, "target", "normalized test results", expected_target)?;
     string(root, "status", "normalized test results")?;
+    if let Some(supported) = root.get("selection_supported") {
+        ensure!(
+            supported.is_boolean(),
+            "normalized test results selection_supported must be a boolean"
+        );
+    }
 
     let runner = nested_object(root, "runner", "normalized test results")?;
     string(runner, "type", "normalized test results runner")?;
@@ -52,6 +58,11 @@ pub fn validate_test_results_for_units(
     expected_units: &[String],
 ) -> Result<()> {
     validate_test_results(value, expected_target)?;
+    ensure!(
+        expected_units.is_empty()
+            || value.get("selection_supported").and_then(Value::as_bool) != Some(false),
+        "normalized test results do not support exact test-unit selection"
+    );
     let cases = value["cases"]
         .as_array()
         .expect("validated normalized test cases");

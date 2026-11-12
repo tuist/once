@@ -155,9 +155,8 @@ function main() {
   const command = options.runner_via_node === "true" ? process.execPath : options.runner
   const args = options.runner_via_node === "true" ? [options.runner, ...runnerArgs] : runnerArgs
   const started = performance.now()
-  const execution = spawnSync(command, args, { encoding: "utf8", env: process.env })
-  if (execution.stdout) process.stdout.write(execution.stdout)
-  if (execution.stderr) process.stderr.write(execution.stderr)
+  const execution = spawnSync(command, args, { stdio: "inherit", env: process.env })
+  if (execution.error) throw execution.error
   const exitCode = execution.status ?? 1
   let native = { testResults: [] }
   if (fs.existsSync(options.native_results)) {
@@ -190,19 +189,13 @@ function main() {
       })
     }
   }
-  if (duplicates) {
-    console.error("duplicate full test names cannot be filtered exactly")
-    cases.push({
-      id: options.target + "::once-duplicate-identifiers",
-      name: "duplicate full test names cannot be filtered exactly",
-      suite: options.target,
-      status: "failed",
-      attempts: [{ status: "failed" }],
-      runner_metadata: {},
-    })
+  if (duplicates && units.length) {
+    throw new Error("selected full test names are ambiguous; run the whole target without test-unit filters")
   }
+  const suiteUnit = options.unit === "suite" || duplicates
   const metadata = {}
-  if (options.unit === "suite") {
+  if (suiteUnit) {
+    cases.length = 0
     const nativeSummary = { total: 0, passed: 0, failed: 0, skipped: 0 }
     for (const suite of native.testResults || []) {
       for (const assertion of suite.assertionResults || []) {
@@ -214,6 +207,7 @@ function main() {
     const attempt = { status, duration_ms: Math.round(performance.now() - started) }
     if (status === "failed") attempt.failure = { message: "Native test suite failed; see the native results and runner log" }
     metadata.unit = "suite"
+    if (duplicates) metadata.selection_reason = "duplicate full test names cannot be filtered exactly"
     metadata.native_summary = nativeSummary
     cases.push({
       id: options.target + "::suite",
@@ -227,11 +221,12 @@ function main() {
   const passed = cases.filter(item => item.status === "passed").length
   const failed = cases.filter(item => item.status === "failed").length
   const skipped = cases.filter(item => item.status === "skipped").length
-  const status = options.unit === "suite" ? cases[0].status : exitCode === 0 && !duplicates ? "passed" : "failed"
+  const status = suiteUnit ? cases[0].status : exitCode === 0 ? "passed" : "failed"
   const normalized = {
     schema: "once.test_results.v1",
     target: options.target,
     runner: { type: options.runner_type, metadata },
+    selection_supported: !suiteUnit,
     status,
     summary: { total: cases.length, passed, failed, skipped, flaky: 0 },
     cases,
@@ -333,7 +328,7 @@ def _javascript_test_attrs(runner, display_name):
         attr("args", "list<string>", default = "[]", docs = "Additional runner arguments.", configurable = False),
         attr("env", "map<string,string>", default = "{}", docs = "Environment variables for test execution.", configurable = True),
         attr("env_inherit", "list<string>", default = "[]", docs = "Host environment variables inherited by name.", configurable = False),
-        attr("unit", "string", default = "\"case\"", docs = "Result unit: `case` requires unique file/full-name identities; `suite` retains the complete native report as one target-level unit without case listing, filtering, or sharding.", configurable = False, allowed_values = ["case", "suite"]),
+        attr("unit", "string", default = "\"case\"", docs = "Result unit: `case` uses unique file/full-name identities, falling back to a whole-target suite when an unfiltered run contains duplicates; `suite` always retains the complete native report as one target-level unit without case listing, filtering, or sharding.", configurable = False, allowed_values = ["case", "suite"]),
         attr("batching", "string", default = "\"file\"", docs = "Automatic batch granularity: `file`, `case`, or `target`.", configurable = False),
         attr("labels", "list<string>", default = "[]", docs = "Labels exposed through test discovery."),
         attr("timeout_ms", "int", docs = "Optional test timeout in milliseconds.", configurable = False),

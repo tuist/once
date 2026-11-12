@@ -50,13 +50,15 @@ Once disables Jest's mutable local cache inside the action because installed
 packages are declared inputs. Once's action cache reuses successful test
 results when those inputs have not changed.
 
-For suites with duplicate full test names, explicitly set `unit = "suite"`.
-Once then records one target-owned suite unit and retains every assertion in
-the native JSON report, including duplicate names. Native assertion totals are
-also available in `runner.metadata.native_summary`. Any native failure fails
-the suite. Case listing, exact unit filtering, and automatic sharding are
-unsupported in this mode; `batching` does not subdivide it. The default
-`unit = "case"` continues to reject ambiguous names rather than inventing IDs.
+When an unfiltered run contains duplicate file/full-name identities, Once
+automatically reports one target-owned suite unit instead of failing the run
+or inventing case identities. Every assertion remains in the native JSON
+report, and assertion totals are available in `runner.metadata.native_summary`.
+Any native failure still fails the suite. The discovered manifest disables
+case listing, exact selection, and sharding, so subsequent runs remain whole
+targets and successful results stay cacheable. An explicitly filtered run
+still rejects duplicate identities. Set `unit = "suite"` to always use this
+whole-target reporting mode, even when names are unique.
 
 ## Attributes
 
@@ -70,7 +72,7 @@ unsupported in this mode; `batching` does not subdivide it. The default
 | `args` | list&lt;string&gt; | no | `[]` | Additional Jest arguments |
 | `env` | map&lt;string, string&gt; | no | `{}` | Explicit test environment variables |
 | `env_inherit` | list&lt;string&gt; | no | `[]` | Host environment variables inherited by name |
-| `unit` | string | no | `case` | `case` for unique case identities; `suite` for one complete target unit without case selection or sharding |
+| `unit` | string | no | `case` | `case` for unique case identities with automatic whole-target fallback on duplicates; `suite` to always disable case selection and sharding |
 | `batching` | string | no | `file` | Automatic granularity: `file`, `case`, or `target` |
 | `labels` | list&lt;string&gt; | no | `[]` | Labels exposed through test discovery |
 | `timeout_ms` | int | no | empty | Optional timeout in milliseconds |
