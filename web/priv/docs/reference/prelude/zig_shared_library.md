@@ -55,6 +55,7 @@ unknown keys fail validation.
 | `emit_asm` | bool | no | `false` | Emit assembly output |
 | `emit_llvm_ir` | bool | no | `false` | Emit compiler intermediate representation output |
 | `emit_llvm_bc` | bool | no | `false` | Emit compiler bitcode output |
+| `emit_docs` | bool | no | `true` | Generate documentation alongside compilation; disable for library-only builds |
 | `shared_lib_name` | string | no | platform name | Exact shared library output file name |
 | `android_abi` | string | no | empty | Android [Application Binary Interface](https://developer.android.com/ndk/guides/abis) directory for packaging |
 | `output_name` | string | no | target name | Output file name without platform extension |

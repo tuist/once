@@ -55,6 +55,7 @@ unknown keys fail validation.
 | `emit_asm` | bool | no | `false` | Emit assembly output |
 | `emit_llvm_ir` | bool | no | `false` | Emit compiler intermediate representation output |
 | `emit_llvm_bc` | bool | no | `false` | Emit compiler bitcode output |
+| `emit_docs` | bool | no | `true` | Generate documentation alongside compilation; disable for library-only builds |
 | `emit_bin` | bool | no | `true` | Emit the static library. Disable only when another emitted output is enabled |
 | `output_name` | string | no | target name | Output file name without platform extension |
 

@@ -299,8 +299,8 @@ defmodule OnceSiteWeb.Docs.Sidebar do
                 ~w(cargo_workspace cargo_dependencies rust_library rust_mobile_library
                 rust_binary rust_test rust_crate rust_proc_macro)
               ),
-              target_group("Zig", ~w(zig_dependencies zig_package zig_library zig_c_library
-                zig_binary zig_static_library zig_shared_library zig_test zig_configure
+              target_group("Zig", ~w(zig_dependencies zig_package zig_library zig_generated_library
+                zig_c_library zig_binary zig_static_library zig_shared_library zig_test zig_configure
                 zig_configure_binary zig_configure_test))
             ]
       },

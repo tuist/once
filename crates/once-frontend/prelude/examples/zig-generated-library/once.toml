@@ -1,0 +1,39 @@
+[[target]]
+name = "generator"
+kind = "zig_binary"
+srcs = ["generator.zig"]
+
+[target.attrs]
+main = "generator.zig"
+strip = true
+emit_docs = false
+
+[[target]]
+name = "generated"
+kind = "zig_generated_library"
+srcs = ["module.txt"]
+deps = ["base"]
+
+[target.dependencies]
+generator = ["generator"]
+
+[target.attrs]
+args = ["{output}", "module.txt"]
+
+[[target]]
+name = "base"
+kind = "zig_library"
+srcs = ["base.zig"]
+
+[target.attrs]
+main = "base.zig"
+
+[[target]]
+name = "check"
+kind = "zig_test"
+srcs = ["check.zig"]
+deps = ["generated"]
+
+[target.attrs]
+main = "check.zig"
+strip = true

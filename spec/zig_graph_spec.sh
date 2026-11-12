@@ -1,6 +1,9 @@
 #shellcheck shell=bash
 # End-to-end specs for C and Zig graph target kinds.
 
+SPEC_ZIG="${SPEC_ZIG:-$(mise which zig 2>/dev/null || true)}"
+export SPEC_ZIG
+
 Describe 'C and Zig graph target kinds'
   BeforeEach 'setup_workspace'
   AfterEach 'cleanup_workspace'
@@ -893,5 +896,38 @@ SH
     The contents of file "$WORKSPACE/tests_query.json" should include '"kind":"zig_test"'
     The contents of file "$WORKSPACE/tests_query.json" should include '"runner":"zig_test"'
     The contents of file "$WORKSPACE/tests_query.json" should include '"labels":["module"]'
+  End
+
+  real_zig_unavailable() {
+    [ ! -x "$SPEC_ZIG" ]
+  }
+
+  exercise_generated_zig_module() {
+    example="$REPO_ROOT/crates/once-frontend/prelude/examples/zig-generated-library"
+    cp "$example/"* "$WORKSPACE/"
+    awk -v zig="$SPEC_ZIG" '{print; if ($0 == "strip = true") print "zig = \"" zig "\""}' "$example/once.toml" > "$WORKSPACE/once.toml"
+    once --format json test check > /dev/null || return
+    once --format json build generated > "$WORKSPACE/warm.json" || return
+    printf '%s\n' 'pub const answer: u32 = @import("base").answer + 9;' > "$WORKSPACE/module.txt"
+    if once --format json test check > "$WORKSPACE/changed.json" 2> "$WORKSPACE/changed.stderr"; then
+      return 1
+    fi
+    cp "$WORKSPACE/.once/out/check/test/test_results.json" "$WORKSPACE/changed-results.json"
+    printf '%s\n' 'pub const answer: u32 = 28;' > "$WORKSPACE/base.zig"
+    once --format json test check > /dev/null || return
+    rm "$WORKSPACE/.once/out/generated/generated.zig"
+    once --format json build generated > /dev/null
+  }
+
+  It 'compiles generated modules, invalidates changed inputs, and restores cached sources'
+    Skip if 'Zig toolchain unavailable' real_zig_unavailable
+
+    When call exercise_generated_zig_module
+    The status should be success
+    The contents of file "$WORKSPACE/warm.json" should include '"cache":"hit"'
+    The contents of file "$WORKSPACE/changed-results.json" should include '"status":"failed"'
+    The contents of file "$WORKSPACE/.once/out/check/test/test_results.json" should include '"status":"passed"'
+    The contents of file "$WORKSPACE/.once/out/generated/generated.zig" should include '+ 9'
+    The path "$WORKSPACE/.once/out/generator/generator.docs" should not be exist
   End
 End
