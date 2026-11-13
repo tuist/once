@@ -87,6 +87,83 @@ fn only_attempt<'a>(report: &'a serde_json::Value, name: &str) -> &'a serde_json
 }
 
 #[test]
+fn shellspec_reports_escape_strings_and_preserve_duplicate_case_identity() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let spec = "spec/quoted\"\\\t_spec.sh";
+    std::fs::create_dir(dir.path().join("spec")).unwrap();
+    let name = "does not matches contains \".dot\" file\\path\t\r\u{0001}";
+    std::fs::write(
+        dir.path().join(spec),
+        format!("Describe 'files'\n  It '{name}'\n  It '{name}'\nEnd\n"),
+    )
+    .unwrap();
+    write_executable(
+        &dir.path().join("shellspec"),
+        "#!/bin/sh\nexit \"${SHELLSPEC_EXIT:-0}\"\n",
+    );
+    let target = "tests\"\\\t\n";
+    let build_dir = "out\"\\\t\n";
+    let source = format!(
+        r#"{}
+def host_which(name):
+    return "/usr/bin/" + name
+ctx = {{
+    "label": {{"id": {target}, "name": "tests", "package": ""}},
+    "attr": {{"shellspec": "./shellspec"}},
+    "srcs": ["spec/**/*_spec.sh"],
+    "build_dir": {build_dir},
+    "capability": "test",
+}}
+result = repr(_shellspec_test_impl(ctx))
+"#,
+        all_prelude_source(),
+        target = serde_json::to_string(target).unwrap(),
+        build_dir = serde_json::to_string(build_dir).unwrap(),
+    );
+    let mut reports = Vec::new();
+    for exit in [0, 0, 7] {
+        let store =
+            super::AnalysisStore::new(dir.path().to_path_buf(), String::new(), "out".into());
+        let (store, result) =
+            super::with_active_store(store, || super::eval_prelude_source_to_repr(source.clone()));
+        result.unwrap();
+        let action = super::action_by_identifier(&store, &format!("shellspec_test:{target}"));
+        std::fs::create_dir_all(dir.path().join(build_dir).join("test")).unwrap();
+        let output = run(Command::new(&action.argv[0])
+            .args(&action.argv[1..])
+            .env("HOME", dir.path().join(build_dir).join("test/home"))
+            .env("SHELLSPEC_EXIT", exit.to_string())
+            .current_dir(dir.path()));
+        assert_eq!(output.status.code(), Some(exit), "{output:?}");
+        reports.push(read_report(
+            &dir.path().join(build_dir).join("test/test_results.json"),
+        ));
+    }
+    assert_eq!(reports[0], reports[1]);
+    assert_eq!(reports[0]["target"], target);
+    assert_eq!(
+        reports[0]["artifacts"]["logs"][0],
+        format!("{build_dir}/test/shellspec.log")
+    );
+    assert_eq!(
+        reports[0]["artifacts"]["native_results"][0],
+        format!("{build_dir}/test/native_results.txt")
+    );
+    assert_eq!(reports[2]["status"], "failed");
+    let cases = reports[0]["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 2);
+    for (index, case) in cases.iter().enumerate() {
+        assert_eq!(case["name"], name);
+        assert_eq!(case["file"], spec);
+        assert_eq!(case["suite"], "quoted\"\\\t");
+        assert_eq!(case["status"], "passed");
+        assert_eq!(case["id"], format!("{spec}:{}", index + 2));
+        assert_eq!(reports[2]["cases"][index]["id"], case["id"]);
+        assert_eq!(reports[2]["cases"][index]["status"], "unknown");
+    }
+}
+
+#[test]
 fn javascript_adapter_reports_assertion_durations_and_failure_messages() {
     let dir = tempfile::TempDir::new().unwrap();
     let adapter = dir.path().join("adapter.mjs");

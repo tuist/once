@@ -1438,42 +1438,17 @@ set +e
 status=$?
 set -e
 cp "$log" "$native_results"
-total=0
-cases_file="{test_dir}/cases.jsonl"
-: > "$cases_file"
-for spec in {specs}; do
-  [ -f "$spec" ] || continue
-  suite=${{spec#spec/}}
-  suite=${{suite%_spec.sh}}
-  while IFS= read -r line; do
-    case "$line" in
-      *"It '"*)
-        name=${{line#*"It '"}}
-        name=${{name%%"'"*}}
-        total=$((total + 1))
-        case_id="$spec::$name"
-        if [ "$status" -eq 0 ]; then case_status=passed; else case_status=unknown; fi
-        if [ "$total" -gt 1 ]; then printf ',\n' >> "$cases_file"; fi
-        printf '{{"id":"%s","name":"%s","suite":"%s","file":"%s","status":"%s","attempts":[{{"status":"%s"}}],"runner_metadata":{{}}}}' "$case_id" "$name" "$suite" "$spec" "$case_status" "$case_status" >> "$cases_file"
-        ;;
-    esac
-  done < "$spec"
-done
-if [ "$status" -eq 0 ]; then run_status=passed; failed=0; passed=$total; else run_status=failed; failed=1; passed=0; fi
-{{
-  printf '{{"schema":"once.test_results.v1","target":"%s","runner":{{"type":"shellspec","metadata":{{}}}},"status":"%s","summary":{{"total":%s,"passed":%s,"failed":%s,"skipped":0,"flaky":0}},"cases":[' "{target}" "$run_status" "$total" "$passed" "$failed"
-  cat "$cases_file"
-  printf '],"artifacts":{{"logs":["%s"],"native_results":["%s"]}}}}\n' "$log" "$native_results"
-}} > "$results"
+ONCE_TARGET={target} ONCE_LOG="$log" ONCE_NATIVE_RESULTS="$native_results" ONCE_STATUS="$status" {awk} {reporter} {specs} < /dev/null > "$results"
 exit "$status"
 """.format(
-        test_dir = test_dir,
         log = _shell_literal(log),
         results = _shell_literal(results),
         native_results = _shell_literal(native_results),
         command = _shell_words(runner_args),
         specs = _shell_words(spec_srcs),
-        target = ctx["label"]["id"],
+        target = _shell_literal(ctx["label"]["id"]),
+        awk = _shell_literal(host_which("awk")),
+        reporter = _shell_literal(_shellspec_test_results_awk()),
     )
     prepare_path(test_dir, kind = "directory", identifier = "apple_shellspec_test_dir:" + ctx["label"]["id"])
     run_action(
@@ -1487,6 +1462,40 @@ exit "$status"
         identifier = "shellspec_test:" + ctx["label"]["id"],
     )
     return provider
+
+def _shellspec_test_results_awk():
+    return """
+function quoted(value, result, i, char) {
+    result = "\\\""
+    for (i = 1; i <= length(value); i++) {
+        char = substr(value, i, 1)
+        if (char in escaped) result = result escaped[char]
+        else result = result char
+    }
+    return result "\\\""
+}
+BEGIN {
+    slash = sprintf("%c", 92)
+    for (i = 0; i < 32; i++) escaped[sprintf("%c", i)] = slash sprintf("u%04x", i)
+    escaped[slash] = slash slash
+    escaped["\\\""] = slash "\\\""
+    success = ENVIRON["ONCE_STATUS"] == "0"
+    status = success ? "passed" : "unknown"
+    printf "{\\\"schema\\\":\\\"once.test_results.v1\\\",\\\"target\\\":%s,\\\"runner\\\":{\\\"type\\\":\\\"shellspec\\\",\\\"metadata\\\":{}},\\\"cases\\\":[", quoted(ENVIRON["ONCE_TARGET"])
+}
+index($0, "It '") {
+    name = substr($0, index($0, "It '") + 4)
+    sub(/'.*$/, "", name)
+    suite = FILENAME
+    sub(/^spec\\//, "", suite)
+    sub(/_spec.sh$/, "", suite)
+    if (total++) printf ",\\n"
+    printf "{\\\"id\\\":%s,\\\"name\\\":%s,\\\"suite\\\":%s,\\\"file\\\":%s,\\\"status\\\":%s,\\\"attempts\\\":[{\\\"status\\\":%s}],\\\"runner_metadata\\\":{}}", quoted(FILENAME ":" FNR), quoted(name), quoted(suite), quoted(FILENAME), quoted(status), quoted(status)
+}
+END {
+    printf "],\\\"status\\\":%s,\\\"summary\\\":{\\\"total\\\":%d,\\\"passed\\\":%d,\\\"failed\\\":%d,\\\"skipped\\\":0,\\\"flaky\\\":0},\\\"artifacts\\\":{\\\"logs\\\":[%s],\\\"native_results\\\":[%s]}}\\n", quoted(success ? "passed" : "failed"), total, success ? total : 0, success ? 0 : 1, quoted(ENVIRON["ONCE_LOG"]), quoted(ENVIRON["ONCE_NATIVE_RESULTS"])
+}
+"""
 
 def _apple_test_source_cases_awk():
     return """

@@ -1008,7 +1008,7 @@ JS
     create_shellspec_test_workspace
     once --format json test cli_e2e >/dev/null
 
-    When call once --format json test cli_e2e --test-unit 'spec/cli_surface_spec.sh::lists commands'
+    When call once --format json test cli_e2e --test-unit 'spec/cli_surface_spec.sh:8'
     The status should be failure
     The stderr should include '"schema":"once.error.v1"'
     The stderr should include 'does not support explicit test-unit filtering'
@@ -1100,8 +1100,10 @@ JS
     The stdout should include '"schema":"once.test_results.v1"'
     The stdout should include '"target":"cli_e2e"'
     The stdout should include '"status":"passed"'
-    The stdout should include 'spec/cli_surface_spec.sh::lists commands'
-    The stdout should include 'spec/graph_query_spec.sh::lists declared targets'
+    The stdout should include '"id":"spec/cli_surface_spec.sh:8"'
+    The stdout should include '"name":"lists commands"'
+    The stdout should include '"id":"spec/graph_query_spec.sh:8"'
+    The stdout should include '"name":"lists declared targets"'
   End
 
   It 'queries summarized shellspec test results without case records'
@@ -1114,6 +1116,6 @@ JS
     The stdout should include '"source_schema":"once.test_results.v1"'
     The stdout should include '"target":"cli_e2e"'
     The stdout should include '"status":"passed"'
-    The stdout should not include 'spec/cli_surface_spec.sh::lists commands'
+    The stdout should not include 'spec/cli_surface_spec.sh:8'
   End
 End
