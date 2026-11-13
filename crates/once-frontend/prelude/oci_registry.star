@@ -385,7 +385,6 @@ oci_import = target_kind(
     ],
     providers = ["container_image", "oci_import"],
     capabilities = [capability("build", ["layout", "archive"])],
-    tools = [tool("tar", executables = ["tar"])],
     examples = [
         example(
             "oci-import",
