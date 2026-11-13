@@ -405,7 +405,6 @@ oci_load = target_kind(
     deps = [dep("image", ["container_image"], "The images whose archives are loaded, in order. List several to load a bundle with one command.")],
     providers = ["oci_load"],
     capabilities = [capability("build", []), capability("run", [])],
-    tools = [tool("docker", executables = ["docker"])],
     examples = [
         example(
             "oci-pull-and-extend",

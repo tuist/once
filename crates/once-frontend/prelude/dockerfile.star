@@ -1,5 +1,3 @@
-_DOCKERFILE_TOOL = tool("docker", executables = ["docker"])
-
 def _dockerfile_attr(ctx, name, default):
     return _configured_attr(ctx, name, default)
 
@@ -527,7 +525,6 @@ dockerfile_image = target_kind(
     ],
     providers = ["container_image", "dockerfile_image"],
     capabilities = [capability("build", ["archive", "metadata", "layer_cache", "layout", "plan"]), capability("lint", ["sarif", "results"])],
-    tools = [_DOCKERFILE_TOOL],
     examples = [
         example(
             "dockerfile-image-instructions",
