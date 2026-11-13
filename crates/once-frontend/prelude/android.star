@@ -2178,7 +2178,7 @@ def android_artifact_metadata_plan(ctx):
         "application_id": identity.split("name='", 1)[1].split("'", 1)[0],
         "version_code": identity.split("versionCode='", 1)[1].split("'", 1)[0],
         "version_name": spec["version_name"],
-        "minimum_sdk": [line.split("'", 2)[1] for line in badging.split("\n") if line.startswith("sdkVersion:")],
+        "minimum_sdk": [line.split("'", 2)[1] for line in badging.split("\n") if line.startswith("minSdkVersion:'") or line.startswith("sdkVersion:'")],
         "certificate_sha256": certificates,
         "signature_verified": len(certificates) > 0,
     }))

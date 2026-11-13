@@ -60,6 +60,7 @@ tools = pathlib.Path(os.environ['ANDROID_HOME']) / 'build-tools/35.0.0'
 subprocess.run([str(tools / 'apksigner'), 'verify', str(apk)], check=True, capture_output=True)
 assert metadata['application_id'] == 'dev.once.hello' and metadata['display_name'] == 'Once Hello'
 assert metadata['version_code'] == '1' and metadata['version_name'] == '1.0'
+assert metadata['minimum_sdk'] == ['23']
 assert metadata['signature_verified'] is True and metadata['certificate_sha256']
 assert first['automatic_publication'] is True
 shutil.rmtree(root / '.once/out')

@@ -70,7 +70,8 @@ android_artifact_metadata_plan({{"args": {{
 fn android_metadata_uses_the_default_label_and_the_densest_png_icon_within_one_mebibyte() {
     let store = android_plan(
         "package: name='dev.tuist.code' versionCode='7' versionName='0.1.0'\n\
-         sdkVersion:'26'\n\
+         minSdkVersion:'26'\n\
+         targetSdkVersion:'35'\n\
          application-label:'Tuist Code'\n\
          application-label-de:'Tuist Code (DE)'\n\
          application-icon-120:'res/drawable-ldpi-v4/app_icon.png'\n\
@@ -86,6 +87,7 @@ fn android_metadata_uses_the_default_label_and_the_densest_png_icon_within_one_m
     let metadata = metadata(&store);
     assert_eq!(metadata["display_name"], "Tuist Code");
     assert_eq!(metadata["application_id"], "dev.tuist.code");
+    assert_eq!(metadata["minimum_sdk"], serde_json::json!(["26"]));
     let extracted = ".once/out/app/artifact/icon/res/drawable-xxhdpi-v4/app_icon.png";
     let extract = action_by_identifier(&store, &format!("android_artifact_icon_extract:{ICON}"));
     assert_eq!(
@@ -113,6 +115,7 @@ fn android_metadata_without_a_label_or_png_icon_leaves_the_icon_empty() {
         "",
     );
     assert_eq!(metadata(&store)["display_name"], "");
+    assert_eq!(metadata(&store)["minimum_sdk"], serde_json::json!(["24"]));
     assert!(written(&store, ICON).is_empty());
     assert_eq!(store.actions.len(), 2);
 }
