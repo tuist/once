@@ -61,7 +61,7 @@ Describe 'nx native project'
     The status should be success
     The stdout should include 'nx_workspace nx'
     The stdout should include 'nx_task hello_world__build'
-    The stdout should include 'nx_task hello_world__test'
+    The stdout should include 'nx_test hello_world__test'
     The stdout should include 'nx_task greeter__build'
     The path "$WORKSPACE/once.toml" should not be exist
   End
@@ -130,5 +130,107 @@ TOML
     The stderr should be blank
     The stdout should equal 'miss hit miss hit; failure propagated'
     The contents of file "$WORKSPACE/packages/app/coverage/result.txt" should equal 'actual coverage'
+  End
+
+  generated_dependency_changes() {
+    SEED=first once --format json build consumer >/dev/null || return
+    test "$(cat "$WORKSPACE/result.txt")" = first || return
+    SEED=second once --format json build consumer >/dev/null || return
+    test "$(cat "$WORKSPACE/result.txt")" = second || return
+    rm "$WORKSPACE/generated.txt" "$WORKSPACE/result.txt"
+    SEED=second once --format json build consumer >/dev/null || return
+    test "$(cat "$WORKSPACE/generated.txt")" = second || return
+    cat "$WORKSPACE/result.txt"
+  }
+
+  It 'invalidates consumers when generated dependency contents change without source changes'
+    command -v node >/dev/null 2>&1 || Skip 'node is required'
+    cat > "$WORKSPACE/once.toml" <<'TOML'
+[[target]]
+name = "generate"
+kind = "nx_task"
+[target.attrs]
+project = "app"
+task = "generate"
+runnable = true
+executor = "nx:run-commands"
+commands = ["printf %s \"$SEED\" > generated.txt"]
+env_inherit = ["SEED"]
+outputs = ["generated.txt"]
+workspace_outputs = ["generated.txt", "result.txt"]
+
+[[target]]
+name = "consumer"
+kind = "nx_task"
+deps = ["generate"]
+[target.attrs]
+project = "app"
+task = "build"
+runnable = true
+executor = "nx:run-commands"
+commands = ["cp generated.txt result.txt"]
+outputs = ["result.txt"]
+workspace_outputs = ["generated.txt", "result.txt"]
+TOML
+
+    When call generated_dependency_changes
+    The status should be success
+    The stderr should be blank
+    The stdout should equal 'second'
+  End
+
+  It 'does not skip failing test prerequisites of builds'
+    command -v node >/dev/null 2>&1 || Skip 'node is required'
+    cat > "$WORKSPACE/once.toml" <<'TOML'
+[[target]]
+name = "check"
+kind = "nx_test"
+[target.attrs]
+project = "app"
+task = "test"
+runnable = true
+executor = "nx:run-commands"
+commands = ["exit 7"]
+
+[[target]]
+name = "consumer"
+kind = "nx_task"
+deps = ["check"]
+[target.attrs]
+project = "app"
+task = "build"
+runnable = true
+executor = "nx:run-commands"
+commands = ["printf built > result.txt"]
+outputs = ["result.txt"]
+TOML
+
+    When call once build consumer
+    The status should be failure
+    The stderr should include 'exit code 7'
+    The path "$WORKSPACE/result.txt" should not be exist
+  End
+
+  It 'runs plugin executors with native JSONC workspace configuration'
+    nx_toolchain_unavailable && Skip 'node and npm are required'
+    printf '%s\n' '{"private":true,"devDependencies":{"nx":"^23.0.0","@nx/devkit":"^23.0.0"}}' > "$WORKSPACE/package.json"
+    install_fixture || Skip 'npm install failed; skipping (offline?)'
+    printf '%s\n' '{/* native Nx accepts comments */ "parallel":1,}' > "$WORKSPACE/nx.json"
+    cat > "$WORKSPACE/once.toml" <<'TOML'
+[[target]]
+name = "probe"
+kind = "nx_task"
+[target.attrs]
+project = "app"
+task = "build"
+runnable = true
+executor = "nx:noop"
+executor_graph = '{"nodes":{"app":{"name":"app","type":"app","data":{"root":".","targets":{"build":{"executor":"nx:noop"}}}}},"dependencies":{}}'
+TOML
+
+    When call once --format json build probe
+    The status should be success
+    The stderr should be blank
+    The stdout should include '"status":"completed"'
   End
 End

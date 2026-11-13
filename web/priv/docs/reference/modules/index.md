@@ -385,6 +385,18 @@ test suites that belong only to resolved dependencies. A custom resolver can
 use the same convention by declaring the attribute as `list<string>` on its
 seed target kind and returning the generated test names through `attrs`.
 
+The Nx resolver emits `nx_task` for ordinary tasks and `nx_test` for test
+suites, and records every first-party test in `_default_test_roots`. Both
+kinds carry resolver-owned `executor_graph` and `workspace_outputs` attributes.
+Plugin actions consume a canonical graph through Nx's executor API without
+delegating scheduling or caching to Nx. `nx_test` publishes `once_test_info`
+and normalized suite results, without case listing, filtering, or sharding.
+Workspace inputs conservatively cover shared sources, with declared generated
+outputs excluded and declared environment inputs inherited into action hashes.
+Dependency output snapshots, including transitive snapshots, are explicit action
+inputs so generated content changes invalidate consumers. Test targets also
+execute through the build capability when used as prerequisites.
+
 A resolver can also return a non-configurable `_display_name` string for the
 owner. Generic run reporting uses it as the user-facing label without knowing
 which target kind produced it. When absent, reporting uses the target label.

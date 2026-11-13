@@ -39,7 +39,8 @@ once query targets --kind nx_task
 
 No `once.toml` is required, and these commands do not write one. The
 `nx_workspace` seed runs `nx graph` once at load time, reads the resulting
-project graph, and emits one `nx_task` target per project and task pair.
+project graph, and emits one target per project and task pair: `nx_test` for
+tests and `nx_task` for other tasks.
 Dependency edges honor Nx's `dependsOn`, including the upstream `^` form
 and the object form.
 
@@ -91,16 +92,35 @@ Coverage falls into three groups today:
   `metadata.runCommand`. Nx populates that field with the exact
   package-manager invocation (for example `pnpm run build`), which Once
   runs as a single command from the project directory.
-- Other executors (`@nx/webpack:webpack`, `@nx/jest:jest`,
-  `@angular-devkit/build-angular:*`, plugin executors) surface as
-  informational `nx_task` targets that fail the build capability with a
-  message that names the executor. The graph still loads and the
-  dependency relationships are visible to `once query`.
+- Plugin executors run through the installed Nx `runExecutor` API, using
+  the resolved project graph and default configuration. Once owns the
+  dependency schedule, action hashing, output snapshots, and cache. It does
+  not invoke `nx build`, `nx test`, or Nx's task runner.
 
-The distribution varies by workspace. In practice, most workspaces built
-around `run-commands` or `run-script` tasks run natively in full. A
-workspace that leans on plugin executors will need adapters for those
-executors before Once can run them.
+Commands retain the host's activated `PATH` after the project-local tool
+directories, so package-manager shims and additional toolchains remain
+available. Install and activate those tools before invoking Once. Once does
+not install SDKs, restore NuGet packages, or download browser binaries.
+
+Once conservatively hashes workspace sources and installed dependencies,
+excluding declared generated outputs and runtime caches. This covers shared
+configuration and cross-project sources, but can invalidate more tasks than
+Nx's fine-grained named inputs. Output tokens such as `{options.outputPath.base}`
+resolve against the task's default configuration before snapshotting.
+
+### Run Tests
+
+```sh
+once test
+```
+
+Tasks named `test` become `nx_test` targets, exposing one normalized, cacheable
+suite batch per project. Both application and library suites run by default.
+Once runs the resolved command or plugin executor, records its exit status
+and duration, and retains its log. A failed command produces a failed suite.
+Suite units do not offer case listing, case filtering, or within-suite
+sharding. Native runner output remains in the log; individual assertions are
+not imported into the normalized suite result.
 
 ## Configuration
 

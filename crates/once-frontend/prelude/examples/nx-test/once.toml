@@ -1,0 +1,11 @@
+[[target]]
+name = "hello__test"
+kind = "nx_test"
+srcs = ["test.js"]
+
+[target.attrs]
+project = "hello"
+task = "test"
+executor = "nx:run-commands"
+runnable = true
+commands = ["node test.js"]

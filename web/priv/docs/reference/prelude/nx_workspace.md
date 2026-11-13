@@ -13,9 +13,10 @@ Nx remains authoritative for project discovery, task configuration, named
 inputs, and executor semantics. Once schedules and caches the tasks it
 emits without shelling back into `nx run`. Tasks whose executor is
 `nx:run-commands` (or its `@nx/` / `@nrwl/` aliases) or `nx:run-script`
-run their underlying command directly; tasks with other executors emit
-provider-only targets that fail the build capability with a message that
-names the executor.
+run their underlying command directly. Other executors run through the
+installed Nx `runExecutor` API with the resolved graph and default
+configuration, without Nx's scheduler or cache. Tasks named `test` become
+`nx_test` targets with cacheable suite-level batches through `once test`.
 
 The default task filter emits every `build`, `test`, and `lint` task in
 the graph, together with their transitive `dependsOn` tasks. For example,
@@ -31,6 +32,7 @@ the empty list to include every task Nx reports.
 | `targets` | list&lt;string&gt; | no | `["build", "test", "lint"]` | Nx task names to emit with their transitive task dependencies; empty list includes every task |
 | `resolver_inputs` | list&lt;string&gt; | no | `srcs` | Text inputs available while deriving the graph |
 | `graph_file` | string | no |  | Optional workspace-relative path to a checked-in `nx graph --view=projects` JSON snapshot; when set, Once reads it directly instead of running `nx graph` |
+| `_default_test_roots` | list&lt;string&gt; | no | `[]` | Resolver-owned application and library test names selected by targetless `once test` |
 
 ## Providers
 

@@ -152,6 +152,7 @@ PRELUDE_TARGET_KINDS = {
     "nx.star": [
         "nx_workspace",
         "nx_task",
+        "nx_test",
     ],
     "react_native.star": [
         "react_native_dependencies",

@@ -8,7 +8,7 @@ One task in a native [Nx](https://nx.dev) workspace.
 graph. Once hashes its declared inputs, schedules it against the resolved
 graph, and runs the task's underlying command directly.
 
-Only two executor families are runnable natively today:
+Resolved command executors run directly:
 
 - `nx:run-commands` and its aliases (`@nx/run-commands:run-commands`,
   `@nrwl/run-commands:run-commands`, `@nx/workspace:run-commands`,
@@ -22,8 +22,9 @@ Only two executor families are runnable natively today:
 For `run-commands`, the resolver forwards `options.args` unless the task or
 individual command sets `forwardAllArgs` to false.
 
-Other executors emit a provider-only target that fails the build
-capability with a message naming the executor.
+Other executors run through the installed Nx `runExecutor` API with the
+resolved project graph and default configuration. Once still owns scheduling,
+hashing, caching, and output restoration; Nx's task runner is not invoked.
 
 Most attributes on this target are filled in by the `nx_workspace`
 resolver. Declaring an `nx_task` by hand is only necessary when the
@@ -32,7 +33,20 @@ workspace is not fully covered by the `nx` native project.
 Commands can invoke installed tools such as `tsc` and `vitest` by name.
 Once prepends `node_modules/.bin` directories from the command's working
 directory through the workspace root to `PATH`, with the nearest package
-taking precedence.
+taking precedence, then retains the activated host `PATH` for package
+managers and additional toolchains.
+
+Source hashing conservatively includes workspace sources and installed
+dependencies, excluding declared outputs and runtime caches. Dependency output
+snapshots are explicit action inputs, including transitive snapshots, so generated
+content changes invalidate consumers even when workspace sources are unchanged. Default
+configuration options resolve output tokens, including nested tokens such as
+`{options.outputPath.base}`.
+
+Tasks named `test` are emitted as [`nx_test`](/docs/reference/prelude/nx_test)
+targets with the same attributes and both build and test capabilities, so test
+prerequisites also execute during builds. Each project produces one normalized,
+cacheable suite batch.
 
 Nx output declarations are cache patterns, not required products. Once stores
 a required snapshot and a manifest of existing matches, then restores those
@@ -50,8 +64,10 @@ Generated Vite caches under `node_modules/.vite` are not source inputs.
 | `project_root` | string | no |  | Workspace-relative directory that holds the project's sources |
 | `outputs` | list&lt;string&gt; | no | `[]` | Workspace-relative Nx output paths or patterns with `{projectRoot}`, `{workspaceRoot}`, and `{projectName}` expanded. Only existing matches are cached; absent outputs are valid |
 | `executor` | string | no |  | Nx executor id, kept for provenance so cache keys segregate between executors |
+| `executor_graph` | string | no |  | Resolver-owned canonical graph used by plugin executor actions |
+| `workspace_outputs` | list&lt;string&gt; | no | `[]` | Resolver-owned output patterns excluded from workspace source hashing |
 | `project_type` | string | no |  | Nx project type reported by the graph: `app`, `lib`, or `e2e` |
-| `runnable` | bool | no | `false` | Resolver-owned flag: true when Once was able to lower the task to a concrete command it can run |
+| `runnable` | bool | no | `false` | Resolver-owned flag: true when commands or a plugin executor graph are available |
 | `commands` | list&lt;string&gt; | no | `[]` | Resolver-owned shell commands lowered from the Nx executor options |
 | `command_cwd` | string | no |  | Resolver-owned working directory for the lowered command |
 | `command_env` | map&lt;string, string&gt; | no | `{}` | Resolver-owned environment variables from the executor's `env` option |
