@@ -111,6 +111,48 @@ fn startup_failure_preserves_its_exit_status_and_stderr_despite_old_evidence() {
 
 #[cfg(unix)]
 #[test]
+fn whole_target_startup_failure_cannot_reuse_previous_passing_results() {
+    use std::os::unix::fs::PermissionsExt;
+    let _guard = super::super::cancellation::TEST_LOCK.lock().unwrap();
+    let workspace = tempfile::TempDir::new().unwrap();
+    let batch = TestBatch::new("tests", Vec::new()).unwrap();
+    let directory = workspace.path().join(results_directory(&batch).unwrap());
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join("test_results.json"),
+        serde_json::to_vec(&results()).unwrap(),
+    )
+    .unwrap();
+    let executable = workspace.path().join("failing-runner");
+    std::fs::write(
+        &executable,
+        "#!/bin/sh\necho 'dependency sources missing' >&2\nexit 17\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let run = run_test_target(
+        &executable,
+        workspace.path(),
+        &batch,
+        SandboxMode::Off,
+        super::super::executor::ChildLimits {
+            memory_bytes: 0,
+            cpu_slots: 1,
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(run["success"], false);
+    assert_eq!(run["exit_code"], 17);
+    assert!(run["results"].is_null(), "{run}");
+    assert!(run["stderr"]
+        .as_str()
+        .unwrap()
+        .contains("dependency sources missing"));
+}
+
+#[cfg(unix)]
+#[test]
 fn each_batch_is_given_its_share_of_the_cpu_budget() {
     use std::os::unix::fs::PermissionsExt;
     let _guard = super::super::cancellation::TEST_LOCK.lock().unwrap();

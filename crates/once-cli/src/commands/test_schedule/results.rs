@@ -62,7 +62,7 @@ fn aggregate(target: &str, batches: &[&TestBatch], runs: &BTreeMap<&str, &Value>
             // always synthesizing a failure.
             let evidenced_success = success && batch.test_filters.is_empty();
             all_passed &= evidenced_success;
-            add_synthetic_case(target, batch, evidenced_success, &mut cases);
+            add_synthetic_case(target, batch, evidenced_success, run, &mut cases);
             continue;
         };
         once_core::validate_test_results_for_units(result, target, &batch.test_filters)
@@ -169,6 +169,7 @@ fn add_synthetic_case(
     target: &str,
     batch: &TestBatch,
     succeeded: bool,
+    run: Option<&Value>,
     cases: &mut BTreeMap<String, Value>,
 ) {
     let (status, name) = if succeeded {
@@ -176,6 +177,17 @@ fn add_synthetic_case(
     } else {
         ("failed", "test batch did not produce normalized results")
     };
+    let mut attempt = json!({"status": status});
+    if !succeeded {
+        if let Some(message) = run.and_then(|run| {
+            ["stderr", "error", "results_error"]
+                .iter()
+                .filter_map(|field| run[*field].as_str())
+                .find(|message| !message.trim().is_empty())
+        }) {
+            attempt["failure"] = json!({"message": message.chars().take(4000).collect::<String>()});
+        }
+    }
     let filters = if batch.test_filters.is_empty() {
         vec![format!("{target}::batch:{}", batch.id)]
     } else {
@@ -188,7 +200,7 @@ fn add_synthetic_case(
                 "name": name,
                 "suite": target,
                 "status": status,
-                "attempts": [{"status": status}],
+                "attempts": [attempt],
                 "runner_metadata": {},
             })
         });
@@ -281,6 +293,29 @@ mod tests {
         assert_eq!(value["status"], "passed");
         assert_eq!(value["summary"]["passed"], 1);
         assert_eq!(value["summary"]["failed"], 0);
+    }
+
+    #[test]
+    fn startup_failure_retains_bounded_diagnostics_in_normalized_results() {
+        let batch = TestBatch::new("tests/unit", Vec::new()).unwrap();
+        let message = format!("dependency sources missing: {}", "é".repeat(5000));
+        for field in ["stderr", "error", "results_error"] {
+            let mut run = json!({"success": false, "results": null});
+            run[field] = json!(message);
+            let value = aggregate(
+                "tests/unit",
+                &[&batch],
+                &BTreeMap::from([(batch.id.as_str(), &run)]),
+            )
+            .unwrap();
+            assert_eq!(value["status"], "failed");
+            assert_eq!(value["summary"]["failed"], 1);
+            assert_eq!(value["summary"]["passed"], 0);
+            assert_eq!(
+                value["cases"][0]["attempts"][0]["failure"]["message"],
+                message.chars().take(4000).collect::<String>()
+            );
+        }
     }
 
     #[test]

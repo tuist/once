@@ -176,6 +176,14 @@ recognizes nested Mix projects. An umbrella root builds its detected child
 workspaces. Use `once query targets` to find each package-qualified target
 rather than assuming that every target lives at the root.
 
+Targetless `once test` includes discovered nested test suites, even when native
+`mix test` at the root runs only the root project. Each separate Mix project
+needs its own `mix deps.get --check-locked`; fetching at the root does not
+materialize a nested project's dependencies. Once preserves native test aliases,
+including database creation and migration tasks. Provision any required external
+services before running those suites. Native test results remain uncached so
+these services are exercised on every run; compilation actions remain cacheable.
+
 External Hex and Git dependencies must be present under `deps/`. Mix and Rebar
 3 packages are supported. Packages that require Make or a custom dependency
 compile command fail with an explicit diagnostic instead of silently falling

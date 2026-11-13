@@ -37,15 +37,16 @@ pub(super) fn run_test_target(
     command.arg("test").arg("--sandbox").arg(sandbox);
     if let Some(portable) = portable {
         portable.add_to_command(&mut command, &batch.id);
-        let path = workspace
-            .join(results_directory(batch)?)
-            .join("test_results.json");
+    }
+    if portable.is_some() || batch.test_filters.is_empty() {
+        let path = workspace.join(results_directory(batch)?.join("test_results.json"));
         match std::fs::remove_file(&path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error).context("removing prior portable batch evidence"),
+            Err(error) => return Err(error).context("removing prior test batch evidence"),
         }
-    } else {
+    }
+    if portable.is_none() {
         command.arg(&batch.target);
         for test_filter in &batch.test_filters {
             command.arg("--batch-test-unit").arg(test_filter);
