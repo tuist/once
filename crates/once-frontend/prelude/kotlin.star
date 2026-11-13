@@ -412,14 +412,21 @@ def _kotlin_jvm_compile_test_runner(ctx, tools):
     source = declare_output("test_runner/OnceJvmTestRunner.java")
     classes = declare_output("test_runner/classes")
     classes_hash = declare_output("test_runner/classes.sha256")
+    framework = _kotlin_jvm_attr(ctx, "test_framework", "reflection")
+    if framework not in ["reflection", "junit4"]:
+        fail("unsupported Kotlin JVM test_framework `" + framework + "`; use `reflection` or `junit4`")
+    jars = _kotlin_jvm_runtime_jars(_kotlin_jvm_runtime_deps(ctx)) if framework == "junit4" else []
+    argv = [tools["javac"], "-encoding", "UTF-8", "-d", classes]
+    if jars:
+        argv.extend(["-classpath", _kotlin_jvm_classpath_separator().join(jars)])
     prepare_path(classes, kind = "remove", identifier = "kotlin_jvm_test_runner_clean:" + ctx["label"]["id"])
     prepare_path(classes, kind = "directory", identifier = "kotlin_jvm_test_runner_prepare:" + ctx["label"]["id"])
-    write_path(source, _jvm_test_runner_source())
+    write_path(source, _jvm_test_runner_source(junit4 = framework == "junit4"))
     run_action(
         display_name = "Compile JVM test runner · " + ctx["label"]["name"],
         source_files = _action_source_files([source]),
-        argv = [tools["javac"], "-encoding", "UTF-8", "-d", classes, source],
-        inputs = [source],
+        argv = argv + [source],
+        inputs = [source] + _kotlin_jvm_workspace_inputs(jars),
         outputs = [classes],
         env = _kotlin_jvm_env(ctx),
         toolchain_identity = tools["identity"] + "\x00kotlin_jvm_test_runner_javac.v1",
@@ -637,6 +644,7 @@ kotlin_jvm_binary = target_kind(
 kotlin_jvm_test = target_kind(
     docs = "Compiles Kotlin tests for the Java virtual machine and emits normalized Once test results.",
     attrs = _KOTLIN_JVM_COMMON_ATTRS + [
+        attr("test_framework", "string", default = "\"reflection\"", docs = "`reflection` for convention-based tests or `junit4` for native JUnit lifecycle, rules, and runners. Declare JUnit on the runtime classpath.", configurable = False),
         attr("test_class", "string", docs = "Optional fully qualified test class or Class#method filter.", configurable = False),
         attr("args", "list<string>", default = "[]", docs = "Additional fully qualified class or Class#method filters.", configurable = False),
         attr("jvm_flags", "list<string>", default = "[]", docs = "Flags passed to the Java virtual machine before the test classpath.", configurable = False),

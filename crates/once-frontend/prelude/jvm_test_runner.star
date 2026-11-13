@@ -1,5 +1,5 @@
-def _jvm_test_runner_source():
-    return """import java.io.PrintWriter;
+def _jvm_test_runner_source(junit4 = False):
+    source = """import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.AnnotatedElement;
@@ -358,4 +358,126 @@ public final class OnceJvmTestRunner {
     return out.toString();
   }
 }
+"""
+    if junit4:
+        source = source.replace("runTests(classes, target, filters, logText)", "runJUnit4(classes, target, filters, logText)")
+        source = source.replace("  private static boolean matchesFilter(", _jvm_junit4_methods() + "  private static boolean matchesFilter(")
+    return source
+
+def _jvm_junit4_methods():
+    return """  private static List<TestCase> runJUnit4(Path classes, String target, List<String> filters, StringBuilder logText) throws Exception {
+    List<TestCase> cases = new ArrayList<>();
+    org.junit.runner.JUnitCore core = new org.junit.runner.JUnitCore();
+    core.addListener(new org.junit.runner.notification.RunListener() {
+      final java.util.Map<org.junit.runner.Description, TestCase> active = new java.util.HashMap<>();
+      final java.util.Map<org.junit.runner.Description, Long> started = new java.util.HashMap<>();
+
+      private TestCase entry(org.junit.runner.Description description) {
+        TestCase result = active.get(description);
+        if (result == null) {
+          String suite = description.getClassName();
+          String name = description.getMethodName();
+          if (suite == null) suite = description.getDisplayName();
+          if (name == null) name = description.getDisplayName();
+          result = new TestCase(target + "::" + suite + "." + name, name, suite);
+          active.put(description, result);
+          cases.add(result);
+        }
+        return result;
+      }
+
+      @Override public void testStarted(org.junit.runner.Description description) {
+        TestCase result = entry(description);
+        if (!"failed".equals(result.status)) result.status = "passed";
+        started.put(description, System.nanoTime());
+      }
+
+      @Override public void testFailure(org.junit.runner.notification.Failure failure) {
+        TestCase result = entry(failure.getDescription());
+        result.status = "failed";
+        result.failure += failure.getTrace();
+      }
+
+      @Override public void testAssumptionFailure(org.junit.runner.notification.Failure failure) {
+        TestCase result = entry(failure.getDescription());
+        if (!"failed".equals(result.status)) result.status = "skipped";
+      }
+
+      @Override public void testIgnored(org.junit.runner.Description description) {
+        TestCase result = entry(description);
+        if (!"failed".equals(result.status)) result.status = "skipped";
+      }
+
+      @Override public void testFinished(org.junit.runner.Description description) {
+        TestCase result = entry(description);
+        Long start = started.remove(description);
+        if (start != null) result.durationMs = (System.nanoTime() - start) / 1_000_000L;
+      }
+    });
+    java.util.Map<String, org.junit.runner.Runner> runners = new java.util.LinkedHashMap<>();
+    for (String className : classNames(classes)) {
+      if (!filters.isEmpty()) {
+        boolean selected = false;
+        for (String filter : filters) {
+          String filterClass = filter.split("#", -1)[0];
+          if (filterClass.isEmpty() || filterClass.equals(className)) selected = true;
+        }
+        if (!selected) continue;
+      }
+      Class<?> type = Class.forName(className, false, OnceJvmTestRunner.class.getClassLoader());
+      if (type.isAnonymousClass() || type.isLocalClass() || type.isSynthetic()
+          || type.isInterface() || Modifier.isAbstract(type.getModifiers())
+          || (type.isMemberClass() && !Modifier.isStatic(type.getModifiers()))) continue;
+      boolean suite = type.isAnnotationPresent(org.junit.runner.RunWith.class);
+      for (Class<?> base = type; base != null; base = base.getSuperclass()) {
+        for (Method method : base.getDeclaredMethods()) {
+          if (method.isAnnotationPresent(org.junit.Test.class)) suite = true;
+        }
+      }
+      if (!suite) continue;
+      org.junit.runner.Request request = org.junit.runner.Request.aClass(type);
+      if (!filters.isEmpty() && !matchesFilter(filters, className, "")) {
+        org.junit.runner.manipulation.Filter filter = new org.junit.runner.manipulation.Filter() {
+          @Override public boolean shouldRun(org.junit.runner.Description description) {
+            if (description.isTest()) {
+              String method = description.getMethodName();
+              return matchesFilter(filters, description.getClassName(), method == null ? "" : method)
+                  || (method != null && method.contains("[")
+                      && matchesFilter(filters, description.getClassName(), method.substring(0, method.indexOf('['))));
+            }
+            for (org.junit.runner.Description child : description.getChildren()) {
+              if (shouldRun(child)) return true;
+            }
+            return false;
+          }
+          @Override public String describe() { return String.join(", ", filters); }
+        };
+        org.junit.runner.Runner runner = request.getRunner();
+        if (!filter.shouldRun(runner.getDescription())) continue;
+        request = request.filterWith(filter);
+      }
+      runners.put(className, request.getRunner());
+    }
+    java.util.Set<String> owned = new java.util.HashSet<>();
+    for (java.util.Map.Entry<String, org.junit.runner.Runner> runner : runners.entrySet()) {
+      collectJUnit4OwnedClasses(runner.getValue().getDescription(), runner.getKey(), owned);
+    }
+    for (java.util.Map.Entry<String, org.junit.runner.Runner> runner : runners.entrySet()) {
+      if (!owned.contains(runner.getKey())) core.run(runner.getValue());
+    }
+    for (TestCase result : cases) {
+      logText.append(result.status).append(" ").append(result.suite).append(".").append(result.name).append(System.lineSeparator());
+      if (!result.failure.isEmpty()) logText.append(result.failure);
+    }
+    return cases;
+  }
+
+  private static void collectJUnit4OwnedClasses(org.junit.runner.Description description, String owner, java.util.Set<String> owned) {
+    String name = description.getClassName();
+    if (name != null && !name.equals(owner)) owned.add(name);
+    for (org.junit.runner.Description child : description.getChildren()) {
+      collectJUnit4OwnedClasses(child, owner, owned);
+    }
+  }
+
 """

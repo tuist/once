@@ -6316,6 +6316,7 @@ ctx = {{
         "javac": "/tools/javac",
         "kotlin_stdlib": "{stdlib}",
         "labels": ["unit"],
+        "test_framework": "junit4",
         "test_class": "GreetingTest#testGreeting",
     }},
     "deps": [{{
@@ -6362,6 +6363,10 @@ result = repr(_kotlin_jvm_test_impl(ctx))
         "kotlin_jvm_test_runner_compile:apps/hello/GreetingTests",
     );
     assert_eq!(runner_compile.argv[0], "/tools/javac");
+    assert!(runner_compile
+        .inputs
+        .iter()
+        .any(|path| path == ".once/out/libs/runtime/Runtime.jar"));
     let run = action_by_identifier(&store, "kotlin_jvm_test:apps/hello/GreetingTests");
     assert_eq!(run.argv[0], "/tools/java");
     assert!(run.argv.iter().any(|arg| arg == "OnceJvmTestRunner"));
@@ -9239,6 +9244,7 @@ ctx = {{
         "kotlinc": "/kotlin/bin/kotlinc",
         "kotlin_stdlib": "/kotlin/lib/kotlin-stdlib.jar",
         "javacopts": ["-Xlint:all"],
+        "test_framework": "junit4",
         "classpath": ["third_party/junit.jar"],
         "runtime_classpath": ["third_party/hamcrest.jar"],
         "jvm_flags": ["-Duser.language=en"],
@@ -9305,6 +9311,13 @@ fn assert_android_local_test_actions(store: &AnalysisStore, out: &str) {
         .inputs
         .iter()
         .any(|input| input.ends_with("OnceJvmTestRunner.java")));
+    for jar in [
+        "third_party/junit.jar",
+        "third_party/hamcrest.jar",
+        ".once/out/apps/hello/Runtime/Runtime.jar",
+    ] {
+        assert!(runner_compile.inputs.iter().any(|input| input == jar));
+    }
     let run = action_by_identifier(store, "android_local_test:apps/hello/GreetingTests");
     assert_eq!(run.argv[0], "/jdk/bin/java");
     assert_eq!(run.argv[1], "-Duser.language=en");

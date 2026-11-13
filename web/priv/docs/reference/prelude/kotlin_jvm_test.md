@@ -19,10 +19,24 @@ classes are not independent test suites.
 Methods or suites annotated with `org.junit.Ignore` or `kotlin.test.Ignore`
 are reported as skipped without invoking them or initializing ignored suites.
 
+Set `test_framework = "junit4"` to execute annotated tests through native
+JUnit 4 instead of invoking methods directly. Declare JUnit 4 and its runtime
+dependencies on the target's runtime classpath. Native execution honors
+inherited setup and teardown, class lifecycle, rules, expected exceptions,
+assumptions, and `@RunWith` runners, including parameterized tests. Results
+remain normalized per case, with assumption violations reported as skipped
+and setup or teardown failures reported as failed. `Class#method` selects all
+parameter values; `Class#method[0]` selects an exact parameterized case when
+the runner uses that name. Aggregate suites execute their child classes once;
+a class-only suite filter selects all its children. Invalid annotated methods
+are reported through native JUnit initialization failures. Convention-only
+methods are not JUnit tests.
+
 ## Test Attributes
 
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `test_framework` | string | no | `reflection` | `reflection` for convention-based tests or `junit4` for native JUnit 4 execution |
 | `test_class` | string | no |  | Fully qualified class or `Class#method` filter |
 | `args` | list&lt;string&gt; | no | `[]` | Additional class or `Class#method` filters |
 | `jvm_flags` | list&lt;string&gt; | no | `[]` | Flags passed to the Java virtual machine before the test classpath |

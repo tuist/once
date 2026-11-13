@@ -947,18 +947,25 @@ def _android_compile_local_java(ctx, attrs, tools, java_sources, dep_jars):
     return (classes_dir, classes_hash)
 
 
-def _android_compile_local_test_runner(ctx, tools):
+def _android_compile_local_test_runner(ctx, attrs, tools, runtime_jars):
     source = declare_output("test_runner/OnceJvmTestRunner.java")
     classes = declare_output("test_runner/classes")
     classes_hash = declare_output("test_runner/classes.sha256")
+    framework = _android_attr(attrs, "test_framework", "reflection")
+    if framework not in ["reflection", "junit4"]:
+        fail("unsupported Android local test_framework `" + framework + "`; use `reflection` or `junit4`")
+    jars = runtime_jars if framework == "junit4" else []
+    argv = [tools["javac"], "-encoding", "UTF-8", "-d", classes]
+    if jars:
+        argv.extend(["-classpath", _android_classpath_sep().join(jars)])
     prepare_path(classes, kind = "remove", identifier = "android_local_test_runner_clean:" + ctx["label"]["id"])
     prepare_path(classes, kind = "directory", identifier = "android_local_test_runner_prepare:" + ctx["label"]["id"])
-    write_path(source, _jvm_test_runner_source())
+    write_path(source, _jvm_test_runner_source(junit4 = framework == "junit4"))
     run_action(
         display_name = "Compile JVM test runner · " + ctx["label"]["name"],
         source_files = _action_source_files([source]),
-        argv = [tools["javac"], "-encoding", "UTF-8", "-d", classes, source],
-        inputs = [source],
+        argv = argv + [source],
+        inputs = [source] + _android_workspace_inputs(jars),
         outputs = [classes],
         env = _android_env(tools),
         toolchain_identity = tools["identity"] + "\x00android_local_test_runner_javac.v1",
@@ -1952,20 +1959,21 @@ def _android_local_test_impl(ctx):
     compile_jars = _unique(dep_compile_jars + extra_classpath)
     java_classes_dir, java_classes_hash = _android_compile_local_java(ctx, attrs, tools, java_sources, compile_jars)
     classes_dir, classes_hash = _android_compile_kotlin(ctx, attrs, tools, kotlin_sources, java_classes_dir, java_classes_hash, compile_jars)
-    runner_classes, runner_hash = _android_compile_local_test_runner(ctx, tools)
-    test_dir = _test_output_dir(ctx)
-    results = test_dir + "/test_results.json"
-    log = test_dir + "/android-local-test.log"
-    native_results = test_dir + "/native_results.txt"
-    runtime_classpath = _unique(
-        [runner_classes, classes_dir, tools["android_jar"]] +
+    runtime_jars = _unique(
+        [tools["android_jar"]] +
         _android_runtime_jars(ctx["deps"]) +
         _android_runtime_jars(_android_dependency_role(ctx, "runtime_deps")) +
         compile_jars +
         _android_attr(attrs, "runtime_classpath", [])
     )
+    runner_classes, runner_hash = _android_compile_local_test_runner(ctx, attrs, tools, runtime_jars)
+    runtime_classpath = _unique([runner_classes, classes_dir] + runtime_jars)
     if len(kotlin_sources) > 0:
         runtime_classpath = _unique([tools["kotlin_stdlib"]] + runtime_classpath)
+    test_dir = _test_output_dir(ctx)
+    results = test_dir + "/test_results.json"
+    log = test_dir + "/android-local-test.log"
+    native_results = test_dir + "/native_results.txt"
     command_argv = [tools["java"]] + _android_attr(attrs, "jvm_flags", []) + [
         "-cp", _android_classpath_sep().join(runtime_classpath),
         "OnceJvmTestRunner",
@@ -2204,6 +2212,7 @@ _ANDROID_APK_ATTRS = [
 ]
 
 _ANDROID_LOCAL_TEST_ATTRS = [
+    attr("test_framework", "string", default = "\"reflection\"", docs = "`reflection` for convention-based tests or `junit4` for native JUnit lifecycle and runners such as Robolectric. Declare the framework and its runtime inputs explicitly.", configurable = False),
     attr("compile_sdk", "int", docs = "Android Software Development Kit platform level used for android.jar. Defaults to the highest installed platform.", configurable = False),
     attr("build_tools_version", "string", docs = "Android Software Development Kit build-tools version. Defaults to the highest installed version.", configurable = False),
     attr("android_sdk", "string", docs = "Android Software Development Kit root. Defaults to ANDROID_HOME or ANDROID_SDK_ROOT.", configurable = False),

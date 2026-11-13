@@ -1742,6 +1742,20 @@ versions numerically and excludes preview and canary platforms. An explicit
 platform. Resource linking still uses the integer API level for the default
 target SDK, and action cache identities include the selected platform version.
 
+`kotlin_jvm_test.test_framework` and `android_local_test.test_framework`
+default to `reflection`. Set either to `junit4` for native JUnit 4 lifecycle,
+rules, assumptions, expected exceptions, and `@RunWith` dispatch, including
+parameterized and Robolectric runners. Supply JUnit and its dependencies through
+runtime dependency providers or Android's explicit classpath attributes. The
+generated runner compiles against that classpath, with package-relative jars
+declared as action inputs. Native outcomes retain per-case normalized results
+and exact class or method filtering, including parameterized case names.
+Aggregate suites own their child classes instead of rerunning them independently;
+class-only suite filters select their descendants, and malformed annotated test
+methods surface as native initialization failures. Existing convention-based
+test behavior is unchanged. Prepare custom-runner SDK and configuration inputs
+explicitly; undeclared runtime downloads are not covered by the action cache.
+
 Nx output declarations describe potential paths or patterns, not required
 products. Runnable tasks cache a declared snapshot and manifest of existing
 matches, then restore them through deferred copy actions. Missing matches are

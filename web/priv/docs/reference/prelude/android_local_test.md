@@ -24,10 +24,25 @@ classes are not independent test suites. Methods or suites annotated with
 invoking them or initializing ignored suites. The reflection runner does not
 implement framework lifecycle hooks or custom runners such as Robolectric.
 
+Set `test_framework = "junit4"` to delegate execution to native JUnit 4,
+including `@Before`/`@After`, rules, expected exceptions, assumptions, and
+`@RunWith` runners such as Robolectric. Supply JUnit, the custom runner and all
+its runtime dependencies through declared classpaths or dependency providers.
+Framework configuration and SDK jars must be declared inputs too; Once does
+not infer Gradle configuration or fingerprint files downloaded during a test.
+For Robolectric, prepare its SDK jars before testing, declare them through
+`runtime_classpath`, and use offline resolution through `jvm_flags` rather than
+letting the runner download undeclared dependencies. This mode reports native
+initialization failures instead of silently skipping malformed annotated tests.
+Android resource tests also need the linked test resource package, its matching
+runtime R classes, and the runner configuration as declared inputs. A static
+library's unassigned resource IDs are not a substitute for linked runtime IDs.
+
 ## Attributes
 
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `test_framework` | string | no | `reflection` | `reflection` for convention-based methods or `junit4` for native lifecycle and runner dispatch |
 | `compile_sdk` | int | no | highest installed | Android Software Development Kit platform level used for `android.jar` |
 | `build_tools_version` | string | no | highest installed | Android Software Development Kit build-tools version |
 | `android_sdk` | string | no | env | Android Software Development Kit root, otherwise `ANDROID_HOME` or `ANDROID_SDK_ROOT` |
