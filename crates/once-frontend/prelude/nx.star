@@ -78,16 +78,32 @@ def _nx_env_with_path(env, node, cwd = None):
     merged["PATH"] = separator.join(path_segments)
     return merged
 
-# Nx's `--print` opens a browser and hangs in v19+, and `--file=/dev/stdout`
-# is rejected because Nx enforces a `.json`/`.html` suffix. The reliable path
-# is to point `--file` at a workspace-local JSON file, run nx once, then read
-# the file back and decode it. `.nx/` is Nx's own cache directory and is
-# gitignored by convention.
 _NX_GRAPH_OUTPUT = ".nx/once-workspace-graph.json"
+
+_NX_PROJECT_GRAPH = """
+const fs = require('node:fs');
+const path = require('node:path');
+const nxPath = fs.realpathSync(process.argv[1]);
+const nxRequire = require('node:module').createRequire(nxPath);
+const dotenvLoader = path.join(path.dirname(nxPath), '../src/utils/dotenv.js');
+if (fs.existsSync(dotenvLoader)) {
+  nxRequire(dotenvLoader).loadRootEnvFiles(process.cwd());
+} else {
+  for (const file of ['.local.env', '.env.local', '.env']) {
+    nxRequire('dotenv-expand').expand(nxRequire('dotenv').config({ path: file }));
+  }
+}
+nxRequire('../src/project-graph/project-graph').createProjectGraphAsync({ exitOnError: true }).then(graph => {
+  fs.mkdirSync(path.dirname(process.argv[2]), { recursive: true });
+  fs.writeFileSync(process.argv[2], JSON.stringify({ graph }));
+  // Nx plugin workers can keep the graph process alive after it completes.
+  process.exit(0);
+}).catch(error => { console.error(error); process.exit(1); });
+"""
 
 def _nx_load_graph(ctx):
     # A checked-in graph snapshot (`graph_file` attribute) skips the live
-    # `nx graph` invocation entirely. Bundled starters and CI-only workspaces
+    # project-graph API invocation entirely. Bundled starters and CI-only workspaces
     # use it to prove the target kind loads without an installed Node.js and
     # `node_modules/nx`.
     graph_file = _nx_attr(ctx, "graph_file", "")
@@ -96,10 +112,8 @@ def _nx_load_graph(ctx):
         return json_decode(raw)
     node = _nx_node(ctx)
     nx_binary = _nx_binary(ctx)
-    # `--view=projects` returns every project's full `data.targets`, so no
-    # `--targets` filter is needed at graph-load time. The filter, when set,
-    # is applied downstream in the resolver.
-    argv = [node, nx_binary, "graph", "--file=" + _NX_GRAPH_OUTPUT, "--view=projects"]
+    # The display graph prunes external nodes needed by plugin executors.
+    argv = [node, "-e", _NX_PROJECT_GRAPH, nx_binary, _NX_GRAPH_OUTPUT]
     host_command(
         argv,
         env = _nx_env_with_path(_nx_env(), node),
@@ -571,12 +585,12 @@ def _nx_test_impl(ctx):
     return _nx_task_impl(ctx, is_test = True)
 
 nx_workspace = target_kind(
-    docs = "Native Nx workspace seed. Its resolver runs `nx graph --print` once during graph load, translates every project and task into a first-class Once target, and hands scheduling, caching, and remote execution to Once instead of `nx run`.",
+    docs = "Native Nx workspace seed. Its resolver loads the full Nx project graph, including external packages, translates every project and task into a first-class Once target, and hands scheduling, caching, and remote execution to Once instead of `nx run`.",
     attrs = [
         attr("node", "string", default = "\"node\"", docs = "Node.js executable name, absolute path, or workspace-relative path.", configurable = False),
         attr("targets", "list<string>", default = "[\"build\", \"test\", \"lint\"]", docs = "Nx task names to emit, together with their transitive task dependencies. Defaults to build, test, and lint. Set an empty list to include every task in the graph.", configurable = False),
         attr("resolver_inputs", "list<string>", default = "[]", docs = "Package-relative text globs supplied to native integration resolution. Defaults to srcs when empty.", configurable = False),
-        attr("graph_file", "string", default = "\"\"", docs = "Optional workspace-relative path to a checked-in `nx graph --view=projects` JSON snapshot. When set, Once reads it directly instead of running `nx graph`, which lets a workspace load without an installed Node.js and `node_modules/nx`.", configurable = False),
+        attr("graph_file", "string", default = "\"\"", docs = "Optional workspace-relative path to a checked-in Nx project-graph JSON snapshot. Include external package nodes for plugin execution. Once reads it directly instead of invoking Nx, allowing graph inspection without Node.js or node_modules/nx.", configurable = False),
         attr("_default_test_roots", "list<string>", default = "[]", docs = "Resolver-owned first-party test target names, including library suites, for targetless test selection.", configurable = False),
     ],
     resolver = _nx_workspace_resolver,

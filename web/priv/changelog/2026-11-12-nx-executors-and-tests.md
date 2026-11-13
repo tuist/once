@@ -5,6 +5,8 @@ date: 2026-11-12
 
 Once can now invoke installed Nx plugin executors directly, while retaining
 ownership of dependency scheduling, action caching, and output restoration.
+Discovery retains the full project graph, including external package metadata
+needed by compiler executors such as Nx 17's TypeScript compiler.
 Resolved command tasks preserve the activated host toolchain path, so package
 manager shims and SDK commands remain available.
 

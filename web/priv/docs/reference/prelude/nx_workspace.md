@@ -4,8 +4,8 @@ Native [Nx](https://nx.dev) workspace seed.
 
 ## Description
 
-`nx_workspace` runs `nx graph --view=projects` at graph load time, reads
-the resulting project graph, and emits one `nx_task` target per project
+`nx_workspace` calls Nx's full project-graph API at graph load time,
+retaining external package nodes, and emits one task target per project
 and task pair. Dependency edges honor Nx's `dependsOn`, including the
 upstream `^` form and the object form.
 
@@ -31,7 +31,7 @@ the empty list to include every task Nx reports.
 | `node` | string | no | `node` | Node.js executable name, absolute path, or workspace-relative path |
 | `targets` | list&lt;string&gt; | no | `["build", "test", "lint"]` | Nx task names to emit with their transitive task dependencies; empty list includes every task |
 | `resolver_inputs` | list&lt;string&gt; | no | `srcs` | Text inputs available while deriving the graph |
-| `graph_file` | string | no |  | Optional workspace-relative path to a checked-in `nx graph --view=projects` JSON snapshot; when set, Once reads it directly instead of running `nx graph` |
+| `graph_file` | string | no |  | Optional workspace-relative Nx project-graph JSON snapshot; include external package nodes for plugin execution. Once reads it directly instead of invoking Nx |
 | `_default_test_roots` | list&lt;string&gt; | no | `[]` | Resolver-owned application and library test names selected by targetless `once test` |
 
 ## Providers

@@ -1,7 +1,7 @@
 #shellcheck shell=bash
 # End-to-end specs for the graph Once derives from an Nx workspace without a
-# manifest of its own. `nx graph --print` returns the project graph that Once
-# translates into `nx_task` targets so it can schedule and cache them.
+# manifest of its own. Nx's project graph API provides the graph that Once
+# translates into task targets so it can schedule and cache them.
 
 Describe 'nx native project'
   BeforeEach 'setup_workspace'
@@ -232,5 +232,48 @@ TOML
     The status should be success
     The stderr should be blank
     The stdout should include '"status":"completed"'
+  End
+
+  compiler_dependency_outputs() {
+    result=$(once --format json build app__build) || return
+    printf '%s\n' "$result" | jq -er '.cache == "miss"' >/dev/null || return
+    rm -rf "$WORKSPACE/dist"
+    result=$(once --format json build app__build) || return
+    printf '%s\n' "$result" | jq -er '.cache == "hit"' >/dev/null || return
+    (cd "$WORKSPACE" && node -e 'console.log(require("./dist/app/index.js").answer, require("./dist/app/package.json").dependencies.tslib)')
+  }
+
+  It 'retains external package dependencies for Nx 17 compiler actions and cache restoration'
+    nx_toolchain_unavailable && Skip 'node and npm are required'
+    cat > "$WORKSPACE/package.json" <<'JSON'
+{"name":"nx17-probe","private":true,"dependencies":{"tslib":"2.4.1"},"devDependencies":{"nx":"17.1.3","@nx/js":"17.1.3","typescript":"5.2.2"}}
+JSON
+    install_fixture || Skip 'npm install failed; skipping (offline?)'
+    printf '%s\n' '{"plugins":["./dotenv-plugin.cjs"]}' > "$WORKSPACE/nx.json"
+    printf '%s\n' 'ONCE_NX_GRAPH_BASE=loaded' 'ONCE_NX_GRAPH_VALUE=${ONCE_NX_GRAPH_BASE}-local' > "$WORKSPACE/.local.env"
+    printf '%s\n' 'ONCE_NX_GRAPH_VALUE=wrong' > "$WORKSPACE/.env.local"
+    cat > "$WORKSPACE/dotenv-plugin.cjs" <<'JS'
+module.exports = {
+  name: 'dotenv-probe',
+  createNodes: ['**/project.json', () => {
+    if (process.env.ONCE_NX_GRAPH_VALUE !== 'loaded-local') {
+      throw new Error('root dotenv precedence and expansion were not preserved');
+    }
+    return { projects: {} };
+  }],
+};
+JS
+    printf '%s\n' '{"compilerOptions":{"importHelpers":true,"declaration":true,"module":"commonjs","target":"es2018","types":[]}}' > "$WORKSPACE/tsconfig.base.json"
+    mkdir -p "$WORKSPACE/packages/app/src"
+    printf '%s\n' 'export const answer: number = 42;' > "$WORKSPACE/packages/app/src/index.ts"
+    printf '%s\n' '{"extends":"../../tsconfig.base.json","include":["src/**/*.ts"]}' > "$WORKSPACE/packages/app/tsconfig.lib.json"
+    cat > "$WORKSPACE/packages/app/project.json" <<'JSON'
+{"name":"app","sourceRoot":"packages/app/src","projectType":"library","targets":{"build":{"executor":"@nx/js:tsc","outputs":["{options.outputPath}"],"options":{"outputPath":"dist/app","main":"packages/app/src/index.ts","rootDir":"packages/app/src","tsConfig":"packages/app/tsconfig.lib.json","assets":[],"updateBuildableProjectDepsInPackageJson":true}}}}
+JSON
+
+    When call compiler_dependency_outputs
+    The status should be success
+    The stderr should be blank
+    The stdout should equal '42 2.4.1'
   End
 End

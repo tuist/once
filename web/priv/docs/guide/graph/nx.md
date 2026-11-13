@@ -38,9 +38,11 @@ once query targets --kind nx_task
 ```
 
 No `once.toml` is required, and these commands do not write one. The
-`nx_workspace` seed runs `nx graph` once at load time, reads the resulting
-project graph, and emits one target per project and task pair: `nx_test` for
-tests and `nx_task` for other tasks.
+`nx_workspace` seed calls Nx's full project-graph API at load time, retaining
+external package metadata needed by plugin executors, and emits one target
+per project and task pair: `nx_test` for
+tests and `nx_task` for other tasks. Root dotenv files load with the installed
+Nx version's precedence and variable expansion before graph construction.
 Dependency edges honor Nx's `dependsOn`, including the upstream `^` form
 and the object form.
 
@@ -128,11 +130,11 @@ not imported into the normalized suite result.
 
 - `targets` selects which task names to emit. Defaults to `build`, `test`,
   and `lint`. Set it to the empty list to include every task in the graph.
-- `graph_file` points at a checked-in `nx graph --view=projects` JSON
-  snapshot. When set, Once reads the snapshot directly instead of running
-  Nx. This is useful in environments that do not install Node.js and
-  `node_modules/nx`, such as documentation builds and reproducibility
-  tests.
+- `graph_file` points at a checked-in Nx project-graph JSON snapshot.
+  Include external package nodes when executing plugins. Once reads the
+  snapshot directly instead of invoking Nx. This is useful in environments
+  that do not install Node.js and `node_modules/nx`, such as documentation
+  builds and reproducibility tests.
 
 `nx_task` carries the per-task attributes Once needs to run the underlying
 command: `project`, `task`, `project_root`, resolved `commands`, and their
