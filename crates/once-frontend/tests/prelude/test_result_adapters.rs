@@ -106,7 +106,7 @@ fn shellspec_reports_escape_strings_and_preserve_duplicate_case_identity() {
     let source = format!(
         r#"{}
 def host_which(name):
-    return "/usr/bin/" + name
+    return "/bin/sh" if name == "sh" else "/usr/bin/" + name
 ctx = {{
     "label": {{"id": {target}, "name": "tests", "package": ""}},
     "attr": {{"shellspec": "./shellspec"}},
