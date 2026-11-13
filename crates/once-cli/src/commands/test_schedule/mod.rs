@@ -81,6 +81,7 @@ async fn execute_validated(
 ) -> Result<TestExecutionReport> {
     validate_workers(requested_workers)?;
     anyhow::ensure!(!plan.batches.is_empty(), "test plan contains no batches");
+    crate::commands::graph::prepare_graph_tools(workspace, &graph).await?;
     let store = TestTimingStore::open_workspace(workspace);
     let estimates = store.duration_estimates().await?;
     let executable = std::env::current_exe().context("resolving current once executable")?;

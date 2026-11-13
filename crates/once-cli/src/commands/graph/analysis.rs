@@ -1083,6 +1083,16 @@ async fn resolve_graph_tools(
     })
 }
 
+/// Install the graph's tools before several processes analyse it at once.
+///
+/// `mise install` installs what it can even when another requested tool
+/// fails, so a process that resolved an executable from the host before a
+/// sibling's install finished would analyse the same actions as that sibling
+/// into different digests that write the same outputs.
+pub(crate) async fn prepare_graph_tools(workspace: &Path, graph: &[GraphTarget]) -> Result<()> {
+    resolve_graph_tools(workspace, graph).await.map(drop)
+}
+
 async fn resolve_graph_tool_executables(
     workspace: &Path,
     tool_names: &Arc<[String]>,
