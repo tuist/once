@@ -7,23 +7,8 @@ foreach(_once_required ONCE_SOURCE_DIR ONCE_BUILD_DIR)
   endif()
 endforeach()
 
-set(_once_configure
-  "${CMAKE_COMMAND}"
-  "-S" "${ONCE_SOURCE_DIR}"
-  "-B" "${ONCE_BUILD_DIR}"
-)
-if(DEFINED ONCE_GENERATOR AND NOT "${ONCE_GENERATOR}" STREQUAL "")
-  list(APPEND _once_configure "-G" "${ONCE_GENERATOR}")
-endif()
-if(DEFINED ONCE_BUILD_TYPE AND NOT "${ONCE_BUILD_TYPE}" STREQUAL "")
-  list(APPEND _once_configure "-DCMAKE_BUILD_TYPE=${ONCE_BUILD_TYPE}")
-endif()
-if(DEFINED ONCE_CONFIGURE_ARGS AND NOT "${ONCE_CONFIGURE_ARGS}" STREQUAL "")
-  list(APPEND _once_configure ${ONCE_CONFIGURE_ARGS})
-endif()
-
 execute_process(
-  COMMAND ${_once_configure}
+  COMMAND "${CMAKE_COMMAND}" "-S" "${ONCE_SOURCE_DIR}" "-B" "${ONCE_BUILD_DIR}"@ONCE_CONFIGURE_ARGS@
   RESULT_VARIABLE _once_configure_result
   COMMAND_ECHO STDOUT
 )
@@ -31,19 +16,8 @@ if(NOT _once_configure_result EQUAL 0)
   message(FATAL_ERROR "CMake configuration failed with exit code ${_once_configure_result}")
 endif()
 
-set(_once_build "${CMAKE_COMMAND}" "--build" "${ONCE_BUILD_DIR}")
-if(DEFINED ONCE_BUILD_TYPE AND NOT "${ONCE_BUILD_TYPE}" STREQUAL "")
-  list(APPEND _once_build "--config" "${ONCE_BUILD_TYPE}")
-endif()
-if(DEFINED ONCE_BUILD_TARGETS AND NOT "${ONCE_BUILD_TARGETS}" STREQUAL "")
-  list(APPEND _once_build "--target" ${ONCE_BUILD_TARGETS})
-endif()
-if(DEFINED ONCE_BUILD_ARGS AND NOT "${ONCE_BUILD_ARGS}" STREQUAL "")
-  list(APPEND _once_build ${ONCE_BUILD_ARGS})
-endif()
-
 execute_process(
-  COMMAND ${_once_build}
+  COMMAND "${CMAKE_COMMAND}" "--build" "${ONCE_BUILD_DIR}"@ONCE_BUILD_ARGS@
   RESULT_VARIABLE _once_build_result
   COMMAND_ECHO STDOUT
 )
@@ -73,11 +47,15 @@ def _cmake_collect(deps, key, own):
         values.extend(dep.get(key) or [])
     return _unique(values)
 
-def _cmake_encode_list(values):
-    encoded = []
-    for value in values:
-        encoded.append(value.replace("\\", "\\\\").replace(";", "\\;"))
-    return ";".join(encoded)
+# Arguments are rendered as quoted CMake arguments because passing them through
+# a CMake list loses boundaries at `;`, doubles `\`, and merges at unbalanced `[`.
+def _cmake_quoted_args(values):
+    return "".join(["\n    \"" + value.replace("\\", "\\\\").replace("\"", "\\\"").replace("$", "\\$") + "\"" for value in values])
+
+def _cmake_build_driver(generator, build_type, configure_args, build_targets, build_args):
+    configure = (["-G", generator] if generator else []) + (["-DCMAKE_BUILD_TYPE=" + build_type] if build_type else []) + configure_args
+    build = (["--config", build_type] if build_type else []) + (["--target"] + build_targets if build_targets else []) + build_args
+    return _CMAKE_BUILD_DRIVER.replace("@ONCE_CONFIGURE_ARGS@", _cmake_quoted_args(configure)).replace("@ONCE_BUILD_ARGS@", _cmake_quoted_args(build))
 
 def _cmake_product_tokens():
     os = host_os()
@@ -153,7 +131,7 @@ def _cmake_project_impl(ctx):
     action_env = dict(_cmake_attr(ctx, "env", {}))
     if not action_env.get("PATH"):
         action_env["PATH"] = host_env("PATH")
-    write_path(driver, _CMAKE_BUILD_DRIVER)
+    write_path(driver, _cmake_build_driver(generator, build_type, configure_args, _cmake_attr(ctx, "build_targets", []), _cmake_attr(ctx, "build_args", [])))
     run_action(
         display_name = "Configure and build CMake project · " + ctx["label"]["name"],
         history = _action_history(ctx, "cmake", "configure-and-build"),
@@ -163,11 +141,6 @@ def _cmake_project_impl(ctx):
             cmake,
             "-DONCE_SOURCE_DIR:PATH=" + execution_path(source_dir),
             "-DONCE_BUILD_DIR:PATH=" + execution_path(build_root),
-            "-DONCE_GENERATOR:STRING=" + generator,
-            "-DONCE_BUILD_TYPE:STRING=" + build_type,
-            "-DONCE_CONFIGURE_ARGS:STRING=" + _cmake_encode_list(configure_args),
-            "-DONCE_BUILD_TARGETS:STRING=" + _cmake_encode_list(_cmake_attr(ctx, "build_targets", [])),
-            "-DONCE_BUILD_ARGS:STRING=" + _cmake_encode_list(_cmake_attr(ctx, "build_args", [])),
             "-P", execution_path(driver),
         ],
         inputs = _unique(inputs + [driver]),
@@ -308,16 +281,11 @@ def _cmake_test_impl(ctx):
     inputs = _unique(glob(ctx["srcs"]) + _cmake_globs(_cmake_attr(ctx, "data", [])))
     identity = "once.cmake.test.v1\x00" + host_os() + "\x00" + host_arch() + "\x00" + content_sha256(workspace_root()) + "\x00" + host_command([cmake, "--version"]) + "\x00" + program_version
     build_driver = ctx["scratch_dir"] + "/OnceCTestBuild.cmake"
-    write_path(build_driver, _CMAKE_TEST_PATH_GUARD + _CMAKE_BUILD_DRIVER)
+    write_path(build_driver, _CMAKE_TEST_PATH_GUARD + _cmake_build_driver(generator, build_type, configure_args, _cmake_attr(ctx, "build_targets", []), ["--parallel", str(jobs)]))
     run_action(
         argv = [cmake] + path_args + [
             "-DONCE_SOURCE_DIR:PATH=" + execution_path(_cmake_package_path(ctx, _cmake_attr(ctx, "source_dir", "."))),
             "-DONCE_BUILD_DIR:PATH=" + execution_path(build_root),
-            "-DONCE_GENERATOR:STRING=" + generator,
-            "-DONCE_BUILD_TYPE:STRING=" + build_type,
-            "-DONCE_CONFIGURE_ARGS:STRING=" + _cmake_encode_list(configure_args),
-            "-DONCE_BUILD_TARGETS:STRING=" + _cmake_encode_list(_cmake_attr(ctx, "build_targets", [])),
-            "-DONCE_BUILD_ARGS:STRING=" + _cmake_encode_list(["--parallel", str(jobs)]),
             "-P", execution_path(build_driver),
         ],
         inputs = inputs + [build_driver],
@@ -573,9 +541,9 @@ cmake_project = target_kind(
         attr("generator", "string", default = "\"Ninja\"", docs = "CMake generated-build backend.", configurable = False),
         attr("build_program", "string", docs = "Generated-build executable. Defaults to resolving `ninja` for the Ninja generator.", configurable = False),
         attr("build_type", "string", default = "\"Debug\"", docs = "CMake build configuration passed during configure and build."),
-        attr("configure_args", "list<string>", default = "[]", docs = "Additional arguments passed to CMake configuration.", configurable = False),
+        attr("configure_args", "list<string>", default = "[]", docs = "Additional arguments passed to CMake configuration. Each item is one argument, so `-DNAME=a;b` sets a CMake list.", configurable = False),
         attr("build_targets", "list<string>", default = "[]", docs = "Optional native CMake targets passed to the generated build.", configurable = False),
-        attr("build_args", "list<string>", default = "[]", docs = "Additional arguments passed to `cmake --build`.", configurable = False),
+        attr("build_args", "list<string>", default = "[]", docs = "Additional arguments passed to `cmake --build`, each item as one argument.", configurable = False),
         attr("products", "list<string>", required = True, docs = "Files expected under the generated build directory. Product tokens support static, shared, and executable platform suffixes.", configurable = False),
         attr("hdrs", "list<string>", default = "[]", docs = "Public package-relative headers exposed to native dependents.", configurable = False),
         attr("header_globs", "list<string>", default = "[]", docs = "Public header glob patterns exposed to native dependents.", configurable = False),
@@ -603,7 +571,7 @@ cmake_test = target_kind(
         attr("generator", "string", default = "\"Ninja\"", docs = "CMake generated-build backend.", configurable = False),
         attr("build_program", "string", docs = "Generated-build executable. Defaults to ninja for Ninja.", configurable = False),
         attr("build_type", "string", default = "\"Debug\"", docs = "Build configuration, preserving native debug information."),
-        attr("configure_args", "list<string>", default = "[]", docs = "Additional CMake configure arguments. Enable upstream tests here.", configurable = False),
+        attr("configure_args", "list<string>", default = "[]", docs = "Additional CMake configure arguments. Enable upstream tests here. Each item is one argument, so `-DNAME=a;b` sets a CMake list.", configurable = False),
         attr("build_targets", "list<string>", default = "[]", docs = "Optional native build targets. Defaults to building all targets, including test executables.", configurable = False),
         attr("test_targets", "list<string>", default = "[]", docs = "Native CMake targets to execute as the test suite through cmake --build. Empty uses CTest with no-tests=error. Explicit targets own test discovery and failure reporting; no native JUnit is assumed.", configurable = False),
         attr("jobs", "int", default = "1", docs = "Native build and CTest concurrency, reserved through the action resource pool.", configurable = False),

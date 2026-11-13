@@ -31,9 +31,9 @@ CMake graph should also be queryable.
 | `generator` | string | no | `Ninja` | CMake generated-build backend |
 | `build_program` | string | no | `ninja` for Ninja | Generated-build executable name or path |
 | `build_type` | string | no | `Debug` | CMake build configuration |
-| `configure_args` | list&lt;string&gt; | no | `[]` | Additional CMake configure arguments |
+| `configure_args` | list&lt;string&gt; | no | `[]` | Additional CMake configure arguments, each passed as one argument |
 | `build_targets` | list&lt;string&gt; | no | `[]` | Native CMake targets passed to the generated build |
-| `build_args` | list&lt;string&gt; | no | `[]` | Additional arguments passed to `cmake --build` |
+| `build_args` | list&lt;string&gt; | no | `[]` | Additional arguments passed to `cmake --build`, each as one argument |
 | `products` | list&lt;string&gt; | yes |  | Exact files expected under the generated build directory |
 | `hdrs` | list&lt;string&gt; | no | `[]` | Public package-relative headers |
 | `header_globs` | list&lt;string&gt; | no | `[]` | Public header patterns |

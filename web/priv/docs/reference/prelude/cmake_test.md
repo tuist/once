@@ -42,7 +42,7 @@ not fall back automatically when CTest finds no tests.
 | `generator` | string | `Ninja` | Generated-build backend |
 | `build_program` | string | `ninja` for Ninja | Generated-build executable name or path |
 | `build_type` | string | `Debug` | Native build configuration; debug information is preserved |
-| `configure_args` | list&lt;string&gt; | `[]` | Configure arguments, including upstream test-enabling options |
+| `configure_args` | list&lt;string&gt; | `[]` | Configure arguments, each passed as one argument, including upstream test-enabling options |
 | `build_targets` | list&lt;string&gt; | `[]` | Native build targets; defaults to all, including tests |
 | `test_targets` | list&lt;string&gt; | `[]` | Native targets run as the test suite; empty uses CTest with empty suites treated as errors |
 | `jobs` | int | `1` | Positive native build and test concurrency |

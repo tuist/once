@@ -113,6 +113,26 @@ CMAKE
     End
   End
 
+  preserve_configure_argument_boundaries() {
+    write_ctest_workspace
+    cat >> "$WORKSPACE/once.toml" <<'TOML'
+configure_args = ['-DPROBE_LIST=a;-DPROBE_SPLIT=b', '-DPROBE_PATH=C:\dir', '-DPROBE_BRACKET=[x', '-DPROBE_AFTER=y']
+TOML
+    once --format json test Tests > /dev/null || return
+    grep '^PROBE_' "$WORKSPACE/.once/out/Tests/cmake-build/CMakeCache.txt" | sort
+  }
+
+  It 'passes each configure argument to CMake as one native argument'
+    Skip if 'CMake native toolchain unavailable' cmake_tools_unavailable
+    When call preserve_configure_argument_boundaries
+    The status should be success
+    The line 1 of stdout should equal 'PROBE_AFTER:UNINITIALIZED=y'
+    The line 2 of stdout should equal 'PROBE_BRACKET:UNINITIALIZED=[x'
+    The line 3 of stdout should equal 'PROBE_LIST:UNINITIALIZED=a;-DPROBE_SPLIT=b'
+    The line 4 of stdout should equal 'PROBE_PATH:UNINITIALIZED=C:\dir'
+    The lines of stdout should equal 4
+  End
+
   reject_relocated_ctest_tree() {
     write_ctest_workspace
     once --format json build Tests > "$WORKSPACE/original.json" || return
