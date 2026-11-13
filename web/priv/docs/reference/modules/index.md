@@ -1767,9 +1767,13 @@ are excluded from task inputs. Plugin executors remain unsupported.
 `cmake_project` and `cmake_test` bypass native configure/build caching because
 CMake can select external compilers and toolchains outside declared inputs.
 Product staging remains content-addressed. `cmake_test` rejects relocated
-execution, runs CTest uncached, and reports one normalized suite alongside native
-JUnit results. Its positive `timeout_ms` bounds the suite and retains normalized
-failure on timeout. Case listing, filtering, and sharding are unsupported. Its
+execution and runs tests uncached. Its optional `test_targets` selects explicit
+native CMake targets through `cmake --build` instead of CTest. Empty defaults to
+CTest with `--no-tests=error`; there is no automatic fallback. Both modes report
+one normalized suite and retain logs. Only CTest declares native JUnit results;
+custom targets own discovery and test exit status. Its positive `timeout_ms`
+bounds the suite and retains normalized failure on timeout. Case listing,
+filtering, and sharding are unsupported. Its
 declared job count also bounds nested CMake builds and reserves the corresponding
 action resources.
 

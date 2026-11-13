@@ -1,6 +1,7 @@
 # `cmake_test`
 
-Build and test an existing CMake project through CTest. This is separate from
+Build and test an existing CMake project through CTest or explicit native test
+targets. This is separate from
 [`cmake_project`](/reference/prelude/cmake_project), which stages declared
 products and exposes a native link provider rather than running tests.
 
@@ -21,6 +22,16 @@ are retained even when CTest fails. Use `once query tests`,
 `once query test-manifest Tests`, and `once query test-results Tests` to
 inspect the runner contract and normalized outcome.
 
+For projects that expose custom test targets instead of registering CTest
+entries, set `test_targets = ["check"]` to the upstream target names. Once runs
+`cmake --build <build-dir> --config <build-type> --parallel <jobs> --target check`
+in the test phase, after configure and build. `build_targets` only selects the
+preparatory build; it does not replace the test runner. Use `env` for upstream
+runner options. Explicit test targets own test discovery, empty-selection
+handling, and exit status. Once reports their nonzero exits and timeouts as
+failures, but cannot infer case counts from arbitrary native output. It does
+not fall back automatically when CTest finds no tests.
+
 ## Attributes
 
 | Attribute | Type | Default | Description |
@@ -33,7 +44,8 @@ inspect the runner contract and normalized outcome.
 | `build_type` | string | `Debug` | Native build configuration; debug information is preserved |
 | `configure_args` | list&lt;string&gt; | `[]` | Configure arguments, including upstream test-enabling options |
 | `build_targets` | list&lt;string&gt; | `[]` | Native build targets; defaults to all, including tests |
-| `jobs` | int | `1` | Positive native build and CTest concurrency |
+| `test_targets` | list&lt;string&gt; | `[]` | Native targets run as the test suite; empty uses CTest with empty suites treated as errors |
+| `jobs` | int | `1` | Positive native build and test concurrency |
 | `data` | list&lt;string&gt; | `[]` | Additional runtime and configuration input globs |
 | `env` | map&lt;string, string&gt; | `{}` | Declared build and test environment |
 | `labels` | list&lt;string&gt; | `[]` | Test discovery labels |
@@ -68,14 +80,16 @@ fail explicitly before configure or test execution. Run locally with the
 default sandbox policy. No compiler stripping or debug-information removal
 is performed. Native build-tree metadata is not claimed byte-reproducible.
 
-CTest execution is also always uncached, so tests with undeclared external
-state cannot be silently replaced by an older passing result.
+CTest and custom test target execution are also always uncached, so tests with
+undeclared external state cannot be silently replaced by an older passing result.
 
 ## Results and inventory
 
 The target exposes `build`, `test`, and `once_test_info`. Normalized results
 contain exactly one suite case, not one case per native CTest entry. The log
 and native JUnit report retain native case names, counts, failures, and output.
+Custom test targets retain `cmake-test.log` instead of `ctest.log` and expose no
+native JUnit artifact; their `native_results` list is empty.
 When `timeout_ms` expires, Once retains a normalized failed suite and a timeout
 reason in the log; CTest may not finish writing its native JUnit report.
 Exact native case filtering, case listing, sharding, retries, and coverage

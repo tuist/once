@@ -63,6 +63,56 @@ Describe 'CTest graph target kind'
     The stdout should include '"status":"failed"'
   End
 
+  run_custom_cmake_suite() {
+    mode="$1"
+    write_ctest_workspace
+    cat > "$WORKSPACE/CMakeLists.txt" <<'CMAKE'
+cmake_minimum_required(VERSION 3.21)
+project(CustomTests C)
+add_executable(check_sum test.c)
+add_custom_target(native-check COMMAND check_sum DEPENDS check_sum)
+add_custom_target(second-check COMMAND "${CMAKE_COMMAND}" -E echo "second suite executed")
+add_custom_target(slow-check COMMAND "${CMAKE_COMMAND}" -E sleep 3)
+CMAKE
+    targets='"native-check", "second-check"'
+    case "$mode" in
+      failure) printf '%s\n' 'int main(void) { return 7; }' > "$WORKSPACE/test.c" ;;
+      missing) targets='"missing-check"' ;;
+      timeout) targets='"slow-check"'; printf '%s\n' 'timeout_ms = 100' >> "$WORKSPACE/once.toml" ;;
+    esac
+    printf 'test_targets = [%s]\nctest = "nonexistent-ctest"\n' "$targets" >> "$WORKSPACE/once.toml"
+    once --format json test Tests > "$WORKSPACE/run.json" 2>&1
+    code=$?
+    cat "$WORKSPACE/.once/out/Tests/test/test_results.json"
+    return "$code"
+  }
+
+  It 'runs explicit native test targets without CTest and retains logs without invented JUnit'
+    Skip if 'CMake native toolchain unavailable' cmake_tools_unavailable
+    When call run_custom_cmake_suite success
+    The status should be success
+    The stdout should include '"total":1,"passed":1,"failed":0'
+    The stdout should include '"native_results":[]'
+    The contents of file "$WORKSPACE/.once/out/Tests/test/cmake-test.log" should include 'second suite executed'
+    The path "$WORKSPACE/.once/out/Tests/test/ctest.xml" should not be exist
+  End
+
+  Describe 'custom native test failures'
+    Parameters
+      failure
+      missing
+      timeout
+    End
+
+    It "retains normalized failure for $1"
+      Skip if 'CMake native toolchain unavailable' cmake_tools_unavailable
+      When call run_custom_cmake_suite "$1"
+      The status should be failure
+      The stdout should include '"total":1,"passed":0,"failed":1'
+      The contents of file "$WORKSPACE/.once/out/Tests/test/cmake-test.log" should include 'CMake test runner failed:'
+    End
+  End
+
   reject_relocated_ctest_tree() {
     write_ctest_workspace
     once --format json build Tests > "$WORKSPACE/original.json" || return

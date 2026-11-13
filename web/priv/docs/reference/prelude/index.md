@@ -246,7 +246,7 @@ you already have.
 - [`cmake_project`](/reference/prelude/cmake_project): coarse uncached CMake
   configure and build boundary with explicitly declared products
 - [`cmake_test`](/reference/prelude/cmake_test): path-bound local CMake build
-  tree and uncached CTest execution with suite-level results and native JUnit
+  tree and uncached CTest or explicit native test targets with suite-level results
 - [`cmake_workspace`](/reference/prelude/cmake_workspace): checked configured
   graph snapshot imported as queryable targets
 - [`cmake_target`](/reference/prelude/cmake_target): resolver-generated
