@@ -143,6 +143,98 @@ async fn export_rejects_undeclared_payloads_and_detects_tampered_metadata() {
     );
 }
 
+#[tokio::test]
+async fn empty_optional_payloads_are_left_out_with_the_spec_entries_naming_them() {
+    let root = tempfile::tempdir().unwrap();
+    let destination = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("payload"), b"").unwrap();
+    std::fs::write(root.path().join("icon"), b"").unwrap();
+    let declaration = |optional: bool| -> ArtifactInfo {
+        serde_json::from_value(json!({
+            "schema": "once.artifact_info.v1",
+            "artifacts": [{
+                "name": "product",
+                "payloads": {
+                    "content": {"path": "payload", "media_type": "application/octet-stream"},
+                    "icon": {"path": "icon", "media_type": "image/png", "optional": optional},
+                },
+                "interfaces": {"example.unknown.v7": {"payload": "content", "spec": {"icon_payload": "icon", "kind": "icon", "names": ["icon"]}}},
+            }],
+        }))
+        .unwrap()
+    };
+    let outputs = ["payload".to_string(), "icon".to_string()];
+    let permit = permit().await;
+    let manifest = |export: ArtifactExport| async move {
+        read_artifact_json::<ArtifactManifest>(
+            &export.directory,
+            &export.artifacts.members["product"].artifact,
+        )
+        .await
+        .unwrap()
+    };
+    let omitted = manifest(
+        export_artifacts(
+            root.path(),
+            &declaration(true),
+            &outputs,
+            destination.path(),
+            &permit,
+        )
+        .await
+        .unwrap(),
+    )
+    .await;
+    assert_eq!(omitted.payloads.keys().collect::<Vec<_>>(), ["content"]);
+    assert_eq!(
+        json!(omitted.interfaces["example.unknown.v7"].spec),
+        json!({"kind": "icon", "names": ["icon"]})
+    );
+    let required = manifest(
+        export_artifacts(
+            root.path(),
+            &declaration(false),
+            &outputs,
+            destination.path(),
+            &permit,
+        )
+        .await
+        .unwrap(),
+    )
+    .await;
+    assert_eq!(required.payloads["icon"].size_bytes, 0);
+    std::fs::write(root.path().join("icon"), b"\x89PNG").unwrap();
+    let present = manifest(
+        export_artifacts(
+            root.path(),
+            &declaration(true),
+            &outputs,
+            destination.path(),
+            &permit,
+        )
+        .await
+        .unwrap(),
+    )
+    .await;
+    assert_eq!(present.payloads["icon"].size_bytes, 4);
+    assert_eq!(present.payloads["icon"].media_type, "image/png");
+    assert_eq!(
+        present.interfaces["example.unknown.v7"].spec["icon_payload"],
+        json!("icon")
+    );
+    let mut primary = declaration(true);
+    primary.artifacts[0]
+        .interfaces
+        .get_mut("example.unknown.v7")
+        .unwrap()
+        .payload = "icon".into();
+    assert!(primary
+        .validate(&outputs)
+        .unwrap_err()
+        .to_string()
+        .contains("required payload"));
+}
+
 #[test]
 fn artifact_contract_bounds_and_interface_references_are_validated() {
     let mut declaration = info("payload");

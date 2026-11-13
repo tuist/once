@@ -1905,6 +1905,13 @@ Expose `capability("artifact", ["default", "artifact"])` and declare the
 
 Each payload must be an exact declared output file inside the workspace,
 including after symlink resolution. Package directories with `write_archive`.
+A payload declared with `"optional": True` is left out of the exported
+artifact when its output file is empty, and so is every top-level interface
+`spec` entry whose key ends in `_payload` and whose value is that payload's
+name. Use it for content an action
+planner only discovers while it runs, such as an application icon, and write an
+empty file when there is none. An interface's own `payload` must not be
+optional.
 Artifact and payload names use 1 to 128 ASCII letters, digits, dots,
 underscores or hyphens. A provider exports 1 to 128 artifacts, each with 1 to
 128 payloads and at most 32 interfaces and 32 selectors. Provider metadata

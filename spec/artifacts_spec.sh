@@ -14,7 +14,7 @@ Describe 'artifact export and publication'
 
   inspect_android_export() {
     python3 - "$ONCE_BIN" "$WORKSPACE" "$REPO_ROOT" <<'PY'
-import hashlib, json, os, pathlib, shutil, subprocess, sys
+import hashlib, json, os, pathlib, shutil, struct, subprocess, sys, zlib
 binary, workspace, repo = sys.argv[1:]
 root = pathlib.Path(workspace)
 shutil.copytree(pathlib.Path(repo) / 'crates/once-frontend/prelude/examples/android-binary-minimal', root, dirs_exist_ok=True)
@@ -27,7 +27,12 @@ def run(*args):
     result = subprocess.run([binary, '-C', workspace, '--format', 'json', *args], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
-def exported(result):
+def png(size):
+    def chunk(kind, data):
+        return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
+    rows = b''.join(b'\x00' + bytes([88, 64, 200, 255]) * size for _ in range(size))
+    return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', size, size, 8, 6, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(rows)) + chunk(b'IEND', b'')
+def exported(result, icon = None):
     directory = pathlib.Path(result['directory']) / 'blobs/sha256'
     def read(descriptor):
         path = directory / descriptor['digest'].split(':')[1]
@@ -37,27 +42,46 @@ def exported(result):
         return path
     index = json.loads(read(result['root']).read_bytes())
     manifest = json.loads(read(index['members']['product']['artifact']).read_bytes())
+    spec = manifest['interfaces']['dev.once.android-install.v1']['spec']
+    if icon is None:
+        assert 'icon' not in manifest['payloads']
+        assert spec == {'metadata_payload': 'metadata'}
+    else:
+        assert spec == {'metadata_payload': 'metadata', 'icon_payload': 'icon'}
+        assert manifest['payloads']['icon']['media_type'] == 'image/png'
+        data = read(manifest['payloads']['icon']).read_bytes()
+        assert data[:8] == b'\x89PNG\r\n\x1a\n' and data[12:16] == b'IHDR'
+        assert struct.unpack('>II', data[16:24]) == (icon, icon)
     return read(manifest['payloads']['apk']), json.loads(read(manifest['payloads']['metadata']).read_bytes())
 run('build', target)
 first = run('artifact', 'export', target)
 apk, metadata = exported(first)
 tools = pathlib.Path(os.environ['ANDROID_HOME']) / 'build-tools/35.0.0'
 subprocess.run([str(tools / 'apksigner'), 'verify', str(apk)], check=True, capture_output=True)
-assert metadata['application_id'] == 'dev.once.hello'
+assert metadata['application_id'] == 'dev.once.hello' and metadata['display_name'] == 'Once Hello'
 assert metadata['version_code'] == '1' and metadata['version_name'] == '1.0'
 assert metadata['signature_verified'] is True and metadata['certificate_sha256']
 assert first['automatic_publication'] is True
 shutil.rmtree(root / '.once/out')
 assert run('artifact', 'export', target)['root'] == first['root']
+launcher = root / 'apps/hello/res/mipmap-xhdpi/ic_launcher.png'
+launcher.parent.mkdir(parents=True)
+launcher.write_bytes(png(96))
+android_manifest = root / 'apps/hello/AndroidManifest.xml'
+android_manifest.write_text(android_manifest.read_text().replace('android:label=', 'android:icon="@mipmap/ic_launcher"\n        android:label=', 1))
+with_icon = run('artifact', 'export', target)
+exported(with_icon, icon = 96)
+shutil.rmtree(root / '.once/out')
+assert run('artifact', 'export', target)['root'] == with_icon['root']
 manifest = root / 'apps/hello/once.toml'
 manifest.write_text(manifest.read_text() + '\nsigning = "none"\n')
 unsigned = run('artifact', 'export', target)
-_, metadata = exported(unsigned)
+_, metadata = exported(unsigned, icon = 96)
 assert metadata['signature_verified'] is False and metadata['certificate_sha256'] == []
 assert unsigned['automatic_publication'] is False
 assert unsigned['root'] != first['root']
 assert not (root / '.once/publications').exists()
-print('native signed APK, metadata, cache replay and unsigned exclusion verified')
+print('native signed APK, metadata, icon, cache replay and unsigned exclusion verified')
 PY
   }
 
@@ -95,7 +119,8 @@ plist = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
 assert metadata['bundle_identifier'] == plist['CFBundleIdentifier'] == 'dev.once.Hello'
 assert metadata['platform'] == 'macos' and metadata['sdk_variant'] == 'device'
 assert metadata['signature_verified'] is True
-assert manifest['interfaces']['dev.once.apple-install.v2']['spec']['metadata_payload'] == 'metadata'
+assert manifest['interfaces']['dev.once.apple-install.v2']['spec'] == {'metadata_payload': 'metadata'}
+assert 'icon' not in manifest['payloads']
 executable = app / 'Contents/MacOS' / plist['CFBundleExecutable']
 uuid = subprocess.check_output(['xcrun', 'dwarfdump', '--uuid', str(executable)], text=True).split()[1]
 assert metadata['mach_o_uuids'] == [uuid]

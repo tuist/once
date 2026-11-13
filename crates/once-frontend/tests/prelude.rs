@@ -94,6 +94,9 @@ mod oci_containers;
 #[path = "prelude/action_metadata.rs"]
 mod action_metadata;
 
+#[path = "prelude/artifact_metadata.rs"]
+mod artifact_metadata;
+
 fn store_for(workspace: &Path, package: &str) -> AnalysisStore {
     AnalysisStore::new(
         workspace.to_path_buf(),

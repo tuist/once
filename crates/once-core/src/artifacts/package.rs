@@ -35,6 +35,7 @@ pub async fn export_artifacts(
     let mut members = BTreeMap::new();
     for artifact in &info.artifacts {
         let mut payloads = BTreeMap::new();
+        let mut interfaces = artifact.interfaces.clone();
         for (name, payload) in &artifact.payloads {
             let source = tokio::fs::canonicalize(workspace.join(&payload.path))
                 .await
@@ -43,13 +44,21 @@ pub async fn export_artifacts(
                 source.starts_with(&workspace),
                 "artifact payload escapes workspace through a symlink"
             );
+            if payload.optional && tokio::fs::metadata(&source).await?.len() == 0 {
+                for interface in interfaces.values_mut() {
+                    interface.spec.retain(|key, value| {
+                        !key.ends_with("_payload") || value.as_str() != Some(name.as_str())
+                    });
+                }
+                continue;
+            }
             let descriptor = copy_content(&source, &blobs, &payload.media_type).await?;
             payloads.insert(name.clone(), descriptor);
         }
         let manifest = ArtifactManifest {
             schema: "once.artifact.v1".into(),
             payloads,
-            interfaces: artifact.interfaces.clone(),
+            interfaces,
         };
         let descriptor =
             write_metadata(&manifest, &blobs, "application/vnd.once.artifact.v1+json").await?;

@@ -34,6 +34,10 @@ pub struct ArtifactDeclaration {
 pub struct ArtifactPayload {
     pub path: String,
     pub media_type: String,
+    /// An optional payload whose output is empty is left out of the exported
+    /// manifest, together with interface spec `*_payload` entries that name it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub optional: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -139,9 +143,15 @@ impl ArtifactInfo {
                             }),
                     "interface contract must be a namespaced versioned identifier"
                 );
+                let payload = artifact.payloads.get(&interface.payload);
                 ensure!(
-                    artifact.payloads.contains_key(&interface.payload),
+                    payload.is_some(),
                     "interface `{contract}` references unknown payload `{}`",
+                    interface.payload
+                );
+                ensure!(
+                    payload.is_some_and(|payload| !payload.optional),
+                    "interface `{contract}` must point to a required payload, not optional `{}`",
                     interface.payload
                 );
             }

@@ -2136,17 +2136,22 @@ def _android_binary_impl(ctx):
     }
     if ctx["capability"] == "artifact":
         metadata = declare_output("artifact/metadata.json")
+        icon = declare_output("artifact/icon.png")
         signing = _android_attr(attrs, "signing", "debug")
         expand_actions(
             implementation = "android_artifact_metadata_plan",
             inputs = [apk],
-            outputs = [metadata],
-            args = {"apk": apk, "metadata": metadata, "aapt2": tools["aapt2"], "apksigner": tools["apksigner"], "env": _android_env(tools), "signing": signing, "version_name": _android_attr(attrs, "version_name", "1.0")},
+            outputs = [metadata, icon],
+            args = {"apk": apk, "metadata": metadata, "icon": icon, "icon_staging": ctx["build_dir"] + "/artifact/icon", "aapt2": tools["aapt2"], "apksigner": tools["apksigner"], "jar": tools["jar"], "env": _android_env(tools), "toolchain_identity": tools["identity"], "signing": signing, "version_name": _android_attr(attrs, "version_name", "1.0")},
         )
         provider["artifact_info"] = _artifact_info([{
             "name": "product",
-            "payloads": {"apk": {"path": apk, "media_type": "application/vnd.android.package-archive"}, "metadata": {"path": metadata, "media_type": "application/json"}},
-            "interfaces": {"dev.once.android-install.v1": {"payload": "apk", "spec": {"metadata_payload": "metadata"}}},
+            "payloads": {
+                "apk": {"path": apk, "media_type": "application/vnd.android.package-archive"},
+                "metadata": {"path": metadata, "media_type": "application/json"},
+                "icon": {"path": icon, "media_type": "image/png", "optional": True},
+            },
+            "interfaces": {"dev.once.android-install.v1": {"payload": "apk", "spec": {"metadata_payload": "metadata", "icon_payload": "icon"}}},
             "selectors": {"platform": "android"},
         }], automatic_publication = signing == "debug" and not provider["instrumentation_target"])
     return provider
@@ -2165,8 +2170,11 @@ def android_artifact_metadata_plan(ctx):
         certificates = [line.split(": ", 1)[1] for line in verification.split("\n") if " certificate SHA-256 digest: " in line]
         if not certificates:
             fail("The APK has no verified signing certificate")
+    _android_artifact_icon(spec, badging)
+    labels = [line[len("application-label:'"):-1] for line in badging.split("\n") if line.startswith("application-label:'") and line.endswith("'")]
     write_path(spec["metadata"], _json_encode({
         "schema": "once.android_application.v1",
+        "display_name": labels[0] if labels else "",
         "application_id": identity.split("name='", 1)[1].split("'", 1)[0],
         "version_code": identity.split("versionCode='", 1)[1].split("'", 1)[0],
         "version_name": spec["version_name"],
@@ -2174,6 +2182,46 @@ def android_artifact_metadata_plan(ctx):
         "certificate_sha256": certificates,
         "signature_verified": len(certificates) > 0,
     }))
+
+_ANDROID_ARTIFACT_ICON_MAX_BYTES = 1024 * 1024
+
+def _android_artifact_icon(spec, badging):
+    candidates = []
+    for line in badging.split("\n"):
+        if not line.startswith("application-icon-") or not line.endswith("'") or ":'" not in line:
+            continue
+        density, path = line[len("application-icon-"):-1].split(":'", 1)
+        if density.isdigit() and path.endswith(".png"):
+            candidates.append((int(density), path))
+    sizes = {}
+    if candidates:
+        listing = host_command([spec["jar"], "--list", "--verbose", "--file", workspace_root() + "/" + spec["apk"]], env = spec["env"], max_output_bytes = 64 * 1024 * 1024)
+        for line in listing.split("\n"):
+            fields = line.split()
+            if len(fields) >= 2 and fields[0].isdigit():
+                sizes[fields[-1]] = int(fields[0])
+    best = None
+    for density, path in candidates:
+        if sizes.get(path, _ANDROID_ARTIFACT_ICON_MAX_BYTES + 1) <= _ANDROID_ARTIFACT_ICON_MAX_BYTES and (best == None or density > best[0]):
+            best = (density, path)
+    if best == None:
+        write_path(spec["icon"], "")
+        return
+    staging = spec["icon_staging"]
+    extracted = staging + "/" + best[1]
+    run_action(
+        display_name = "Extract APK icon",
+        argv = [spec["jar"], "--extract", "--file", "../" * len(staging.split("/")) + spec["apk"], best[1]],
+        cwd = staging,
+        inputs = [spec["apk"]],
+        outputs = [extracted],
+        clean_paths = [staging],
+        create_dirs = [staging],
+        env = spec["env"],
+        toolchain_identity = spec["toolchain_identity"] + "\x00artifact_icon",
+        identifier = "android_artifact_icon_extract:" + spec["icon"],
+    )
+    copy_path(extracted, spec["icon"], inputs = [extracted], identifier = "android_artifact_icon:" + spec["icon"])
 
 _ANDROID_RESOURCE_ATTRS = [
     attr("manifest", "string", default = "AndroidManifest.xml", docs = "Package-relative AndroidManifest.xml path.", configurable = False),

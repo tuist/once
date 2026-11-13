@@ -137,11 +137,13 @@ Generic artifact contents remain private even in public projects:
 
 - `apple_application` exports `dev.once.apple-install.v2` on macOS, alongside
   its v1 installation description. The v2 interface points to the bundle ZIP
-  and `spec.metadata_payload` with `once.apple_application.v1` metadata.
+  and `spec.metadata_payload` with `once.apple_application.v1` metadata, and
+  `spec.icon_payload` names a PNG icon when the bundle has one.
   Ad-hoc signed macOS and simulator applications are eligible for automatic
   publication and preview projection. Physical-device applications are not.
 - `android_binary` exports `dev.once.android-install.v1`, pointing to the APK
   and `spec.metadata_payload` with `once.android_application.v1` metadata.
+  `spec.icon_payload` names a PNG icon when the APK has one.
   Debug-signed, non-instrumentation APKs approve automatic publication.
   Unsigned APKs do not produce installable previews.
 

@@ -113,12 +113,18 @@ zipalign. Production signing is not implemented yet.
 ## Artifacts
 
 The `artifact` capability exports one `product` member with `apk` and `metadata`
-payloads. `dev.once.android-install.v1` points to `apk` and names `metadata`
-through `spec.metadata_payload`. The `once.android_application.v1` metadata
-records `application_id`, `version_code`, `version_name`, `minimum_sdk`,
-`certificate_sha256` and `signature_verified`. Package identity and minimum SDK
-come from `aapt2 dump badging`; signed APK certificates come from
-`apksigner verify --print-certs`.
+payloads, plus an `icon` payload when the APK has a PNG launcher icon.
+`dev.once.android-install.v1` points to `apk`, names `metadata` through
+`spec.metadata_payload` and names `icon` through `spec.icon_payload`. The
+`once.android_application.v1` metadata records `display_name`,
+`application_id`, `version_code`, `version_name`, `minimum_sdk`,
+`certificate_sha256` and `signature_verified`. The display name, package
+identity and minimum SDK come from `aapt2 dump badging`; `display_name` is the
+default application label, or empty when the APK has none. The `icon` payload
+is the highest-density PNG application icon in the APK that is at most one
+mebibyte. Adaptive and other XML icons without a PNG fallback produce no `icon`
+payload. Signed APK certificates
+come from `apksigner verify --print-certs`.
 
 The v2 producer declaration approves the entire closure for automatic
 publication only for debug-signed, non-instrumentation APKs. Unsigned and

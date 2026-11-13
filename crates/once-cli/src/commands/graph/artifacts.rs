@@ -109,6 +109,7 @@ pub fn query(workspace: &Path, target_id: &str) -> Result<Value> {
             "payloads_per_artifact_max": 128,
             "interfaces_per_artifact_max": 32,
             "interface_shape": {"payload": "<payload-name>", "spec": {}},
+            "optional_payloads": "A payload declared with \"optional\": true is left out of the export when its output file is empty, together with interface spec keys ending in _payload whose value names it; an interface's own payload must be required",
             "unknown_interfaces": "Preserved without execution; consumption requires a trusted compatible handler",
             "paths": "Exact declared output files inside the workspace, including after symlink resolution",
         },

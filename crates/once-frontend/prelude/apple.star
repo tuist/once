@@ -5678,6 +5678,7 @@ def _apple_application_impl(ctx):
         "transitive_vfs_overlays": dep_vfs_overlays,
     }
     if ctx["capability"] == "artifact":
+        provider["app_icon_files"] = _apple_app_icon_files(asset_catalogs, app_icon) if host_os() == "macos" else []
         return _apple_export_artifact(ctx, provider, info_plist, minimum_os, arch)
     return provider
 

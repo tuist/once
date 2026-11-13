@@ -36,6 +36,14 @@ On macOS, `dev.once.apple-install.v2` also points to `bundle` and names a
 `version`, `build_version`, `mach_o_uuids`, `platform`, `sdk_variant`, `signing`
 and `signature_verified`. The producer verifies the completed bundle with
 `codesign --verify --deep --strict` and collects Mach-O UUIDs with `dwarfdump`.
+When the application has an icon, an `icon` PNG payload is named through
+`spec.icon_payload`. macOS applications convert the `CFBundleIconFile` `.icns`
+with `sips`; other platforms use the largest PNG named by `CFBundleIcons` or
+`CFBundleIcons~ipad`. Only files the build declares as part of the bundle count.
+When the bundle names no usable icon, the largest PNG in the `app_icon` set of
+`asset_catalogs` is used instead. Xcode-optimized CgBI PNGs are skipped. Icons
+larger than 512 pixels are scaled down to 512. An application with none of these
+publishes without an `icon` payload.
 
 The v2 producer declaration approves automatic publication of the full closure
 only for ad-hoc signed macOS and simulator applications exported on macOS.
