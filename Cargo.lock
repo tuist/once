@@ -369,9 +369,9 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "bazel-remote-apis"
-version = "0.29.0"
+version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89d6db9eac2683e55a2514f4e21a124d715094a4a9d2728c86ba1f1c0107edaa"
+checksum = "bb0b0a9dfe182d1453322c7e54960f0b6664f2537c96dbdc939e151631f23be0"
 dependencies = [
  "prost",
  "tonic",
