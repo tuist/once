@@ -1733,6 +1733,13 @@ attribute overrides that tool. Without a manifest, compiler-produced archives
 are unchanged. Kotlin manifest packaging and Android JAR/AAR packaging and APK
 additions use fixed ZIP timestamps with JDK 17 or newer.
 
+Android target kinds discover installed release SDK platforms with integer or
+major/minor versions, including API 37.0. Automatic selection compares these
+versions numerically and excludes preview and canary platforms. An explicit
+`compile_sdk = 37` uses the integer platform when installed, otherwise the 37.0
+platform. Resource linking still uses the integer API level for the default
+target SDK, and action cache identities include the selected platform version.
+
 Nx output declarations describe potential paths or patterns, not required
 products. Runnable tasks cache a declared snapshot and manifest of existing
 matches, then restore them through deferred copy actions. Missing matches are

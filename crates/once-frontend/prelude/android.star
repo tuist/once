@@ -254,15 +254,18 @@ def _android_sdk_subdirs(root):
     return dirs
 
 def _android_highest_platform(sdk_root, label_id):
-    best = -1
+    best = (-1, -1)
     best_name = ""
     for name in _android_sdk_subdirs(sdk_root + "/platforms"):
         if not name.startswith("android-"):
             continue
         version = name[len("android-"):]
-        if not _android_all_digits(version):
+        parts = version.split(".")
+        if len(parts) > 2 or not _android_all_digits(parts[0]):
             continue
-        value = int(version)
+        if len(parts) == 2 and not _android_all_digits(parts[1]):
+            continue
+        value = (int(parts[0]), int(parts[1]) if len(parts) == 2 else -1)
         if value > best:
             best = value
             best_name = version
@@ -317,14 +320,19 @@ def _android_kotlin_stdlib(attrs, kotlinc):
 def _android_tools(ctx, attrs, include_java, include_apk, include_kotlin = False, include_jar = True):
     label_id = ctx["label"]["id"]
     sdk_root = _android_sdk_root(attrs, label_id)
-    compile_sdk = str(_android_attr(attrs, "compile_sdk", "") or _android_highest_platform(sdk_root, label_id))
+    platform = str(_android_attr(attrs, "compile_sdk", "") or _android_highest_platform(sdk_root, label_id))
+    platform_root = sdk_root + "/platforms/android-" + platform
+    if not host_file_exists(platform_root + "/android.jar") and host_file_exists(platform_root + ".0/android.jar"):
+        platform += ".0"
+        platform_root += ".0"
+    compile_sdk = platform.split(".")[0]
     build_tools_version = _android_attr(attrs, "build_tools_version", "") or _android_highest_build_tools(sdk_root, label_id)
     build_tools = sdk_root + "/build-tools/" + build_tools_version
     tools = {
         "sdk_root": sdk_root,
         "compile_sdk": compile_sdk,
         "build_tools_version": build_tools_version,
-        "android_jar": sdk_root + "/platforms/android-" + compile_sdk + "/android.jar",
+        "android_jar": platform_root + "/android.jar",
         "aapt2": _android_attr(attrs, "aapt2", "") or build_tools + "/aapt2",
     }
     identity = [
@@ -332,7 +340,7 @@ def _android_tools(ctx, attrs, include_java, include_apk, include_kotlin = False
         "sdk",
         sdk_root,
         "compile_sdk",
-        compile_sdk,
+        platform,
         "build_tools",
         build_tools_version,
         "aapt2",

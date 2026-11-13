@@ -41,6 +41,9 @@ mod jvm_test_results;
 #[path = "prelude/android_archives.rs"]
 mod android_archives;
 
+#[path = "prelude/android_sdk.rs"]
+mod android_sdk;
+
 #[cfg(unix)]
 #[path = "prelude/rust_build_script.rs"]
 mod rust_build_script;
