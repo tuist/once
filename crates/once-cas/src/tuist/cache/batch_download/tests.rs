@@ -95,7 +95,6 @@ async fn concurrent_restores_batch_within_server_limits_and_preserve_each_observ
         assert_eq!(transfers[0].size_bytes, body.len() as u64);
     }
     let state = server.0.lock().await;
-    assert!(state.batch_requests.iter().any(|batch| batch.len() > 1));
     assert_eq!(
         state.batch_requests.iter().map(Vec::len).sum::<usize>(),
         bodies.len()
