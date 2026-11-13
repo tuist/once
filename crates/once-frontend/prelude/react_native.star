@@ -249,11 +249,12 @@ def _react_native_dependencies_resolver(ctx):
     }
 
 def _react_native_tools(ctx, include_package_manager = False):
+    project_root = workspace_root() + "/" + _react_native_package_root(ctx)
     node_name = _react_native_attr(ctx, "node", "node")
     node = _resolve_host_executable(node_name)
     if not node:
         fail(ctx["label"]["id"] + ": Node.js executable `" + node_name + "` was not found")
-    node_version = host_command([node, "--version"]).strip()
+    node_version = host_command([node, "--version"], cwd = project_root).strip()
     tools = {
         "node": node,
         "node_version": node_version,
@@ -265,7 +266,7 @@ def _react_native_tools(ctx, include_package_manager = False):
         executable = _resolve_host_executable(executable_name)
         if not executable:
             fail(ctx["label"]["id"] + ": " + manager + " executable `" + executable_name + "` was not found")
-        version = host_command([executable, "--version"]).strip()
+        version = host_command([executable, "--version"], cwd = project_root).strip()
         tools["package_manager"] = executable
         tools["package_manager_name"] = manager
         tools["package_manager_version"] = version
@@ -401,10 +402,12 @@ def _react_native_dependencies_impl(ctx):
         "label_id": ctx["label"]["id"],
         "target_kind": "react_native_dependencies",
         "javascript_root": install_root,
+        "javascript_source_root": ctx["label"]["package"],
         "node_modules": node_modules,
         "package_json": package_json,
         "lockfile": lockfile,
         "package_manager": _react_native_attr(ctx, "_package_manager", "npm"),
+        "javascript_tools": {"name": tools["package_manager_name"], "executable": tools["package_manager"], "identity": tools["identity"]},
         "react_native_version": _react_native_attr(ctx, "_react_native_version", ""),
         "hermes_version": _react_native_attr(ctx, "_hermes_version", ""),
         "module_targets": _react_native_attr(ctx, "_react_native_module_targets", []),
@@ -467,16 +470,7 @@ def _react_native_source_files(ctx, default_excludes = []):
     return [source for source in glob(ctx["srcs"]) if source not in excluded]
 
 def _react_native_stage_project(ctx, dependency, files):
-    stage = ctx["build_dir"] + "/project"
-    prepare_path(stage, kind = "remove", identifier = ctx["label"]["id"] + ":project-clean")
-    prepare_path(stage, kind = "directory", identifier = ctx["label"]["id"] + ":project-prepare")
-    _react_native_stage_files(ctx, stage, files)
-    link_path(
-        dependency["node_modules"],
-        stage + "/node_modules",
-        identifier = ctx["label"]["id"] + ":stage-node-modules",
-    )
-    return stage
+    return _javascript_stage_project(ctx, dependency, files)
 
 def _react_native_hermes_runner_source():
     return """const path = require("node:path");

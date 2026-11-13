@@ -12,6 +12,91 @@ def _javascript_node(ctx):
         fail(ctx["label"]["id"] + ": Node.js executable `" + requested + "` was not found")
     return resolved
 
+def _javascript_stage_project(ctx, dependency, files):
+    stage = ctx["build_dir"] + "/project"
+    copy_path(
+        dependency["javascript_root"],
+        stage,
+        kind = "tree",
+        inputs = [dependency["javascript_root"]],
+        identifier = ctx["label"]["id"] + ":stage-dependencies",
+        source_files = _action_source_files([dependency["javascript_root"]]),
+    )
+    package = dependency["javascript_source_root"]
+    prefix = package + "/" if package else ""
+    for source in files:
+        relative = source[len(prefix):] if prefix and source.startswith(prefix) else source
+        copy_path(
+            source,
+            stage + "/" + relative,
+            inputs = [source],
+            identifier = ctx["label"]["id"] + ":stage:" + relative,
+            source_files = _action_source_files([source]),
+        )
+    return stage
+
+def _javascript_build_impl(ctx):
+    dependencies = [dep for dep in ctx["deps"] if dep.get("javascript_dependency_set")]
+    if len(dependencies) != 1:
+        fail(ctx["label"]["id"] + ": expected exactly one javascript_dependency_set dependency")
+    dependency = dependencies[0]
+    package_dir = _javascript_attr(ctx, "package_dir", ".")
+    outputs = _javascript_attr(ctx, "outputs", [])
+    for path in [package_dir] + outputs:
+        if not path or path.startswith("/") or "\\" in path or ":" in path or ".." in path.split("/"):
+            fail(ctx["label"]["id"] + ": package_dir and outputs must be relative paths inside the staged workspace")
+    if not outputs or [path for path in outputs if "." in path.split("/") or "" in path.split("/")]:
+        fail(ctx["label"]["id"] + ": outputs must name build products, not the workspace root")
+    files = glob(ctx["srcs"])
+    stage = _javascript_stage_project(ctx, dependency, files)
+    tools = dependency["javascript_tools"]
+    node = _javascript_node(ctx)
+    node_version = host_command([node, "--version"], cwd = workspace_root() + "/" + ctx["label"]["package"]).strip()
+    home = ctx["scratch_dir"] + "/home"
+    products = [stage + "/" + path for path in outputs]
+    env = {
+        "CI": "1",
+        "HOME": execution_path(home),
+        "PATH": _parent_dir(node) + ":" + _parent_dir(tools["executable"]) + ":/usr/bin:/bin",
+    }
+    env.update(_javascript_attr(ctx, "env", {}))
+    args = _javascript_attr(ctx, "args", [])
+    argv = [tools["executable"], "run", _javascript_attr(ctx, "script", "")]
+    if args and tools["name"] == "npm":
+        argv.append("--")
+    argv.extend(args)
+    run_action(
+        display_name = "Build JavaScript package · " + ctx["label"]["name"],
+        source_files = _action_source_files(files),
+        argv = argv,
+        inputs = [stage],
+        outputs = products,
+        clean_paths = products,
+        create_dirs = [home],
+        cwd = stage + "/" + package_dir,
+        env = env,
+        toolchain_identity = tools["identity"] + "\x00build-node\x00" + node + "\x00" + node_version,
+        identifier = ctx["label"]["id"] + ":javascript-build",
+    )
+    return {"label_id": ctx["label"]["id"], "target_kind": "javascript_build", "products": products}
+
+javascript_build = target_kind(
+    docs = "Runs a package manager script in a private copy of a locked JavaScript workspace and caches its declared build products.",
+    attrs = [
+        attr("script", "string", required = True, docs = "Package script passed to the locked dependency set's package manager with `run`.", configurable = False),
+        attr("package_dir", "string", default = "\".\"", docs = "Workspace-relative package directory used as the working directory.", configurable = False),
+        attr("outputs", "list<string>", required = True, docs = "Build product paths relative to the staged workspace root, not package_dir.", configurable = False),
+        attr("args", "list<string>", default = "[]", docs = "Additional script arguments.", configurable = True),
+        attr("env", "map<string,string>", default = "{}", docs = "Explicit non-secret build environment.", configurable = True),
+        attr("node", "string", default = "\"node\"", docs = "Node.js executable.", configurable = False),
+    ],
+    deps = [dep("deps", ["javascript_dependency_set"], "Locked workspace installation.", min_count = 1, max_count = 1)],
+    capabilities = [capability("build", ["default", "products"])],
+    tools = [_JAVASCRIPT_TOOL],
+    examples = [example("react-native-application-minimal", name = "JavaScript library declarations", use_when = "Build a TypeScript library alongside a React Native application.", platforms = ["macos"])],
+    impl = _javascript_build_impl,
+)
+
 def _javascript_env(ctx, test_dir, node):
     env = {"HOME": execution_path(test_dir + "/home"), "CI": "1"}
     node_dir = _parent_dir(node)

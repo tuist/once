@@ -108,6 +108,29 @@ host target selection and the default unwind panic strategy are preserved.
 Build-script `OPT_LEVEL` and `DEBUG` environment variables describe the crate's
 optimization and debug information, not the build-script executable's profile.
 
+## JavaScript workspace builds
+
+`javascript_build` consumes exactly one `javascript_dependency_set`. Its
+provider supplies `javascript_root`, the installation tree, and
+`javascript_source_root`, its original workspace-relative package directory
+(empty for the workspace root). Source overlays retain their paths relative to
+that installation root, including when the consumer lives in another package.
+`javascript_tools` contains the package manager's `name`, resolved `executable`,
+and versioned `identity`. The built-in
+`react_native_dependencies` target provides this contract for a locked
+installation, including nested workspace dependencies and lifecycle outputs.
+
+The build copies the complete installation and overlays `srcs` before invoking
+the package manager with `run`, the required `script`, and optional `args`.
+`package_dir` defaults to `.`. Required `outputs` are workspace-relative build
+products, exposed as `products`; they must not name the workspace root or
+escape it. `env` declares non-secret environment values and `node` selects
+Node.js. Sources, installed dependencies, arguments, environment, Node.js
+version, and package-manager identity participate in the action cache key.
+The provider's installation remains immutable while scripts run in private
+staging directories. See [React Native](/guide/graph/react-native) for library
+and Expo boundaries.
+
 ## Loading Project Modules
 
 Project modules are listed from the root manifest:

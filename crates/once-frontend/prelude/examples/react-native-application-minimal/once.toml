@@ -1,4 +1,14 @@
 [[target]]
+name = "Library"
+kind = "javascript_build"
+srcs = ["library.ts"]
+deps = ["./Dependencies"]
+
+[target.attrs]
+script = "build:library"
+outputs = ["lib"]
+
+[[target]]
 name = "Dependencies"
 kind = "react_native_dependencies"
 srcs = [

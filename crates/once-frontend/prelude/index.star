@@ -42,7 +42,7 @@ PRELUDE_DEPENDENCIES = {
     "android.star": ["jvm_test_runner.star"],
     "kotlin.star": ["jvm_test_runner.star"],
     "xcode.star": ["apple.star", "archive.star"],
-    "react_native.star": ["android.star"],
+    "react_native.star": ["android.star", "javascript.star"],
     "swift_package.star": ["apple.star", "xcode.star"],
 }
 
@@ -146,6 +146,7 @@ PRELUDE_TARGET_KINDS = {
         "minitest_test",
     ],
     "javascript.star": [
+        "javascript_build",
         "vitest_test",
         "jest_test",
     ],

@@ -3,6 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
+    "build:library": "tsc library.ts --declaration --skipLibCheck --outDir lib",
     "android": "react-native run-android",
     "ios": "react-native run-ios",
     "lint": "eslint .",

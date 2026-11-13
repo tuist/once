@@ -1,0 +1,50 @@
+[[target]]
+name = "Dependencies"
+kind = "react_native_dependencies"
+srcs = [
+  "package.json",
+  "yarn.lock",
+  "example/package.json",
+  "docs/package.json",
+  "scripts/**/*",
+  ".yarn/releases/*",
+]
+
+[target.attrs]
+allow_network = true
+package_manager_files = [".yarnrc.yml"]
+resolver_inputs = ["package.json", "yarn.lock", ".yarnrc.yml"]
+
+[[target]]
+name = "Paper"
+kind = "javascript_build"
+srcs = ["src/**/*", "scripts/**/*", "tsconfig*.json", "babel.config.js", "babel.js"]
+deps = ["./Dependencies"]
+
+[target.attrs]
+script = "prepack"
+outputs = ["lib"]
+
+[[target]]
+name = "Example"
+kind = "javascript_build"
+srcs = [
+  "src/**/*",
+  "example/src/**/*",
+  "example/assets/**/*",
+  "example/public/**/*",
+  "example/*.js",
+  "example/*.json",
+  "example/utils/**/*",
+  "babel.config.js",
+  "babel.js",
+  "tsconfig*.json",
+]
+deps = ["./Dependencies"]
+
+[target.attrs]
+script = "expo"
+package_dir = "example"
+args = ["export", "--platform", "all", "--no-bytecode", "--max-workers", "2", "--output-dir", "dist"]
+outputs = ["example/dist"]
+env = { EXPO_NO_TELEMETRY = "1", EXPO_NO_TYPESCRIPT_SETUP = "1" }

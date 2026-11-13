@@ -104,9 +104,11 @@ validation. CocoaPods and Gradle still regenerate the files they consume.
 
 ## Cache boundary
 
-The JavaScript dependency tree is installed and cached once. Consumer targets
-stage a lightweight workspace link instead of duplicating that tree in every
-target output. Metro bundles, Hermes bytecode, generated native interfaces,
+The JavaScript workspace is installed and cached once. Build targets copy the
+complete installation into a private staging directory, then overlay their
+declared sources. This preserves workspace-local dependency trees and relative
+package links without letting a build mutate another target's installation.
+Metro bundles, Hermes bytecode, generated native interfaces,
 module metadata, and native application products are independently cacheable.
 Device installation, application launch, port forwarding, and the Metro server
 are runtime effects and always execute.
@@ -137,11 +139,56 @@ once -vv build OnceBaseline
 
 Once supports `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, and
 `bun.lock`. It detects the manager from the target attributes, the
-`packageManager` field, or the declared lockfile. The dependency target models
-one application package, so workspace-root installation is not yet
-synthesized. Package-manager configuration may be declared as an input, but it
+`packageManager` field, or the declared lockfile. For a workspace, declare the
+dependency target at the installation root. Include every workspace package
+manifest, local package source needed during installation, lifecycle script,
+and its inputs in `srcs`. Declare package-manager configuration with
+`package_manager_files`, and include that configuration in `resolver_inputs`.
+For Yarn's `yarnPath`, also stage the checked-in release through `srcs`.
+Missing workspace manifests can make an immutable install fail because the
+staged project no longer describes the locked dependency graph. Do not repair
+that failure by disabling frozen installs or regenerating the lockfile.
+Package-manager configuration may be declared as an input, but it
 must not contain credentials because inputs can enter a shared cache.
 Lifecycle scripts still run with the package manager's normal permissions.
+
+### Library builds and Expo exports
+
+Installing dependencies does not build a library or an application. Use
+`javascript_build` for package scripts such as a library's `prepack` build:
+
+```toml
+[[target]]
+name = "Library"
+kind = "javascript_build"
+srcs = ["src/**/*", "scripts/**/*", "tsconfig*.json", "babel.config.js"]
+deps = ["./Dependencies"]
+
+[target.attrs]
+script = "prepack"
+outputs = ["lib"]
+```
+
+`package_dir` selects a workspace member as the working directory. `outputs`
+remain relative to the staged workspace root. Declare every source and
+configuration file read by the script. The build invokes the dependency set's
+package manager and caches only the declared products. Builds start from a
+fresh workspace snapshot, so generated files cannot feed back into later keys.
+Package scripts retain their upstream shell semantics; Once does not synthesize
+a shell command for staging or cleanup.
+
+An Expo workspace can use its package manager's binary invocation through
+`javascript_build`, with `script = "expo"`, `package_dir = "example"`,
+`args = ["export", "--platform", "all", "--no-bytecode", "--output-dir", "dist"]`, and
+`outputs = ["example/dist"]` when that manager supports `run` for binaries.
+This exports JavaScript and assets. Some Expo versions embed random temporary
+filenames in Hermes bytecode; disabling bytecode avoids that source of
+non-reproducible output. A package-script action does not normalize arbitrary
+tool output, so verify reproducibility before enabling bytecode for a pinned
+Expo version. An export does not produce an APK or an Apple application.
+Expo projects without native
+directories require a separate prebuild step before the native application
+targets can build them; Once does not automatically synthesize that step.
 
 ### Native builds
 
@@ -158,5 +205,5 @@ Hermes artifact for distribution workflows.
 Metro watches the application package and its locked dependencies. Packages
 outside that boundary require a project-specific Metro configuration. Once
 can build Apple simulator or signed-device products, but `once run` installs
-simulator products only. React Native actions currently run locally because
-remote execution needs a portable replacement for workspace dependency links.
+simulator products only. Native builds still need the corresponding host
+toolchains. Live Metro uses a local dependency snapshot and workspace links.

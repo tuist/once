@@ -282,7 +282,7 @@ defmodule OnceSiteWeb.Docs.Sidebar do
                 mix_release elixir_library elixir_test)),
               target_group("Python", ~w(pytest_test)),
               target_group("Ruby", ~w(rspec_test minitest_test)),
-              target_group("JavaScript", ~w(vitest_test jest_test)),
+              target_group("JavaScript", ~w(javascript_build vitest_test jest_test)),
               target_group("Nx", ~w(nx_workspace nx_task)),
               target_group(
                 "React Native",

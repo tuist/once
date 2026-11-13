@@ -197,6 +197,7 @@ fn android_prelude_source() -> String {
 fn react_native_prelude_source() -> String {
     [
         include_str!("../prelude/common.star"),
+        include_str!("../prelude/javascript.star"),
         include_str!("../prelude/jvm_test_runner.star"),
         include_str!("../prelude/android.star"),
         include_str!("../prelude/react_native.star"),
@@ -852,6 +853,7 @@ ctx = {{
     "deps": [{{
         "react_native_dependency_set": True,
         "javascript_root": ".once/out/Dependencies/javascript",
+        "javascript_source_root": "app",
         "node_modules": ".once/out/Dependencies/javascript/node_modules",
         "package_json": "app/package.json",
         "lockfile": "app/package-lock.json",
@@ -877,10 +879,13 @@ result = repr(_react_native_bundle_impl(ctx))
     let result = result.unwrap();
     assert!(result.contains("\"react_native_bundle\": True"));
     assert!(result.contains("\"sources\": [\"app/index.js\", \"app/metro.config.js\"]"));
-    let stage_link = action_by_identifier(&store, "app/Bundle:stage-node-modules");
+    let stage_link = action_by_identifier(&store, "app/Bundle:stage-dependencies");
     assert!(matches!(
         stage_link.operation,
-        Some(DeclaredActionOperation::LinkPath { .. })
+        Some(DeclaredActionOperation::CopyPath {
+            mode: DeclaredCopyPathMode::Tree,
+            ..
+        })
     ));
     let metro = action_by_identifier(&store, "app/Bundle:metro-bundle");
     assert!(metro.inputs.iter().any(|input| input.ends_with("project")));
@@ -939,6 +944,7 @@ ctx = {{
     "deps": [{{
         "react_native_dependency_set": True,
         "javascript_root": ".once/out/Dependencies/javascript",
+        "javascript_source_root": "app",
         "node_modules": ".once/out/Dependencies/javascript/node_modules",
         "package_json": "app/package.json",
         "lockfile": "app/package-lock.json",
@@ -1036,6 +1042,7 @@ ctx = {{
     "deps": [{{
         "react_native_dependency_set": True,
         "javascript_root": ".once/out/Dependencies/javascript",
+        "javascript_source_root": "app",
         "node_modules": ".once/out/Dependencies/javascript/node_modules",
         "package_json": "app/package.json",
         "lockfile": "app/package-lock.json",
@@ -1204,6 +1211,7 @@ ctx = {{
     "deps": [{{
         "react_native_dependency_set": True,
         "javascript_root": ".once/out/Dependencies/javascript",
+        "javascript_source_root": "app",
         "node_modules": ".once/out/Dependencies/javascript/node_modules",
         "package_json": "app/package.json",
         "lockfile": "app/package-lock.json",

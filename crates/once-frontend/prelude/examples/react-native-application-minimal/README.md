@@ -12,6 +12,15 @@ Install and cache the locked JavaScript packages:
 once build Dependencies
 ```
 
+Build the small TypeScript library and its declarations with a package script:
+
+```sh
+once build Library
+```
+
+This target uses `javascript_build` with the same locked installation. Its
+JavaScript and declaration products are separate from the native applications.
+
 Build the native applications:
 
 ```sh

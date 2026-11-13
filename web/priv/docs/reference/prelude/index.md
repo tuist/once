@@ -174,6 +174,8 @@ you already have.
 
 ## JavaScript target kinds
 
+- [`javascript_build`](/reference/prelude/javascript_build): package scripts
+  with locked workspace dependencies and declared build products
 - [`vitest_test`](/reference/prelude/vitest_test): Vitest suites with exact
   case execution and automatic batching
 - [`jest_test`](/reference/prelude/jest_test): Jest suites with exact case
