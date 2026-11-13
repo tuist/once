@@ -652,7 +652,6 @@ impl Repair<'_> {
                         {
                             super::prepare_command_setup_admitted(
                                 self.workspace,
-                                self.cache,
                                 &setup.clean_paths,
                                 &setup.create_dirs,
                                 &lease,
@@ -662,6 +661,8 @@ impl Repair<'_> {
                         super::preparation::write_args(self.workspace, &setup.arg_files, &lease)
                             .await?;
                     }
+                    let outputs = producer.outputs.keys().cloned().collect::<Vec<_>>();
+                    super::preparation::output_parents(self.workspace, &outputs, &lease).await?;
                     let result = super::provider::execute(
                         &producer.action,
                         self.workspace,

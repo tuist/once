@@ -6,6 +6,7 @@ use std::sync::Arc;
 use futures::StreamExt;
 use once_cas::{ActionResult, CacheProvider};
 use sha2::Digest as ShaDigest;
+use std::io::Read as _;
 use std::io::Write as _;
 
 mod sandbox;
@@ -248,11 +249,19 @@ async fn execute_portable_action(
         Action::MaterializeHostFile {
             source,
             source_sha256,
+            source_mode,
             destination,
             ..
         } => {
-            materialize_host_file(source, source_sha256, destination, workspace_root, lease)
-                .await?;
+            materialize_host_file(
+                source,
+                source_sha256,
+                *source_mode,
+                destination,
+                workspace_root,
+                lease,
+            )
+            .await?;
             capture_file_action_outputs(
                 std::slice::from_ref(destination),
                 workspace_root,
@@ -916,17 +925,7 @@ async fn execute_command(
             (setup.create_dirs, PreparePathMode::Directory),
         ] {
             for path in paths {
-                execute_portable_action(
-                    &Action::PreparePath {
-                        path: path.clone(),
-                        mode,
-                        input_digest: None,
-                    },
-                    workspace_root,
-                    cache,
-                    lease.as_ref(),
-                )
-                .await?;
+                prepare_path(path, mode, workspace_root, lease.as_ref()).await?;
             }
         }
     }
@@ -1048,6 +1047,18 @@ fn empty_file_action_result() -> ActionResult {
     }
 }
 
+pub(crate) async fn prepare_path(
+    path: &WorkspacePath,
+    mode: PreparePathMode,
+    workspace_root: &Path,
+    lease: Option<&ExecutionPermit>,
+) -> Result<()> {
+    match mode {
+        PreparePathMode::Remove => remove_path(path, workspace_root, lease).await,
+        PreparePathMode::Directory => ensure_dir(path, workspace_root, lease).await,
+    }
+}
+
 /// Largest piece of a borrowed buffer copied into one blocking write, so a
 /// write never clones the whole buffer.
 const WRITE_CHUNK_BYTES: usize = 1 << 20;
@@ -1119,6 +1130,7 @@ async fn copy_file(
 async fn materialize_host_file(
     source: &Path,
     source_sha256: &str,
+    source_mode: Option<u32>,
     destination: &WorkspacePath,
     workspace_root: &Path,
     lease: Option<&ExecutionPermit>,
@@ -1140,9 +1152,38 @@ async fn materialize_host_file(
         }
     };
     spawn_admitted(lease, move || {
-        let bytes = std::fs::read(&source)
+        let mut input = std::fs::File::open(&source)
             .map_err(file_action("read_host_file", source.display().to_string()))?;
-        let digest = sha2::Sha256::digest(&bytes);
+        let metadata = input
+            .metadata()
+            .map_err(file_action("stat_host_file", source.display().to_string()))?;
+        if source_mode.is_some_and(|mode| once_host_tree::host_file_mode(&metadata) != mode) {
+            return Err(Error::InvalidHostFile {
+                reason: format!(
+                    "source `{}` permissions changed after analysis",
+                    source.display()
+                ),
+            });
+        }
+        let parent = absolute.parent().expect("workspace file has a parent");
+        std::fs::create_dir_all(parent).map_err(file_action("create_parent_dir", label.clone()))?;
+        let mut output = tempfile::NamedTempFile::new_in(parent)
+            .map_err(file_action("create_host_file_snapshot", label.clone()))?;
+        let mut hasher = sha2::Sha256::new();
+        let mut buffer = [0; 16 * 1024];
+        loop {
+            let count = input
+                .read(&mut buffer)
+                .map_err(file_action("read_host_file", source.display().to_string()))?;
+            if count == 0 {
+                break;
+            }
+            hasher.update(&buffer[..count]);
+            output
+                .write_all(&buffer[..count])
+                .map_err(file_action("write_host_file_snapshot", label.clone()))?;
+        }
+        let digest = hasher.finalize();
         let mut actual = String::with_capacity(digest.len() * 2);
         for byte in digest {
             write!(&mut actual, "{byte:02x}").expect("writing to a String cannot fail");
@@ -1154,11 +1195,25 @@ async fn materialize_host_file(
                 actual,
             });
         }
-        if let Some(parent) = absolute.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(file_action("create_parent_dir", label.clone()))?;
+        if source_mode.is_none() {
+            // Legacy actions retain ordinary file-creation permissions.
+            let mut snapshot = output
+                .reopen()
+                .map_err(file_action("read_host_file_snapshot", label.clone()))?;
+            let mut destination = std::fs::File::create(&absolute)
+                .map_err(file_action("write_file", label.clone()))?;
+            return std::io::copy(&mut snapshot, &mut destination)
+                .map(|_| ())
+                .map_err(file_action("write_file", label));
         }
-        std::fs::write(&absolute, &bytes).map_err(file_action("write_file", label))
+        output
+            .as_file()
+            .set_permissions(metadata.permissions())
+            .map_err(file_action("set_host_file_permissions", label.clone()))?;
+        output
+            .persist(&absolute)
+            .map(|_| ())
+            .map_err(|error| file_action("write_file", label)(error.error))
     })
     .await
     .map_err(|join| Error::FileAction {

@@ -35,6 +35,8 @@ pub enum DeclaredActionOperation {
     MaterializeHostFile {
         source: String,
         source_sha256: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_mode: Option<u32>,
         destination: String,
     },
     MaterializeHostTree {
@@ -301,6 +303,10 @@ pub enum Observation {
     FileDigest {
         path: String,
         sha256: String,
+    },
+    FileMode {
+        path: String,
+        mode: u32,
     },
     /// The size in bytes of one host file.
     FileSize {

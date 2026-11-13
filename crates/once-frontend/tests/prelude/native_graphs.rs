@@ -1,5 +1,118 @@
 use super::*;
 
+#[test]
+fn bazel_test_query_selects_roots_without_removing_build_targets() {
+    let source = format!(
+        r#"{}
+def host_which_optional(name):
+    return "/tools/bazel"
+def host_command(argv, cwd = None, env = None):
+    if argv[1] == "--version":
+        return "bazel 9"
+    if argv[2] == "selected":
+        return "cc_test rule //:unit\ncc_test rule //:outside_graph"
+    return "cc_library rule //:library\ncc_test rule //:unit\ncc_test rule //:benchmark"
+graph = bazel_workspace["resolver"]({{"label": {{"id": "bazel", "package": ""}}, "attr": {{"test_query": "selected"}}}})
+result = repr([graph["roots"], graph["attrs"]["_default_test_roots"], [target["name"] for target in graph["targets"]]])
+"#,
+        all_prelude_source(),
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["bz_library"], ["bz_unit"], ["bz_library", "bz_unit", "bz_benchmark"]]"#
+    );
+}
+
+#[test]
+fn bazel_workspace_forwards_declared_environment_to_generated_targets() {
+    let source = format!(
+        r#"{}
+def host_env(name):
+    return {{"HOME": "/home/test", "PATH": "/tools"}}.get(name)
+def host_which_optional(name):
+    return "/tools/bazelisk" if name == "bazelisk" else ""
+def host_file_exists(path):
+    return False
+def workspace_root():
+    return "/workspace"
+def host_command(argv, cwd = None, env = None):
+    if env.get("SDK_ROOT") != "" or env.get("CUSTOM") != "declared":
+        fail("missing declared environment")
+    if argv[0] != "/tools/bazelisk" or cwd != "/workspace/project":
+        fail("wrong tool or workspace")
+    return "bazel 9" if argv[1] == "--version" else "cc_library rule //lib:core\ncc_test rule //lib:core_test"
+ctx = {{"label": {{"id": "project/bazel", "package": "project"}}, "attr": {{"env": {{"SDK_ROOT": "", "CUSTOM": "declared"}}}}}}
+graph = _bazel_workspace_resolver(ctx)
+result = repr([graph["roots"], graph["attrs"]["_default_test_roots"], [target["attrs"]["env"] for target in graph["targets"]]])
+"#,
+        all_prelude_source(),
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["bz_lib_core"], ["bz_lib_core_test"], [{"SDK_ROOT": "", "CUSTOM": "declared"}, {"SDK_ROOT": "", "CUSTOM": "declared"}]]"#
+    );
+}
+
+#[test]
+fn bazel_explicit_executable_does_not_fall_back_to_bazelisk() {
+    let source = format!(
+        r#"{}
+def host_which_optional(name):
+    return "/tools/bazelisk" if name == "bazelisk" else ""
+def host_file_exists(path):
+    return False
+result = repr(_bazel_resolve_executable({{"label": {{"id": "bazel"}}, "attr": {{"bazel": "missing-bazel"}}}}))
+"#,
+        all_prelude_source(),
+    );
+    assert!(eval_prelude_source_to_repr(source)
+        .unwrap_err()
+        .contains("Bazel executable `missing-bazel` was not found"));
+}
+
+#[test]
+fn bazel_actions_preserve_empty_overrides_and_native_action_environment() {
+    for (mnemonic, native) in [("CppCompile", true), ("Unsupported", false)] {
+        let workspace = TempDir::new().unwrap();
+        let source = format!(
+            r#"{}
+def host_env(name):
+    return "/tools" if name == "PATH" else ""
+def host_which_optional(name):
+    return "/tools/bazel"
+def host_command(argv, cwd = None, env = None, max_output_bytes = None):
+    if len(argv) > 1 and argv[1] == "aquery":
+        if env.get("SDK_ROOT") != "" or env.get("CUSTOM") != "declared":
+            fail("missing analysis environment")
+        return '{{"actions": [{{"mnemonic": "{mnemonic}", "arguments": {arguments}, "environmentVariables": [{{"key": "CUSTOM", "value": "native"}}]}}]}}'
+    return "/output-base" if len(argv) > 1 and argv[1] == "info" else ""
+ctx = {{
+    "label": {{"id": "library", "name": "library", "package": ""}},
+    "attr": {{"_bazel_resolved": True, "bazel_label": "//:library", "bazel_rule_kind": "cc_library", "env": {{"SDK_ROOT": "", "CUSTOM": "declared"}}}},
+    "capability": "build",
+}}
+result = repr(bazel_target["impl"](ctx))
+"#,
+            all_prelude_source(),
+            arguments = if native {
+                r#"["cc", "source.cc"]"#
+            } else {
+                "[]"
+            },
+        );
+        let (store, result) = with_active_store(store_for(workspace.path(), ""), || {
+            eval_prelude_source_to_repr(source)
+        });
+        result.unwrap();
+        let action = store.actions.last().unwrap();
+        assert_eq!(action.env.get("SDK_ROOT").map(String::as_str), Some(""));
+        assert_eq!(
+            action.env.get("CUSTOM").map(String::as_str),
+            Some(if native { "native" } else { "declared" })
+        );
+    }
+}
+
 fn package_source(source: &str) -> String {
     format!(
         "{}\n{}\n{source}",

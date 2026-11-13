@@ -12,14 +12,13 @@ rule whose class ends in `_binary` (for example `rust_binary`, `cc_binary`,
 resolver must materialize it so the `bazel_label` and `bazel_rule_kind`
 attributes stay tied to real Bazel state.
 
-Both capabilities read the action graph for the label through `bazel aquery`
-and run every action themselves from
-`<workspace>/.once/bazel-shadow/<target>/`. Bazel handles analysis and
-external-repository download via `bazel fetch`; Once handles execution.
-When the action graph contains a Bazel-internal action (with no argv in
-`aquery` output), the capability falls back to `bazel run <label>` (or
-`bazel build <label>` for the `build` capability) and records the
-unsupported mnemonics on the target's provider.
+Build selects the default output, runfiles and validation closure from
+Bazel's analysis and executes it in `<workspace>/.once/bazel-actions/`.
+Spawns have declared inputs, outputs and environments. Spawn caching requires
+complete `toolchain_inputs` on the workspace seed. File writes, aliases and
+manifest-mapped runfiles use cacheable Once primitives. Unknown required
+action contracts delegate to Bazel and are recorded on the provider;
+delegated commands remain uncached by Once.
 
 ## Attributes
 
@@ -28,6 +27,9 @@ unsupported mnemonics on the target's provider.
 | `bazel_label` | string | yes |  | Fully qualified Bazel label of the binary rule, for example `//src:kura`. Set by the resolver. |
 | `bazel_rule_kind` | string | yes |  | Bazel rule class, for example `rust_binary`. Set by the resolver. |
 | `bazel` | string | no | `bazel` | Bazel executable forwarded from the workspace seed. |
+| `env` | map&lt;string,string&gt; | no | `{}` | Declared environment forwarded from the workspace seed. Empty values override inherited host variables; native `aquery` action environments take precedence. |
+| `toolchain_inputs` | list&lt;string&gt; | no | `[]` | Complete implicit host toolchain inputs, forwarded from the workspace seed. Required for spawn caching. |
+| `test_env` | map&lt;string,string&gt; | no | `{}` | Test runtime environment forwarded from the workspace seed. |
 
 ## Providers and capabilities
 

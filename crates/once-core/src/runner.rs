@@ -59,6 +59,16 @@ pub struct Runner {
 }
 
 impl Runner {
+    /// Prepare a command path without capturing unrelated directory contents.
+    pub async fn prepare_path_admitted(
+        path: &crate::WorkspacePath,
+        mode: crate::PreparePathMode,
+        workspace_root: &Path,
+        lease: crate::ExecutionPermit,
+    ) -> Result<()> {
+        execute::prepare_path(path, mode, workspace_root, Some(&lease)).await
+    }
+
     /// Execute a caller-admitted command with explicit workspace setup.
     /// Graph callers must include setup in their own command/cache identity.
     /// Docker applies it after staging inputs; native unsandboxed execution
@@ -1190,33 +1200,59 @@ mod tests {
         let host = TempDir::new().unwrap();
         let source = host.path().join("toolchain.bin");
         std::fs::write(&source, b"toolchain").unwrap();
-        let action = Action::MaterializeHostFile {
-            source: source.clone(),
-            source_sha256: "0db3de82a739e43a2b560d166d037c3c0061601bb194866eb79b2c87045d00f2"
-                .to_string(),
-            destination: WorkspacePath::try_from("out/toolchain.bin").unwrap(),
-            input_digest: Some(Digest::of_bytes(b"host-toolchain")),
-        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let mode = once_host_tree::host_file_mode(&std::fs::metadata(&source).unwrap());
+        let reference = host.path().join("default-mode");
+        std::fs::write(&reference, b"reference").unwrap();
+        let default_mode = once_host_tree::host_file_mode(&std::fs::metadata(reference).unwrap());
+        for (source_mode, expected_mode) in [(Some(mode), mode), (None, default_mode)] {
+            std::fs::write(&source, b"toolchain").unwrap();
+            let action = Action::MaterializeHostFile {
+                source: source.clone(),
+                source_sha256: "0db3de82a739e43a2b560d166d037c3c0061601bb194866eb79b2c87045d00f2"
+                    .to_string(),
+                source_mode,
+                destination: WorkspacePath::try_from("out/toolchain.bin").unwrap(),
+                input_digest: Some(Digest::of_bytes(b"host-toolchain")),
+            };
 
-        let first = run(&action, tmp.path(), &cas, RunOpts::default())
-            .await
-            .unwrap();
-        assert_eq!(first.cache, CacheState::Miss);
-        assert_eq!(
-            std::fs::read(tmp.path().join("out/toolchain.bin")).unwrap(),
-            b"toolchain"
-        );
+            let first = run(&action, tmp.path(), &cas, RunOpts::default())
+                .await
+                .unwrap();
+            assert_eq!(first.cache, CacheState::Miss);
+            assert_eq!(
+                once_host_tree::host_file_mode(
+                    &std::fs::metadata(tmp.path().join("out/toolchain.bin")).unwrap()
+                ),
+                expected_mode
+            );
+            assert_eq!(
+                std::fs::read(tmp.path().join("out/toolchain.bin")).unwrap(),
+                b"toolchain"
+            );
 
-        std::fs::remove_file(source).unwrap();
-        std::fs::remove_file(tmp.path().join("out/toolchain.bin")).unwrap();
-        let second = run(&action, tmp.path(), &cas, RunOpts::default())
-            .await
-            .unwrap();
-        assert_eq!(second.cache, CacheState::Hit);
-        assert_eq!(
-            std::fs::read(tmp.path().join("out/toolchain.bin")).unwrap(),
-            b"toolchain"
-        );
+            std::fs::remove_file(&source).unwrap();
+            std::fs::remove_file(tmp.path().join("out/toolchain.bin")).unwrap();
+            let second = run(&action, tmp.path(), &cas, RunOpts::default())
+                .await
+                .unwrap();
+            assert_eq!(second.cache, CacheState::Hit);
+            assert_eq!(
+                once_host_tree::host_file_mode(
+                    &std::fs::metadata(tmp.path().join("out/toolchain.bin")).unwrap()
+                ),
+                expected_mode
+            );
+            assert_eq!(
+                std::fs::read(tmp.path().join("out/toolchain.bin")).unwrap(),
+                b"toolchain"
+            );
+            std::fs::remove_file(tmp.path().join("out/toolchain.bin")).unwrap();
+        }
     }
 
     #[tokio::test]
@@ -1228,6 +1264,7 @@ mod tests {
             source,
             source_sha256: "0db3de82a739e43a2b560d166d037c3c0061601bb194866eb79b2c87045d00f2"
                 .to_string(),
+            source_mode: None,
             destination: WorkspacePath::try_from("out/toolchain.bin").unwrap(),
             input_digest: Some(Digest::of_bytes(b"changed-host-toolchain")),
         };
@@ -1488,6 +1525,55 @@ mod tests {
             .await
             .unwrap();
         assert!(tmp.path().join("out/stale").is_dir());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn command_directory_setup_does_not_capture_unrelated_files() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let workspace = TempDir::new().unwrap();
+        let (_storage, cas) = fresh_cas();
+        let cache = CacheProvider::Local(cas);
+        std::fs::create_dir(workspace.path().join("out")).unwrap();
+        let private = workspace.path().join("out/private");
+        std::fs::write(&private, "unrelated").unwrap();
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o0)).unwrap();
+        let mut action = echo_action("controlled");
+        if let Action::RunCommand {
+            stdout_path,
+            outputs,
+            ..
+        } = &mut action
+        {
+            *stdout_path = Some(Box::new(WorkspacePath::try_from("out/value").unwrap()));
+            outputs.push(WorkspacePath::try_from("out/value").unwrap());
+        }
+        let resources =
+            ExecutorResources::new(Arc::new(ResourcePool::new(ResourceLimits::new(1, 1 << 30))));
+        let lease = resources
+            .acquire(Executor::Local, action.resource_request())
+            .await;
+        let result = Runner::run_uncached_admitted_with_setup(
+            &action,
+            workspace.path(),
+            &cache,
+            false,
+            None,
+            lease,
+            &[],
+            &[WorkspacePath::try_from("out").unwrap()],
+            &[],
+        )
+        .await;
+        std::fs::set_permissions(private, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let result = result.unwrap();
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(
+            std::fs::read(workspace.path().join("out/value")).unwrap(),
+            b"controlled"
+        );
+        assert_eq!(result.outputs.keys().collect::<Vec<_>>(), [&"out/value"]);
     }
 
     #[cfg(unix)]

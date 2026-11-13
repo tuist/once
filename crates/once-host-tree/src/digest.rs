@@ -198,13 +198,13 @@ fn file_sha256_hex(path: &Path) -> std::io::Result<String> {
 }
 
 #[cfg(unix)]
-pub(crate) fn host_file_mode(metadata: &std::fs::Metadata) -> u32 {
+pub fn host_file_mode(metadata: &std::fs::Metadata) -> u32 {
     use std::os::unix::fs::PermissionsExt;
     metadata.permissions().mode()
 }
 
 #[cfg(not(unix))]
-pub(crate) fn host_file_mode(_metadata: &std::fs::Metadata) -> u32 {
+pub fn host_file_mode(_metadata: &std::fs::Metadata) -> u32 {
     0
 }
 

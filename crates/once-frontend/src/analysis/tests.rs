@@ -1365,9 +1365,30 @@ fn materialize_host_file_records_a_content_addressed_operation() {
             source: source.to_string_lossy().into_owned(),
             source_sha256: "0db3de82a739e43a2b560d166d037c3c0061601bb194866eb79b2c87045d00f2"
                 .to_string(),
+            source_mode: Some(once_host_tree::host_file_mode(
+                &std::fs::metadata(&source).unwrap()
+            )),
             destination: ".once/out/p/toolchain.bin".to_string(),
         })
     );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let engine = AnalysisEngine::new().unwrap();
+        assert!(engine.observations_hold(
+            tmp.path(),
+            &store.observations,
+            CommandPolicy::Rerun,
+            &UnchangedWorkspace::Unknown
+        ));
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!engine.observations_hold(
+            tmp.path(),
+            &store.observations,
+            CommandPolicy::Rerun,
+            &UnchangedWorkspace::Unknown
+        ));
+    }
 }
 
 #[test]

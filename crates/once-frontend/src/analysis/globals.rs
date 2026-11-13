@@ -951,6 +951,11 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             path: source.to_string(),
             sha256: source_sha256.clone(),
         });
+        let source_mode = once_host_tree::host_file_mode(&std::fs::metadata(source_path)?);
+        observe(Observation::FileMode {
+            path: source.to_string(),
+            mode: source_mode,
+        });
         let action = DeclaredAction {
             presentation: unpack_presentation(presentation),
             history: None,
@@ -958,6 +963,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             operation: Some(DeclaredActionOperation::MaterializeHostFile {
                 source: source.to_string(),
                 source_sha256,
+                source_mode: Some(source_mode),
                 destination: destination.to_string(),
             }),
             argv: Vec::new(),
@@ -2449,6 +2455,8 @@ fn observation_holds(
         Observation::FileDigest { path, sha256 } => host_cache
             .host_file_digest(Path::new(path), || file_sha256_hex(Path::new(path)))
             .is_ok_and(|actual| &actual == sha256),
+        Observation::FileMode { path, mode } => std::fs::metadata(path)
+            .is_ok_and(|metadata| once_host_tree::host_file_mode(&metadata) == *mode),
         Observation::TreeDigest { path, sha256 } => {
             let source = Path::new(path);
             source.is_dir()

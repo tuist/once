@@ -230,7 +230,7 @@ async fn same_target_outputs_materialize_before_a_later_miss() {
 }
 
 #[test]
-fn declared_action_uses_direct_argv_and_creates_output_parents() {
+fn declared_action_uses_direct_argv_without_creating_output_parents() {
     let workspace = tempfile::tempdir().unwrap();
     let declared = DeclaredAction {
         resources: ResourceRequest::default(),
@@ -272,8 +272,8 @@ fn declared_action_uses_direct_argv_and_creates_output_parents() {
     )
     .unwrap();
 
-    assert!(workspace.path().join(".once/out/x").is_dir());
-    assert!(workspace.path().join(".once/out/x/sub").is_dir());
+    assert!(!workspace.path().join(".once/out/x").exists());
+    assert!(!workspace.path().join(".once/out/x/sub").exists());
     let Action::RunCommand { argv, inputs, .. } = action else {
         panic!("command declaration should lower to RunCommand");
     };

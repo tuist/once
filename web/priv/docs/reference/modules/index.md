@@ -13,6 +13,28 @@ available across families; toolchain-specific helpers do not need to be loaded
 for unrelated targets. This keeps analysis work proportional to the graph
 without changing the schemas available through discovery.
 
+Bazel workspace seeds accept a nonconfigurable `env` map, forwarded to
+discovery, analysis, generated targets, and execution. Empty values override
+inherited host variables, while native action environments from `aquery` take
+precedence. The default executable falls back to `bazelisk` only when `bazel`
+is missing; custom executable names and paths are never silently replaced. See
+[`bazel_workspace`](/reference/prelude/bazel_workspace).
+
+Bazel workspace `test_query` selects default test roots independently of build
+targets. Only enumerated test rules returned by the query become default test
+roots; explicit test requests are unchanged. Native test command filters are
+not inferred from `.bazelrc`.
+
+Bazel owned actions use declared inputs, outputs and environments. Complete
+`toolchain_inputs` fingerprint implicit host toolchain dependencies before
+enabling spawn caching. Fresh spawns remove their declared outputs before
+execution, matching native Bazel; cache hits restore them instead.
+Aliases and manifest-mapped runfiles are materialized
+by value and remain cacheable. Test execution stays uncached, with additional
+runtime environment declared through `test_env`. Required unsupported native
+actions delegate to Bazel and remain uncached by Once. These declarations do
+not provide hermetic remote execution or cross-host cache portability.
+
 Built-in Apple target kinds use Xcode tool discovery on macOS and the registered
 xtool Darwin Swift SDK on Linux. The existing `xcode_developer_dir` attribute
 pins Xcode's `Developer` directory on macOS or a Darwin SDK bundle's `Developer`
@@ -889,9 +911,10 @@ Built-in history currently covers Rust compilation/build scripts/test-runner com
   one or more directory contents while preserving their symlink layout. Each
   source tree is automatically hashed as an input.
 - `materialize_host_file(source, destination)` snapshots one absolute host
-  toolchain file into a workspace output. Analysis records its
-  [256-bit Secure Hash Algorithm digest](https://csrc.nist.gov/pubs/fips/180-4/upd1/final),
-  and execution verifies the digest before the output enters the cache.
+  toolchain file into a workspace output, preserving its permissions. Analysis
+  records its [256-bit Secure Hash Algorithm digest](https://csrc.nist.gov/pubs/fips/180-4/upd1/final)
+  and file mode. Execution verifies both before publishing the output through
+  bounded streaming buffers. Cache restoration preserves executable permissions.
 - `materialize_host_tree(source, destination)` snapshots one absolute host
   directory into a workspace directory output. Analysis and execution verify
   its content, file modes, and symbolic links before the output enters the
@@ -1015,9 +1038,11 @@ and includes its identity in the action's cache key.
   command execution. Cache hits restore outputs without running the
   command.
 - `create_dirs`: workspace-relative directories to create before a fresh
-  command execution. With Docker provider execution, directory setup applies
-  inside the worker after input staging. It does not copy coordinator scratch
-  contents as implicit inputs or mutate coordinator-only setup paths. Other
+  command execution. Existing sibling contents are not read, captured or
+  added to the command's inputs or outputs. With Docker provider execution,
+  directory setup applies inside the worker after input staging. It does not
+  copy coordinator scratch contents as implicit inputs or mutate
+  coordinator-only setup paths. Other
   remote adapters currently reject nonempty command directory setup.
 - `cwd`: workspace-relative directory to run the command in. Defaults to
   the workspace root when omitted or `None`.

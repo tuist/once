@@ -229,6 +229,8 @@ pub enum Action {
     MaterializeHostFile {
         source: PathBuf,
         source_sha256: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_mode: Option<u32>,
         destination: WorkspacePath,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         input_digest: Option<Digest>,

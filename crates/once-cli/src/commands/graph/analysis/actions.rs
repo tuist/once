@@ -881,6 +881,18 @@ async fn run_declared_action(run: DeclaredActionRun<'_>) -> Result<DeclaredActio
         "preparing declared graph action"
     );
     let prepare_started = std::time::Instant::now();
+    preparation::restore_generated_directories(
+        &Repair {
+            workspace,
+            cache,
+            source_digest_cache,
+            resources,
+            producers,
+        },
+        &declared,
+        available_inputs,
+    )
+    .await?;
     let preparation = producers
         .executors(resources)?
         .acquire_materialization()
@@ -1001,7 +1013,6 @@ async fn prepare_command_setup(
 
 async fn prepare_command_setup_admitted(
     workspace: &Path,
-    cache: &CacheProvider,
     clean_paths: &[String],
     create_dirs: &[String],
     lease: &once_core::ExecutionPermit,
@@ -1015,13 +1026,13 @@ async fn prepare_command_setup_admitted(
                 .map(|path| (path, once_core::PreparePathMode::Directory)),
         );
     for (path, mode) in paths {
-        let action = Action::PreparePath {
-            path: workspace_path(path, "command preparation path")?,
+        once_core::Runner::prepare_path_admitted(
+            &workspace_path(path, "command preparation path")?,
             mode,
-            input_digest: None,
-        };
-        once_core::run_uncached_admitted(&action, workspace, cache, false, None, lease.clone())
-            .await?;
+            workspace,
+            lease.clone(),
+        )
+        .await?;
     }
     Ok(())
 }
@@ -1139,6 +1150,14 @@ fn record_producer(
             .filter_map(|input| enclosing_available_output(context.available_inputs, input))
             .map(|(path, input)| (path.clone(), input.blob_digest)),
     );
+    for input in &declared.inputs {
+        if resolve_available_input(context.available_inputs, input).is_none() {
+            inputs.extend(
+                generated_input_children(context.available_inputs, input)
+                    .map(|(path, input)| (path.clone(), input.blob_digest)),
+            );
+        }
+    }
     if declared.depends_on_prior_actions {
         inputs.extend(
             context
@@ -1898,7 +1917,6 @@ fn prepare_declared_action_with_inputs(
                 .with_context(|| format!("invalid declared output path `{path}`"))
         })
         .collect::<Result<Vec<_>>>()?;
-    ensure_output_parent_dirs(workspace, &outputs)?;
     let stdout_path = declared
         .stdout
         .as_deref()
@@ -2034,6 +2052,7 @@ fn operation_to_action(operation: DeclaredActionOperation, input_digest: Digest)
         DeclaredActionOperation::MaterializeHostFile {
             source,
             source_sha256,
+            source_mode,
             destination,
         } => {
             let source = std::path::PathBuf::from(source);
@@ -2046,6 +2065,7 @@ fn operation_to_action(operation: DeclaredActionOperation, input_digest: Digest)
             Action::MaterializeHostFile {
                 source,
                 source_sha256,
+                source_mode,
                 destination: workspace_path(&destination, "materialize_host_file destination")?,
                 input_digest: Some(input_digest),
             }
@@ -2378,6 +2398,16 @@ fn enclosing_available_output<'a>(
     None
 }
 
+fn generated_input_children<'a>(
+    available: &'a BTreeMap<String, AvailableInput>,
+    input: &str,
+) -> impl Iterator<Item = (&'a String, &'a AvailableInput)> {
+    let prefix = format!("{input}/");
+    available
+        .range(prefix.clone()..)
+        .take_while(move |(path, _)| path.starts_with(&prefix))
+}
+
 fn compose_input_fingerprint_with_available(
     workspace: &Path,
     declared: &DeclaredAction,
@@ -2406,9 +2436,12 @@ fn compose_input_fingerprint_with_available(
             };
             builder.push_keyed_component(category, *input, input.as_bytes(), digest);
         } else {
+            let generated_directory = generated_input_children(available_inputs, input)
+                .next()
+                .is_some();
             let digest = match source_digest_cache {
-                Some(cache) => cache.digest(workspace, input),
-                None => once_core::digest_source_path(workspace, input),
+                Some(cache) if !generated_directory => cache.digest(workspace, input),
+                _ => once_core::digest_source_path(workspace, input),
             }
             .with_context(|| format!("hashing declared input `{input}`"))?;
             builder.push_keyed_component("source", *input, input.as_bytes(), &digest);

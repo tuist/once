@@ -8,18 +8,36 @@ Native [Bazel](https://bazel.build) workspace seed.
 [`bazel query`](https://bazel.build/query/language) and materializes every
 rule the query returns as a `bazel_target` graph node. When a graph target
 is built, Once reads Bazel's action graph for that target through
-[`bazel aquery`](https://bazel.build/query/aquery) and runs every action
-itself from a shadow execution root under
-`<workspace>/.once/bazel-shadow/<target>/`. Bazel supplies the analysis
-phase (target loading, toolchain resolution, external repository download
-via `bazel fetch`, the action graph); Once supplies the execution phase.
+[`bazel aquery`](https://bazel.build/query/aquery). A configured query selects
+the default outputs, runfiles and validation closure. Once executes that closure
+in `<workspace>/.once/bazel-actions/`, with declared source copies and
+content-verified external repository files. Bazel supplies analysis and
+external repository downloads; Once supplies execution.
 `bazel build` is not invoked in the ownership path.
 
 Unsupported internal actions fall back to `bazel <capability>` for the
-target. `TestRunner` also delegates because its runtime test environment
-and runfiles mapping are not fully described by `aquery`. The target's
-provider records which mnemonics forced the fallback. Delegated commands
-bypass the Once action cache; Bazel owns their build and test cache reuse.
+target. This includes opaque file writes and stamped build information when
+required by the selected outputs. The provider records unsupported mnemonics.
+Delegated commands remain uncached by Once, with Bazel owning their outputs.
+They are not cacheable native-action ownership.
+
+Owned spawn actions declare their actual inputs, outputs and environment.
+They are cacheable only with explicit `toolchain_inputs`; this declaration must
+cover every implicit host dependency, including compiler subprocesses, system
+headers and link libraries. Contents participate in action identity. Merely
+declaring the compiler executable is insufficient. Without this declaration,
+spawns bypass the cache. External-file staging, file writes, materialized
+aliases and manifest-mapped runfiles remain cacheable. Aliases and runfiles are
+copied by value rather than linked into mutable native outputs.
+
+Owned tests use the exposed test launcher and manifest mapping, rule arguments,
+environment, size, timeout and shard count. Test execution intentionally bypasses
+the cache; compilation and runfiles preparation remain cacheable. Declare
+additional native test command environment through `test_env`. Once does not
+infer `.bazelrc` test command options or implement flaky-test retries. Unsupported
+test action shapes delegate. These contracts do not imply hermetic remote
+execution or cross-host cache portability: host tool paths, native action
+arguments and runfiles manifests can contain absolute paths.
 
 Once discovers a Bazel workspace automatically from `MODULE.bazel`,
 `WORKSPACE.bazel`, or `WORKSPACE`. A repository without `once.toml` can
@@ -32,6 +50,13 @@ rule the workspace exposes. The `query` attribute overrides that expression
 when only a subset of the graph should reach Once. The `exclude_packages`
 attribute drops named package prefixes from the default query without
 rewriting it.
+
+`test_query` independently selects default test roots from that graph. It does
+not remove build targets or change explicit `once test <target>` requests.
+Once does not infer Bazel test command filters from `.bazelrc`; declare the
+matching query when the native suite excludes tagged tests. For example,
+`tests(//...) except attr("tags", "benchmark", //...)` excludes benchmark-tagged
+tests from targetless testing while keeping them available to build.
 
 Each rule becomes one of three target kinds so the graph advertises only
 the capabilities the underlying rule actually supports: `_test` rules become
@@ -50,7 +75,11 @@ mapping are reported as a resolver error instead of silently deduplicated.
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `bazel` | string | no | `bazel` | Bazel executable name or workspace-relative path. Resolves through [`bazelisk`](https://github.com/bazelbuild/bazelisk) when installed. |
+| `env` | map&lt;string,string&gt; | no | `{}` | Declared environment for discovery, analysis, and execution. Empty values override inherited host variables. Native action environments reported by `aquery` take precedence. |
+| `toolchain_inputs` | list&lt;string&gt; | no | `[]` | Absolute host files and trees covering implicit toolchain inputs. Contents fingerprint owned spawn actions. Required for spawn caching, not a remote execution declaration. |
+| `test_env` | map&lt;string,string&gt; | no | `{}` | Additional declared test runtime environment. Overrides rule environment. |
 | `query` | string | no | `kind("rule", //...)` | Bazel query expression used to enumerate rules. |
+| `test_query` | string | no | All enumerated test rules | Bazel query selecting default test roots from the enumerated graph, independently of build selection. |
 | `exclude_packages` | list&lt;string&gt; | no | `[]` | Package prefixes to strip from the default query. Each entry excludes both `//<prefix>/...` and `//<prefix>:*`. |
 | `resolver_inputs` | list&lt;string&gt; | no | `srcs` | Package-relative source globs supplied during graph loading. |
 
@@ -73,6 +102,25 @@ once test
 Targetless build selects the single discovered workspace seed. Targetless
 test selects the first-party Bazel test rules reported by its resolver.
 Discovery does not create `once.toml`.
+
+To declare a portable environment, add an explicit workspace seed. For example,
+clear an unrelated host SDK installation during repository discovery and analysis:
+
+```toml
+[[target]]
+name = "bazel"
+kind = "bazel_workspace"
+srcs = ["MODULE.bazel"]
+
+[target.attrs.env]
+ANDROID_HOME = ""
+ANDROID_SDK_ROOT = ""
+```
+
+The environment is forwarded to every generated target, including tests and
+delegated Bazel commands. Owned actions do not inherit the caller's environment.
+Environment declaration alone does not enable caching for actions that depend
+on undeclared host state.
 
 ## Coexistence with Once outputs
 

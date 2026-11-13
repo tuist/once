@@ -28,6 +28,62 @@ async fn a_batched_miss_does_not_mark_its_cached_sibling_materialized() {
     );
 }
 
+#[tokio::test]
+async fn assembled_directory_inputs_include_deferred_children_and_keep_their_key() {
+    let workspace = tempfile::tempdir().unwrap();
+    let cache_root = tempfile::tempdir().unwrap();
+    let cache = CacheProvider::Local(once_cas::Cas::open(cache_root.path()));
+    run(
+        workspace.path(),
+        &cache,
+        vec![write("stage/a", b"alpha", false)],
+    )
+    .await;
+    std::fs::remove_dir_all(workspace.path().join("stage")).unwrap();
+    let actions = || {
+        let mut tree = copy("stage", "published", false);
+        if let Some(DeclaredActionOperation::CopyPath { mode, .. }) = &mut tree.operation {
+            *mode = DeclaredCopyPathMode::Tree;
+        }
+        vec![
+            write("stage/a", b"alpha", false),
+            write("stage/nested/b", b"beta", false),
+            write("published/MANIFEST", b"intermediate", false),
+            tree,
+        ]
+    };
+    let digests = SourceDigestCache::open(workspace.path());
+    let first = run_with_digests(workspace.path(), &cache, actions(), Some(&digests)).await;
+    for directory in ["stage", "published"] {
+        std::fs::remove_dir_all(workspace.path().join(directory)).unwrap();
+    }
+    digests.with_known_changes(
+        super::super::super::source_digest_cache::KnownChanges::Since {
+            sources: BTreeSet::new(),
+            outputs: BTreeSet::new(),
+        },
+    );
+    let restored = run_with_digests(workspace.path(), &cache, actions(), Some(&digests)).await;
+    materialize_prior_cached_results(
+        workspace.path(),
+        &cache,
+        &restored.cached_results,
+        Some(&digests),
+    )
+    .await
+    .unwrap();
+    assert_eq!(first.action_digest, restored.action_digest);
+    assert_eq!(restored.cache_state, EvidenceCacheState::Hit);
+    assert_eq!(
+        std::fs::read(workspace.path().join("published/a")).unwrap(),
+        b"alpha"
+    );
+    assert_eq!(
+        std::fs::read(workspace.path().join("published/nested/b")).unwrap(),
+        b"beta"
+    );
+}
+
 fn write(path: &str, bytes: &[u8], ordered: bool) -> DeclaredAction {
     serde_json::from_value(serde_json::json!({
         "outputs": [path], "depends_on_prior_actions": ordered, "identifier": path,
@@ -48,6 +104,15 @@ async fn run(
     workspace: &Path,
     cache: &CacheProvider,
     actions: Vec<DeclaredAction>,
+) -> BuildOutcome {
+    run_with_digests(workspace, cache, actions, None).await
+}
+
+async fn run_with_digests(
+    workspace: &Path,
+    cache: &CacheProvider,
+    actions: Vec<DeclaredAction>,
+    digests: Option<&SourceDigestCache>,
 ) -> BuildOutcome {
     let target: GraphTarget = serde_json::from_value(serde_json::json!({
         "label": {"package": "", "name": "pending", "id": "pending"}, "kind": "fixture", "capabilities": []
@@ -74,7 +139,7 @@ async fn run(
         &[],
         &BTreeMap::new(),
         &BTreeMap::new(),
-        None,
+        digests,
         SandboxMode::Off,
         &resources,
         None,
