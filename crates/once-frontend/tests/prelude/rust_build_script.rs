@@ -199,3 +199,91 @@ result = repr([
     let linux = r#"{"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"}"#;
     assert_eq!(env("linux"), format!("[{linux}, {linux}]"));
 }
+
+#[test]
+fn rustc_on_macos_finds_toolchain_libraries_after_shell_wrapper_drops_dyld_variables() {
+    let workspace = TempDir::new().unwrap();
+    let root = workspace.path();
+    let sysroot = root.join("toolchain");
+    let rustc = sysroot.join("bin/rustc");
+    let seen = root.join("dyld-fallback");
+    std::fs::create_dir_all(rustc.parent().unwrap()).unwrap();
+    // A compiled probe, like the real rustc: a shell script would be started
+    // through /bin/sh, which on macOS drops DYLD_* variables once more.
+    let probe = root.join("probe.c");
+    std::fs::write(
+        &probe,
+        format!(
+            r#"#include <stdio.h>
+#include <stdlib.h>
+int main(void) {{
+    const char *value = getenv("DYLD_FALLBACK_LIBRARY_PATH");
+    FILE *out = fopen({seen:?}, "w");
+    if (!out) return 1;
+    fputs(value ? value : "", out);
+    return fclose(out);
+}}
+"#,
+            seen = seen.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    let compiled = Command::new("cc")
+        .arg(&probe)
+        .arg("-o")
+        .arg(&rustc)
+        .output()
+        .unwrap();
+    assert!(compiled.status.success(), "{compiled:?}");
+    std::fs::create_dir_all(root.join(".once/out/bindgen")).unwrap();
+    std::fs::write(root.join(".once/out/bindgen/build-script.stdout"), "").unwrap();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "macos"
+
+def _rustc_toolchain(target):
+    return ({rustc:?}, "fake-rustc", "aarch64-apple-darwin")
+
+ctx = {{
+    "label": {{"package": "", "name": "web", "id": "web"}},
+    "attr": {{"target": "wasm32-unknown-unknown", "crate_type": "cdylib", "crate_root": "lib.rs"}},
+    "deps": [{{
+        "crate_name": "wasm_bindgen",
+        "rlib": ".once/out/bindgen/libwasm_bindgen.rlib",
+        "build_script_stdout": ".once/out/bindgen/build-script.stdout",
+    }}],
+    "srcs": ["*.rs"],
+}}
+_rust_compile(ctx, "cdylib", "lib.rs", "web.wasm")
+result = repr("ok")
+"#,
+        prelude = all_prelude_source(),
+        rustc = rustc.to_str().unwrap(),
+    );
+    let store = store_for(root, "web");
+    let (store, result) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    result.unwrap();
+    let compile = action_by_identifier(&store, "web:rustc");
+    let expected = format!("{}/lib:/usr/local/lib:/usr/lib", sysroot.display());
+    assert_eq!(compile.env["DYLD_FALLBACK_LIBRARY_PATH"], expected);
+    assert_ne!(compile.argv[0], rustc.to_str().unwrap(), "{compile:?}");
+    let resolve = |value: &str| value.replace("{{once.execution_root}}", root.to_str().unwrap());
+    // Launch the action the way macOS launches a SIP-protected /bin/sh: with
+    // every DYLD_* variable removed from its environment.
+    let output = Command::new(resolve(&compile.argv[0]))
+        .args(compile.argv[1..].iter().map(|arg| resolve(arg)))
+        .env_clear()
+        .envs(
+            compile
+                .env
+                .iter()
+                .filter(|(key, _)| !key.starts_with("DYLD_"))
+                .map(|(key, value)| (key, resolve(value))),
+        )
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{compile:?}: {output:?}");
+    assert_eq!(std::fs::read_to_string(&seen).unwrap(), expected);
+}

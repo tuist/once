@@ -64,6 +64,7 @@ package without synthetic target collisions.
 | `_cargo_workspace_dep_aliases` | map&lt;string, map&lt;string, string&gt;&gt; | resolver-owned | `{}` | Records Cargo dependency renames by workspace package and generated target |
 | `_cargo_workspace_dev_dep_aliases` | map&lt;string, map&lt;string, string&gt;&gt; | resolver-owned | `{}` | Records Cargo dev-dependency renames by workspace package and generated target |
 | `_cargo_workspace_build_dep_aliases` | map&lt;string, map&lt;string, string&gt;&gt; | resolver-owned | `{}` | Records Cargo build-dependency renames by workspace package and generated target |
+| `_cargo_workspace_package_env` | map&lt;string, map&lt;string, string&gt;&gt; | resolver-owned | `{}` | Records each workspace package's Cargo compile environment, such as `CARGO_PKG_NAME`, `CARGO_PKG_VERSION`, and a workspace-relative `CARGO_MANIFEST_DIR`. Targets that set `cargo_package` inherit it below their own `rustc_env` |
 
 The underscore-prefixed attributes are part of the typed resolver contract.
 They are produced by Once and should not be set in `once.toml`.

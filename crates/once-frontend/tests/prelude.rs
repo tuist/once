@@ -10212,6 +10212,83 @@ result = repr({{spec["name"]: [spec["attrs"]["features"], spec["deps"]] for spec
 }
 
 #[test]
+fn prelude_first_party_crate_inherits_its_cargo_package_environment() {
+    let metadata = wasm_host_context_metadata();
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "/workspace"
+
+resolver_ctx = {{
+    "label": {{"package": "", "name": "deps", "id": "deps"}},
+    "attrs": {{"vendor_dir": "vendor"}},
+}}
+package_env = _cargo_metadata_resolution(resolver_ctx, json_decode({metadata:?}))["workspace_package_env"]
+dependency_set = {{"dependency_set": True, "workspace_package_env": package_env}}
+ctx = {{
+    "label": {{"package": "web", "name": "web", "id": "web/web"}},
+    "attr": {{"cargo_package": "app", "rustc_env": {{"CARGO_PKG_VERSION": "9.9.9"}}}},
+    "deps": [dependency_set],
+}}
+env = _rust_compile_env(ctx)
+unrelated = _rust_compile_env({{"label": ctx["label"], "attr": {{"cargo_package": "other"}}, "deps": [dependency_set]}})
+result = repr([
+    {{key: env.get(key, "") for key in ["CARGO_PKG_NAME", "CARGO_PKG_VERSION", "CARGO_PKG_VERSION_MINOR", "CARGO_MANIFEST_DIR", "CARGO_CRATE_NAME"]}},
+    sorted([key for key in unrelated.keys() if key.startswith("CARGO_")]),
+])
+"#,
+        metadata = metadata.to_string(),
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+    let values: serde_json::Value = serde_json::from_str(&out).unwrap();
+
+    // The target's own rustc_env wins over the inherited package values, and
+    // the manifest directory is the package's, not the consuming target's.
+    assert_eq!(
+        values[0],
+        serde_json::json!({
+            "CARGO_PKG_NAME": "app",
+            "CARGO_PKG_VERSION": "9.9.9",
+            "CARGO_PKG_VERSION_MINOR": "1",
+            "CARGO_MANIFEST_DIR": "/workspace/app",
+            "CARGO_CRATE_NAME": "",
+        }),
+        "{out}"
+    );
+    assert_eq!(values[1], serde_json::json!([]), "{out}");
+}
+
+#[test]
+fn prelude_rust_dynamic_library_names_follow_the_target_platform() {
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def host_os():
+    return "macos"
+
+def name(target, crate_type):
+    return _rust_output_name({{"label": {{"name": "web", "id": "web"}}, "attr": {{"target": target, "crate_name": "web"}}}}, crate_type)
+
+result = repr([
+    name("wasm32-unknown-unknown", "cdylib"),
+    name("wasm32-wasip1", "cdylib"),
+    name("wasm32-unknown-unknown", "staticlib"),
+    name("aarch64-linux-android", "cdylib"),
+    name("aarch64-apple-ios", "staticlib"),
+    name("", "cdylib"),
+    name("x86_64-pc-windows-msvc", "staticlib"),
+])
+"#
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+    assert_eq!(
+        out,
+        r#"["web.wasm", "web.wasm", "libweb.a", "libweb.so", "libweb.a", "libweb.dylib", "web.lib"]"#
+    );
+}
+
+#[test]
 fn prelude_cargo_explicit_targets_scope_generated_names() {
     let prelude = all_prelude_source();
     let source = format!(

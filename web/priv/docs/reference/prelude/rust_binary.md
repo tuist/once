@@ -38,7 +38,7 @@ identity.
 | `crate_aliases` | map&lt;string, string&gt; | no | `{}` | Map dependency label, package name, or crate name to the local extern crate name |
 | `aliases` | map&lt;string, string&gt; | no | `{}` | Bazel-compatible alias map from dependency label or crate name to local extern crate name |
 | `named_deps` | map&lt;string, string&gt; | no | `{}` | Buck-compatible alias map from local extern crate name to dependency label or crate name |
-| `cargo_package` | string | no | empty | Cargo package name used to select direct external deps from a `cargo_dependencies` dependency set. Defaults to `CARGO_PKG_NAME` when present |
+| `cargo_package` | string | no | empty | Cargo package name used to select direct external deps from a `cargo_dependencies` dependency set, and to inherit that package's Cargo compile environment, such as `CARGO_PKG_NAME`, `CARGO_PKG_VERSION`, and `CARGO_MANIFEST_DIR`, below the target's own `rustc_env`. Defaults to `CARGO_PKG_NAME` when present |
 | `build_script` | string | no | empty | Package-relative Cargo build script path run before `rustc`; common `cargo:rustc-*` stdout directives are consumed, dependency `cargo:rustc-link-search` outputs are replayed downstream, and direct dependency `links` metadata is consumed |
 | `args` | list&lt;string&gt; | no | `[]` | Arguments passed to the executable during `once run`, before any given on the command line |
 | `run_env` | map&lt;string, string&gt; | no | `{}` | Environment variables passed to the executable during `once run` |

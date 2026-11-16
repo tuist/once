@@ -683,7 +683,22 @@ def _rust_compile_env(ctx):
     manifest_dir = env.get("CARGO_MANIFEST_DIR")
     if manifest_dir:
         env["CARGO_MANIFEST_DIR"] = _workspace_absolute(_rust_manifest_dir(ctx, manifest_dir))
+    for key, value in _rust_cargo_package_env(ctx).items():
+        if key not in env:
+            env[key] = _workspace_absolute(value) if key == "CARGO_MANIFEST_DIR" else value
     return env
+
+# What Cargo sets for the package a first-party crate belongs to, recorded by
+# the cargo_dependencies resolver for each workspace member.
+def _rust_cargo_package_env(ctx):
+    package = _rust_attr(ctx, "cargo_package", "")
+    if not package:
+        return {}
+    for dependency_set in _rust_declared_deps(ctx):
+        env = (dependency_set.get("workspace_package_env") or {}).get(package)
+        if env:
+            return env
+    return {}
 
 def _rust_manifest_dir(ctx, manifest_dir):
     if not manifest_dir or manifest_dir.startswith("/"):
@@ -720,7 +735,17 @@ def _rustc_runtime_dirs(rustc, host_triple):
         sysroot + "/lib/rustlib/" + host_triple + "/bin",
     ]
 
-def _rust_add_windows_rustc_runtime_path(env, rustc, host_triple):
+# Mirrors what the rustup proxy sets for Cargo, since Once runs the sysroot's
+# rustc directly. On macOS, linkers bundled with the toolchain, such as
+# rust-lld for wasm and bare-metal targets, load libLLVM from the sysroot's
+# lib directory through the dynamic loader's fallback path.
+def _rust_add_rustc_runtime_env(env, rustc, host_triple):
+    if host_os() == "macos":
+        configured = env.get("DYLD_FALLBACK_LIBRARY_PATH") or ""
+        # Setting the variable replaces dyld's built-in fallback, so keep the
+        # system part of it when the target does not configure its own.
+        env["DYLD_FALLBACK_LIBRARY_PATH"] = _rust_merge_paths(_rustc_sysroot(rustc) + "/lib", configured or "/usr/local/lib:/usr/lib")
+        return
     if host_os() != "windows":
         return
     path = _rust_path_separator().join(_rustc_runtime_dirs(rustc, host_triple))
@@ -1342,10 +1367,10 @@ def _rust_build_script(ctx, rustc, identity, target, host_triple, edition, dep_a
     )
     dependency_build_outputs = _rust_dep_build_script_outputs(deps)
     dependency_build_inputs = _rust_dep_build_script_native_inputs(deps)
-    wrapped = _rustc_with_build_script_args(ctx, compile_argv, dependency_stdouts = dependency_build_outputs, wrapper_name = "build-script-rustc-wrapper.ps1")
-    compile_argv = wrapped[0]
     build_script_compile_env = _rust_compile_action_env(ctx, host_triple, host_triple)
-    _rust_add_windows_rustc_runtime_path(build_script_compile_env, rustc, host_triple)
+    _rust_add_rustc_runtime_env(build_script_compile_env, rustc, host_triple)
+    wrapped = _rustc_with_build_script_args(ctx, compile_argv, dependency_stdouts = dependency_build_outputs, wrapper_name = "build-script-rustc-wrapper.ps1", env = build_script_compile_env)
+    compile_argv = wrapped[0]
     _rust_add_windows_proc_macro_path(build_script_compile_env, deps)
     run_action(
         display_name = "Compile Rust build script · " + ctx["label"]["name"],
@@ -1456,8 +1481,17 @@ def _rustc_unix_read_own_build_script_args(stdout):
 done < {stdout}
 """.format(stdout = _shell_quote(execution_path(stdout)), out_root = _shell_quote(execution_path(".once/out")))
 
-def _rustc_unix_build_script_args(argv, own_stdout, dependency_stdouts):
-    snippets = []
+# macOS removes every DYLD_* variable when it starts a SIP-protected program
+# such as /bin/sh, so the wrapper sets them again before it runs rustc.
+def _rustc_unix_dyld_exports(env):
+    return "".join([
+        "export " + key + "=" + _shell_quote(env[key]) + "\n"
+        for key in sorted(env.keys())
+        if key.startswith("DYLD_")
+    ])
+
+def _rustc_unix_build_script_args(argv, own_stdout, dependency_stdouts, env):
+    snippets = [_rustc_unix_dyld_exports(env)]
     if own_stdout:
         snippets.append(_rustc_unix_read_own_build_script_args(own_stdout))
     for stdout in dependency_stdouts:
@@ -1591,12 +1625,12 @@ try {
     write_path(wrapper, script)
     return ([host_which("powershell"), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", wrapper] + argv, [wrapper])
 
-def _rustc_with_build_script_args(ctx, argv, own_stdout = None, dependency_stdouts = [], wrapper_name = "rustc-build-script-wrapper.ps1"):
+def _rustc_with_build_script_args(ctx, argv, own_stdout = None, dependency_stdouts = [], wrapper_name = "rustc-build-script-wrapper.ps1", env = {}):
     if not own_stdout and not dependency_stdouts:
         return (argv, [])
     if host_os() == "windows":
         return _rustc_windows_build_script_args(ctx, argv, own_stdout, dependency_stdouts, wrapper_name)
-    return (_rustc_unix_build_script_args(argv, own_stdout, dependency_stdouts), [])
+    return (_rustc_unix_build_script_args(argv, own_stdout, dependency_stdouts, env), [])
 
 def _rust_dep_build_script_outputs(deps):
     outputs = []
@@ -1678,6 +1712,8 @@ def _rust_output_extension(crate_type, target):
     if crate_type == "staticlib":
         return ".lib" if "windows" in os_key else ".a"
     if crate_type == "cdylib" or crate_type == "dylib" or crate_type == "proc-macro":
+        if os_key.startswith("wasm"):
+            return ".wasm"
         if "windows" in os_key:
             return ".dll"
         if "apple" in os_key or "darwin" in os_key or os_key == "macos":
@@ -1709,7 +1745,9 @@ def _rust_output_name(ctx, crate_type):
     if crate_type == "bin":
         return _rust_attr(ctx, "_binary_output_name", crate_name) + _rust_output_extension(crate_type, target)
     if crate_type == "rlib" or crate_type == "staticlib" or crate_type == "cdylib" or crate_type == "dylib" or crate_type == "proc-macro":
-        prefix = "" if "windows" in (target or host_os()) and crate_type != "rlib" else "lib"
+        os_key = target or host_os()
+        wasm_dylib = os_key.startswith("wasm") and (crate_type == "cdylib" or crate_type == "dylib")
+        prefix = "" if ("windows" in os_key and crate_type != "rlib") or wasm_dylib else "lib"
         return prefix + crate_name + _rust_extra_filename(ctx, crate_type) + _rust_output_extension(crate_type, target)
     return crate_name
 
@@ -1755,7 +1793,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name, test = False, prov
     feature_flags = _rust_feature_flags(ctx)
     build_out_dir, build_inputs, build_env, build_stdout = _rust_build_script(ctx, rustc, identity, target, host_triple, edition, build_dep_args, build_dep_inputs, build_deps, deps + build_deps, feature_flags, source_inputs, build_script_inputs)
     compile_env = build_env if build_env else _rust_compile_action_env(ctx, target, host_triple)
-    _rust_add_windows_rustc_runtime_path(compile_env, rustc, host_triple)
+    _rust_add_rustc_runtime_env(compile_env, rustc, host_triple)
     _rust_add_windows_proc_macro_path(compile_env, deps)
     linker_args, linker_identity = _rust_linker(ctx, crate_type, target, host_triple)
     linker_script_args, linker_script_inputs = _rust_linker_script(ctx)
@@ -1789,7 +1827,7 @@ def _rust_compile(ctx, crate_type, default_root, output_name, test = False, prov
     )
     dependency_build_outputs = _rust_dep_build_script_outputs(deps)
     dependency_build_inputs = _rust_dep_build_script_native_inputs(deps)
-    wrapped = _rustc_with_build_script_args(ctx, argv, build_stdout, dependency_build_outputs)
+    wrapped = _rustc_with_build_script_args(ctx, argv, build_stdout, dependency_build_outputs, env = compile_env)
     argv = wrapped[0]
     build_inputs.extend(wrapped[1])
     compile_cwd = None
@@ -2594,7 +2632,7 @@ def _rust_test_impl(ctx):
     runner_rustc, runner_identity, runner_host_triple = _rustc_toolchain("")
     write_path(runner_source, _rust_test_runner_source())
     runner_env = _rust_compile_action_env(ctx, runner_host_triple, runner_host_triple)
-    _rust_add_windows_rustc_runtime_path(runner_env, runner_rustc, runner_host_triple)
+    _rust_add_rustc_runtime_env(runner_env, runner_rustc, runner_host_triple)
     run_action(
         display_name = "Compile Rust test runner · " + ctx["label"]["name"],
         resources = {"memory_bytes": 2 * 1024 * 1024 * 1024},
@@ -2693,6 +2731,7 @@ def _cargo_dependencies_impl(ctx):
         "workspace_deps": workspace_deps,
         "workspace_dev_deps": workspace_dev_deps,
         "workspace_build_deps": workspace_build_deps,
+        "workspace_package_env": _rust_attr(ctx, "_cargo_workspace_package_env", {}),
     }
 
 def _cargo_feature_args(ctx):
@@ -2759,6 +2798,7 @@ def _cargo_resolved_metadata(ctx, default_vendor_dir = "third_party/rust/vendor"
         "workspace_dep_aliases": resolution["workspace_dep_aliases"],
         "workspace_dev_dep_aliases": resolution["workspace_dev_dep_aliases"],
         "workspace_build_dep_aliases": resolution["workspace_build_dep_aliases"],
+        "workspace_package_env": resolution["workspace_package_env"],
         "split_host": split_host,
     }
 
@@ -2860,9 +2900,12 @@ def _cargo_workspace_dependency_names(metadata, id_to_target_name, id_to_host_na
     aliases = {}
     dev_aliases_by_package = {}
     build_aliases_by_package = {}
+    package_env = {}
     for package in packages:
         if not workspace_package_ids.get(package.get("id")):
             continue
+        if package.get("version") != None:
+            package_env[package["name"]] = _cargo_workspace_package_env(package)
         node = nodes.get(package.get("id")) or {}
         external_deps = [
             dep
@@ -2897,7 +2940,21 @@ def _cargo_workspace_dependency_names(metadata, id_to_target_name, id_to_host_na
         "dep_aliases": aliases,
         "dev_dep_aliases": dev_aliases_by_package,
         "build_dep_aliases": build_aliases_by_package,
+        "package_env": package_env,
     }
+
+# The package-level part of Cargo's compile environment. The manifest directory
+# is kept workspace-relative so the resolved graph stays machine-independent.
+def _cargo_workspace_package_env(package):
+    root = _cargo_comparison_path(workspace_root())
+    manifest_dir = _cargo_comparison_path(_cargo_package_root(package))
+    if manifest_dir == root:
+        manifest_dir = "."
+    elif root and manifest_dir.startswith(root + "/"):
+        manifest_dir = manifest_dir[len(root) + 1:]
+    env = _cargo_rustc_env(package, {}, manifest_dir)
+    env.pop("CARGO_CRATE_NAME")
+    return env
 
 def _cargo_role_aliases(role_aliases, target_names):
     return {
@@ -3018,6 +3075,7 @@ def _cargo_dependencies_resolver(ctx):
             "_cargo_workspace_dep_aliases": resolved["workspace_dep_aliases"],
             "_cargo_workspace_dev_dep_aliases": resolved["workspace_dev_dep_aliases"],
             "_cargo_workspace_build_dep_aliases": resolved["workspace_build_dep_aliases"],
+            "_cargo_workspace_package_env": resolved["workspace_package_env"],
         },
     }
 
@@ -3779,6 +3837,7 @@ def _cargo_metadata_resolution(ctx, metadata, host_metadata = None, materialize_
         "workspace_dep_aliases": workspace["dep_aliases"],
         "workspace_dev_dep_aliases": workspace["dev_dep_aliases"],
         "workspace_build_dep_aliases": workspace["build_dep_aliases"],
+        "workspace_package_env": workspace["package_env"],
     }
 
 def _cargo_metadata_targets(ctx, metadata, host_metadata = None):
@@ -4158,7 +4217,7 @@ _RUST_COMMON_ATTRS = [
     attr("crate_aliases", "map<string, string>", default = "{}", docs = "Map dependency label, package name, or crate name to the local extern crate name.", configurable = False),
     attr("aliases", "map<string, string>", default = "{}", docs = "Bazel-compatible alias map from dependency label or crate name to local extern crate name.", configurable = False),
     attr("named_deps", "map<string, string>", default = "{}", docs = "Buck-compatible alias map from local extern crate name to dependency label or crate name.", configurable = False),
-    attr("cargo_package", "string", docs = "Cargo package name used to select direct external deps from a cargo_dependencies dependency set. Defaults to CARGO_PKG_NAME when present.", configurable = False),
+    attr("cargo_package", "string", docs = "Cargo package name used to select direct external deps from a cargo_dependencies dependency set and to inherit that package's Cargo compile environment, such as CARGO_PKG_NAME, CARGO_PKG_VERSION, and CARGO_MANIFEST_DIR. Defaults to CARGO_PKG_NAME when present.", configurable = False),
     attr("build_script", "string", docs = "Package-relative Cargo build script path. Once compiles and runs it before rustc, consumes common cargo:rustc-* stdout directives, and passes direct dependency links metadata as DEP_* env vars.", configurable = False),
     attr("build_script_tools", "list<string>", default = "[]", docs = "Host tool names the build script invokes, such as `cmake`. Each name is resolved on PATH during graph loading; the resolved directory joins the build script's search path and the resolved path joins the action identity. Names that resolve to nothing are ignored, so a script that only needs a tool on some platforms still loads.", configurable = False),
     attr("cargo_config_env", "map<string, string>", default = "{}", docs = "Environment variables declared by Cargo configuration, applied to the compiler, the build script, the test process, and `once run`. They sit below `env`, `rustc_env`, `test_env`, and `run_env`, matching how Cargo lets its own variables win.", configurable = False),
@@ -4299,6 +4358,7 @@ cargo_dependencies = target_kind(
         attr("_cargo_workspace_dep_aliases", "map<string, map<string, string>>", default = "{}", docs = "Resolver-owned Cargo rename mappings for workspace package dependencies.", configurable = False),
         attr("_cargo_workspace_dev_dep_aliases", "map<string, map<string, string>>", default = "{}", docs = "Resolver-owned Cargo rename mappings for workspace package dev-dependencies.", configurable = False),
         attr("_cargo_workspace_build_dep_aliases", "map<string, map<string, string>>", default = "{}", docs = "Resolver-owned Cargo rename mappings for workspace package build-dependencies.", configurable = False),
+        attr("_cargo_workspace_package_env", "map<string, map<string, string>>", default = "{}", docs = "Resolver-owned package-level Cargo compile environment, such as CARGO_PKG_NAME, CARGO_PKG_VERSION, and a workspace-relative CARGO_MANIFEST_DIR, for each workspace package. Crates that set cargo_package inherit it below their own rustc_env.", configurable = False),
     ],
     resolver = _cargo_dependencies_resolver,
     deps = [dep("deps", ["rust_crate", "rust_proc_macro"], "Resolver-generated locked packages aggregated into the Rust dependency set.")],
