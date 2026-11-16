@@ -165,6 +165,10 @@ srcs = ["MODULE.bazel"]
 [target.attrs.test_env]
 DECLARED = "runtime"
 TOML
+    # Bazel reports paths under the physical directory it runs in, which on
+    # macOS is /private/var/... for a /var/... temporary workspace.
+    local physical
+    physical="$(cd "$WORKSPACE" && pwd -P)"
     cat > "$WORKSPACE/tools/bazelisk" <<SH
 #!/bin/sh
 case "\$1" in
@@ -174,14 +178,14 @@ case "\$1" in
       *streamed_jsonproto*) printf '%s\n' '{"rule":{"attribute":[{"name":"shard_count","intValue":2},{"name":"args","stringListValue":["expected"]}]}}' ;;
       *) printf 'sh_test rule //:support_test\n' ;;
     esac ;;
-  info) printf '%s\n' "$WORKSPACE/native" ;;
+  info) printf '%s\n' "$physical/native" ;;
   cquery) printf 'bazel-out/test.runfiles\n' ;;
   aquery) cat <<JSON
 {"pathFragments":[{"id":1,"label":"launcher.sh"},{"id":2,"label":"test.sh"},{"id":3,"label":"hidden/source.txt"},{"id":4,"label":"bazel-out/test.runfiles_manifest"},{"id":5,"label":"bazel-out/test.runfiles/MANIFEST"},{"id":6,"label":"bazel-out/test.runfiles"},{"id":7,"label":"bazel-out/testlogs/shard_1/test.log"},{"id":8,"label":"bazel-out/testlogs/shard_2/test.log"}],
 "artifacts":[{"id":1,"pathFragmentId":1},{"id":2,"pathFragmentId":2},{"id":3,"pathFragmentId":3},{"id":4,"pathFragmentId":4},{"id":5,"pathFragmentId":5},{"id":6,"pathFragmentId":6},{"id":7,"pathFragmentId":7},{"id":8,"pathFragmentId":8}],
 "depSetOfFiles":[{"id":1,"directArtifactIds":[4]},{"id":2,"directArtifactIds":[5,2,3]},{"id":3,"directArtifactIds":[1,6]}],
 "actions":[
-{"mnemonic":"SourceSymlinkManifest","outputIds":[4],"fileContents":"_main/bin/test.sh $WORKSPACE/test.sh\\n_main/data/renamed.txt $WORKSPACE/hidden/source.txt\\n_main/empty \\n"},
+{"mnemonic":"SourceSymlinkManifest","outputIds":[4],"fileContents":"_main/bin/test.sh $physical/test.sh\\n_main/data/renamed.txt $physical/hidden/source.txt\\n_main/empty \\n"},
 {"mnemonic":"SymlinkTree","inputDepSetIds":[1],"outputIds":[5]},
 {"mnemonic":"RunfilesTree","inputDepSetIds":[2],"outputIds":[6]},
 {"mnemonic":"TestRunner","arguments":["./launcher.sh","bin/test.sh","expected"],"inputDepSetIds":[3],"outputIds":[7]},
