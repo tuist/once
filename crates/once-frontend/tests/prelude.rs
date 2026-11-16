@@ -10065,6 +10065,152 @@ result = repr(commands[0])
     assert!(out.ends_with(", \"/workspace\"]"), "{out}");
 }
 
+fn wasm_host_context_metadata() -> serde_json::Value {
+    let registry = "registry+https://github.com/rust-lang/crates.io-index";
+    let git = "git+https://github.com/wasm-bindgen/wasm-bindgen?rev=0123abcd#0123abcd";
+    let package = |name: &str, version: &str, kind: &str, source: Option<&str>| {
+        serde_json::json!({
+            "id": format!("{name}@{version}"),
+            "name": name,
+            "version": version,
+            "source": source,
+            "manifest_path": format!("/workspace/{name}/Cargo.toml"),
+            "targets": [{
+                "name": name,
+                "kind": [kind],
+                "crate_types": [kind],
+                "src_path": format!("/workspace/{name}/src/lib.rs"),
+                "edition": "2021",
+            }],
+        })
+    };
+    let dep = |name: &str, version: &str, kinds: &[Option<&str>]| {
+        serde_json::json!({
+            "name": name.replace('-', "_"),
+            "pkg": format!("{name}@{version}"),
+            "dep_kinds": kinds
+                .iter()
+                .map(|kind| serde_json::json!({"kind": kind, "target": null}))
+                .collect::<Vec<_>>(),
+        })
+    };
+    let node = |name: &str, version: &str, deps: Vec<serde_json::Value>| serde_json::json!({"id": format!("{name}@{version}"), "features": [], "deps": deps});
+    let mut app = package("app", "0.1.0", "lib", None);
+    app["targets"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "name": "build-script-build",
+            "kind": ["custom-build"],
+            "crate_types": ["bin"],
+            "src_path": "/workspace/app/build.rs",
+            "edition": "2021",
+        }));
+    serde_json::json!({
+        "workspace_members": ["app@0.1.0"],
+        "packages": [
+            app,
+            package("getrandom", "0.2.17", "lib", Some(registry)),
+            package("js-sys", "0.3.107", "lib", Some(registry)),
+            package("serde_derive", "1.0.229", "proc-macro", Some(registry)),
+            package("syn", "3.0.10", "lib", Some(registry)),
+            package("wasm-bindgen", "0.2.130", "lib", Some(registry)),
+            package("wasm-bindgen-macro", "0.2.130", "proc-macro", Some(git)),
+            package("wasm-bindgen-macro-support", "0.2.130", "lib", Some(git)),
+        ],
+        "resolve": {"nodes": [
+            node("app", "0.1.0", vec![
+                dep("getrandom", "0.2.17", &[None, Some("build")]),
+                dep("serde_derive", "1.0.229", &[None]),
+                dep("wasm-bindgen", "0.2.130", &[None]),
+            ]),
+            node("getrandom", "0.2.17", vec![dep("js-sys", "0.3.107", &[None])]),
+            node("js-sys", "0.3.107", vec![]),
+            node("serde_derive", "1.0.229", vec![dep("syn", "3.0.10", &[None])]),
+            node("syn", "3.0.10", vec![]),
+            node("wasm-bindgen", "0.2.130", vec![dep("wasm-bindgen-macro", "0.2.130", &[None])]),
+            node("wasm-bindgen-macro", "0.2.130", vec![dep("wasm-bindgen-macro-support", "0.2.130", &[None])]),
+            node("wasm-bindgen-macro-support", "0.2.130", vec![dep("syn", "3.0.10", &[None])]),
+        ]},
+    })
+}
+
+#[test]
+fn prelude_cargo_host_tools_keep_features_of_proc_macros_only_the_target_reaches() {
+    let metadata = wasm_host_context_metadata();
+    // `cargo tree --prefix indent --charset ascii` output for each platform.
+    // `serde_derive` is a unix-only dependency and `wasm-bindgen` a wasm-only
+    // one, so on wasm32 `syn` is reached only through a git-sourced proc
+    // macro, whose source Cargo prints after `(proc-macro)`. `getrandom` is
+    // both a normal and a build dependency; only its build occurrence runs on
+    // the host, so the wasm-only `js` feature must not reach the host build.
+    let wasm_tree = "app v0.1.0 (/workspace/app)|
+|-- getrandom v0.2.17|js,js-sys
+|   `-- js-sys v0.3.107|default
+`-- wasm-bindgen v0.2.130|default
+    `-- wasm-bindgen-macro v0.2.130 (proc-macro) (https://github.com/wasm-bindgen/wasm-bindgen?rev=0123abcd#0123abcd)|
+        `-- wasm-bindgen-macro-support v0.2.130 (https://github.com/wasm-bindgen/wasm-bindgen?rev=0123abcd#0123abcd)|
+            `-- syn v3.0.10|derive,full,parsing,visit-mut
+[build-dependencies]
+`-- getrandom v0.2.17|
+";
+    let host_tree = "app v0.1.0 (/workspace/app)|
+|-- getrandom v0.2.17|
+`-- serde_derive v1.0.229 (proc-macro)|default
+    `-- syn v3.0.10|derive,parsing
+[build-dependencies]
+`-- getrandom v0.2.17| (*)
+";
+    let prelude = all_prelude_source();
+    let source = format!(
+        r#"{prelude}
+def workspace_root():
+    return "/workspace"
+
+def host_command(argv, env = None, cwd = None, merge_stderr = None, check = True):
+    if "metadata" in argv:
+        return {metadata:?}
+    return {wasm_tree:?} if "wasm32-unknown-unknown" in argv else {host_tree:?}
+
+ctx = {{
+    "label": {{"package": "", "name": "deps", "id": "deps"}},
+    "attr": {{}},
+    "attrs": {{"target": "wasm32-unknown-unknown", "vendor_dir": "vendor"}},
+    "files": {{}},
+}}
+target_metadata = _cargo_metadata_for_platform(ctx, "cargo", "Cargo.toml", "wasm32-unknown-unknown")
+host_metadata = _cargo_metadata_for_platform(ctx, "cargo", "Cargo.toml", "x86_64-unknown-linux-gnu")
+specs = _cargo_metadata_targets(ctx, target_metadata, host_metadata)
+result = repr({{spec["name"]: [spec["attrs"]["features"], spec["deps"]] for spec in specs if spec.get("host_tool")}})
+"#,
+        metadata = metadata.to_string(),
+    );
+    let out = eval_prelude_source_to_repr(source).unwrap();
+    let host_tools: serde_json::Value = serde_json::from_str(&out).unwrap();
+
+    assert_eq!(
+        host_tools["syn-3.0.10-wasm32-unknown-unknown-host"][0],
+        serde_json::json!(["derive", "full", "parsing", "visit-mut"]),
+        "{out}"
+    );
+    assert_eq!(
+        host_tools["wasm-bindgen-macro-support-0.2.130-wasm32-unknown-unknown-host"][1],
+        serde_json::json!(["./syn-3.0.10-wasm32-unknown-unknown-host"]),
+        "{out}"
+    );
+    assert_eq!(
+        host_tools["getrandom-0.2.17-wasm32-unknown-unknown-host"],
+        serde_json::json!([[], []]),
+        "{out}"
+    );
+    assert!(
+        host_tools
+            .get("js-sys-0.3.107-wasm32-unknown-unknown-host")
+            .is_none(),
+        "{out}"
+    );
+}
+
 #[test]
 fn prelude_cargo_explicit_targets_scope_generated_names() {
     let prelude = all_prelude_source();

@@ -3065,41 +3065,61 @@ def _cargo_metadata_for_platform(ctx, cargo, manifest, platform):
     # per-package feature union replace what metadata reports.
     tree = host_command(
         cargo_argv(
-            ["tree", "--color", "never", "--workspace", "--edges", "normal,build,dev", "--prefix", "depth", "--format", "{p}|{f}"],
+            ["tree", "--color", "never", "--workspace", "--edges", "normal,build,dev", "--prefix", "indent", "--charset", "ascii", "--format", "{p}|{f}"],
             "--target",
         ),
         env = metadata_env,
         cwd = workspace_root(),
     )
-    platform_features = {}
-    platform_edges = {}
-    ancestors = []
-    for line in tree.splitlines():
-        digits = 0
-        for character in line.elems():
-            if not character.isdigit():
-                break
-            digits += 1
-        package, separator, features = line[digits:].partition("|")
-        words = package.split(" ")
-        if not digits or not separator or len(words) < 2:
-            continue
-        depth = int(line[:digits])
-        if features.endswith(" (*)"):
-            features = features[:-len(" (*)")]
-        key = words[0] + "@" + words[1].removeprefix("v")
-        ancestors = ancestors[:depth] + [key]
-        if depth > 0:
-            platform_edges[ancestors[depth - 1] + "\x00" + key] = True
-        enabled = platform_features.setdefault(key, {})
-        for feature in features.split(","):
-            if feature:
-                enabled[feature] = True
     versions = {
         package.get("id"): package.get("name") + "@" + package.get("version")
         for package in metadata.get("packages") or []
     }
     resolve = metadata.get("resolve") or {}
+
+    # Proc macros, build dependencies, and everything below them compile for
+    # the execution host. Cargo unifies their features separately from the
+    # target graph, so the host-context features and edges seen here are kept
+    # apart and merged into the host graph by the resolver. The indented tree
+    # labels build and dev dependencies with section headers, which is the
+    # only way to tell an edge's kind when one dependency is both normal and
+    # build.
+    platform_features = {}
+    platform_edges = {}
+    host_features = {}
+    host_edges = {}
+    ancestors = []
+    host_context = []
+    sections = []
+    for line in tree.splitlines():
+        content = line.lstrip("|`- ")
+        depth = (len(line) - len(content)) // 4
+        if content in ["[build-dependencies]", "[dev-dependencies]"]:
+            sections = sections[:depth] + [content]
+            continue
+        package, separator, features = content.partition("|")
+        words = package.split(" ")
+        if not separator or len(words) < 2:
+            continue
+        if features.endswith(" (*)"):
+            features = features[:-len(" (*)")]
+        key = words[0] + "@" + words[1].removeprefix("v")
+        ancestors = ancestors[:depth] + [key]
+        host = len(words) > 2 and words[2] == "(proc-macro)"
+        if depth > 0:
+            edge = ancestors[depth - 1] + "\x00" + key
+            platform_edges[edge] = True
+            host = host or host_context[depth - 1] or sections[depth - 1] == "[build-dependencies]"
+            if host:
+                host_edges[edge] = True
+        host_context = host_context[:depth] + [host]
+        sections = sections[:depth] + [""]
+        enabled = platform_features.setdefault(key, {})
+        host_enabled = host_features.setdefault(key, {}) if host else {}
+        for feature in features.split(","):
+            if feature:
+                enabled[feature] = True
+                host_enabled[feature] = True
     nodes = []
     for node in resolve.get("nodes") or []:
         key = versions.get(node.get("id")) or ""
@@ -3117,6 +3137,11 @@ def _cargo_metadata_for_platform(ctx, cargo, manifest, platform):
             for dep in node.get("dependencies") or []
             if platform_edges.get(key + "\x00" + (versions.get(dep) or ""))
         ]
+        if key in host_features:
+            node["_once_host"] = {
+                "features": sorted(host_features[key].keys()),
+                "deps": [dep for dep in node["deps"] if host_edges.get(key + "\x00" + (versions.get(dep.get("pkg")) or ""))],
+            }
         nodes.append(node)
     resolve["nodes"] = nodes
     metadata["packages"] = [
@@ -3403,6 +3428,29 @@ def _cargo_resolve_nodes(metadata):
         nodes[node.get("id")] = node
     return nodes
 
+# The host-platform graph misses proc macros and build scripts that only the
+# target platform reaches, such as a proc macro behind a wasm-only dependency.
+# Cargo still compiles them for the host and unifies their features with the
+# other host units, so the host-context view of the target graph is merged in.
+def _cargo_with_target_host_context(nodes, host_nodes):
+    merged = dict(host_nodes)
+    for package_id, node in nodes.items():
+        extra = node.get("_once_host")
+        if extra == None:
+            continue
+        base = host_nodes.get(package_id)
+        if base == None:
+            out = dict(node)
+            out["features"] = extra["features"]
+            out["deps"] = extra["deps"]
+        else:
+            out = dict(base)
+            out["features"] = sorted({feature: True for feature in (base.get("features") or []) + extra["features"]}.keys())
+            seen = {dep.get("pkg"): True for dep in base.get("deps") or []}
+            out["deps"] = (base.get("deps") or []) + [dep for dep in extra["deps"] if not seen.get(dep.get("pkg"))]
+        merged[package_id] = out
+    return merged
+
 def _cargo_merge_packages(primary, secondary):
     out = []
     seen = {}
@@ -3670,7 +3718,7 @@ def _cargo_metadata_resolution(ctx, metadata, host_metadata = None, materialize_
     target_package_ids = _cargo_package_id_set(target_packages)
     duplicate_counts = _cargo_duplicate_counts(packages, workspace_member_ids)
     nodes = _cargo_resolve_nodes(metadata)
-    host_nodes = _cargo_resolve_nodes(host_metadata) if host_metadata != None else nodes
+    host_nodes = _cargo_with_target_host_context(nodes, _cargo_resolve_nodes(host_metadata)) if host_metadata != None else nodes
     split_host = ctx["attrs"].get("split_host_variants")
     if split_host == None:
         split_host = True
