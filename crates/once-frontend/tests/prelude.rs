@@ -3251,7 +3251,7 @@ fn prelude_mix_package_uses_native_mix_compiler_pipeline() {
 }
 
 #[test]
-fn prelude_mix_rebar_package_app_copy_reads_the_staged_package_metadata() {
+fn prelude_mix_rebar_package_declares_script_helpers_and_staged_metadata() {
     // Hex packages such as ranch ship `ebin/<app>.app`. The copy that
     // assembles the application must list the staged metadata output itself;
     // Once only links an input to the producer of that path or a parent of it.
@@ -3265,6 +3265,8 @@ def host_env(name):
 def glob(patterns):
     if patterns[0].endswith("/ebin/**/*"):
         return ["deps/ranch/ebin/ranch.app"]
+    if patterns == ["deps/ranch/**/*"]:
+        return ["deps/ranch/rebar.config", "deps/ranch/priv/config.script"]
     return []
 def _elixir_rebar_toolchain():
     return {{"elixir": "elixir", "rebar3": "rebar3", "path": "/bin", "identity": "rebar"}}
@@ -3288,6 +3290,8 @@ result = repr(_mix_rebar_package_action(
     });
     result.unwrap();
 
+    let config = action_by_identifier(&store, "mix-ranch:rebar-config");
+    assert!(config.inputs.contains(&"deps/ranch/priv/config.script".into()));
     let metadata = action_by_identifier(&store, "mix-ranch:rebar-metadata");
     let app = action_by_identifier(&store, "mix-ranch:rebar-app");
     for output in &metadata.outputs {
