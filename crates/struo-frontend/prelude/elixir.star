@@ -2447,17 +2447,20 @@ def _mix_rebar_package_action(ctx, source_root, app_name, mix_env, apps, app_dir
     compiled_app_dir = compiled_root + "/" + app_name
     compiled_ebin_dir = compiled_app_dir + "/ebin"
     validation_marker = ctx["build_dir"] + "/rebar-app.valid"
+    package_inputs = glob(ctx["srcs"])
+    # Rebar config scripts may read helpers or data anywhere in the package.
+    config_inputs = _unique(package_inputs + [config_script])
     write_path(config_script, _mix_rebar_config_source())
     run_action(
         display_name = "Configure Rebar dependency · " + ctx["label"]["name"],
-        source_files = _action_source_files(_unique(glob([source_root + "/rebar.config", source_root + "/rebar.config.script"]) + [config_script])),
+        source_files = _action_source_files(config_inputs),
         argv = [
             toolchain["elixir"],
             _elixir_from_package(ctx, config_script),
             source_root,
             _elixir_from_package(ctx, config_file),
         ],
-        inputs = _unique(glob([source_root + "/rebar.config", source_root + "/rebar.config.script"]) + [config_script]),
+        inputs = config_inputs,
         outputs = [config_file],
         clean_paths = [config_home],
         create_dirs = [config_home],
@@ -2474,9 +2477,9 @@ def _mix_rebar_package_action(ctx, source_root, app_name, mix_env, apps, app_dir
         _elixir_workspace_source_root(ctx["label"]["package"], source_root),
         source_stage,
         kind = "tree",
-        inputs = glob(ctx["srcs"]),
+        inputs = package_inputs,
         identifier = ctx["label"]["id"] + ":rebar-source",
-        source_files = _action_source_files(glob(ctx["srcs"])),
+        source_files = _action_source_files(package_inputs),
     )
     package_include = glob([source_root + "/include/**/*"])
     package_priv = glob([source_root + "/priv/**/*"])
