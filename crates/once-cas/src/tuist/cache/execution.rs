@@ -43,6 +43,7 @@ pub struct TuistExecution {
     executor: Channel,
     image: String,
     root: String,
+    max_concurrency: usize,
     /// Actions in flight, bounded by the account's advertised concurrency so
     /// a wide build waits here instead of overflowing the service's queue.
     slots: Arc<Semaphore>,
@@ -169,16 +170,16 @@ impl TuistCache {
             image = %capabilities.image,
             "resolved Tuist remote execution"
         );
+        let max_concurrency = capabilities
+            .max_concurrency
+            .clamp(1, Semaphore::MAX_PERMITS);
         Ok(TuistExecution {
             cas: self.pinned_to(cas_endpoint),
             executor,
             image: capabilities.image,
             root,
-            slots: Arc::new(Semaphore::new(
-                capabilities
-                    .max_concurrency
-                    .clamp(1, Semaphore::MAX_PERMITS),
-            )),
+            max_concurrency,
+            slots: Arc::new(Semaphore::new(max_concurrency)),
         })
     }
 
@@ -211,6 +212,11 @@ impl TuistExecution {
     /// Worker image tag the service runs actions in.
     pub fn image(&self) -> &str {
         &self.image
+    }
+
+    /// Actions the account may run at once, as the service advertises.
+    pub fn max_concurrency(&self) -> usize {
+        self.max_concurrency
     }
 
     /// Absolute directory each action's input root is materialized at.

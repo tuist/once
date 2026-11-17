@@ -136,9 +136,14 @@ kind = "distributed"
 }
 
 async fn build(root: &Path, home: &Path) -> Output {
+    build_with(root, home, &[]).await
+}
+
+async fn build_with(root: &Path, home: &Path, global: &[&str]) -> Output {
     let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_once"));
     command
         .current_dir(root)
+        .args(global)
         .args(["--format", "json", "build", "--remote", "app"])
         .env_clear()
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
@@ -543,6 +548,43 @@ async fn parallel_actions_respect_the_advertised_concurrency_and_upload_only_cha
             String::from_utf8_lossy(unchanged)
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn remote_actions_use_the_advertised_concurrency_not_local_cpu_slots() {
+    let server = tuist_execution::start_with(None, 3, false).await;
+    let module = PARALLEL.replace("\"tr a-z", "\"sleep 1; tr a-z").replace(
+        "identifier = stem,",
+        "identifier = stem,\n        resources = {\"cpu_slots\": 8} if stem == \"a\" else {},",
+    );
+    let root = workspace(&server.url, &module, PIECES);
+    let home = tempfile::tempdir().unwrap();
+    for name in ["a", "b", "c"] {
+        std::fs::write(root.path().join(format!("{name}.in")), name).unwrap();
+    }
+
+    let output = build_with(root.path(), home.path(), &["--cpu-limit", "1"]).await;
+    assert!(output.status.success(), "{}", stderr(&output));
+    let state = server.service.state.lock().await;
+    assert_eq!(state.executed.len(), 3);
+    assert_eq!(state.over_limit, 0, "Once never exceeds max_concurrency");
+    assert_eq!(
+        state.max_in_flight, 3,
+        "one local CPU slot must not serialize remote actions"
+    );
+    let memory = |platform: &Vec<(String, String)>| {
+        platform
+            .iter()
+            .find(|(name, _)| name == "tuist-memory-gb")
+            .map(|(_, value)| value.clone())
+    };
+    let mut sizes = state.platforms.iter().map(memory).collect::<Vec<_>>();
+    sizes.sort();
+    assert_eq!(
+        sizes,
+        [None, None, Some("8".to_string())],
+        "eight declared CPU slots get the largest VM three concurrent default VMs hold"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

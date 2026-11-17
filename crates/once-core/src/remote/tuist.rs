@@ -37,6 +37,28 @@ const MAX_OUTPUT_TREE_BYTES: u64 = 4 * 1024 * 1024;
 /// Search path for commands whose environment declares none. Workers resolve
 /// a bare program name only through the action's own `PATH`.
 const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+/// Platform property that sizes the worker VM, in GB of guest memory.
+const MEMORY_PROPERTY: &str = "tuist-memory-gb";
+/// VM sizes workers offer, smallest first. Each has two vCPUs per 4 GB, and
+/// the smallest is the default, which actions get without the property.
+const VM_MEMORY_SIZES_GB: [u64; 3] = [4, 8, 16];
+const GIB: u64 = 1024 * 1024 * 1024;
+
+/// The smallest VM that holds the action's declared CPU slots and memory, or
+/// `None` for the default size, which keeps undeclared actions' digests. A
+/// request beyond the account's limits gets the largest VM they hold: one VM
+/// of `gb` takes `gb / 4` of the concurrency the account advertises.
+fn vm_memory_gb(request: &crate::ResourceRequest, max_concurrency: usize) -> Option<u64> {
+    let fits_account = |gb: &u64| usize::try_from(gb / 4).is_ok_and(|vms| vms <= max_concurrency);
+    let sizes = VM_MEMORY_SIZES_GB.iter().copied().filter(fits_account);
+    let needed = sizes.clone().find(|gb| {
+        u64::try_from(request.cpu_slots).is_ok_and(|cpus| cpus <= gb / 2)
+            && request.memory_bytes <= gb * GIB
+    });
+    needed
+        .or_else(|| sizes.last())
+        .filter(|gb| *gb > VM_MEMORY_SIZES_GB[0])
+}
 
 pub(super) async fn execute_command(
     remote: &RemoteExecution,
@@ -261,9 +283,14 @@ async fn prepare(
                 ("tuist-image", image),
             ]
             .into_iter()
+            .map(|(name, value)| (name, value.to_string()))
+            .chain(
+                vm_memory_gb(command.resources, execution.max_concurrency())
+                    .map(|gb| (MEMORY_PROPERTY, gb.to_string())),
+            )
             .map(|(name, value)| reapi::platform::Property {
                 name: name.into(),
-                value: value.into(),
+                value,
             })
             .collect(),
         }),
@@ -722,6 +749,33 @@ fn file_error(action: &'static str, path: &Path, source: std::io::Error) -> Erro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn declared_resources_pick_the_smallest_worker_vm_the_account_holds() {
+        let request = |cpu_slots, memory_bytes| crate::ResourceRequest {
+            cpu_slots,
+            memory_bytes,
+            ..Default::default()
+        };
+        let cases = [
+            (crate::ResourceRequest::default(), 32, None),
+            (request(2, 4 * GIB), 32, None),
+            (request(3, 0), 32, Some(8)),
+            (request(1, 4 * GIB + 1), 32, Some(8)),
+            (request(4, 8 * GIB), 32, Some(8)),
+            (request(5, 0), 32, Some(16)),
+            (request(64, 64 * GIB), 32, Some(16)),
+            (request(8, 0), 3, Some(8)),
+            (request(8, 0), 1, None),
+        ];
+        for (request, max_concurrency, expected) in cases {
+            assert_eq!(
+                vm_memory_gb(&request, max_concurrency),
+                expected,
+                "{request:?} with concurrency {max_concurrency}"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn uploads_refuse_inputs_that_changed_or_moved_behind_a_link() {

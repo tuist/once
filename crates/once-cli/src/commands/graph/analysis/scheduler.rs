@@ -36,7 +36,7 @@ impl<'a> BuildScheduler<'a> {
         retained: &'a HashSet<String>,
         uncached_work: &'a AtomicBool,
     ) -> Self {
-        let max_in_flight = context.resources.max_parallel_actions();
+        let max_in_flight = context.producers.max_parallel_work(&context.resources);
         Self {
             root_id,
             context,
