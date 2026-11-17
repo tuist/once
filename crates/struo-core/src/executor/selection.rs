@@ -40,7 +40,7 @@ impl Executor {
             if *network == NetworkPolicy::Deny {
                 return Err(executor.unsupported("network denial"));
             }
-            if stdout_path.is_some() || stderr_path.is_some() {
+            if executor != Self::Tuist && (stdout_path.is_some() || stderr_path.is_some()) {
                 return Err(executor.unsupported("stdout/stderr path redirection"));
             }
             if !output_symlink_mode.is_default() {

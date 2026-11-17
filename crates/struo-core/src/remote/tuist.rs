@@ -21,10 +21,10 @@ use super::output_install::OutputStaging;
 use super::path::Directory;
 use super::{CommandFilesystemSetup, PreparedCommand};
 use crate::{
-    resolve_execution_argv, resolve_execution_env, Error, Executor, RemoteExecution,
-    RemoteIoLimits, Result, WorkspacePath,
+    resolve_execution_env, Error, Executor, RemoteExecution, RemoteIoLimits, Result, WorkspacePath,
 };
 
+mod command;
 mod tree;
 
 pub(super) const PROVIDER: &str = "tuist";
@@ -50,7 +50,6 @@ pub(super) async fn execute_command(
         .lease
         .as_ref()
         .map_or_else(RemoteIoLimits::default, crate::ExecutionPermit::io_limits);
-    let cwd = command.cwd.map_or("", WorkspacePath::as_str);
     let (action_digest, input_tree, timeout) =
         prepare(&execution, remote, &command, setup, workspace, limits).await?;
     let lease = command.lease.as_ref();
@@ -102,8 +101,8 @@ pub(super) async fn execute_command(
     if executed.timed_out {
         return Err(Error::Timeout(timeout.unwrap_or(DEFAULT_EXECUTION_TIMEOUT)));
     }
-    if command.accepts_exit_code(result.exit_code) && !command.outputs.is_empty() {
-        install_outputs(&execution, cache, workspace, &command, cwd, &result, limits).await?;
+    if !command.outputs.is_empty() {
+        install_outputs(&execution, cache, workspace, &command, &result, limits).await?;
     }
     tracing::debug!(
         executor = PROVIDER,
@@ -164,19 +163,12 @@ async fn prepare(
     limits: RemoteIoLimits,
 ) -> Result<(reapi::Digest, tree::InputTree, Option<Duration>)> {
     let image = remote.environment.as_deref().unwrap_or_default();
-    let cwd = command.cwd.map_or("", WorkspacePath::as_str);
     let root = Path::new(execution.execution_root());
-    let mut output_paths = command
-        .outputs
+    let output_paths = command::output_roots(command.outputs)
         .iter()
-        .map(|output| relative_to(cwd, output.as_str()))
-        .collect::<Result<Vec<_>>>()?;
-    output_paths.sort();
-    output_paths.dedup();
-    let arguments = resolve_execution_argv(command.argv, root);
-    if arguments.is_empty() {
-        return Err(Error::EmptyArgv);
-    }
+        .map(|output| output.as_str().to_string())
+        .collect::<Vec<_>>();
+    let arguments = command::arguments(command, root)?;
     let mut environment = resolve_execution_env(command.env, root);
     environment
         .entry("PATH".into())
@@ -188,7 +180,6 @@ async fn prepare(
             .map(|(name, value)| reapi::command::EnvironmentVariable { name, value })
             .collect(),
         output_paths,
-        working_directory: cwd.to_string(),
         ..Default::default()
     };
 
@@ -198,6 +189,17 @@ async fn prepare(
         .map(|path| path.as_str().to_string())
         .collect::<Vec<_>>();
     directories.extend(command.cwd.map(|cwd| cwd.as_str().to_string()));
+    for path in [command.redirect.stdout, command.redirect.stderr]
+        .into_iter()
+        .flatten()
+    {
+        if let Some(parent) = Path::new(path.as_str())
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+        {
+            directories.push(parent.to_string_lossy().into_owned());
+        }
+    }
     let (inputs, clean_paths, restored) = (
         command.inputs.to_vec(),
         setup.clean_paths.to_vec(),
@@ -258,22 +260,6 @@ async fn prepare(
             .insert(tree::key(&digest), (digest, tree::Blob::Bytes(bytes)));
     }
     Ok((action_digest, input_tree, timeout))
-}
-
-/// REAPI output paths are relative to the working directory, and Tuist
-/// workers refuse paths that leave it.
-fn relative_to(cwd: &str, output: &str) -> Result<String> {
-    if cwd.is_empty() {
-        return Ok(output.to_string());
-    }
-    output
-        .strip_prefix(cwd)
-        .and_then(|rest| rest.strip_prefix('/'))
-        .filter(|rest| !rest.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| {
-            Executor::Tuist.unsupported("declared outputs outside the command working directory")
-        })
 }
 
 async fn upload_missing(
@@ -433,17 +419,11 @@ async fn output_entries(
     execution: &TuistExecution,
     cache: &CacheProvider,
     command: &PreparedCommand<'_>,
-    cwd: &str,
     result: &reapi::ActionResult,
     limits: RemoteIoLimits,
 ) -> Result<Vec<Entry>> {
     let at = |path: &str| -> Result<PathBuf> {
-        let joined = if cwd.is_empty() {
-            path.to_string()
-        } else {
-            format!("{cwd}/{path}")
-        };
-        let joined = WorkspacePath::try_from(joined.as_str())?;
+        let joined = WorkspacePath::try_from(path)?;
         if !command
             .outputs
             .iter()
@@ -456,28 +436,6 @@ async fn output_entries(
         }
         Ok(PathBuf::from(joined.as_str()))
     };
-    let produced = result
-        .output_files
-        .iter()
-        .map(|file| &file.path)
-        .chain(
-            result
-                .output_directories
-                .iter()
-                .map(|directory| &directory.path),
-        )
-        .chain(result.output_symlinks.iter().map(|link| &link.path))
-        .map(|path| at(path))
-        .collect::<Result<std::collections::BTreeSet<_>>>()?;
-    if let Some(missing) = command
-        .outputs
-        .iter()
-        .find(|output| !produced.contains(Path::new(output.as_str())))
-    {
-        return Err(Error::MissingOutput {
-            path: missing.as_str().to_string(),
-        });
-    }
     let mut entries = Vec::new();
     for file in &result.output_files {
         let digest = file
@@ -508,6 +466,25 @@ async fn output_entries(
             .map_err(|_| tree::api_error("malformed output tree".into()))?;
         tree_entries(&output_tree, at(&directory.path)?, &mut entries, limits)?;
     }
+    if command.accepts_exit_code(result.exit_code) {
+        let produced = entries
+            .iter()
+            .map(|entry| match entry {
+                Entry::File(path, ..) | Entry::Directory(path) | Entry::Link(path, _) => {
+                    path.as_path()
+                }
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        if let Some(missing) = command
+            .outputs
+            .iter()
+            .find(|output| !produced.contains(Path::new(output.as_str())))
+        {
+            return Err(Error::MissingOutput {
+                path: missing.as_str().to_string(),
+            });
+        }
+    }
     Ok(entries)
 }
 
@@ -516,11 +493,21 @@ async fn install_outputs(
     cache: &CacheProvider,
     workspace: &Path,
     command: &PreparedCommand<'_>,
-    cwd: &str,
     result: &reapi::ActionResult,
     limits: RemoteIoLimits,
 ) -> Result<()> {
-    let entries = output_entries(execution, cache, command, cwd, result, limits).await?;
+    let entries = output_entries(execution, cache, command, result, limits).await?;
+    let outputs = command::output_roots(command.outputs)
+        .into_iter()
+        .filter(|output| {
+            entries.iter().any(|entry| {
+                let path = match entry {
+                    Entry::File(path, ..) | Entry::Directory(path) | Entry::Link(path, _) => path,
+                };
+                path == Path::new(output.as_str())
+            })
+        })
+        .collect::<Vec<_>>();
     // Digests carry every size, so an oversized result is refused before any
     // of it is downloaded.
     let bytes = entries
@@ -566,9 +553,7 @@ async fn install_outputs(
         .buffer_unordered(PARALLEL_TRANSFERS)
         .try_collect::<()>()
         .await?;
-    staging
-        .install_admitted(command.outputs, workspace, phase)
-        .await
+    staging.install_admitted(&outputs, workspace, phase).await
 }
 
 fn tree_entries(
@@ -687,15 +672,6 @@ fn file_error(action: &'static str, path: &Path, source: std::io::Error) -> Erro
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn outputs_are_relative_to_the_working_directory_and_cannot_leave_it() {
-        assert_eq!(relative_to("", "out/lib.rlib").unwrap(), "out/lib.rlib");
-        assert_eq!(relative_to("crates/a", "crates/a/out").unwrap(), "out");
-        assert!(relative_to("crates/a", "crates/ab/out").is_err());
-        assert!(relative_to("crates/a", "crates/a").is_err());
-        assert!(relative_to("crates/a", ".struo/out/a").is_err());
-    }
 
     #[tokio::test]
     async fn uploads_refuse_inputs_that_changed_or_moved_behind_a_link() {

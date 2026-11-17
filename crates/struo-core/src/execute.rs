@@ -958,6 +958,7 @@ async fn execute_command(
                     inputs,
                     outputs,
                     resources,
+                    redirect: invocation.redirect,
                     timeout_ms: *timeout_ms,
                     success_exit_codes,
                 },

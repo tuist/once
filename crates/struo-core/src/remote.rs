@@ -28,6 +28,7 @@ pub(crate) struct PreparedCommand<'a> {
     pub inputs: &'a [WorkspacePath],
     pub outputs: &'a [WorkspacePath],
     pub resources: &'a ResourceRequest,
+    pub redirect: crate::local::Redirect<'a>,
     pub timeout_ms: Option<u64>,
     pub success_exit_codes: &'a [i32],
 }

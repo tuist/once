@@ -279,8 +279,13 @@ plus twenty minutes, which covers the fifteen minutes Tuist keeps an action
 queued.
 
 Workers run `linux/amd64`. Commands must resolve their tools inside the worker
-image, not on the computer that started the build, and declared outputs must
-sit beneath the command's working directory. Workers look up a bare program
+image, not on the computer that started the build. Struo does not wrap remote
+commands in the coordinator's mise installation. Declared outputs must stay
+inside the execution workspace, but may sit outside the command's working
+directory. Stdout and stderr can be redirected to declared output files;
+redirecting both to the same path preserves their shared stream. Failed
+commands return the output files they produced, including redirected logs.
+Workers look up a bare program
 name such as `sh` only through the action's `PATH`. When an action declares no
 `PATH`, Struo sends `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
 the default of most Linux images. An action that times out on a worker fails as

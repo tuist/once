@@ -103,7 +103,14 @@ pub(in crate::commands::graph::analysis) fn run_declared_actions_with<'a>(
             provider,
             ..
         } = analysis;
-        expose_target_tools(workspace, target, &mut actions, Some(tool_paths)).await?;
+        let local_tools = producers
+            .execution()
+            .map(struo_core::Executor::from_binding)
+            .transpose()?
+            .is_none_or(|executor| executor == struo_core::Executor::Local);
+        if local_tools {
+            expose_target_tools(workspace, target, &mut actions, Some(tool_paths)).await?;
+        }
         tracing::trace!(
             target = %target.label.id,
             declared_actions = actions.len(),
@@ -152,7 +159,9 @@ pub(in crate::commands::graph::analysis) fn run_declared_actions_with<'a>(
                 planner = Some(engine);
                 let expansion = expansion?;
                 let mut expanded = expansion.actions;
-                expose_target_tools(workspace, target, &mut expanded, Some(tool_paths)).await?;
+                if local_tools {
+                    expose_target_tools(workspace, target, &mut expanded, Some(tool_paths)).await?;
+                }
                 for action in expanded.into_iter().rev() {
                     pending.push_front(action);
                 }

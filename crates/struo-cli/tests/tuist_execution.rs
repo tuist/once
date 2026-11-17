@@ -81,10 +81,11 @@ stem = "c"
 
 const ABSENT: &str = r#"
 def _impl(ctx):
-    out = declare_output("never.txt")
+    directory = declare_output("tree")
+    out = declare_output("tree/never.txt")
     run_action(
-        argv = ["/bin/sh", "-c", "true", "sh", out],
-        outputs = [out],
+        argv = ["mkdir", "-p", directory],
+        outputs = [directory, out],
         identifier = "absent",
     )
     return {}
@@ -260,6 +261,122 @@ async fn a_mismatched_worker_image_fails_before_anything_runs() {
         stderr(&output)
     );
     assert!(server.service.state.lock().await.executed.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn redirected_streams_and_outputs_outside_cwd_are_restored_and_cached() {
+    let server = tuist_execution::start().await;
+    let root = workspace(
+        &server.url,
+        r#"
+def _impl(ctx):
+    logs = declare_output("logs")
+    out = declare_output("logs/stdout 'quoted'.txt")
+    err = declare_output("logs/stderr.txt")
+    merged = declare_output("logs/merged.txt")
+    result = declare_output("result.txt")
+    run_action(
+        argv = ["/bin/sh", "-c", "cat input.txt > \"$1\"; printf '%s' \"$2\"; printf diagnostic >&2; exit 23", "sh", execution_path(result), "literal $HOME; $(touch injected)"],
+        inputs = ["nested work/input.txt"],
+        outputs = [result, logs, out, err],
+        stdout = out,
+        stderr = err,
+        cwd = "nested work",
+        success_exit_codes = [23],
+        identifier = "separate",
+    )
+    run_action(
+        argv = ["/bin/sh", "-c", "printf first >&2; printf second"],
+        outputs = [merged],
+        stdout = merged,
+        stderr = merged,
+        cwd = "empty work",
+        create_dirs = ["empty work"],
+        identifier = "merged",
+    )
+    return {}
+
+distributed = target_kind(
+    tools = [tool("sh", executables = ["sh"])],
+    capabilities = [capability("build", ["default"])],
+    impl = _impl,
+)
+"#,
+        "",
+    );
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("mise.toml"), "[tools]\n").unwrap();
+    let mise = home.path().join(format!(
+        ".local/share/struo/tools/mise/{}/mise",
+        struo_core::MANAGED_MISE_VERSION
+    ));
+    std::fs::create_dir_all(mise.parent().unwrap()).unwrap();
+    std::fs::write(
+        &mise,
+        "#!/bin/sh\ncase \"$1\" in\nwhich) printf /bin/sh;;\nexec) exit 97;;\n*) exit 0;;\nesac\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(&mise, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::create_dir(root.path().join("nested work")).unwrap();
+    std::fs::write(
+        root.path().join("nested work/input.txt"),
+        "from working directory",
+    )
+    .unwrap();
+
+    for cold_client in [false, true] {
+        if cold_client {
+            std::fs::remove_dir_all(root.path().join(".struo")).unwrap();
+            std::fs::remove_dir_all(home.path().join("cache")).unwrap();
+        }
+        let output = build(root.path(), home.path()).await;
+        assert!(output.status.success(), "{}", stderr(&output));
+        let record: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let outputs = record["outputs"].as_array().unwrap();
+        for (suffix, expected) in [
+            ("/result.txt", "from working directory"),
+            ("/stdout 'quoted'.txt", "literal $HOME; $(touch injected)"),
+            ("/stderr.txt", "diagnostic"),
+            ("/merged.txt", "firstsecond"),
+        ] {
+            let path = outputs
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .find(|path| path.ends_with(suffix))
+                .expect("declared output is reported");
+            assert_eq!(
+                std::fs::read_to_string(root.path().join(path)).unwrap(),
+                expected
+            );
+        }
+        assert_eq!(server.service.state.lock().await.executed.len(), 2);
+        assert!(
+            !root.path().join("empty work").exists(),
+            "setup stays remote"
+        );
+    }
+
+    let module = root.path().join("modules/distributed.star");
+    let source = std::fs::read_to_string(&module).unwrap();
+    std::fs::write(
+        &module,
+        source.replace("success_exit_codes = [23]", "success_exit_codes = [0]"),
+    )
+    .unwrap();
+    std::fs::remove_dir_all(root.path().join(".struo")).unwrap();
+    let failed = build(root.path(), home.path()).await;
+    assert!(!failed.status.success());
+    assert!(stderr(&failed).contains("23"), "{}", stderr(&failed));
+    let diagnostic = walkdir::WalkDir::new(root.path().join(".struo/out"))
+        .into_iter()
+        .filter_map(Result::ok)
+        .find(|entry| entry.file_name() == "stderr.txt")
+        .expect("failed command diagnostics are restored");
+    assert_eq!(
+        std::fs::read_to_string(diagnostic.path()).unwrap(),
+        "diagnostic"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -222,7 +222,36 @@ def _elixir_app_code_paths(apps):
             paths.append(ebin)
     return _unique(paths)
 
-def _elixir_compiler_toolchain():
+def _elixir_execution_toolchain():
+    execution = execution_context()
+    if not execution or (execution.get("executor") or execution.get("provider")) == "local":
+        return None
+    toolchain = (execution.get("properties") or {}).get("elixir")
+    if type(toolchain) != "dict" or toolchain.get("schema_version") != 1:
+        fail("Remote Elixir builds require infrastructure.execution.properties.elixir with schema_version = 1 and an image-bound toolchain description")
+    if not execution.get("environment") or toolchain.get("environment") != execution["environment"]:
+        fail("Elixir execution toolchain environment must match the selected execution environment")
+    if toolchain.get("os") != "linux" or toolchain.get("arch") not in ["arm64", "x86_64"]:
+        fail("Elixir execution toolchains require Linux workers with arch arm64 or x86_64")
+    for name in ["elixir_bin", "erlang_bin", "mix_home", "rebar3"]:
+        path = toolchain.get(name)
+        if type(path) != "string" or not path.startswith("/") or ".." in path.split("/") or "\x00" in path:
+            fail("Elixir execution toolchain " + name + " must be an absolute worker path without parent traversal")
+    return {
+        "elixir": toolchain["elixir_bin"] + "/elixir",
+        "elixirc": toolchain["elixir_bin"] + "/elixirc",
+        "mix": toolchain["elixir_bin"] + "/mix",
+        "erl": toolchain["erlang_bin"] + "/erl",
+        "mix_home": toolchain["mix_home"],
+        "rebar3": toolchain["rebar3"],
+        "path": toolchain["elixir_bin"] + ":" + toolchain["erlang_bin"] + ":/usr/bin:/bin:/usr/sbin:/sbin",
+        "identity": "struo.elixir.execution.v1\x00" + content_sha256(_json_encode(execution)),
+    }
+
+def _elixir_compiler_toolchain(worker = True):
+    remote = _elixir_execution_toolchain() if worker else None
+    if remote:
+        return remote
     elixir = host_which("elixir")
     elixirc = host_which("elixirc")
     erl = host_which("erl")
@@ -242,8 +271,11 @@ def _elixir_compiler_toolchain():
         "identity": identity,
     }
 
-def _elixir_mix_toolchain():
-    compiler = _elixir_compiler_toolchain()
+def _elixir_mix_toolchain(worker = True):
+    remote = _elixir_execution_toolchain() if worker else None
+    if remote:
+        return remote
+    compiler = _elixir_compiler_toolchain(worker = False)
     mix = host_which("mix")
     mix_version = host_command([mix, "--version"]).strip()
     mix_home_info = host_command([
@@ -278,7 +310,10 @@ IO.write(mix_home <> "\\n" <> hex_version)
     }
 
 def _elixir_rebar_toolchain():
-    compiler = _elixir_compiler_toolchain()
+    remote = _elixir_execution_toolchain()
+    if remote:
+        return remote
+    compiler = _elixir_compiler_toolchain(worker = False)
     requested = host_env("MIX_REBAR3")
     rebar3 = requested
     if not rebar3:
@@ -1881,7 +1916,7 @@ def _mix_read_locked_graph(ctx):
         if graph.get("struo_inputs") != expected_inputs:
             fail(ctx["label"]["id"] + ": Mix graph snapshot `" + graph_file + "` input binding does not match resolver_inputs")
         return graph
-    toolchain = _elixir_mix_toolchain()
+    toolchain = _elixir_mix_toolchain(worker = False)
     resolver_home = workspace_root() + "/.struo/tmp/mix-resolver"
     env = _elixir_action_env(toolchain)
     env["MIX_HOME"] = resolver_home + "/mix"
@@ -3230,7 +3265,7 @@ def _mix_workspace_environment(ctx):
     return _elixir_attr(ctx, "mix_env", "") or host_env("MIX_ENV") or "dev"
 
 def _mix_workspace_metadata(ctx):
-    toolchain = _elixir_compiler_toolchain()
+    toolchain = _elixir_compiler_toolchain(worker = False)
     project_dir = _mix_workspace_path(ctx, ".")
     content = host_command(
         [toolchain["elixir"], "-e", _mix_workspace_metadata_source(), "--", project_dir, _mix_workspace_environment(ctx)],
