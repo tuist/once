@@ -157,7 +157,7 @@ fn stderr(output: &Output) -> String {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn graph_actions_run_on_the_tuist_execution_service_and_restore_from_its_cache() {
-    let server = tuist_execution::start().await;
+    let server = tuist_execution::start_with(None, 4, true).await;
     let root = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("modules")).unwrap();
@@ -381,7 +381,7 @@ distributed = target_kind(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn parallel_actions_respect_the_advertised_concurrency_and_upload_only_changed_inputs() {
-    let server = tuist_execution::start_with(None, 1).await;
+    let server = tuist_execution::start_with(None, 1, false).await;
     let root = workspace(&server.url, PARALLEL, PIECES);
     let home = tempfile::tempdir().unwrap();
     for name in ["a", "b", "c"] {
@@ -605,7 +605,7 @@ fn worker_image() -> String {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires Docker and ONCE_TUIST_WORKER_IMAGE"]
 async fn graph_actions_run_in_a_simulated_linux_tuist_worker() {
-    let server = tuist_execution::start_with(Some(worker_image()), 4).await;
+    let server = tuist_execution::start_with(Some(worker_image()), 4, false).await;
     let root = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("modules")).unwrap();

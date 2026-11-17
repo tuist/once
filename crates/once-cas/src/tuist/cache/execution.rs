@@ -64,6 +64,8 @@ struct Capabilities {
     endpoint: String,
     cas_endpoint: String,
     #[serde(default)]
+    client_cas_endpoint: Option<String>,
+    #[serde(default)]
     max_concurrency: usize,
     #[serde(default)]
     execution_root: Option<String>,
@@ -157,14 +159,18 @@ impl TuistCache {
             .http2_keep_alive_interval(Duration::from_secs(30))
             .keep_alive_while_idle(true)
             .connect_lazy();
+        let cas_endpoint = capabilities
+            .client_cas_endpoint
+            .as_deref()
+            .unwrap_or(&capabilities.cas_endpoint);
         tracing::debug!(
             executor = %redact::endpoint(&capabilities.endpoint),
-            cas = %redact::endpoint(&capabilities.cas_endpoint),
+            cas = %redact::endpoint(cas_endpoint),
             image = %capabilities.image,
             "resolved Tuist remote execution"
         );
         Ok(TuistExecution {
-            cas: self.pinned_to(&capabilities.cas_endpoint),
+            cas: self.pinned_to(cas_endpoint),
             executor,
             image: capabilities.image,
             root,
