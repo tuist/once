@@ -9,7 +9,7 @@
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::{FutureExt as _, StreamExt as _, TryStreamExt as _};
 use once_cas::{
@@ -45,6 +45,7 @@ pub(super) async fn execute_command(
     parent: bool,
     setup: CommandFilesystemSetup<'_>,
 ) -> Result<ActionResult> {
+    let prepare_started = Instant::now();
     let execution = connect(remote, cache).await?;
     let limits = command
         .lease
@@ -52,15 +53,21 @@ pub(super) async fn execute_command(
         .map_or_else(RemoteIoLimits::default, crate::ExecutionPermit::io_limits);
     let (action_digest, input_tree, timeout) =
         prepare(&execution, remote, &command, setup, workspace, limits).await?;
+    let prepare_ms = prepare_started.elapsed().as_millis() as u64;
+    let admission_started = Instant::now();
     let lease = command.lease.as_ref();
     let capture = lease.map(crate::ExecutionPermit::capture_budget);
     if let Some(capture) = &capture {
         capture.reserve_upfront().await?;
     }
     let slot = execution.admit().await;
+    let admission_ms = admission_started.elapsed().as_millis() as u64;
+    let upload_started = Instant::now();
     upload_missing(&execution, &input_tree, workspace, lease).await?;
+    let input_upload_ms = upload_started.elapsed().as_millis() as u64;
     tracing::debug!(executor = PROVIDER, action_digest = %action_digest.hash, "executing remote action");
 
+    let execute_started = Instant::now();
     let executed = match execution.execute(&action_digest, timeout).await {
         Err(error) if error.is_not_found() => {
             tracing::debug!(
@@ -72,8 +79,10 @@ pub(super) async fn execute_command(
         }
         executed => executed?,
     };
+    let execute_rpc_ms = execute_started.elapsed().as_millis() as u64;
     // Downloading results does not occupy the account's execution capacity.
     drop(slot);
+    let download_started = Instant::now();
     let result = executed.result;
     let stdout = mirror_log(
         &execution,
@@ -106,7 +115,13 @@ pub(super) async fn execute_command(
     }
     tracing::debug!(
         executor = PROVIDER,
+        action_digest = %action_digest.hash,
         exit_code = result.exit_code,
+        prepare_ms,
+        admission_ms,
+        input_upload_ms,
+        execute_rpc_ms,
+        output_download_ms = download_started.elapsed().as_millis() as u64,
         "remote action completed"
     );
     Ok(ActionResult {
