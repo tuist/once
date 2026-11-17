@@ -126,7 +126,10 @@ pub(crate) fn decode_open_file<T>(
             stop,
         };
         copy(&mut reader, &mut output).map_err(|error| {
-            if error.raw_os_error().is_none() && error.kind() != io::ErrorKind::Interrupted {
+            if !stop.load(Ordering::Acquire)
+                && error.raw_os_error().is_none()
+                && error.kind() != io::ErrorKind::Interrupted
+            {
                 CorruptBlob::io_error(*expected, &error.to_string())
             } else {
                 error
@@ -172,7 +175,8 @@ impl<R: Read> Read for Stoppable<'_, R> {
     }
 }
 fn cancelled() -> io::Error {
-    io::Error::new(io::ErrorKind::Interrupted, "blob restore was cancelled")
+    // Interrupted is retried by io::copy and read_to_end, so it cannot stop them.
+    io::Error::other("blob restore was cancelled")
 }
 pub(crate) struct StopOnDrop(pub(crate) Arc<AtomicBool>);
 impl Drop for StopOnDrop {
@@ -211,6 +215,39 @@ fn blob_too_large() -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancellation_stops_copy_without_publishing_or_quarantining_valid_data() {
+        for payload in [b"raw".to_vec(), vec![b'x'; 16 * 1024]] {
+            let directory = tempfile::tempdir().unwrap();
+            let source = directory.path().join("blob");
+            let output = directory.path().join("output");
+            std::fs::write(&source, encode_bytes(&payload).unwrap()).unwrap();
+            std::fs::write(&output, b"original").unwrap();
+            let digest = Digest::of_bytes(&payload);
+            let stop = Arc::new(AtomicBool::new(true));
+            let cancel = Arc::clone(&stop);
+            let (started, ready) = std::sync::mpsc::channel();
+            let (finished, result) = std::sync::mpsc::channel();
+            let destination = output.clone();
+            let worker = std::thread::spawn(move || {
+                started.send(()).unwrap();
+                let copied =
+                    decode_file(&source, &destination, &digest, &cancel, |input, output| {
+                        io::copy(input, output)
+                    });
+                finished.send(copied).unwrap();
+            });
+            ready.recv().unwrap();
+            let copied = result.recv_timeout(std::time::Duration::from_secs(1));
+            // Let a broken retry loop finish rather than hang the test process.
+            stop.store(false, Ordering::Release);
+            worker.join().unwrap();
+            let error = copied.expect("cancelled copying must stop").unwrap_err();
+            assert!(!CorruptBlob::is(&error));
+            assert_eq!(std::fs::read(&output).unwrap(), b"original");
+        }
+    }
 
     #[test]
     fn small_payload_stays_raw_when_compression_would_grow_it() {
