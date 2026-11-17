@@ -70,6 +70,7 @@ pub struct State {
     pub platforms: Vec<Vec<(String, String)>>,
     /// Hashes of every uploaded blob, in order, including repeats.
     pub uploads: Vec<String>,
+    pub batch_reads: Vec<Vec<reapi::Digest>>,
     /// Actions submitted and not yet answered, and the most seen at once.
     in_flight: usize,
     pub max_in_flight: usize,
@@ -637,10 +638,10 @@ impl ContentAddressableStorage for Service {
         &self,
         request: Request<reapi::BatchReadBlobsRequest>,
     ) -> Rpc<reapi::BatchReadBlobsResponse> {
-        let state = self.state.lock().await;
-        let responses = request
-            .into_inner()
-            .digests
+        let mut state = self.state.lock().await;
+        let digests = request.into_inner().digests;
+        state.batch_reads.push(digests.clone());
+        let responses = digests
             .into_iter()
             .map(|digest| {
                 let found = state.blobs.get(&digest.hash).cloned();

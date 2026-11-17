@@ -156,6 +156,56 @@ fn stderr(output: &Output) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn many_remote_output_files_are_verified_and_downloaded_in_bounded_batches() {
+    let server = tuist_execution::start().await;
+    let root = workspace(
+        &server.url,
+        r#"
+def _impl(ctx):
+    out = declare_output("result")
+    run_action(
+        argv = ["/bin/sh", "-c", "mkdir -p \"$1\"; for i in $(seq 1 130); do printf 'result-%s' \"$i\" > \"$1/$i\"; done; cp \"$1/1\" \"$1/duplicate\"; : > \"$1/empty\"", "sh", out],
+        outputs = [out],
+    )
+    return {}
+distributed = target_kind(capabilities = [capability("build", ["default"])], impl = _impl)
+"#,
+        "",
+    );
+    let home = tempfile::tempdir().unwrap();
+    let output = build(root.path(), home.path()).await;
+    assert!(output.status.success(), "{}", stderr(&output));
+    let record: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let result = record["outputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .find(|path| path.ends_with("/result"))
+        .unwrap();
+    for index in 1..=130 {
+        assert_eq!(
+            std::fs::read_to_string(root.path().join(result).join(index.to_string())).unwrap(),
+            format!("result-{index}")
+        );
+    }
+    assert_eq!(
+        std::fs::read(root.path().join(result).join("duplicate")).unwrap(),
+        b"result-1"
+    );
+    assert!(std::fs::read(root.path().join(result).join("empty"))
+        .unwrap()
+        .is_empty());
+    let state = server.service.state.lock().await;
+    assert!(state.batch_reads.iter().all(|batch| batch.len() <= 128));
+    assert!(
+        state.batch_reads.len() < 15,
+        "one RPC per file: {} reads",
+        state.batch_reads.len()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn graph_actions_run_on_the_tuist_execution_service_and_restore_from_its_cache() {
     let server = tuist_execution::start_with(None, 4, true).await;
     let root = tempfile::tempdir().unwrap();

@@ -16,6 +16,7 @@ use struo_cas::{
     reapi, reapi_protobuf, ActionResult, CacheProvider, ReapiMessage as _, TuistExecution,
     DEFAULT_EXECUTION_TIMEOUT,
 };
+use tracing::Instrument as _;
 
 use super::output_install::OutputStaging;
 use super::path::Directory;
@@ -113,7 +114,9 @@ pub(super) async fn execute_command(
     let outputs = if command.outputs.is_empty() {
         std::collections::BTreeMap::new()
     } else {
-        install_outputs(&execution, cache, workspace, &command, &result, limits).await?
+        install_outputs(&execution, cache, workspace, &command, &result, limits)
+            .instrument(tracing::debug_span!("remote_outputs", action_digest = %action_digest.hash))
+            .await?
     };
     tracing::debug!(
         executor = PROVIDER,
@@ -513,7 +516,9 @@ async fn install_outputs(
     result: &reapi::ActionResult,
     limits: RemoteIoLimits,
 ) -> Result<std::collections::BTreeMap<String, struo_cas::Digest>> {
+    let metadata_started = Instant::now();
     let entries = output_entries(execution, cache, command, result, limits).await?;
+    let metadata_ms = metadata_started.elapsed().as_millis() as u64;
     let outputs = command::output_roots(command.outputs)
         .into_iter()
         .filter(|output| {
@@ -543,20 +548,27 @@ async fn install_outputs(
     }
     // Download every file into the local store before reserving staging, so
     // the reservation is not held across the network.
-    let entries = futures::stream::iter(entries)
-        .map(|entry| {
-            async move {
-                let local = match &entry {
-                    Entry::File(_, digest, _) => Some(execution.mirror_blob(digest).await?),
-                    Entry::Directory(_) | Entry::Link(..) => None,
-                };
-                Ok::<_, Error>((entry, local))
-            }
-            .boxed()
+    let download_started = Instant::now();
+    let digests = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            Entry::File(_, digest, _) => Some(digest.clone()),
+            Entry::Directory(_) | Entry::Link(..) => None,
         })
-        .buffer_unordered(PARALLEL_TRANSFERS)
-        .try_collect::<Vec<_>>()
-        .await?;
+        .collect::<Vec<_>>();
+    let mut mirrored = execution.mirror_blobs(&digests).await?.into_iter();
+    let entries = entries
+        .into_iter()
+        .map(|entry| {
+            let local = match &entry {
+                Entry::File(..) => Some(mirrored.next().expect("mirrored output file")),
+                Entry::Directory(_) | Entry::Link(..) => None,
+            };
+            (entry, local)
+        })
+        .collect::<Vec<_>>();
+    let files_ms = download_started.elapsed().as_millis() as u64;
+    let staging_started = Instant::now();
     // The staged copy and the backup of any outputs it replaces.
     let phase = super::phase_permit(command.lease.as_ref(), bytes.saturating_mul(2)).await?;
     let mut staging = OutputStaging::create_limited(workspace, limits)?;
@@ -575,8 +587,22 @@ async fn install_outputs(
     } else {
         &outputs
     };
+    let staging_ms = staging_started.elapsed().as_millis() as u64;
+    let capture_started = Instant::now();
     let captured = staging.capture(&outputs, captured_outputs, cache).await?;
+    let capture_ms = capture_started.elapsed().as_millis() as u64;
+    let publish_started = Instant::now();
     staging.install_admitted(&outputs, workspace, phase).await?;
+    tracing::debug!(
+        files = digests.len(),
+        bytes,
+        metadata_ms,
+        files_ms,
+        staging_ms,
+        capture_ms,
+        publish_ms = publish_started.elapsed().as_millis() as u64,
+        "remote outputs restored"
+    );
     Ok(captured)
 }
 
