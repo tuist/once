@@ -378,6 +378,24 @@ impl TuistExecution {
                         operation_name = None;
                         continue;
                     }
+                    let metadata = response
+                        .result
+                        .as_ref()
+                        .and_then(|result| result.execution_metadata.as_ref());
+                    tracing::debug!(
+                        action_digest = %action.hash,
+                        operation = ?operation_name,
+                        cached_result = response.cached_result,
+                        queued = ?metadata.and_then(|m| m.queued_timestamp.as_ref()),
+                        worker_start = ?metadata.and_then(|m| m.worker_start_timestamp.as_ref()),
+                        input_fetch_start = ?metadata.and_then(|m| m.input_fetch_start_timestamp.as_ref()),
+                        input_fetch_end = ?metadata.and_then(|m| m.input_fetch_completed_timestamp.as_ref()),
+                        execution_start = ?metadata.and_then(|m| m.execution_start_timestamp.as_ref()),
+                        execution_end = ?metadata.and_then(|m| m.execution_completed_timestamp.as_ref()),
+                        output_upload_start = ?metadata.and_then(|m| m.output_upload_start_timestamp.as_ref()),
+                        output_upload_end = ?metadata.and_then(|m| m.output_upload_completed_timestamp.as_ref()),
+                        "remote execution response"
+                    );
                     return response_result(response);
                 }
                 Err(status) => status,
