@@ -159,25 +159,31 @@ pub(crate) fn restore_prefetched_output(
     rel: &str,
     abs: &Path,
     mut blob: impl Read + Seek,
-    remote: bool,
+    private: bool,
 ) -> Result<()> {
-    let offset = if remote {
-        let mut magic = vec![0; REMOTE_OUTPUT_MAGIC.len()];
-        blob.read_exact(&mut magic)
+    let offset = if private {
+        let mut magic = Vec::new();
+        (&mut blob)
+            .take(REMOTE_OUTPUT_MAGIC.len() as u64)
+            .read_to_end(&mut magic)
             .map_err(|source| Error::RestoreOutput {
                 path: rel.into(),
                 source,
             })?;
-        if magic != REMOTE_OUTPUT_MAGIC {
-            return Err(Error::RestoreOutput {
-                path: rel.into(),
-                source: std::io::Error::other("mixed remote and local output snapshots"),
-            });
+        // A target outcome can combine local copy actions and remote commands.
+        if magic == REMOTE_OUTPUT_MAGIC {
+            REMOTE_OUTPUT_MAGIC.len() as u64
+        } else {
+            0
         }
-        REMOTE_OUTPUT_MAGIC.len() as u64
     } else {
         0
     };
+    blob.seek(std::io::SeekFrom::Start(offset))
+        .map_err(|source| Error::RestoreOutput {
+            path: rel.into(),
+            source,
+        })?;
     let mut prefix = [0_u8; 32];
     let mut read = 0;
     while read < prefix.len() {
@@ -198,7 +204,7 @@ pub(crate) fn restore_prefetched_output(
             source,
         })?;
     if is_directory_blob(&prefix[..read]) {
-        if remote {
+        if private {
             return crate::directory_blob::restore_remote_directory_blob_from_reader(
                 rel, abs, blob,
             );
