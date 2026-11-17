@@ -295,9 +295,12 @@ place only actions that are safe to repeat on it. Unsupported requirements,
 such as network denial or a timeout longer than ten minutes, fail instead of
 running locally.
 
-Inputs go to the cache endpoint the execution service advertises. When
-`TUIST_CACHE_ENDPOINT` is set, Struo uses it instead and logs a warning if it
-differs, so set it only to an endpoint the workers read from.
+Inputs go to the client-facing cache endpoint the execution service advertises.
+Gateways and workers may use a separate internal address in the same cache mesh;
+coordinators do not need access to the workers' private network. Older servers
+that advertise only one CAS endpoint must make it reachable by the coordinator.
+When `TUIST_CACHE_ENDPOINT` is set, Struo uses it instead and logs a warning if
+it differs, so set it only to an endpoint the workers read from.
 
 ## Next
 

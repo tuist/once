@@ -107,10 +107,14 @@ pub struct Server {
 const WORKER_ROOT: &str = "/workspace/action";
 
 pub async fn start() -> Server {
-    start_with(None, 4).await
+    start_with(None, 4, false).await
 }
 
-pub async fn start_with(worker: Option<String>, max_concurrency: usize) -> Server {
+pub async fn start_with(
+    worker: Option<String>,
+    max_concurrency: usize,
+    client_cas: bool,
+) -> Server {
     let root = tempfile::tempdir().unwrap();
     let service = Service {
         state: Arc::default(),
@@ -146,7 +150,8 @@ pub async fn start_with(worker: Option<String>, max_concurrency: usize) -> Serve
     let body = serde_json::json!({
         "image": IMAGE,
         "endpoint": grpc,
-        "cas_endpoint": grpc,
+        "cas_endpoint": if client_cas { "http://127.0.0.1:1" } else { &grpc },
+        "client_cas_endpoint": client_cas.then_some(&grpc),
         "max_concurrency": max_concurrency,
         "leases": false,
         "execution_root": execution_root,
