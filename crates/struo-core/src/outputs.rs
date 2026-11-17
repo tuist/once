@@ -19,6 +19,9 @@ use crate::file_blob::{
 use crate::{Error, OutputSymlinkMode, Result, WorkspacePath};
 
 const RESTORE_PREFETCH_CONCURRENCY: usize = 16;
+// Remote snapshots must be restored privately and checked before publication.
+// Their action-digest domain is separate from clients without this envelope.
+pub(crate) const REMOTE_OUTPUT_MAGIC: &[u8] = b"struo.remote-output.v1\0";
 
 mod commit;
 mod legacy_hash;
@@ -46,7 +49,7 @@ pub(crate) async fn restore_admitted(
     cache: &CacheProvider,
     lease: Option<crate::ExecutionPermit>,
 ) -> Result<()> {
-    let work = Box::pin(restore_scoped(result, workspace_root, cache));
+    let work = Box::pin(restore_scoped(result, workspace_root, cache, lease.clone()));
     match lease {
         Some(lease) => crate::with_execution_permit(lease, work).await,
         None => work.await,
@@ -57,12 +60,22 @@ async fn restore_scoped(
     result: &ActionResult,
     workspace_root: &Path,
     cache: &CacheProvider,
+    lease: Option<crate::ExecutionPermit>,
 ) -> Result<()> {
+    if result.outputs.is_empty() {
+        return Ok(());
+    }
+    let staging = std::sync::Arc::new(StagingDir::create(workspace_root)?);
+    // Classify before inspecting existing outputs: hashing a remote link on
+    // the coordinator could read data that the action never declared.
+    if prefetch::has_remote_outputs(result, cache, &staging).await? {
+        let prefetched = prefetch::restore(result, cache, &staging).await?;
+        return crate::remote::restore_output_snapshots(prefetched, workspace_root, lease).await;
+    }
     let outputs = outputs_needing_restore(result, workspace_root).await?;
     if outputs.outputs.is_empty() {
         return Ok(());
     }
-    let staging = std::sync::Arc::new(StagingDir::create(workspace_root)?);
     let prefetched = prefetch::restore(&outputs, cache, &staging).await?;
     #[cfg(any(target_os = "linux", target_vendor = "apple"))]
     let mut prefetched = prefetched;
@@ -84,7 +97,7 @@ async fn restore_scoped(
                 if existing_output_matches_digest(&abs, digest) {
                     continue;
                 }
-                restore_prefetched_output(&rel, &abs, blob.into_reader()?)?;
+                restore_prefetched_output(&rel, &abs, blob.into_reader()?, false)?;
             }
             Ok(())
         })
@@ -142,7 +155,29 @@ fn output_restore_lock_path(workspace_root: &Path) -> PathBuf {
     workspace_root.join(".struo/locks/output-restore.lock")
 }
 
-fn restore_prefetched_output(rel: &str, abs: &Path, mut blob: impl Read + Seek) -> Result<()> {
+pub(crate) fn restore_prefetched_output(
+    rel: &str,
+    abs: &Path,
+    mut blob: impl Read + Seek,
+    remote: bool,
+) -> Result<()> {
+    let offset = if remote {
+        let mut magic = vec![0; REMOTE_OUTPUT_MAGIC.len()];
+        blob.read_exact(&mut magic)
+            .map_err(|source| Error::RestoreOutput {
+                path: rel.into(),
+                source,
+            })?;
+        if magic != REMOTE_OUTPUT_MAGIC {
+            return Err(Error::RestoreOutput {
+                path: rel.into(),
+                source: std::io::Error::other("mixed remote and local output snapshots"),
+            });
+        }
+        REMOTE_OUTPUT_MAGIC.len() as u64
+    } else {
+        0
+    };
     let mut prefix = [0_u8; 32];
     let mut read = 0;
     while read < prefix.len() {
@@ -157,11 +192,17 @@ fn restore_prefetched_output(rel: &str, abs: &Path, mut blob: impl Read + Seek) 
             }
         }
     }
-    blob.rewind().map_err(|source| Error::RestoreOutput {
-        path: rel.to_string(),
-        source,
-    })?;
+    blob.seek(std::io::SeekFrom::Start(offset))
+        .map_err(|source| Error::RestoreOutput {
+            path: rel.to_string(),
+            source,
+        })?;
     if is_directory_blob(&prefix[..read]) {
+        if remote {
+            return crate::directory_blob::restore_remote_directory_blob_from_reader(
+                rel, abs, blob,
+            );
+        }
         return restore_directory_blob_from_reader(rel, abs, blob);
     }
     if prefix[..read].starts_with(FILE_BLOB_MAGIC) {
@@ -314,10 +355,10 @@ fn existing_output_matches_digest_owned(
         || digest_raw_file(path, &metadata).is_ok_and(|digest| digest == expected)
 }
 
-struct PrefetchedOutput {
-    rel: String,
-    digest: Digest,
-    blob: struo_cas::StagedBlob,
+pub(crate) struct PrefetchedOutput {
+    pub(crate) rel: String,
+    pub(crate) digest: Digest,
+    pub(crate) blob: struo_cas::StagedBlob,
 }
 
 struct StagingDir {
@@ -394,7 +435,13 @@ pub(crate) async fn capture_admitted(
     symlink_mode: OutputSymlinkMode,
     lease: Option<&crate::ExecutionPermit>,
 ) -> Result<BTreeMap<String, Digest>> {
-    let work = Box::pin(capture_scoped(outputs, workspace_root, cache, symlink_mode));
+    let work = Box::pin(capture_scoped(
+        outputs,
+        workspace_root,
+        cache,
+        symlink_mode,
+        false,
+    ));
     match lease {
         Some(lease) => crate::with_execution_permit(lease.clone(), work).await,
         None => work.await,
@@ -406,6 +453,7 @@ async fn capture_scoped(
     workspace_root: &Path,
     cache: &CacheProvider,
     symlink_mode: OutputSymlinkMode,
+    remote: bool,
 ) -> Result<BTreeMap<String, Digest>> {
     let mut captured = BTreeMap::new();
     for rel in outputs {
@@ -426,6 +474,9 @@ async fn capture_scoped(
         };
         let digest = if let Some(guard) = crate::resource_scope::current() {
             let produce = move |mut writer: &mut dyn Write| {
+                if remote {
+                    writer.write_all(REMOTE_OUTPUT_MAGIC)?;
+                }
                 if metadata.is_dir() {
                     write_directory_blob(&abs, symlink_mode, &mut writer)
                 } else {
@@ -449,6 +500,9 @@ async fn capture_scoped(
                 move || {
                     let file = std::fs::File::create(&output_path)?;
                     let mut writer = BufWriter::new(file);
+                    if remote {
+                        writer.write_all(REMOTE_OUTPUT_MAGIC)?;
+                    }
                     write_directory_blob(&abs, symlink_mode, &mut writer)?;
                     writer.flush()
                 }
@@ -471,7 +525,13 @@ async fn capture_scoped(
                     })?;
             cache.put_stream(file).await?
         } else {
-            let header = Cursor::new(file_blob_header(&metadata));
+            let mut header = if remote {
+                REMOTE_OUTPUT_MAGIC.to_vec()
+            } else {
+                Vec::new()
+            };
+            header.extend(file_blob_header(&metadata));
+            let header = Cursor::new(header);
             let file = tokio::fs::File::open(&abs)
                 .await
                 .map_err(|source| Error::ReadOutput {
@@ -485,6 +545,21 @@ async fn capture_scoped(
         captured.insert(rel.as_str().to_string(), digest);
     }
     Ok(captured)
+}
+
+pub(crate) async fn capture_remote(
+    outputs: &[WorkspacePath],
+    workspace_root: &Path,
+    cache: &CacheProvider,
+) -> Result<BTreeMap<String, Digest>> {
+    capture_scoped(
+        outputs,
+        workspace_root,
+        cache,
+        OutputSymlinkMode::Preserve,
+        true,
+    )
+    .await
 }
 
 #[cfg(test)]

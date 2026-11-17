@@ -423,6 +423,12 @@ impl Action {
                 format: ArchiveFormat::Zip,
                 ..
             } => b"struo.action.write_archive.zip.v2\0".as_slice(),
+            Action::RunCommand {
+                remote: Some(remote),
+                ..
+            } if remote.provider == "tuist" => {
+                b"struo.action.run_command.tuist_snapshots.v1\0".as_slice()
+            }
             // Old normalized results cannot distinguish accepted exits from rejected zero.
             Action::RunCommand {
                 success_exit_codes, ..

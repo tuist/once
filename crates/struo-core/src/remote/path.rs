@@ -10,10 +10,11 @@ pub(super) use boundary::{Directory, Parent};
 mod tree;
 pub(super) use tree::validate_output_tree;
 
-pub(super) fn validate_links(
+pub(super) fn validate_output_links(
     directory: &Directory,
     links: &[PathBuf],
     declared_roots: &[PathBuf],
+    workspace: Option<&Directory>,
 ) -> std::io::Result<()> {
     for link in links {
         let mut pending = components(link)?;
@@ -31,7 +32,16 @@ pub(super) fn validate_links(
                         .iter()
                         .any(|root| root.starts_with(&resolved))
                 {
-                    return Err(unsafe_link(link));
+                    let Some(workspace) = workspace else {
+                        return Err(unsafe_link(link));
+                    };
+                    // A missing workspace-relative reference may be preserved,
+                    // but never traverse a coordinator symlink to resolve it.
+                    match workspace.metadata(&resolved) {
+                        Ok(metadata) if metadata.is_dir() => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        _ => return Err(unsafe_link(link)),
+                    }
                 }
                 let metadata = match directory.metadata(&resolved) {
                     Ok(metadata) => Some(metadata),
@@ -52,7 +62,15 @@ pub(super) fn validate_links(
             }
         }
         if !path_is_declared(&resolved, declared_roots) {
-            return Err(unsafe_link(link));
+            let Some(workspace) = workspace else {
+                return Err(unsafe_link(link));
+            };
+            for root in [directory, workspace] {
+                match root.metadata(&resolved) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    _ => return Err(unsafe_link(link)),
+                }
+            }
         }
     }
     Ok(())

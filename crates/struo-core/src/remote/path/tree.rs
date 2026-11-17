@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::{validate_links, Directory};
+use super::{validate_output_links, Directory};
 use crate::{RemoteIoLimits, Result, WorkspacePath};
 
 pub(in crate::remote) fn validate_output_tree(
@@ -8,6 +8,7 @@ pub(in crate::remote) fn validate_output_tree(
     outputs: &[WorkspacePath],
     limits: RemoteIoLimits,
     retained_metadata_bytes: u64,
+    workspace: Option<&Directory>,
 ) -> Result<()> {
     let roots = outputs
         .iter()
@@ -26,7 +27,8 @@ pub(in crate::remote) fn validate_output_tree(
             limits,
         )?;
     }
-    validate_links(directory, &links, &roots).map_err(|source| error(Path::new(""), source))
+    validate_output_links(directory, &links, &roots, workspace)
+        .map_err(|source| error(Path::new(""), source))
 }
 
 fn collect_links(

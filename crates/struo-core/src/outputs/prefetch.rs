@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::future::Future;
+use std::io::Read as _;
 use std::sync::Arc;
 
 use struo_cas::{ActionResult, CacheProvider, Digest};
@@ -8,6 +9,34 @@ use tokio::task::JoinSet;
 use crate::{Error, ResourcePermit, Result};
 
 use super::{PrefetchedOutput, StagingDir, WorkerSlots, RESTORE_PREFETCH_CONCURRENCY};
+
+pub(super) async fn has_remote_outputs(
+    result: &ActionResult,
+    cache: &CacheProvider,
+    staging: &Arc<StagingDir>,
+) -> Result<bool> {
+    let remote = run(result, |_, _, digest, owner| {
+        let cache = cache.clone();
+        let staging = Arc::clone(staging);
+        struo_cas::transfer::propagate(async move {
+            let parent = staging.path().to_path_buf();
+            let blob = cache
+                .stage_blob_guarded(&digest, &parent, (staging, owner))
+                .await?;
+            let mut prefix = Vec::new();
+            blob.into_reader()?
+                .take(super::REMOTE_OUTPUT_MAGIC.len() as u64)
+                .read_to_end(&mut prefix)
+                .map_err(|source| Error::RestoreOutput {
+                    path: "output snapshot header".into(),
+                    source,
+                })?;
+            Ok(prefix == super::REMOTE_OUTPUT_MAGIC)
+        })
+    })
+    .await?;
+    Ok(remote.into_iter().any(|remote| remote))
+}
 
 pub(super) async fn restore(
     result: &ActionResult,

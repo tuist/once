@@ -277,3 +277,153 @@ async fn failed_multi_output_install_rolls_back_every_published_output() {
         b"old second"
     );
 }
+
+#[tokio::test]
+async fn remote_snapshots_preserve_links_and_recheck_coordinator_targets_on_restore() {
+    use struo_cas::{ActionResult, CacheProvider};
+    use std::os::unix::fs::symlink;
+
+    let workspace = tempfile::tempdir().unwrap();
+    let cas = tempfile::tempdir().unwrap();
+    let cache = CacheProvider::open_local(cas.path().to_path_buf());
+    let roots = ["out", "other"].map(|path| WorkspacePath::try_from(path).unwrap());
+    let mut staging = OutputStaging::create(workspace.path()).unwrap();
+    std::fs::create_dir(staging.files().join("out")).unwrap();
+    std::fs::create_dir(staging.files().join("other")).unwrap();
+    std::fs::write(staging.files().join("other/file"), b"worker bytes").unwrap();
+    symlink("../assets/missing", staging.files().join("out/dangling")).unwrap();
+    symlink("../other/file", staging.files().join("out/cross-output")).unwrap();
+    let outputs = staging.capture(&roots, &roots, &cache).await.unwrap();
+    staging.install(&roots, workspace.path()).await.unwrap();
+    let result = ActionResult {
+        exit_code: 0,
+        stdout: None,
+        stderr: None,
+        outputs,
+    };
+    for _ in 0..2 {
+        assert_eq!(
+            std::fs::read_link(workspace.path().join("out/dangling")).unwrap(),
+            Path::new("../assets/missing")
+        );
+        assert_eq!(
+            std::fs::read(workspace.path().join("out/cross-output")).unwrap(),
+            b"worker bytes"
+        );
+        std::fs::remove_dir_all(workspace.path().join("out")).unwrap();
+        std::fs::remove_dir_all(workspace.path().join("other")).unwrap();
+        crate::outputs::restore(&result, workspace.path(), &cache)
+            .await
+            .unwrap();
+    }
+    std::fs::create_dir(workspace.path().join("assets")).unwrap();
+    std::fs::write(workspace.path().join("assets/missing"), b"coordinator only").unwrap();
+    assert!(crate::outputs::restore(&result, workspace.path(), &cache)
+        .await
+        .is_err());
+    assert_eq!(
+        std::fs::read(workspace.path().join("assets/missing")).unwrap(),
+        b"coordinator only"
+    );
+}
+
+#[tokio::test]
+async fn unsafe_remote_links_are_rejected_before_capture_and_on_cached_restore() {
+    use struo_cas::{ActionResult, CacheProvider};
+    use std::os::unix::fs::symlink;
+
+    for target in [
+        "/etc/passwd",
+        "../../escape",
+        "cycle",
+        "../assets/file",
+        "../alias/absent",
+        "../assets",
+        "../alias/../missing",
+    ] {
+        let workspace = tempfile::tempdir().unwrap();
+        let cas = tempfile::tempdir().unwrap();
+        let cache = CacheProvider::open_local(cas.path().to_path_buf());
+        std::fs::create_dir(workspace.path().join("assets")).unwrap();
+        std::fs::write(workspace.path().join("assets/file"), b"private").unwrap();
+        symlink("assets", workspace.path().join("alias")).unwrap();
+        std::fs::write(workspace.path().join("out"), b"original").unwrap();
+        let mut staging = OutputStaging::create(workspace.path()).unwrap();
+        std::fs::create_dir(staging.files().join("out")).unwrap();
+        symlink(target, staging.files().join("out/cycle")).unwrap();
+        let roots = [WorkspacePath::try_from("out").unwrap()];
+        assert!(
+            staging.capture(&roots, &roots, &cache).await.is_err(),
+            "{target}"
+        );
+
+        // Model a cache blob supplied without the producer's validation.
+        let outputs = crate::outputs::capture_remote(&roots, staging.files(), &cache)
+            .await
+            .unwrap();
+        let result = ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
+            outputs,
+        };
+        assert!(
+            crate::outputs::restore(&result, workspace.path(), &cache)
+                .await
+                .is_err(),
+            "{target}"
+        );
+        assert_eq!(
+            std::fs::read(workspace.path().join("out")).unwrap(),
+            b"original"
+        );
+        assert_eq!(
+            std::fs::read(workspace.path().join("assets/file")).unwrap(),
+            b"private"
+        );
+    }
+}
+
+#[tokio::test]
+async fn remote_snapshot_decoder_rejects_writes_through_links_before_publication() {
+    use struo_cas::{ActionResult, CacheProvider};
+    let workspace = tempfile::tempdir().unwrap();
+    let external = tempfile::tempdir().unwrap();
+    let cas = tempfile::tempdir().unwrap();
+    let cache = CacheProvider::open_local(cas.path().to_path_buf());
+    std::fs::write(workspace.path().join("out"), b"original").unwrap();
+    std::fs::write(external.path().join("secret"), b"private").unwrap();
+    let mut blob = crate::outputs::REMOTE_OUTPUT_MAGIC.to_vec();
+    blob.extend_from_slice(crate::directory_blob::DIRECTORY_BLOB_MAGIC);
+    for (kind, path, content) in [
+        (3_u8, "link", external.path().to_str().unwrap().as_bytes()),
+        (1, "link/secret", b"overwrite".as_slice()),
+    ] {
+        blob.push(kind);
+        blob.extend_from_slice(&(path.len() as u32).to_le_bytes());
+        blob.extend_from_slice(&0o755_u32.to_le_bytes());
+        blob.extend_from_slice(&(content.len() as u64).to_le_bytes());
+        blob.extend_from_slice(path.as_bytes());
+        blob.extend_from_slice(content);
+    }
+    let digest = cache.put_blob(&blob).await.unwrap();
+    let result = ActionResult {
+        exit_code: 0,
+        stdout: None,
+        stderr: None,
+        outputs: BTreeMap::from([("out".into(), digest)]),
+    };
+    assert!(
+        crate::materialize_outputs(&result, workspace.path(), &cache)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        std::fs::read(external.path().join("secret")).unwrap(),
+        b"private"
+    );
+    assert_eq!(
+        std::fs::read(workspace.path().join("out")).unwrap(),
+        b"original"
+    );
+}

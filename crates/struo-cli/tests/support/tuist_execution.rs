@@ -262,7 +262,17 @@ impl Service {
         entries.sort_by_key(std::fs::DirEntry::file_name);
         for entry in entries {
             let name = entry.file_name().into_string().unwrap();
-            if entry.file_type().unwrap().is_dir() {
+            if entry.file_type().unwrap().is_symlink() {
+                directory.symlinks.push(reapi::SymlinkNode {
+                    name,
+                    target: std::fs::read_link(entry.path())
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                        .into(),
+                    ..Default::default()
+                });
+            } else if entry.file_type().unwrap().is_dir() {
                 let digest = Box::pin(self.directory(&entry.path(), tree)).await;
                 directory.directories.push(reapi::DirectoryNode {
                     name,

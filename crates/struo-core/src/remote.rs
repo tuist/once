@@ -13,6 +13,7 @@ mod http;
 mod lifecycle;
 mod microsandbox;
 mod output_install;
+pub(crate) use output_install::restore_output_snapshots;
 mod path;
 mod phase;
 #[cfg(test)]

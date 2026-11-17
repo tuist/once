@@ -110,9 +110,11 @@ pub(super) async fn execute_command(
     if executed.timed_out {
         return Err(Error::Timeout(timeout.unwrap_or(DEFAULT_EXECUTION_TIMEOUT)));
     }
-    if !command.outputs.is_empty() {
-        install_outputs(&execution, cache, workspace, &command, &result, limits).await?;
-    }
+    let outputs = if command.outputs.is_empty() {
+        std::collections::BTreeMap::new()
+    } else {
+        install_outputs(&execution, cache, workspace, &command, &result, limits).await?
+    };
     tracing::debug!(
         executor = PROVIDER,
         action_digest = %action_digest.hash,
@@ -128,7 +130,7 @@ pub(super) async fn execute_command(
         exit_code: result.exit_code,
         stdout,
         stderr,
-        outputs: std::collections::BTreeMap::new(),
+        outputs,
     })
 }
 
@@ -510,7 +512,7 @@ async fn install_outputs(
     command: &PreparedCommand<'_>,
     result: &reapi::ActionResult,
     limits: RemoteIoLimits,
-) -> Result<()> {
+) -> Result<std::collections::BTreeMap<String, struo_cas::Digest>> {
     let entries = output_entries(execution, cache, command, result, limits).await?;
     let outputs = command::output_roots(command.outputs)
         .into_iter()
@@ -557,7 +559,7 @@ async fn install_outputs(
         .await?;
     // The staged copy and the backup of any outputs it replaces.
     let phase = super::phase_permit(command.lease.as_ref(), bytes.saturating_mul(2)).await?;
-    let staging = OutputStaging::create_limited(workspace, limits)?;
+    let mut staging = OutputStaging::create_limited(workspace, limits)?;
     let files = staging.files_directory().clone();
     let scratch = workspace.join(".struo/tmp");
     futures::stream::iter(entries)
@@ -568,7 +570,14 @@ async fn install_outputs(
         .buffer_unordered(PARALLEL_TRANSFERS)
         .try_collect::<()>()
         .await?;
-    staging.install_admitted(&outputs, workspace, phase).await
+    let captured_outputs = if command.accepts_exit_code(result.exit_code) {
+        command.outputs
+    } else {
+        &outputs
+    };
+    let captured = staging.capture(&outputs, captured_outputs, cache).await?;
+    staging.install_admitted(&outputs, workspace, phase).await?;
+    Ok(captured)
 }
 
 fn tree_entries(
