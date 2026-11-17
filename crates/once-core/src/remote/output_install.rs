@@ -8,6 +8,8 @@ use crate::{Error, RemoteIoLimits, Result, WorkspacePath};
 
 mod lock;
 mod publish;
+mod snapshots;
+pub(crate) use snapshots::restore as restore_output_snapshots;
 #[cfg(all(test, any(target_os = "linux", target_vendor = "apple")))]
 mod tests;
 #[cfg(all(test, not(any(target_os = "linux", target_vendor = "apple"))))]
@@ -15,10 +17,6 @@ mod unsupported;
 
 pub(super) struct OutputStaging {
     root: PathBuf,
-    #[cfg(any(
-        feature = "remote-microsandbox",
-        all(test, any(target_os = "linux", target_vendor = "apple"))
-    ))]
     files: PathBuf,
     root_parent: Parent,
     files_dir: Directory,
@@ -26,6 +24,7 @@ pub(super) struct OutputStaging {
     workspace_dir: Directory,
     limits: RemoteIoLimits,
     directory_modes: BTreeMap<PathBuf, u32>,
+    captured: bool,
 }
 
 impl OutputStaging {
@@ -62,10 +61,6 @@ impl OutputStaging {
             let root = parent.join(&name);
             match parent_dir.mkdir(&name) {
                 Ok(()) => {
-                    #[cfg(any(
-                        feature = "remote-microsandbox",
-                        all(test, any(target_os = "linux", target_vendor = "apple"))
-                    ))]
                     let files = root.join("files");
                     let root_dir = parent_dir.descend(&name, false).map_err(|source| {
                         host_error("create_remote_output_staging", &name, source)
@@ -95,10 +90,6 @@ impl OutputStaging {
                     })?;
                     return Ok(Self {
                         root,
-                        #[cfg(any(
-                            feature = "remote-microsandbox",
-                            all(test, any(target_os = "linux", target_vendor = "apple"))
-                        ))]
                         files,
                         root_parent,
                         files_dir,
@@ -106,6 +97,7 @@ impl OutputStaging {
                         workspace_dir,
                         limits,
                         directory_modes: BTreeMap::new(),
+                        captured: false,
                     });
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -128,10 +120,6 @@ impl OutputStaging {
         ))
     }
 
-    #[cfg(any(
-        feature = "remote-microsandbox",
-        all(test, any(target_os = "linux", target_vendor = "apple"))
-    ))]
     pub(super) fn files(&self) -> &Path {
         &self.files
     }
@@ -175,6 +163,7 @@ impl OutputStaging {
                     &outputs,
                     staging.limits,
                     &staging.directory_modes,
+                    staging.captured,
                 )
             })
         })

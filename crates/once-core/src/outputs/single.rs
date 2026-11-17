@@ -46,7 +46,7 @@ pub(super) async fn restore(
             match prepared {
                 Preparation::Ready(tree) => tree.publish(&output.rel, &destination),
                 Preparation::Unavailable(input) => {
-                    super::restore_prefetched_output(&output.rel, &destination, input)
+                    super::restore_prefetched_output(&output.rel, &destination, input, false)
                 }
             }
         })

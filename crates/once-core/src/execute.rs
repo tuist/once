@@ -1004,7 +1004,7 @@ async fn execute_command(
             None => local::execute_command(invocation, workspace_root, cache).await,
         },
     }?;
-    Ok((result, false))
+    Ok((result, executor == Executor::Tuist))
 }
 
 fn copy_sandbox_output_blocking(source: &Path, destination: &Path) -> std::io::Result<()> {

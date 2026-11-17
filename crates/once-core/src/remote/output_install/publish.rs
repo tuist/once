@@ -58,13 +58,20 @@ pub(super) fn install_outputs(
     outputs: &[WorkspacePath],
     limits: RemoteIoLimits,
     directory_modes: &BTreeMap<PathBuf, u32>,
+    captured: bool,
 ) -> Result<()> {
     let mode_bytes = directory_modes.keys().fold(0_u64, |bytes, path| {
         bytes
             .saturating_add(path.as_os_str().len() as u64)
             .saturating_add(64)
     });
-    crate::remote::path::validate_output_tree(files, outputs, limits, mode_bytes)?;
+    crate::remote::path::validate_output_tree(
+        files,
+        outputs,
+        limits,
+        mode_bytes,
+        captured.then_some(workspace),
+    )?;
     for (path, mode) in directory_modes.iter().rev() {
         files
             .set_directory_mode(path, *mode)

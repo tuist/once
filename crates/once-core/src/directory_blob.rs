@@ -423,7 +423,24 @@ pub(crate) fn restore_directory_blob(logical_path: &str, abs: &Path, bytes: &[u8
 pub(crate) fn restore_directory_blob_from_reader(
     logical_path: &str,
     abs: &Path,
+    reader: impl Read,
+) -> Result<()> {
+    restore_directory(logical_path, abs, reader, false)
+}
+
+pub(crate) fn restore_remote_directory_blob_from_reader(
+    logical_path: &str,
+    abs: &Path,
+    reader: impl Read,
+) -> Result<()> {
+    restore_directory(logical_path, abs, reader, true)
+}
+
+fn restore_directory(
+    logical_path: &str,
+    abs: &Path,
     mut reader: impl Read,
+    private: bool,
 ) -> Result<()> {
     let mut magic = vec![0_u8; DIRECTORY_BLOB_MAGIC.len()];
     read_directory_bytes(
@@ -447,6 +464,12 @@ pub(crate) fn restore_directory_blob_from_reader(
             staged.restore_entry(logical_path, &entry, &mut reader)?;
         }
         return staged.publish(logical_path, abs);
+    }
+    if private {
+        return Err(invalid_directory(
+            logical_path,
+            "safe private snapshot restoration unavailable",
+        ));
     }
     prepare_directory_restore(logical_path, abs)?;
     while let Some(entry) =

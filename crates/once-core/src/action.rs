@@ -418,6 +418,12 @@ impl Action {
     pub fn digest(&self) -> Digest {
         let domain = match self {
             Action::CopyPath { .. } => b"once.action.copy_path.v2\0".as_slice(),
+            Action::RunCommand {
+                remote: Some(remote),
+                ..
+            } if remote.provider == "tuist" => {
+                b"once.action.run_command.tuist_snapshots.v1\0".as_slice()
+            }
             // Old normalized results cannot distinguish accepted exits from rejected zero.
             Action::RunCommand {
                 success_exit_codes, ..

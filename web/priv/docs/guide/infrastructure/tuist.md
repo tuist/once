@@ -289,6 +289,14 @@ place only actions that are safe to repeat on it. Unsupported requirements,
 such as network denial or a timeout longer than ten minutes, fail instead of
 running locally.
 
+Output directories preserve relative symbolic links to other declared outputs.
+They can also preserve dangling links elsewhere inside the workspace, provided
+the target is absent and no coordinator symlink is traversed. Absolute targets,
+workspace escapes, cycles, and links to existing undeclared coordinator files or
+directories are rejected. Once snapshots these outputs privately before
+publishing them, and repeats the checks when restoring cached snapshots. It
+never materializes undeclared coordinator data through an output link.
+
 Inputs go to the client-facing cache endpoint the execution service advertises.
 Gateways and workers may use a separate internal address in the same cache mesh;
 coordinators do not need access to the workers' private network. Older servers

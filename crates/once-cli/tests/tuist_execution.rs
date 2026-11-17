@@ -239,6 +239,72 @@ async fn graph_actions_run_on_the_tuist_execution_service_and_restore_from_its_c
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn dangling_workspace_output_links_survive_execution_and_cache_restore() {
+    let server = tuist_execution::start().await;
+    let root = workspace(
+        &server.url,
+        r#"
+def _impl(ctx):
+    out = declare_output("tree")
+    run_action(
+        argv = ["/bin/sh", "-c", "set -e; mkdir -p \"$1\"; printf payload > \"$1/file\"; p=\"${1#\"$PWD\"/}\"; up=; while [ \"$p\" != . ] && [ \"$p\" != / ]; do up=../$up; p=$(dirname \"$p\"); done; test \"$p\" = .; ln -s \"${up}assets/missing\" \"$1/link\"", "sh", out],
+        outputs = [out],
+        identifier = "links",
+    )
+    return {}
+
+distributed = target_kind(
+    capabilities = [capability("build", ["default"])],
+    impl = _impl,
+)
+"#,
+        "",
+    );
+    let home = tempfile::tempdir().unwrap();
+    let mut target = None;
+    for cold_client in [false, true] {
+        if cold_client {
+            std::fs::remove_dir_all(root.path().join(".once")).unwrap();
+            std::fs::remove_dir_all(home.path().join("cache")).unwrap();
+        }
+        let output = build(root.path(), home.path()).await;
+        assert!(output.status.success(), "{}", stderr(&output));
+        let record: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let out = record["outputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .find(|path| path.ends_with("/tree"))
+            .unwrap();
+        let directory = root.path().join(out);
+        assert_eq!(std::fs::read(directory.join("file")).unwrap(), b"payload");
+        let link = std::fs::read_link(directory.join("link")).unwrap();
+        assert!(!link.is_absolute());
+        assert!(!directory.join("link").exists());
+        if let Some(target) = &target {
+            assert_eq!(&link, target, "cache preserves the exact link bytes");
+        }
+        target = Some(link);
+        assert_eq!(server.service.state.lock().await.executed.len(), 1);
+    }
+
+    std::fs::remove_dir_all(root.path().join(".once")).unwrap();
+    std::fs::remove_dir_all(home.path().join("cache")).unwrap();
+    std::fs::create_dir(root.path().join("assets")).unwrap();
+    std::fs::write(root.path().join("assets/missing"), b"coordinator only").unwrap();
+    let output = build(root.path(), home.path()).await;
+    assert!(
+        !output.status.success(),
+        "remote outputs must not capture coordinator data"
+    );
+    assert_eq!(
+        std::fs::read(root.path().join("assets/missing")).unwrap(),
+        b"coordinator only"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_mismatched_worker_image_fails_before_anything_runs() {
     let server = tuist_execution::start().await;
     let root = tempfile::tempdir().unwrap();
