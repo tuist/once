@@ -293,8 +293,31 @@ async fn remote_snapshots_preserve_links_and_recheck_coordinator_targets_on_rest
     std::fs::write(staging.files().join("other/file"), b"worker bytes").unwrap();
     symlink("../assets/missing", staging.files().join("out/dangling")).unwrap();
     symlink("../other/file", staging.files().join("out/cross-output")).unwrap();
-    let outputs = staging.capture(&roots, &roots, &cache).await.unwrap();
+    let mut outputs = staging.capture(&roots, &roots, &cache).await.unwrap();
     staging.install(&roots, workspace.path()).await.unwrap();
+    std::fs::create_dir(workspace.path().join("local")).unwrap();
+    std::fs::write(workspace.path().join("local/file"), b"local copy bytes").unwrap();
+    outputs.extend(
+        crate::outputs::capture(
+            &[WorkspacePath::try_from("local").unwrap()],
+            workspace.path(),
+            &cache,
+            crate::OutputSymlinkMode::Preserve,
+        )
+        .await
+        .unwrap(),
+    );
+    std::fs::write(workspace.path().join("local/file"), b"updated copy bytes").unwrap();
+    outputs.extend(
+        crate::outputs::capture(
+            &[WorkspacePath::try_from("local/file").unwrap()],
+            workspace.path(),
+            &cache,
+            crate::OutputSymlinkMode::Preserve,
+        )
+        .await
+        .unwrap(),
+    );
     let result = ActionResult {
         exit_code: 0,
         stdout: None,
@@ -310,9 +333,14 @@ async fn remote_snapshots_preserve_links_and_recheck_coordinator_targets_on_rest
             std::fs::read(workspace.path().join("out/cross-output")).unwrap(),
             b"worker bytes"
         );
+        assert_eq!(
+            std::fs::read(workspace.path().join("local/file")).unwrap(),
+            b"updated copy bytes"
+        );
+        std::fs::remove_dir_all(workspace.path().join("local")).unwrap();
         std::fs::remove_dir_all(workspace.path().join("out")).unwrap();
         std::fs::remove_dir_all(workspace.path().join("other")).unwrap();
-        crate::outputs::restore(&result, workspace.path(), &cache)
+        crate::materialize_outputs(&result, workspace.path(), &cache)
             .await
             .unwrap();
     }
@@ -406,18 +434,28 @@ async fn remote_snapshot_decoder_rejects_writes_through_links_before_publication
         blob.extend_from_slice(path.as_bytes());
         blob.extend_from_slice(content);
     }
-    let digest = cache.put_blob(&blob).await.unwrap();
-    let result = ActionResult {
-        exit_code: 0,
-        stdout: None,
-        stderr: None,
-        outputs: BTreeMap::from([("out".into(), digest)]),
-    };
-    assert!(
-        crate::materialize_outputs(&result, workspace.path(), &cache)
-            .await
-            .is_err()
-    );
+    let mut marker = crate::outputs::REMOTE_OUTPUT_MAGIC.to_vec();
+    marker.extend_from_slice(b"safe");
+    let marker = cache.put_blob(&marker).await.unwrap();
+    for enveloped in [true, false] {
+        let bytes = if enveloped {
+            &blob[..]
+        } else {
+            &blob[crate::outputs::REMOTE_OUTPUT_MAGIC.len()..]
+        };
+        let digest = cache.put_blob(bytes).await.unwrap();
+        let result = ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
+            outputs: BTreeMap::from([("out".into(), digest), ("marker".into(), marker)]),
+        };
+        assert!(
+            crate::materialize_outputs(&result, workspace.path(), &cache)
+                .await
+                .is_err()
+        );
+    }
     assert_eq!(
         std::fs::read(external.path().join("secret")).unwrap(),
         b"private"

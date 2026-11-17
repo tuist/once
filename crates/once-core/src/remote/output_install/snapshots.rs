@@ -68,15 +68,9 @@ pub(crate) async fn restore(
         let staging = OutputStaging::create_limited(&workspace, limits)?;
         let mut roots: Vec<WorkspacePath> = Vec::new();
         // Prefetch retains the BTreeMap's parent-before-descendant ordering.
-        // A parent snapshot already contains its declared descendants.
+        // Restore descendants too: a later action may have replaced their bytes.
         for (rel, reader) in readers {
             let output = WorkspacePath::try_from(rel.as_str())?;
-            if roots
-                .iter()
-                .any(|root| Path::new(output.as_str()).starts_with(root.as_str()))
-            {
-                continue;
-            }
             staging
                 .files_dir
                 .parent(Path::new(output.as_str()), true)
@@ -89,7 +83,12 @@ pub(crate) async fn restore(
                 reader,
                 true,
             )?;
-            roots.push(output);
+            if !roots
+                .iter()
+                .any(|root| Path::new(output.as_str()).starts_with(root.as_str()))
+            {
+                roots.push(output);
+            }
         }
         super::lock::with_output_lock(&staging.workspace_dir, || {
             super::publish::install_outputs(
