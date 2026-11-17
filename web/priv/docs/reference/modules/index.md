@@ -1080,8 +1080,12 @@ and includes its identity in the action's cache key.
   These are admission estimates, not guaranteed minimums: Struo clamps requests
   to the available host pool budget. Built-in compiler target kinds declare
   their own estimates, including 4 GiB for Swift compilation, 2 GiB for Rust
-  compilation and build scripts, 1 GiB for C-family compilation, and 512 MiB
-  for native archiving. Larger projects may need target-kind-specific estimates.
+  compilation and build scripts, 1 GiB for C-family compilation, 512 MiB
+  for native archiving, and 8 CPU slots with 4 GiB for a Mix project compile.
+  Larger projects may need target-kind-specific estimates. On Tuist remote
+  execution, an action that declares more than two CPU slots or 4 GiB runs in
+  the smallest worker VM that holds both, up to the largest the account's
+  limits allow; other actions run in the default VM.
 - `sandbox`: local filesystem sandbox policy. `off` uses the current
   workspace view. `inputs` runs in an action-private workspace view
   populated from declared inputs and copies declared outputs back after
