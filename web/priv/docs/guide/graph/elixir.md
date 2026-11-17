@@ -39,6 +39,40 @@ mix local.hex --force
 mix local.rebar --force
 ```
 
+### Use an Image-Bound Remote Toolchain
+
+For `once build --remote`, the selected worker image must contain Erlang,
+Elixir, Hex and Rebar already. Actions do not install tools or fetch packages.
+Mix discovery still runs on the coordinator, so keep its local toolchain and
+materialized dependencies available too.
+
+Describe the worker paths in the workspace configuration:
+
+```toml
+[infrastructure.execution.properties.elixir]
+schema_version = 1
+environment = "REPLACE_WITH_THE_SELECTED_IMMUTABLE_IMAGE"
+os = "linux"
+arch = "x86_64"
+elixir_bin = "/opt/elixir/bin"
+erlang_bin = "/opt/erlang/bin"
+mix_home = "/opt/mix"
+rebar3 = "/opt/mix/rebar3"
+```
+
+These paths are illustrative and must exist inside the selected image. The
+`environment` must match the provider's pinned execution image exactly. Linux
+`x86_64` and `arm64` descriptions are supported when the provider supports that
+platform. The complete execution binding participates in action identity;
+changing an image or its toolchain paths invalidates compiled results.
+Coordinator mise wrappers and executable paths are not sent to remote actions.
+Host-side discovery continues using local tools; this description does not
+configure cross-compilation or make incompatible native dependencies portable.
+
+Select the provider per build with `once build --remote --compute workers`
+after configuring that provider. `once test` does not currently expose remote
+execution; keep test runs local.
+
 ### Materialize Locked Dependencies
 
 Once does not download dependencies or change `mix.lock`. If the project has a
