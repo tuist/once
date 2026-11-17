@@ -74,6 +74,7 @@ pub(crate) async fn restore(
             staging
                 .files_dir
                 .parent(Path::new(output.as_str()), true)
+                .and_then(|destination| destination.remove())
                 .map_err(|source| {
                     host_error("stage_remote_snapshot", Path::new(output.as_str()), source)
                 })?;
