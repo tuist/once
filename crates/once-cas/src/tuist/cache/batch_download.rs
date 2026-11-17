@@ -6,6 +6,7 @@ use tokio::sync::{oneshot, OwnedMutexGuard, OwnedSemaphorePermit};
 use super::*;
 
 mod enqueue;
+mod mirror;
 mod rpc;
 use rpc::BatchResponse;
 

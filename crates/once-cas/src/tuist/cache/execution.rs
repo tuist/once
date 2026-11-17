@@ -316,6 +316,16 @@ impl TuistExecution {
             .await
     }
 
+    /// Copy verified output blobs using bounded batches for small files.
+    /// Returns local digests in the requested order, including duplicates.
+    pub async fn mirror_blobs(&self, digests: &[reapi::Digest]) -> Result<Vec<Digest>> {
+        self.refreshing(|| {
+            self.cas
+                .mirror_reapi_blobs(digests, "read execution output")
+        })
+        .await
+    }
+
     /// Run `action`, which must already be in the execution CAS with every
     /// blob it references, and return its result.
     ///
@@ -635,6 +645,132 @@ mod tests {
     use bazel_remote_apis::google::{protobuf::Any, rpc::Status as RpcStatus};
 
     use super::*;
+
+    #[tokio::test]
+    async fn output_batches_preserve_order_limits_and_integrity() {
+        use crate::tuist::cache::fault_server::{connected_cache, FaultServer};
+
+        for fault in [
+            "none",
+            "sha256",
+            "missing",
+            "duplicate",
+            "unsupported",
+            "cancel",
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let server = FaultServer::default();
+            let url = server.serve().await;
+            let mut cache = connected_cache(&temp, "execution", &url).await;
+            cache.capabilities_cache = Arc::default();
+            cache.capabilities_cache.set(RemoteCapabilities {
+                batch_read_limit: Some(64_000),
+                ..RemoteCapabilities::default()
+            });
+            cache.set_transfer_budget(TransferBudget::new(
+                crate::MIN_TRANSFER_MEMORY_BYTES,
+                2 * 1024 * 1024,
+            ));
+            let bodies = [vec![1; 31_999], vec![2; 32_000], vec![3; 64_001]];
+            let digests = bodies
+                .iter()
+                .map(|body| sha256_digest(body).unwrap())
+                .collect::<Vec<_>>();
+            {
+                let mut state = server.0.lock().await;
+                for (body, digest) in bodies.iter().zip(&digests) {
+                    state.blobs.insert(digest.hash.clone(), body.clone());
+                }
+                match fault {
+                    "sha256" => {
+                        state.blobs.insert(digests[0].hash.clone(), vec![4; 31_999]);
+                    }
+                    "missing" => {
+                        state.blobs.remove(&digests[0].hash);
+                    }
+                    "duplicate" => {
+                        state.batch_duplicate_response = true;
+                    }
+                    "cancel" => {
+                        state.batch_stalls = true;
+                    }
+                    _ => {}
+                }
+            }
+            if fault == "unsupported" {
+                server
+                    .fail("batch_read", vec![Status::unimplemented("stream instead")])
+                    .await;
+            }
+            let execution = TuistExecution {
+                cas: cache.clone(),
+                executor: Endpoint::from_shared(url).unwrap().connect_lazy(),
+                image: String::new(),
+                root: String::new(),
+                slots: Arc::new(Semaphore::new(1)),
+            };
+            let requested = [
+                digests[1].clone(),
+                digests[2].clone(),
+                digests[0].clone(),
+                digests[1].clone(),
+            ];
+            if fault == "cancel" {
+                let pending = {
+                    let execution = execution.clone();
+                    let requested = requested.clone();
+                    tokio::spawn(async move { execution.mirror_blobs(&requested).await })
+                };
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    while server.calls("batch_read").await == 0 {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+                pending.abort();
+                assert!(pending.await.unwrap_err().is_cancelled());
+                assert_eq!(
+                    cache.budget.available(),
+                    (cache.budget.memory_bytes(), cache.budget.staging_bytes())
+                );
+                server.0.lock().await.batch_stalls = false;
+            }
+            let result = execution.mirror_blobs(&requested).await;
+            if matches!(fault, "none" | "unsupported" | "cancel") {
+                let mirrored = result.unwrap();
+                for (digest, expected) in mirrored
+                    .iter()
+                    .zip([&bodies[1], &bodies[2], &bodies[0], &bodies[1]])
+                {
+                    assert_eq!(cache.local.get_blob(digest).await.unwrap(), *expected);
+                }
+            } else {
+                let expected = match fault {
+                    "sha256" => ErrorKind::Corrupt,
+                    "missing" => ErrorKind::NotFound,
+                    "duplicate" => ErrorKind::Protocol,
+                    _ => unreachable!(),
+                };
+                assert_eq!(result.unwrap_err().kind(), expected, "{fault}");
+                assert!(!cache
+                    .local
+                    .has_blob(&Digest::of_bytes(&bodies[0]))
+                    .await
+                    .unwrap());
+            }
+            assert_eq!(
+                cache.budget.available(),
+                (cache.budget.memory_bytes(), cache.budget.staging_bytes())
+            );
+            let state = server.0.lock().await;
+            assert!(state.batch_requests.iter().all(|batch| batch
+                .iter()
+                .map(|d| d.size_bytes)
+                .sum::<i64>()
+                <= 64_000));
+        }
+    }
 
     fn failure(code: Code, missing: bool) -> Error {
         let violations = vec![PreconditionViolation {
