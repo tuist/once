@@ -304,6 +304,7 @@ impl BuildSession {
         let mut session = Self::new_with_analyzer(workspace, cache, graph, analyzer, sandbox);
         if let Some(execution) = &resolved.execution {
             session.producers.set_execution(execution.clone());
+            session.advertise_remote_concurrency(execution).await;
         }
         session.tool_paths = Arc::new(resolved_tools.paths);
         session.tool_cache_fingerprint = resolved_tools.fingerprint;
@@ -366,6 +367,7 @@ impl BuildSession {
         let mut session = Self::new_with_analyzer(workspace, cache, graph, analyzer, sandbox);
         if let Some(execution) = &resolved.execution {
             session.producers.set_execution(execution.clone());
+            session.advertise_remote_concurrency(execution).await;
         }
         session.tool_paths = Arc::new(resolved_tools.paths);
         session.tool_cache_fingerprint = resolved_tools.fingerprint;
@@ -418,6 +420,23 @@ impl BuildSession {
         }
     }
 
+    /// Size the remote request quota from the execution service. Discovery
+    /// failures leave the default; the first remote action reports them.
+    async fn advertise_remote_concurrency(&self, execution: &struo_core::RemoteExecution) {
+        if struo_core::Executor::from_binding(execution).ok() != Some(struo_core::Executor::Tuist) {
+            return;
+        }
+        let CacheProvider::Tuist(cache) = &self.cache else {
+            return;
+        };
+        match cache.execution().await {
+            Ok(service) => self
+                .producers
+                .set_remote_concurrency(service.max_concurrency()),
+            Err(error) => tracing::debug!(%error, "remote execution discovery deferred"),
+        }
+    }
+
     pub(super) fn executor_resources(&self) -> Result<&struo_core::ExecutorResources> {
         self.producers.executors(&self.resources)
     }
@@ -450,9 +469,13 @@ impl BuildSession {
         self.analyzer = self.analyzer.with_resource_pool(Arc::clone(&resources));
         self.resources = resources;
         let execution = self.producers.execution().cloned();
+        let remote_concurrency = self.producers.remote_concurrency();
         self.producers = Producers::default();
         if let Some(execution) = execution {
             self.producers.set_execution(execution);
+        }
+        if let Some(count) = remote_concurrency {
+            self.producers.set_remote_concurrency(count);
         }
         self
     }
@@ -669,8 +692,9 @@ impl BuildSession {
                 available_inputs,
             } = self.analyze_capability(target, capability).await?;
             validate_provider(target, &analysis.provider)?;
-            let workers =
-                crate::bus_events::WorkerSlots::new(self.resources.max_parallel_actions());
+            let workers = crate::bus_events::WorkerSlots::new(
+                self.producers.max_parallel_work(&self.resources),
+            );
             let outcome = crate::bus_events::observe_target_transfers(
                 self.event_bus.as_ref(),
                 &target.label.id,
@@ -917,14 +941,15 @@ impl BuildSession {
 
     /// Snapshot the per-build values every spawned task needs.
     fn build_context(&self) -> BuildContext {
-        // One executor slot per action the resource pool would let
-        // run concurrently. Keeping the two numbers in lockstep is
+        // One executor slot per action the resource pool and the remote
+        // quota would let run concurrently. Keeping the numbers in lockstep is
         // what makes a slot equivalent to a real long-lived worker:
         // if the pool ever had fewer slots than the concurrency
         // ceiling, actions would sometimes wait on the WorkerSlots
         // pool instead of the ResourcePool; if it had more, some
         // slots would never be picked.
-        let workers = crate::bus_events::WorkerSlots::new(self.resources.max_parallel_actions());
+        let workers =
+            crate::bus_events::WorkerSlots::new(self.producers.max_parallel_work(&self.resources));
         BuildContext {
             workspace: self.workspace.clone(),
             cache: self.cache.clone(),
@@ -1386,10 +1411,8 @@ struct BuildContext {
     pub suppressed_target_lifecycle: Arc<HashSet<String>>,
     /// Bounded pool of executor slots. Each action acquires a slot
     /// before running and inherits the slot's stable `worker_id` for
-    /// its `ActionCompleted` event. Sized to
-    /// `resources.max_parallel_actions()` so the pool never over- or
-    /// under-provisions relative to the concurrency the runner
-    /// actually allows.
+    /// its `ActionCompleted` event. Sized to the host's parallel actions
+    /// plus the remote request quota, the concurrency the runner allows.
     pub workers: crate::bus_events::WorkerSlots,
     pub producers: Producers,
 }

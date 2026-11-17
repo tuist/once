@@ -165,6 +165,7 @@ struct ProducersInner {
     reporting: OnceLock<Reporting>,
     executors: OnceLock<struo_core::ExecutorResources>,
     execution: OnceLock<struo_core::RemoteExecution>,
+    remote_concurrency: OnceLock<usize>,
 }
 
 impl Default for Producers {
@@ -186,6 +187,7 @@ impl Producers {
                 reporting: OnceLock::new(),
                 executors: OnceLock::new(),
                 execution: OnceLock::new(),
+                remote_concurrency: OnceLock::new(),
             }),
         }
     }
@@ -198,6 +200,26 @@ impl Producers {
             .execution
             .set(execution)
             .expect("execution is configured before graph work");
+    }
+
+    /// Bound outstanding remote requests by what the execution service
+    /// advertises instead of host CPU slots, which do not run remote work.
+    pub(in crate::commands::graph::analysis) fn set_remote_concurrency(&self, count: usize) {
+        let _ = self.inner.remote_concurrency.set(count);
+    }
+
+    pub(in crate::commands::graph::analysis) fn remote_concurrency(&self) -> Option<usize> {
+        self.inner.remote_concurrency.get().copied()
+    }
+
+    /// Targets and actions that may be in flight: every host slot plus every
+    /// remote request, so remote work does not wait on local CPU slots.
+    pub(in crate::commands::graph::analysis) fn max_parallel_work(
+        &self,
+        host: &struo_core::ResourcePool,
+    ) -> usize {
+        host.max_parallel_actions()
+            .saturating_add(self.remote_concurrency().unwrap_or_default())
     }
 
     pub(in crate::commands::graph::analysis) fn execution(
@@ -313,10 +335,13 @@ impl Producers {
         &self,
         host: &Arc<ResourcePool>,
     ) -> Result<&struo_core::ExecutorResources> {
-        let executors = self
-            .inner
-            .executors
-            .get_or_init(|| struo_core::ExecutorResources::new(Arc::clone(host)));
+        let executors = self.inner.executors.get_or_init(|| {
+            let resources = struo_core::ExecutorResources::new(Arc::clone(host));
+            match self.inner.remote_concurrency.get() {
+                Some(count) => resources.with_remote_concurrency(*count),
+                None => resources,
+            }
+        });
         anyhow::ensure!(
             Arc::ptr_eq(executors.host(), host),
             "graph admission pool changed after work started"
