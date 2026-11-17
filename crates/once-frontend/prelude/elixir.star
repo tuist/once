@@ -3034,6 +3034,9 @@ def _mix_project_impl(ctx):
         }),
         stdout = paths["compile_log"],
         stderr = paths["compile_warnings"],
+        # Mix compiles modules on every scheduler, so the project compile asks
+        # for a wide slot; Once clamps it to the host or the worker VM.
+        resources = {"cpu_slots": 8, "memory_bytes": 4 * 1024 * 1024 * 1024},
         toolchain_identity = toolchain["identity"] + "\x00mix-project-compile.v3\x00" + paths["mix_env"] + "\x00" + _mix_workspace_path(ctx, "."),
         identifier = ctx["label"]["id"] + ":mix-compile",
     )
