@@ -50,13 +50,15 @@ async fn download_stalls_before_body_between_chunks_and_after_eof_are_bounded() 
 async fn download_progress_extends_stall_but_not_total_deadline() {
     let root = tempfile::tempdir().unwrap();
     let output = root.path().join("output");
-    let script = "i=0; while test $i -lt 20; do printf data; sleep 0.05; i=$((i+1)); done";
-    let mut client = client(Duration::from_millis(400), Duration::from_millis(20));
+    // The download outlasts the stall window, so it completes only because
+    // each chunk extends it; the window leaves room for a busy scheduler.
+    let script = "i=0; while test $i -lt 40; do printf data; sleep 0.05; i=$((i+1)); done";
+    let mut client = client(Duration::from_secs(1), Duration::from_millis(20));
     client
         .transfer(&command(script), None, Some(&output))
         .await
         .unwrap();
-    assert_eq!(std::fs::read(&output).unwrap(), b"data".repeat(20));
+    assert_eq!(std::fs::read(&output).unwrap(), b"data".repeat(40));
     client.limits.artifact_download_timeout = Duration::from_millis(600);
     assert!(matches!(
         client.transfer(&command(script), None, Some(&output)).await,

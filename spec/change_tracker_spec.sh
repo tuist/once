@@ -135,39 +135,27 @@ try:
     assert output.read_text() == 'second', 'output invalidation did not restore cached bytes'
     literal = run('exec', '--', sys.executable, '-c', 'import sys; print(sys.argv[1])', '__change-tracker')
     assert '__change-tracker' in literal.stdout, literal
-    # The private launcher lets the user-facing executable be replaced while the daemon lives.
-    try:
-        shutil.copyfile(original_binary, binary)
-    except OSError as error:
-        # Name whatever still executes the user-facing binary, since the
-        # tracker should only ever run from its private launcher copy. The
-        # holder may be short-lived, so keep looking until the file frees up.
-        def holders():
-            found = []
-            for entry in pathlib.Path('/proc').glob('[0-9]*'):
-                try:
-                    cmdline = (entry / 'cmdline').read_bytes().replace(b'\0', b' ').decode(errors='replace')
-                    parent = next(line.split()[1] for line in (entry / 'status').read_text().splitlines() if line.startswith('PPid:'))
-                except (OSError, StopIteration):
-                    continue
-                try:
-                    executing = os.path.samefile(entry / 'exe', binary)
-                except OSError:
-                    executing = 'once' in cmdline
-                if executing:
-                    found.append(f'pid {entry.name} (parent {parent}): {cmdline}')
-            return found
-        seen, freed_after = [], None
-        started = time.monotonic()
-        while time.monotonic() - started < 5:
-            seen.extend(holder for holder in holders() if holder not in seen)
-            try:
-                shutil.copyfile(original_binary, binary)
-                freed_after = round(time.monotonic() - started, 3)
-                break
-            except OSError:
-                time.sleep(0.01)
-        raise AssertionError(('binary still executing', error, 'freed after', freed_after, seen or 'no /proc holder found'))
+    # The private launcher lets the user-facing executable be replaced while the
+    # daemon lives. Linux can report the file busy for a moment after the last
+    # process that ran it exited, so allow a short wait; a daemon running from
+    # this file would keep it busy for its whole lifetime.
+    deadline = time.monotonic() + 5
+    while True:
+        try:
+            shutil.copyfile(original_binary, binary)
+            break
+        except OSError as error:
+            if time.monotonic() >= deadline:
+                holders = []
+                for entry in pathlib.Path('/proc').glob('[0-9]*'):
+                    try:
+                        if os.path.samefile(entry / 'exe', binary):
+                            cmdline = (entry / 'cmdline').read_bytes().replace(b'\0', b' ').decode(errors='replace')
+                            holders.append(f'pid {entry.name}: {cmdline}')
+                    except OSError:
+                        continue
+                raise AssertionError(('binary stayed busy while the daemon lived', error, holders))
+            time.sleep(0.05)
     run('build', 'app')
     print('daemon startup, inherited pipe EOF, read-only stability, mutations and barriers verified')
     print('high descriptor above reduced soft limit verified' if high_fd is not None else 'high descriptor unavailable under hard limit')
