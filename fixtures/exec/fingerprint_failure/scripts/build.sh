@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
-# once fingerprint "printf probe-error >&2; exit 7"
-# once cwd ".."
+# struo fingerprint "printf probe-error >&2; exit 7"
+# struo cwd ".."
 touch should-not-exist

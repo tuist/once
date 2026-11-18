@@ -5,13 +5,13 @@ Rust test target.
 ## Description
 
 Compiles a Rust test crate with `rustc --test`, then runs the produced test
-binary through Once's generic test capability. The target can model unit tests
+binary through Struo's generic test capability. The target can model unit tests
 from a library root, or integration tests by setting `crate_root` to a test
 crate entry file and depending on the library under test.
 
 The runner uses the Rust test harness list output to populate
-`once.test_results.v1`, stores the native test output, and returns the test
-binary exit status to Once.
+`struo.test_results.v1`, stores the native test output, and returns the test
+binary exit status to Struo.
 
 ## Test results
 
@@ -45,7 +45,7 @@ as tests that build crates whose build scripts probe for nightly features.
 | `env` | map&lt;string, string&gt; | no | `{}` | Environment variables for `rustc` |
 | `rustc_env` | map&lt;string, string&gt; | no | `{}` | Rust compiler environment variables |
 | `rustc_env_files` | list&lt;string&gt; | no | `[]` | Files with `NAME=value` entries merged into the rustc environment before `env` and `rustc_env` |
-| `rustc_flags` | list&lt;string&gt; | no | `[]` | Additional `rustc` flags appended after Once-managed flags |
+| `rustc_flags` | list&lt;string&gt; | no | `[]` | Additional `rustc` flags appended after Struo-managed flags |
 | `cap_lints` | string | no | empty | Optional rustc lint cap passed as `--cap-lints` |
 | `linker` | string | no | inferred | Optional linker path passed as `-C linker=...` |
 | `linker_flags` | list&lt;string&gt; | no | `[]` | Additional linker flags lowered to `-C link-arg=...` |
@@ -69,7 +69,7 @@ as tests that build crates whose build scripts probe for nightly features.
 | `crate` | target | no | empty | Reserved Bazel-compatible reference to an already-built crate under test |
 | `use_libtest_harness` | bool | no | `true` | Whether to use the Rust libtest harness. Only `true` is supported |
 | `report_time` | bool | no | `true` | Whether to record per-test durations through the test harness timing report. See [Test results](#test-results) |
-| `labels` | list&lt;string&gt; | no | `[]` | Labels exposed through `once_test_info` for test discovery |
+| `labels` | list&lt;string&gt; | no | `[]` | Labels exposed through `struo_test_info` for test discovery |
 | `timeout_ms` | int | no |  | Optional test timeout in milliseconds |
 | `cacheable` | bool | no | `true` | Whether successful test results may be restored from the action cache. Disable it for tests whose outcome depends on host tools or configuration that are not declared inputs, such as tests that inherit `PATH` or `HOME` through `env_inherit`. Compilation stays cacheable |
 
@@ -90,7 +90,7 @@ Use the dependency roles with the same names under `[target.dependencies]`.
 
 ## Providers
 
-The target emits `rust_test` and `once_test_info`.
+The target emits `rust_test` and `struo_test_info`.
 
 ## Capabilities
 
@@ -103,14 +103,14 @@ The target emits `rust_test` and `once_test_info`.
 
 | Output | Location |
 | --- | --- |
-| Test binary | `.once/out/<target>/<crate_name>` or `.exe` on Windows |
-| Test results | `.once/out/<target>/test/test_results.json` |
-| Test log | `.once/out/<target>/test/rust-libtest.log` |
-| Native runner output | `.once/out/<target>/test/native_results.txt` |
+| Test binary | `.struo/out/<target>/<crate_name>` or `.exe` on Windows |
+| Test results | `.struo/out/<target>/test/test_results.json` |
+| Test log | `.struo/out/<target>/test/rust-libtest.log` |
+| Native runner output | `.struo/out/<target>/test/native_results.txt` |
 
 ## Environment
 
-The test process starts with a cleared environment. Once gives it a private
+The test process starts with a cleared environment. Struo gives it a private
 `HOME` under the target's output directory, the standard system tool
 directories on `PATH`, the package's `CARGO_*` description, a
 `CARGO_BIN_EXE_<name>` entry for every `bin_deps` executable, and any

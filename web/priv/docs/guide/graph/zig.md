@@ -5,7 +5,7 @@ next: false
 
 # Zig
 
-Once can describe Zig modules, build and run executables, run host tests, and
+Struo can describe Zig modules, build and run executables, run host tests, and
 produce static or shared libraries. This guide uses one math module from a
 binary and a test target.
 
@@ -24,7 +24,7 @@ should reject a compiler whose reported version does not match the project.
 
 ## Declare a Module, Binary, and Test
 
-Create `tools/hello/once.toml`:
+Create `tools/hello/struo.toml`:
 
 ```toml
 [[target]]
@@ -60,7 +60,7 @@ Use this source layout:
 
 ```text
 tools/hello/
-├── once.toml
+├── struo.toml
 └── src/
     ├── main.zig
     ├── math.zig
@@ -101,7 +101,7 @@ deps = ["zig_dependencies"]
 main = "src/main.zig"
 ```
 
-Once reads the locked package graph and emits one queryable `zig_package`
+Struo reads the locked package graph and emits one queryable `zig_package`
 target per package instance. Local path dependencies are resolved relative to
 the manifest that declares them, and the normalized materialized source root is
 part of their identity. The same relative spelling in two parent packages
@@ -124,14 +124,14 @@ Use `package_paths` to map an alias or content multihash to a different
 materialized source directory. This is useful when an existing vendoring
 layout cannot be changed. Run Zig's native package fetch workflow explicitly
 when the lock or vendored source set changes, then review the expanded graph
-with `once query targets --kind zig_package`.
+with `struo query targets --kind zig_package`.
 
 Build and run a first-party consumer after inspecting the imported packages:
 
 ```sh
-once query targets --kind zig_package
-once build hello
-once run hello
+struo query targets --kind zig_package
+struo build hello
+struo run hello
 ```
 
 The bundled dependency starter imports a locked `math` package and prints its
@@ -144,12 +144,12 @@ this run verifies the complete provider handoff.
 Inspect the targets and their capabilities:
 
 ```sh
-once query targets --kind zig_library
-once query capabilities tools/hello/math
-once query capabilities tools/hello/hello
-once query capabilities tools/hello/math_tests
-once query schema zig_binary
-once query schema zig_test
+struo query targets --kind zig_library
+struo query capabilities tools/hello/math
+struo query capabilities tools/hello/hello
+struo query capabilities tools/hello/math_tests
+struo query schema zig_binary
+struo query schema zig_test
 ```
 
 The module exposes `build` but does not compile an artifact by itself. Its
@@ -157,7 +157,7 @@ binary and test consumers compile it as part of their whole program. The
 binary exposes `build` and `run`; the test exposes `build` and `test`.
 
 Zig compilation selects the LLVM backend with `-fllvm` by default. The chosen
-compiler must include LLVM support for the requested target. Once propagates
+compiler must include LLVM support for the requested target. Struo propagates
 compiler errors rather than silently falling back to another backend.
 
 Explicit `-fno-llvm` flags in `zigopt`, `zigopts`, or `linkopts` are preserved,
@@ -166,11 +166,11 @@ is preserved by default, and these unstripped actions also bypass caching:
 LLVM debugging and symbol metadata can differ between otherwise identical
 compilations. Explicit `strip = true`, `strip_debug_symbols = true`, or a
 root-module `-fstrip` flag permits caching with LLVM; any `-fno-strip` override
-keeps caching disabled. Once never strips debug information automatically.
+keeps caching disabled. Struo never strips debug information automatically.
 
 Zig's self-hosted backend can produce different executable bytes even with
 debug information stripped. A stable action key does not establish byte
-reproducibility. Use `once build --verify-reproducible` to check the declared
+reproducibility. Use `struo build --verify-reproducible` to check the declared
 outputs of a particular target and compiler configuration. This remains an
 observation, not a universal determinism guarantee for arbitrary source code.
 
@@ -179,23 +179,23 @@ observation, not a universal determinism guarantee for arbitrary source code.
 Build the executable and its module:
 
 ```sh
-once build tools/hello/hello
+struo build tools/hello/hello
 ```
 
-The executable appears at `.once/out/tools/hello/hello/hello`, with `.exe`
+The executable appears at `.struo/out/tools/hello/hello/hello`, with `.exe`
 added on Windows. Zig documentation appears at
-`.once/out/tools/hello/hello/hello.docs`. Optional assembly and compiler
+`.struo/out/tools/hello/hello/hello.docs`. Optional assembly and compiler
 representation outputs are produced only when their corresponding attributes
 are enabled.
 
 Run the same binary:
 
 ```sh
-once run tools/hello/hello
+struo run tools/hello/hello
 ```
 
 The binary can receive `args`, `env`, and declared `data` inputs. Run output is
-stored under `.once/out/tools/hello/hello/run/`, including `stdout.log` and
+stored under `.struo/out/tools/hello/hello/run/`, including `stdout.log` and
 `run.json`. Running is not replayed from the action cache, so each invocation
 executes the program again.
 
@@ -204,12 +204,12 @@ executes the program again.
 Build and execute the host test target:
 
 ```sh
-once test tools/hello/math_tests
+struo test tools/hello/math_tests
 ```
 
 The compiled test binary appears under
-`.once/out/tools/hello/math_tests/math_tests`. Results and logs appear under
-`.once/out/tools/hello/math_tests/test/`, including `test_results.json`,
+`.struo/out/tools/hello/math_tests/math_tests`. Results and logs appear under
+`.struo/out/tools/hello/math_tests/test/`, including `test_results.json`,
 `zig-test.log`, and `native_results.txt`.
 
 Zig test execution is host-only. A cross-target test binary can be built, but

@@ -8,7 +8,7 @@ execution waits for the prerequisites listed in its section.
 ## Summary
 
 Teams that work in the same office have idle machines that often share most of
-a build's content. Once could use them in two steps:
+a build's content. Struo could use them in two steps:
 
 1. **Peer blob mirror.** Fetch content-addressed blobs from colleagues on the
    local network before the remote cache. Action results still come only from
@@ -37,7 +37,7 @@ whose work does not split into independent units, toolchain mismatches that
 produce wrong but plausible outputs, and owners disabling the feature because
 it slowed their own machine.
 
-Once avoids part of this because it owns the action graph and a
+Struo avoids part of this because it owns the action graph and a
 content-addressed store (CAS). It does not avoid toolchain identity, trust or
 owner experience. This RFC addresses those directly.
 
@@ -104,7 +104,7 @@ protocol version, a port and a keyed namespace fingerprint. They do not carry
 account names, project names, user names or digests. A client considers only
 peers whose fingerprint matches its own cache namespace.
 
-Networks that block multicast can list peers explicitly in `once.toml`.
+Networks that block multicast can list peers explicitly in `struo.toml`.
 Discovery results are cached briefly, and peers that fail repeatedly are
 removed from the candidate list for the rest of the session.
 
@@ -156,13 +156,13 @@ reach the provider for every request. Both sides authenticate over mutual TLS
 with keys bound to those credentials. Revoking a member at the provider stops
 new credentials, and expiry bounds the remaining window.
 
-A shared team secret configured through `once auth` is simpler, but it cannot
+A shared team secret configured through `struo auth` is simpler, but it cannot
 be revoked per person. It is an acceptable fallback for evaluation, not the
 default.
 
 ### Serving
 
-Serving is an explicit command, such as `once cache serve --peers`, that the
+Serving is an explicit command, such as `struo cache serve --peers`, that the
 owner runs or installs as a login item. It:
 
 - serves blobs from the local store only, read-only, and never writes on

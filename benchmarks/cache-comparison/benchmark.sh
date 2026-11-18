@@ -16,7 +16,7 @@ trap '"$root/server.sh" stop' EXIT INT TERM
 "$root/reset-clients.sh" bazel
 "$root/run-buck2.sh" >/dev/null
 "$root/reset-clients.sh" buck2
-"$root/run-once.sh" >/dev/null
+"$root/run-struo.sh" >/dev/null
 "$root/reset-clients.sh" all
 
 mise exec -- hyperfine \
@@ -26,7 +26,7 @@ mise exec -- hyperfine \
   --prepare "$root/reset-clients.sh all" \
   --command-name Bazel "$root/run-bazel.sh" \
   --command-name Buck2 "$root/run-buck2.sh" \
-  --command-name Once "$root/run-once.sh"
+  --command-name Struo "$root/run-struo.sh"
 
 mise exec -- hyperfine \
   --runs "$runs" \
@@ -34,7 +34,7 @@ mise exec -- hyperfine \
   --export-json "$results/local-hit.json" \
   --command-name Bazel "$root/run-bazel.sh" \
   --command-name Buck2 "$root/run-buck2.sh" \
-  --command-name Once "$root/run-once.sh"
+  --command-name Struo "$root/run-struo.sh"
 
 curl -fsS http://127.0.0.1:18080/status >"$results/cache-status.json"
 curl -fsS http://127.0.0.1:18080/metrics >"$results/cache-metrics.txt"

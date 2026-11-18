@@ -1,0 +1,71 @@
+[[target]]
+name = "struo_core"
+kind = "rust_library"
+deps = [
+  "crates/struo-presentation/struo_presentation",
+  "crates/struo-cas/struo_cas",
+  "crates/struo-host-tree/struo_host_tree",
+  "cargo_dependencies",
+]
+srcs = ["src/**/*.rs"]
+
+[target.attrs]
+crate_name = "struo_core"
+crate_root = "src/lib.rs"
+edition = "2021"
+features = ["default", "remote-microsandbox"]
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/struo-core"
+CARGO_PKG_NAME = "struo-core"
+CARGO_PKG_VERSION = "0.0.0"
+
+# Tests
+
+[[target]]
+name = "struo_core_unit_tests"
+kind = "rust_test"
+deps = [
+  "crates/struo-presentation/struo_presentation",
+  "crates/struo-cas/struo_cas",
+  "crates/struo-host-tree/struo_host_tree",
+  "cargo_dependencies",
+]
+srcs = ["src/**/*.rs"]
+
+[target.attrs]
+crate_name = "struo_core"
+crate_root = "src/lib.rs"
+edition = "2021"
+cargo_package = "struo-core"
+features = [
+  "default",
+  "remote-microsandbox",
+]
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/struo-core"
+CARGO_PKG_NAME = "struo-core"
+CARGO_PKG_VERSION = "0.0.0"
+
+[[target]]
+name = "runner_tests"
+kind = "rust_test"
+deps = [
+  "crates/struo-core/struo_core",
+  "crates/struo-cas/struo_cas",
+  "crates/struo-host-tree/struo_host_tree",
+  "cargo_dependencies",
+]
+srcs = ["tests/runner.rs"]
+
+[target.attrs]
+crate_name = "runner"
+crate_root = "tests/runner.rs"
+edition = "2021"
+cargo_package = "struo-core"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/struo-core"
+CARGO_PKG_NAME = "struo-core"
+CARGO_PKG_VERSION = "0.0.0"

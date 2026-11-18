@@ -12,7 +12,7 @@ export interface CacheStats {
   actionBytes: number;
 }
 
-export class OnceError extends Error {}
+export class StruoError extends Error {}
 
 export interface CacheOptions {
   localCacheRoot?: string;

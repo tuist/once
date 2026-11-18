@@ -6,13 +6,13 @@ Android instrumentation test target.
 
 Installs an Android application package under test and an Android application
 package that contains instrumentation tests, then runs `am instrument` on a
-connected device or emulator through Once's generic test capability.
+connected device or emulator through Struo's generic test capability.
 
 The test package is modeled as an `android_binary` target whose `instruments`
 attribute points at the app under test. The `android_instrumentation_test`
-target depends on both Android application package targets. Once installs both
+target depends on both Android application package targets. Struo installs both
 packages with the Android Debug Bridge (`adb`), runs instrumentation, parses
-standard instrumentation status output, and writes `once.test_results.v1`.
+standard instrumentation status output, and writes `struo.test_results.v1`.
 The run succeeds only when the device reports the standard successful terminal
 instrumentation code. A host command that exits successfully after a device
 process crash is still reported as a failed test run.
@@ -39,10 +39,10 @@ process crash is still reported as a failed test run.
 | `args` | list&lt;string&gt; | no | `[]` | Raw arguments appended to the Android instrumentation command before its component |
 | `support_apks` | list&lt;string&gt; | no | `[]` | Package-relative application package globs installed before the instrumentation application |
 | `target_device` | string | no | empty | Reserved device target selection |
-| `labels` | list&lt;string&gt; | no | `[]` | Labels exposed through `once_test_info` for test discovery |
+| `labels` | list&lt;string&gt; | no | `[]` | Labels exposed through `struo_test_info` for test discovery |
 | `timeout_ms` | int | no |  | Optional test timeout in milliseconds |
 
-A non-empty `target_device` fails validation because Once does not provide the
+A non-empty `target_device` fails validation because Struo does not provide the
 matching device provisioning behavior. Use `adb_serial` to select an already
 provisioned device.
 
@@ -54,7 +54,7 @@ provisioned device.
 
 ## Providers
 
-The target emits `android_instrumentation_test` and `once_test_info`.
+The target emits `android_instrumentation_test` and `struo_test_info`.
 
 ## Capabilities
 
@@ -66,17 +66,17 @@ The target emits `android_instrumentation_test` and `once_test_info`.
 
 | Output | Location |
 | --- | --- |
-| Test results | `.once/out/<target>/test/test_results.json` |
-| Test log | `.once/out/<target>/test/android-instrumentation-test.log` |
-| Native runner output | `.once/out/<target>/test/native_results.txt` |
+| Test results | `.struo/out/<target>/test/test_results.json` |
+| Test log | `.struo/out/<target>/test/android-instrumentation-test.log` |
+| Native runner output | `.struo/out/<target>/test/native_results.txt` |
 
 ## Behavior
 
 The action is not cacheable because it depends on external device state.
-Once waits for a device, installs the app under test, installs the test
+Struo waits for a device, installs the app under test, installs the test
 package, optionally clears package data, and optionally disables animations.
 Files matched by `support_apks` are installed after the app under test and
-before the test package. Once then runs:
+before the test package. Struo then runs:
 
 ```sh
 adb shell am instrument -w -r <args> <test-package>/<runner>
@@ -86,7 +86,7 @@ adb shell am instrument -w -r <args> <test-package>/<runner>
 `test_class` becomes `-e class <value>`.
 
 After a whole-target run discovers test cases, an exact unit selected from
-`once query test-manifest` is translated to the same class filter. The active
+`struo query test-manifest` is translated to the same class filter. The active
 instrumentation runner must implement the standard `class` argument contract.
 
 ## Example
@@ -98,8 +98,8 @@ kind = "android_binary"
 srcs = ["src/main/**/*.kt"]
 
 [target.attrs]
-application_id = "dev.once.greeting"
-namespace = "dev.once.greeting"
+application_id = "dev.struo.greeting"
+namespace = "dev.struo.greeting"
 manifest = "AndroidManifest.xml"
 resource_files = []
 
@@ -109,8 +109,8 @@ kind = "android_binary"
 srcs = ["src/androidTest/**/*.kt"]
 
 [target.attrs]
-application_id = "dev.once.greeting.test"
-namespace = "dev.once.greeting.test"
+application_id = "dev.struo.greeting.test"
+namespace = "dev.struo.greeting.test"
 manifest = "AndroidTestManifest.xml"
 resource_files = []
 instruments = "./GreetingApp"
@@ -122,7 +122,7 @@ deps = ["./GreetingApp", "./GreetingInstrumentationApk"]
 
 [target.attrs]
 test_app = "./GreetingInstrumentationApk"
-instrumentation_runner = "dev.once.greeting.OnceInstrumentationRunner"
+instrumentation_runner = "dev.struo.greeting.StruoInstrumentationRunner"
 labels = ["device"]
 ```
 

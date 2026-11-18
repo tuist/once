@@ -1,4 +1,4 @@
-# Autoresearch: reduce Once local-hit latency
+# Autoresearch: reduce Struo local-hit latency
 
 ## Objective
 
@@ -23,10 +23,10 @@ client cache.
 
 ## Files in Scope
 
-- `crates/once-cli/src/main.rs`: process runtime and command dispatch
-- `crates/once-cli/src/logging.rs`: per-invocation logging setup and writes
-- `crates/once-cli/src/commands/graph/`: graph analysis and scheduling
-- `crates/once-frontend/src/`: manifest, module, and graph loading
+- `crates/struo-cli/src/main.rs`: process runtime and command dispatch
+- `crates/struo-cli/src/logging.rs`: per-invocation logging setup and writes
+- `crates/struo-cli/src/commands/graph/`: graph analysis and scheduling
+- `crates/struo-frontend/src/`: manifest, module, and graph loading
 - workspace manifests: allocator and release profile experiments
 
 ## Off Limits
@@ -35,7 +35,7 @@ client cache.
   still the dominant controllable cost
 - Platform-specific behavior in generic graph or cache interfaces
 - Skipping required session logs
-- Benchmark-only shortcuts that do not improve normal Once workspaces
+- Benchmark-only shortcuts that do not improve normal Struo workspaces
 
 ## Constraints
 
@@ -58,7 +58,7 @@ client cache.
   small stable improvement.
 - Stripping the release executable did not improve latency.
 - Research on Arachne and scheduler activations supports avoiding short-lived
-  kernel threads. Once now creates no asynchronous worker pool for this command.
+  kernel threads. Struo now creates no asynchronous worker pool for this command.
 - Research on mimalloc, snmalloc, and Hoard motivates testing a sharded allocator,
   but their largest gains target concurrent allocation. Mimalloc measured 25.75
   milliseconds in its stable repeat while the system allocator measured 25.13
@@ -125,12 +125,12 @@ client cache.
 - [Rust atomic reference counting documentation](https://doc.rust-lang.org/std/sync/struct.Arc.html)
   documents shared ownership and its atomic reference-count cost.
 - [The Slab Allocator](https://www.usenix.org/conference/usenix-summer-1994-technical-conference/slab-allocator-object-caching-kernel)
-  motivates object reuse for stable kernel allocation workloads. Once's
+  motivates object reuse for stable kernel allocation workloads. Struo's
   short-lived, size-varying command allocations did not justify a custom slab.
 - [Magazines and vmem](https://www.usenix.org/legacy/event/usenix01/full_papers/bonwick/bonwick_html/)
-  shows how per-processor object caches reduce allocator contention. Once's
+  shows how per-processor object caches reduce allocator contention. Struo's
   current-hit path is primarily single-threaded, so removing allocations had
   more value than adding another allocator layer.
 - [Linux zero-copy receive documentation](https://www.kernel.org/doc/html/next/networking/iou-zcrx.html)
   describes a specialized network receive path with kernel and hardware
-  requirements. It is not portable enough for Once's generic cache client.
+  requirements. It is not portable enough for Struo's generic cache client.

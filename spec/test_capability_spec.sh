@@ -29,13 +29,13 @@ Describe 'test capability'
     cp -R "$REPO_ROOT/fixtures/shellspec_test/." "$WORKSPACE/"
     sed -e "s|__SHELLSPEC_BIN__|$shellspec_bin|g" \
       -e "s|__CLEAN_PATH__|$clean_path|g" \
-      -e "s|__ONCE_BIN__|$ONCE_BIN|g" \
-      "$REPO_ROOT/fixtures/shellspec_test/once.toml" > "$WORKSPACE/once.toml"
+      -e "s|__STRUO_BIN__|$STRUO_BIN|g" \
+      "$REPO_ROOT/fixtures/shellspec_test/struo.toml" > "$WORKSPACE/struo.toml"
   }
 
   create_parallel_shellspec_test_workspace() {
     create_shellspec_test_workspace
-    cat >> "$WORKSPACE/once.toml" <<TOML
+    cat >> "$WORKSPACE/struo.toml" <<TOML
 
 [[target]]
 name = "graph_e2e"
@@ -46,16 +46,16 @@ srcs = ["spec/graph_query_spec.sh"]
 shellspec = "$shellspec_bin"
 data = ["spec/spec_helper.sh"]
 labels = ["e2e", "shell"]
-env = { PATH = "$clean_path", ONCE_BIN = "$ONCE_BIN" }
+env = { PATH = "$clean_path", STRUO_BIN = "$STRUO_BIN" }
 TOML
   }
 
   last_progress_line() {
-    tail -n 1 "$ONCE_PROGRESS"
+    tail -n 1 "$STRUO_PROGRESS"
   }
 
   create_rust_test_workspace() {
-    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/rust-test-minimal/." "$WORKSPACE/"
+    cp -R "$REPO_ROOT/crates/struo-frontend/prelude/examples/rust-test-minimal/." "$WORKSPACE/"
   }
 
   create_multi_rust_test_workspace() {
@@ -71,10 +71,10 @@ RS
 
   create_minitest_workspace() {
     ruby_bin="$(command -v ruby)"
-    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/minitest-test-minimal/." "$WORKSPACE/"
+    cp -R "$REPO_ROOT/crates/struo-frontend/prelude/examples/minitest-test-minimal/." "$WORKSPACE/"
     mkdir -p "$WORKSPACE/.ruby/bin"
     ln -s "$ruby_bin" "$WORKSPACE/.ruby/bin/ruby"
-    cat >> "$WORKSPACE/once.toml" <<'TOML'
+    cat >> "$WORKSPACE/struo.toml" <<'TOML'
 
 [target.attrs]
 ruby = ".ruby/bin/ruby"
@@ -83,7 +83,7 @@ TOML
 
   create_pytest_workspace() {
     pytest_python="$(dirname "$(realpath "$(command -v pytest)")")/python"
-    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/pytest-test-minimal/." "$WORKSPACE/"
+    cp -R "$REPO_ROOT/crates/struo-frontend/prelude/examples/pytest-test-minimal/." "$WORKSPACE/"
     mkdir -p "$WORKSPACE/.venv/bin"
     printf '#!/bin/sh\nexec "%s" "$@"\n' "$pytest_python" > "$WORKSPACE/.venv/bin/python"
     chmod +x "$WORKSPACE/.venv/bin/python"
@@ -92,10 +92,10 @@ TOML
   create_rspec_workspace() {
     rspec_root="$(dirname "$(dirname "$(command -v rspec)")")"
     ruby_bin="$(command -v ruby)"
-    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/rspec-test-minimal/." "$WORKSPACE/"
+    cp -R "$REPO_ROOT/crates/struo-frontend/prelude/examples/rspec-test-minimal/." "$WORKSPACE/"
     mkdir -p "$WORKSPACE/.ruby/bin"
     ln -s "$ruby_bin" "$WORKSPACE/.ruby/bin/ruby"
-    cat >> "$WORKSPACE/once.toml" <<TOML
+    cat >> "$WORKSPACE/struo.toml" <<TOML
 ruby = ".ruby/bin/ruby"
 env = { GEM_HOME = "$rspec_root/libexec", GEM_PATH = "$rspec_root/libexec" }
 TOML
@@ -116,11 +116,11 @@ TOML
     if [ -f "$node_modules_dir/$package_entry" ]; then
       runner_entry="$node_modules_dir/$package_entry"
     fi
-    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/$runner_name-test-minimal/." "$WORKSPACE/"
+    cp -R "$REPO_ROOT/crates/struo-frontend/prelude/examples/$runner_name-test-minimal/." "$WORKSPACE/"
     mkdir -p "$WORKSPACE/tools"
     ln -s "$(command -v node)" "$WORKSPACE/tools/node"
     printf '#!/usr/bin/env node\nimport %s\n' "$(printf '%s' "$runner_entry" | jq -R .)" > "$WORKSPACE/tools/$runner_name.mjs"
-    cat >> "$WORKSPACE/once.toml" <<TOML
+    cat >> "$WORKSPACE/struo.toml" <<TOML
 
 [target.attrs]
 node = "tools/node"
@@ -132,10 +132,10 @@ TOML
   create_vitest_workspace() {
     create_javascript_test_workspace vitest
     for source in "$WORKSPACE"/tests/*.test.js; do
-      sed '/^import { expect, test } from "vitest"$/d' "$source" > "$source.once"
-      mv "$source.once" "$source"
+      sed '/^import { expect, test } from "vitest"$/d' "$source" > "$source.struo"
+      mv "$source.struo" "$source"
     done
-    cat >> "$WORKSPACE/once.toml" <<'TOML'
+    cat >> "$WORKSPACE/struo.toml" <<'TOML'
 args = ["--globals"]
 TOML
   }
@@ -159,8 +159,8 @@ TOML
       "$WORKSPACE/android-sdk/platforms/android-35" \
       "$WORKSPACE/bin" \
       "$WORKSPACE/empty" \
-      "$WORKSPACE/libs/greeting/src/main/kotlin/dev/once/greeting" \
-      "$WORKSPACE/libs/greeting/src/test/kotlin/dev/once/greeting"
+      "$WORKSPACE/libs/greeting/src/main/kotlin/dev/struo/greeting" \
+      "$WORKSPACE/libs/greeting/src/test/kotlin/dev/struo/greeting"
     "$jar_bin" cf "$WORKSPACE/android-sdk/platforms/android-35/android.jar" -C "$WORKSPACE/empty" .
     "$jar_bin" cf "$WORKSPACE/kotlin-stdlib.jar" -C "$WORKSPACE/empty" .
     cat > "$WORKSPACE/android-sdk/build-tools/35.0.0/aapt2" <<'SH'
@@ -234,10 +234,10 @@ done
 [ -n "\$out" ] || exit 2
 [ -n "\$source_list" ] || exit 2
 tmp="\$(mktemp -d)"
-mkdir -p "\$tmp/dev/once/greeting"
+mkdir -p "\$tmp/dev/struo/greeting"
 if grep -q 'src/main' "\$source_list"; then
-  cat > "\$tmp/dev/once/greeting/Greeting.java" <<'JAVA'
-package dev.once.greeting;
+  cat > "\$tmp/dev/struo/greeting/Greeting.java" <<'JAVA'
+package dev.struo.greeting;
 
 public final class Greeting {
   private Greeting() {}
@@ -247,10 +247,10 @@ public final class Greeting {
   }
 }
 JAVA
-  "$javac_bin" -classpath "\$classpath" -d "\$out" "\$tmp/dev/once/greeting/Greeting.java"
+  "$javac_bin" -classpath "\$classpath" -d "\$out" "\$tmp/dev/struo/greeting/Greeting.java"
 else
-  cat > "\$tmp/dev/once/greeting/GreetingTest.java" <<'JAVA'
-package dev.once.greeting;
+  cat > "\$tmp/dev/struo/greeting/GreetingTest.java" <<'JAVA'
+package dev.struo.greeting;
 
 public final class GreetingTest {
   public void testMessage() {
@@ -260,25 +260,25 @@ public final class GreetingTest {
   }
 }
 JAVA
-  "$javac_bin" -classpath "\$classpath" -d "\$out" "\$tmp/dev/once/greeting/GreetingTest.java"
+  "$javac_bin" -classpath "\$classpath" -d "\$out" "\$tmp/dev/struo/greeting/GreetingTest.java"
 fi
 SH
     chmod +x "$WORKSPACE/bin/kotlinc"
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [workspace]
-include = ["libs/*/once.toml"]
+include = ["libs/*/struo.toml"]
 TOML
     cat > "$WORKSPACE/libs/greeting/AndroidManifest.xml" <<'XML'
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" />
 XML
-    cat > "$WORKSPACE/libs/greeting/once.toml" <<TOML
+    cat > "$WORKSPACE/libs/greeting/struo.toml" <<TOML
 [[target]]
 name = "Greeting"
 kind = "android_library"
 srcs = ["src/main/**/*.kt"]
 
 [target.attrs]
-namespace = "dev.once.greeting"
+namespace = "dev.struo.greeting"
 manifest = "AndroidManifest.xml"
 resource_files = []
 android_sdk = "$WORKSPACE/android-sdk"
@@ -301,15 +301,15 @@ kotlinc = "$WORKSPACE/bin/kotlinc"
 kotlin_stdlib = "$WORKSPACE/kotlin-stdlib.jar"
 labels = ["kotlin", "unit"]
 TOML
-    cat > "$WORKSPACE/libs/greeting/src/main/kotlin/dev/once/greeting/Greeting.kt" <<'KOTLIN'
-package dev.once.greeting
+    cat > "$WORKSPACE/libs/greeting/src/main/kotlin/dev/struo/greeting/Greeting.kt" <<'KOTLIN'
+package dev.struo.greeting
 
 object Greeting {
     fun message(): String = "hello"
 }
 KOTLIN
-    cat > "$WORKSPACE/libs/greeting/src/test/kotlin/dev/once/greeting/GreetingTest.kt" <<'KOTLIN'
-package dev.once.greeting
+    cat > "$WORKSPACE/libs/greeting/src/test/kotlin/dev/struo/greeting/GreetingTest.kt" <<'KOTLIN'
+package dev.struo.greeting
 
 class GreetingTest {
     fun testMessage() {
@@ -328,8 +328,8 @@ KOTLIN
       "$WORKSPACE/android-sdk/platform-tools" \
       "$WORKSPACE/bin" \
       "$WORKSPACE/empty" \
-      "$WORKSPACE/libs/greeting/src/main/kotlin/dev/once/greeting" \
-      "$WORKSPACE/libs/greeting/src/androidTest/kotlin/dev/once/greeting"
+      "$WORKSPACE/libs/greeting/src/main/kotlin/dev/struo/greeting" \
+      "$WORKSPACE/libs/greeting/src/androidTest/kotlin/dev/struo/greeting"
     "$jar_bin" cf "$WORKSPACE/android-sdk/platforms/android-35/android.jar" -C "$WORKSPACE/empty" .
     "$jar_bin" cf "$WORKSPACE/kotlin-stdlib.jar" -C "$WORKSPACE/empty" .
     cat > "$WORKSPACE/android-sdk/build-tools/35.0.0/aapt2" <<SH
@@ -432,7 +432,7 @@ case "${1:-}" in
   shell)
     shift
     if [ "${1:-}" = "am" ] && [ "${2:-}" = "instrument" ]; then
-      if [ "${ONCE_ANDROID_INSTRUMENTATION_CRASH:-}" = "1" ]; then
+      if [ "${STRUO_ANDROID_INSTRUMENTATION_CRASH:-}" = "1" ]; then
         cat <<'OUT'
 INSTRUMENTATION_RESULT: shortMsg=Process crashed.
 INSTRUMENTATION_CODE: 0
@@ -440,10 +440,10 @@ OUT
         exit 0
       fi
       cat <<'OUT'
-INSTRUMENTATION_STATUS: class=dev.once.greeting.GreetingInstrumentedTest
+INSTRUMENTATION_STATUS: class=dev.struo.greeting.GreetingInstrumentedTest
 INSTRUMENTATION_STATUS: test=useAppContext
 INSTRUMENTATION_STATUS_CODE: 1
-INSTRUMENTATION_STATUS: class=dev.once.greeting.GreetingInstrumentedTest
+INSTRUMENTATION_STATUS: class=dev.struo.greeting.GreetingInstrumentedTest
 INSTRUMENTATION_STATUS: test=useAppContext
 INSTRUMENTATION_STATUS_CODE: 0
 INSTRUMENTATION_RESULT: stream=
@@ -493,10 +493,10 @@ done
 [ -n "\$out" ] || exit 2
 [ -n "\$source_list" ] || exit 2
 tmp="\$(mktemp -d)"
-mkdir -p "\$tmp/dev/once/greeting"
+mkdir -p "\$tmp/dev/struo/greeting"
 if grep -q 'src/main' "\$source_list"; then
-  cat > "\$tmp/dev/once/greeting/Greeting.java" <<'JAVA'
-package dev.once.greeting;
+  cat > "\$tmp/dev/struo/greeting/Greeting.java" <<'JAVA'
+package dev.struo.greeting;
 
 public final class Greeting {
   private Greeting() {}
@@ -506,22 +506,22 @@ public final class Greeting {
   }
 }
 JAVA
-  "$javac_bin" -classpath "\$classpath" -d "\$out" "\$tmp/dev/once/greeting/Greeting.java"
+  "$javac_bin" -classpath "\$classpath" -d "\$out" "\$tmp/dev/struo/greeting/Greeting.java"
 else
-  cat > "\$tmp/dev/once/greeting/GreetingInstrumentedTest.java" <<'JAVA'
-package dev.once.greeting;
+  cat > "\$tmp/dev/struo/greeting/GreetingInstrumentedTest.java" <<'JAVA'
+package dev.struo.greeting;
 
 public final class GreetingInstrumentedTest {
   public void useAppContext() {}
 }
 JAVA
-  "$javac_bin" -classpath "\$classpath" -d "\$out" "\$tmp/dev/once/greeting/GreetingInstrumentedTest.java"
+  "$javac_bin" -classpath "\$classpath" -d "\$out" "\$tmp/dev/struo/greeting/GreetingInstrumentedTest.java"
 fi
 SH
     chmod +x "$WORKSPACE/bin/kotlinc"
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [workspace]
-include = ["libs/*/once.toml"]
+include = ["libs/*/struo.toml"]
 TOML
     cat > "$WORKSPACE/libs/greeting/AndroidManifest.xml" <<'XML'
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" />
@@ -530,18 +530,18 @@ XML
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <instrumentation
     android:name="androidx.test.runner.AndroidJUnitRunner"
-    android:targetPackage="dev.once.greeting" />
+    android:targetPackage="dev.struo.greeting" />
 </manifest>
 XML
-    cat > "$WORKSPACE/libs/greeting/once.toml" <<TOML
+    cat > "$WORKSPACE/libs/greeting/struo.toml" <<TOML
 [[target]]
 name = "GreetingApp"
 kind = "android_binary"
 srcs = ["src/main/**/*.kt"]
 
 [target.attrs]
-application_id = "dev.once.greeting"
-namespace = "dev.once.greeting"
+application_id = "dev.struo.greeting"
+namespace = "dev.struo.greeting"
 manifest = "AndroidManifest.xml"
 resource_files = []
 android_sdk = "$WORKSPACE/android-sdk"
@@ -557,8 +557,8 @@ kind = "android_binary"
 srcs = ["src/androidTest/**/*.kt"]
 
 [target.attrs]
-application_id = "dev.once.greeting.test"
-namespace = "dev.once.greeting.test"
+application_id = "dev.struo.greeting.test"
+namespace = "dev.struo.greeting.test"
 manifest = "AndroidTestManifest.xml"
 resource_files = []
 android_sdk = "$WORKSPACE/android-sdk"
@@ -578,18 +578,18 @@ deps = ["./GreetingApp", "./GreetingInstrumentationApk"]
 android_sdk = "$WORKSPACE/android-sdk"
 test_app = "./GreetingInstrumentationApk"
 instrumentation_runner = "androidx.test.runner.AndroidJUnitRunner"
-env_inherit = ["ONCE_ANDROID_INSTRUMENTATION_CRASH"]
+env_inherit = ["STRUO_ANDROID_INSTRUMENTATION_CRASH"]
 labels = ["android", "device"]
 TOML
-    cat > "$WORKSPACE/libs/greeting/src/main/kotlin/dev/once/greeting/Greeting.kt" <<'KOTLIN'
-package dev.once.greeting
+    cat > "$WORKSPACE/libs/greeting/src/main/kotlin/dev/struo/greeting/Greeting.kt" <<'KOTLIN'
+package dev.struo.greeting
 
 object Greeting {
     fun message(): String = "hello"
 }
 KOTLIN
-    cat > "$WORKSPACE/libs/greeting/src/androidTest/kotlin/dev/once/greeting/GreetingInstrumentedTest.kt" <<'KOTLIN'
-package dev.once.greeting
+    cat > "$WORKSPACE/libs/greeting/src/androidTest/kotlin/dev/struo/greeting/GreetingInstrumentedTest.kt" <<'KOTLIN'
+package dev.struo.greeting
 
 class GreetingInstrumentedTest {
     fun useAppContext() {
@@ -602,18 +602,18 @@ KOTLIN
   It 'discovers shellspec test targets through the generic test query'
     create_shellspec_test_workspace
 
-    When call once --format json query tests
+    When call struo --format json query tests
     The status should be success
     The stdout should include '"id":"cli_e2e"'
     The stdout should include '"kind":"shellspec_test"'
     The stdout should include '"runner":"shellspec"'
-    The stdout should include '"results_path":".once/out/cli_e2e/test/test_results.json"'
+    The stdout should include '"results_path":".struo/out/cli_e2e/test/test_results.json"'
   End
 
   It 'selects affected shellspec tests from changed inputs'
     create_shellspec_test_workspace
 
-    When call once --format json query affected-tests --changed-path spec/cli_surface_spec.sh
+    When call struo --format json query affected-tests --changed-path spec/cli_surface_spec.sh
     The status should be success
     The stdout should include '"id":"cli_e2e"'
     The stdout should include 'changed test input `spec/cli_surface_spec.sh`'
@@ -622,11 +622,11 @@ KOTLIN
   It 'creates a stable test plan independently from runner placement'
     create_shellspec_test_workspace
 
-    When call once --format json query test-plan --changed-path spec/removed_spec.sh
+    When call struo --format json query test-plan --changed-path spec/removed_spec.sh
     The status should be success
-    The stdout should include '"schema":"once.portable_test_plan.v1"'
-    The stdout should include '"schema":"once.test_plan.v1"'
-    The stdout should include '"schema":"once.test_selection.v1"'
+    The stdout should include '"schema":"struo.portable_test_plan.v1"'
+    The stdout should include '"schema":"struo.test_plan.v1"'
+    The stdout should include '"schema":"struo.test_selection.v1"'
     The stdout should include '"bindings":[{"target":"cli_e2e"'
     The stdout should include '"target":"cli_e2e"'
     The stdout should include '"test_filters":[]'
@@ -637,41 +637,41 @@ KOTLIN
 
   It 'runs affected shellspec tests through the MCP tool'
     create_shellspec_test_workspace
-    mcp_request='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"once_run_tests","arguments":{"changed_paths":["spec/cli_surface_spec.sh"]}}}'
+    mcp_request='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"struo_run_tests","arguments":{"changed_paths":["spec/cli_surface_spec.sh"]}}}'
 
-    When call /bin/sh -c 'printf "%s\n" "$1" | "$2" -C "$3" mcp --allow-run' sh "$mcp_request" "$ONCE_BIN" "$WORKSPACE"
+    When call /bin/sh -c 'printf "%s\n" "$1" | "$2" -C "$3" mcp --allow-run' sh "$mcp_request" "$STRUO_BIN" "$WORKSPACE"
     The status should be success
     The stdout should include 'cli_e2e'
-    The stdout should include 'once.test_plan.v1'
-    The stdout should include 'once.test_schedule.v1'
-    The stdout should include 'once.test_batch_attempt.v1'
-    The stdout should include 'once.test_results.v1'
+    The stdout should include 'struo.test_plan.v1'
+    The stdout should include 'struo.test_schedule.v1'
+    The stdout should include 'struo.test_batch_attempt.v1'
+    The stdout should include 'struo.test_results.v1'
     The stdout should include '\"success\": true'
   End
 
   It 'dynamically schedules affected test targets and records attempts'
     create_parallel_shellspec_test_workspace
 
-    When call once --format json test --changed-path spec/graph_query_spec.sh --jobs 2
+    When call struo --format json test --changed-path spec/graph_query_spec.sh --jobs 2
     The status should be success
-    The stdout should include 'once.test_plan.v1'
-    The stdout should include 'once.test_schedule.v1'
-    The stdout should include 'once.test_batch_attempt.v1'
+    The stdout should include 'struo.test_plan.v1'
+    The stdout should include 'struo.test_schedule.v1'
+    The stdout should include 'struo.test_batch_attempt.v1'
     The stdout should include '"strategy":"longest_estimated_duration_first_dynamic"'
     The stdout should include '"workers":2'
     The stdout should include '"target":"cli_e2e"'
     The stdout should include '"target":"graph_e2e"'
     The stdout should include '"placement":"local"'
-    The path "$WORKSPACE/.once/once.sqlite" should be file
+    The path "$WORKSPACE/.struo/struo.sqlite" should be file
   End
 
   It 'queries persisted test batch attempts'
     create_parallel_shellspec_test_workspace
-    "$ONCE_BIN" -C "$WORKSPACE" --format json test --all --jobs 2 >/dev/null
+    "$STRUO_BIN" -C "$WORKSPACE" --format json test --all --jobs 2 >/dev/null
 
-    When call once --format json query test-attempts --target graph_e2e --limit 1
+    When call struo --format json query test-attempts --target graph_e2e --limit 1
     The status should be success
-    The stdout should include 'once.test_batch_attempt.v1'
+    The stdout should include 'struo.test_batch_attempt.v1'
     The stdout should include '"target":"graph_e2e"'
     The stdout should include '"placement":"local"'
     The stdout should include '"duration_ms"'
@@ -679,57 +679,57 @@ KOTLIN
 
   It 'reports one progress snapshot for a whole test schedule'
     create_parallel_shellspec_test_workspace
-    export ONCE_PROGRESS="$WORKSPACE/progress.jsonl"
+    export STRUO_PROGRESS="$WORKSPACE/progress.jsonl"
 
-    When call once --format json test --all --jobs 2
+    When call struo --format json test --all --jobs 2
     The status should be success
-    The stdout should include 'once.test_schedule.v1'
+    The stdout should include 'struo.test_schedule.v1'
     The result of function last_progress_line should include '"command":"test","target":"","state":"succeeded","planned":2,"done":2'
   End
 
   It 'runs shellspec tests and exposes normalized test results'
     create_shellspec_test_workspace
 
-    When call once --format json test cli_e2e
+    When call struo --format json test cli_e2e
     The status should be success
     The stdout should include '"target":"cli_e2e"'
     The stdout should include '"capability":"test"'
-    The path "$WORKSPACE/.once/out/cli_e2e/test/test_results.json" should be file
+    The path "$WORKSPACE/.struo/out/cli_e2e/test/test_results.json" should be file
   End
 
   It 'runs Rust test targets end to end'
     create_rust_test_workspace
 
-    When call once --format json test hello_tests
+    When call struo --format json test hello_tests
     The status should be success
     The stdout should include '"target":"hello_tests"'
     The stdout should include '"capability":"test"'
-    The path "$WORKSPACE/.once/out/hello_tests/test/test_results.json" should be file
-    The contents of file "$WORKSPACE/.once/out/hello_tests/test/test_results.json" should include '"runner":{"type":"rust_libtest"'
-    The contents of file "$WORKSPACE/.once/out/hello_tests/test/test_results.json" should include '"status":"passed"'
-    The contents of file "$WORKSPACE/.once/out/hello_tests/test/test_results.json" should include 'returns_greeting'
+    The path "$WORKSPACE/.struo/out/hello_tests/test/test_results.json" should be file
+    The contents of file "$WORKSPACE/.struo/out/hello_tests/test/test_results.json" should include '"runner":{"type":"rust_libtest"'
+    The contents of file "$WORKSPACE/.struo/out/hello_tests/test/test_results.json" should include '"status":"passed"'
+    The contents of file "$WORKSPACE/.struo/out/hello_tests/test/test_results.json" should include 'returns_greeting'
   End
 
   It 'discovers and schedules Minitest files as parallel batches'
     create_minitest_workspace
-    once --format json test tests >/dev/null
+    struo --format json test tests >/dev/null
 
-    When call once --format json test --jobs 2 tests
+    When call struo --format json test --jobs 2 tests
     The status should be success
     The stdout should include '"workers":2'
     The stdout should include 'tests::test/math_test.rb'
     The stdout should include 'tests::test/string_test.rb'
     The stdout should include '/test/batches/'
-    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include '"total":2'
-    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'test/math_test.rb'
-    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'test/string_test.rb'
+    The contents of file "$WORKSPACE/.struo/out/tests/test/test_results.json" should include '"total":2'
+    The contents of file "$WORKSPACE/.struo/out/tests/test/test_results.json" should include 'test/math_test.rb'
+    The contents of file "$WORKSPACE/.struo/out/tests/test/test_results.json" should include 'test/string_test.rb'
   End
 
   It 'discovers and schedules pytest files as parallel batches'
     create_pytest_workspace
-    once --format json test --jobs 2 tests > "$WORKSPACE/first-run.json"
+    struo --format json test --jobs 2 tests > "$WORKSPACE/first-run.json"
 
-    When call once --format json test --jobs 2 tests
+    When call struo --format json test --jobs 2 tests
     The status should be success
     The contents of file "$WORKSPACE/first-run.json" should include '"next_plan"'
     The contents of file "$WORKSPACE/first-run.json" should include 'tests::tests/test_math.py'
@@ -738,14 +738,14 @@ KOTLIN
     The stdout should include 'tests::tests/test_math.py'
     The stdout should include 'tests::tests/test_string.py'
     The stdout should include '/test/batches/'
-    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include '"total":3'
-    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'tests/test_math.py'
-    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'tests/test_string.py'
+    The contents of file "$WORKSPACE/.struo/out/tests/test/test_results.json" should include '"total":3'
+    The contents of file "$WORKSPACE/.struo/out/tests/test/test_results.json" should include 'tests/test_math.py'
+    The contents of file "$WORKSPACE/.struo/out/tests/test/test_results.json" should include 'tests/test_string.py'
   End
 
   It 'replays one file batch without losing its fixture scope or complete manifest'
     create_pytest_workspace
-    once --format json test --jobs 2 tests > "$WORKSPACE/discovery.json"
+    struo --format json test --jobs 2 tests > "$WORKSPACE/discovery.json"
     batch_id="$(jq -r '.next_plan.batches | max_by(.test_filters | length) | .id' "$WORKSPACE/discovery.json")"
 
     When call /bin/sh -c '
@@ -753,7 +753,7 @@ KOTLIN
       jq -e --arg id "$3" ".plan.batches | length == 1" "$2/replay-run.json" &&
       jq -e ".plan.batches[0].test_filters | length == 2" "$2/replay-run.json" &&
       "$1" -C "$2" --format json query test-manifest tests | jq -e ".units | length == 3"
-    ' sh "$ONCE_BIN" "$WORKSPACE" "$batch_id"
+    ' sh "$STRUO_BIN" "$WORKSPACE" "$batch_id"
     The status should be success
     The stdout should include 'true'
     The contents of file "$WORKSPACE/replay-run.json" should include 'requested_test_batch'
@@ -763,40 +763,40 @@ KOTLIN
 
   It 'rejects an obsolete batch rather than executing a stale inventory'
     create_pytest_workspace
-    once --format json test --jobs 2 tests > "$WORKSPACE/discovery.json"
+    struo --format json test --jobs 2 tests > "$WORKSPACE/discovery.json"
     batch_id="$(jq -r '.next_plan.batches[0].id' "$WORKSPACE/discovery.json")"
     printf '\ndef test_new_case():\n    assert True\n' >> "$WORKSPACE/tests/test_math.py"
 
-    When call once --format json test tests --test-batch "$batch_id"
+    When call struo --format json test tests --test-batch "$batch_id"
     The status should be failure
     The stderr should include 'not in the current plan'
-    The stderr should include 'once query test-plan --target tests'
+    The stderr should include 'struo query test-plan --target tests'
     The stderr should include 'whole target'
   End
 
   It 'executes portable file batches on a fresh relocated worker without discovery state'
     create_pytest_workspace
-    once --format json test tests >/dev/null
-    once --format json query test-plan --target tests > "$SPEC_ROOT/plan.json"
-    printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"once_query_test_plan","arguments":{"target":"tests"}}}' |
-      once mcp > "$SPEC_ROOT/mcp-plan.json"
+    struo --format json test tests >/dev/null
+    struo --format json query test-plan --target tests > "$SPEC_ROOT/plan.json"
+    printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"struo_query_test_plan","arguments":{"target":"tests"}}}' |
+      struo mcp > "$SPEC_ROOT/mcp-plan.json"
     worker="$SPEC_ROOT/worker"
     mkdir -p "$worker/tools"
     cp -R "$WORKSPACE/tests" "$worker/"
-    cp "$WORKSPACE/once.toml" "$worker/once.toml"
+    cp "$WORKSPACE/struo.toml" "$worker/struo.toml"
     cp "$WORKSPACE/.venv/bin/python" "$worker/tools/interpreter"
-    printf '\n[target.attrs]\npython = "tools/interpreter"\n' >> "$worker/once.toml"
+    printf '\n[target.attrs]\npython = "tools/interpreter"\n' >> "$worker/struo.toml"
 
     When call /bin/sh -eu -c '
       jq -e --slurpfile plan "$3" ".result.structuredContent.result == \$plan[0]" "$5"
-      test ! -e "$2/.once"
+      test ! -e "$2/.struo"
       "$1" -C "$2" --format json --cpu-limit 2 test --plan "$3" --jobs 2 > "$4"
-      jq -e ".schema == \"once.portable_test_execution.v1\" and .complete and .success and (.execution.runs | length == 2) and (.execution.runs | map(.results.summary.total) | add == 3)" "$4"
-      test ! -e "$2/.once/test-manifests"
+      jq -e ".schema == \"struo.portable_test_execution.v1\" and .complete and .success and (.execution.runs | length == 2) and (.execution.runs | map(.results.summary.total) | add == 3)" "$4"
+      test ! -e "$2/.struo/test-manifests"
       id=$(jq -r ".plan.batches | max_by(.test_filters | length) | .id" "$3")
       "$1" -C "$2" --format json test --plan "$3" --batch "$id" --jobs 1 > "$4"
       jq -e --arg id "$id" ".complete and .success and .selected_batch_ids == [\$id] and (.execution.runs | length == 1) and .execution.runs[0].results.summary.total == 2" "$4"
-    ' sh "$ONCE_BIN" "$worker" "$SPEC_ROOT/plan.json" "$SPEC_ROOT/execution.json" "$SPEC_ROOT/mcp-plan.json"
+    ' sh "$STRUO_BIN" "$worker" "$SPEC_ROOT/plan.json" "$SPEC_ROOT/execution.json" "$SPEC_ROOT/mcp-plan.json"
     The status should be success
     The stdout should include 'true'
     The contents of file "$SPEC_ROOT/execution.json" should include '/test/batches/'
@@ -804,13 +804,13 @@ KOTLIN
 
   It 'rejects stale portable inputs and unknown or duplicate batch assignments before execution'
     create_pytest_workspace
-    cat >> "$WORKSPACE/once.toml" <<'TOML'
+    cat >> "$WORKSPACE/struo.toml" <<'TOML'
 
 [target.attrs]
-env_inherit = ["ONCE_PORTABLE_DISCOVERY_TEST"]
+env_inherit = ["STRUO_PORTABLE_DISCOVERY_TEST"]
 TOML
-    once --format json test tests >/dev/null
-    once --format json query test-plan --target tests > "$SPEC_ROOT/plan.json"
+    struo --format json test tests >/dev/null
+    struo --format json query test-plan --target tests > "$SPEC_ROOT/plan.json"
     batch_id="$(jq -r '.plan.batches[0].id' "$SPEC_ROOT/plan.json")"
 
     When call /bin/sh -eu -c '
@@ -818,7 +818,7 @@ TOML
       grep -q "unknown portable test batch" "$4"
       if "$1" -C "$2" --format json test --plan "$3" --batch "$5" --batch "$5" > "$4" 2>&1; then exit 1; fi
       grep -q "duplicate selected test batch" "$4"
-      if ONCE_PORTABLE_DISCOVERY_TEST=changed "$1" -C "$2" --format json test --plan "$3" > "$4" 2>&1; then exit 1; fi
+      if STRUO_PORTABLE_DISCOVERY_TEST=changed "$1" -C "$2" --format json test --plan "$3" > "$4" 2>&1; then exit 1; fi
       grep -q "portable test plan is stale" "$4"
       printf "\ndef test_added_after_planning():\n    assert True\n" >> "$2/tests/test_math.py"
       if "$1" -C "$2" --format json test --plan "$3" > "$4" 2>&1; then exit 1; fi
@@ -828,7 +828,7 @@ TOML
       grep -q "test manifest for .* is stale" "$4"
       "$1" -C "$2" --format json query test-plan --target tests > "$4"
       jq -e ".plan.batches | length == 1 and .[0].test_filters == []" "$4"
-    ' sh "$ONCE_BIN" "$WORKSPACE" "$SPEC_ROOT/plan.json" "$SPEC_ROOT/rejection.json" "$batch_id"
+    ' sh "$STRUO_BIN" "$WORKSPACE" "$SPEC_ROOT/plan.json" "$SPEC_ROOT/rejection.json" "$batch_id"
     The status should be success
     The stdout should include 'true'
   End
@@ -841,13 +841,13 @@ def test_failure():
     import os
     assert "/batches/" not in os.environ["HOME"], "expected partition failure"
 PY
-    once --format json test tests > "$SPEC_ROOT/discovery.json"
-    once --format json query test-plan --target tests > "$SPEC_ROOT/plan.json"
+    struo --format json test tests > "$SPEC_ROOT/discovery.json"
+    struo --format json query test-plan --target tests > "$SPEC_ROOT/plan.json"
 
     When call /bin/sh -eu -c '
       if "$1" -C "$2" --format json test --plan "$3" --jobs 1 > "$4"; then exit 1; fi
-      jq -e ".schema == \"once.portable_test_execution.v1\" and .complete and (.success | not) and (.execution.runs | length == 2) and (.execution.runs | map(.results.summary.total) | add == 4) and (.execution.runs | map(.results.summary.failed) | add == 1)" "$4"
-    ' sh "$ONCE_BIN" "$WORKSPACE" "$SPEC_ROOT/plan.json" "$SPEC_ROOT/failed-execution.json"
+      jq -e ".schema == \"struo.portable_test_execution.v1\" and .complete and (.success | not) and (.execution.runs | length == 2) and (.execution.runs | map(.results.summary.total) | add == 4) and (.execution.runs | map(.results.summary.failed) | add == 1)" "$4"
+    ' sh "$STRUO_BIN" "$WORKSPACE" "$SPEC_ROOT/plan.json" "$SPEC_ROOT/failed-execution.json"
     The status should be success
     The stdout should include 'true'
     The contents of file "$SPEC_ROOT/failed-execution.json" should include 'expected partition failure'
@@ -855,13 +855,13 @@ PY
 
   It 'keeps plan and batch identity independent of worker capacity'
     create_pytest_workspace
-    once --format json test tests >/dev/null
+    struo --format json test tests >/dev/null
 
     When call /bin/sh -c '
       "$1" -C "$2" --format json test tests --jobs 1 > "$2/one.json" &&
       "$1" -C "$2" --format json test tests --jobs 4 > "$2/four.json" &&
       jq -e -s ".[0].plan == .[1].plan and .[0].schedule.workers == 1 and .[1].schedule.workers == 2" "$2/one.json" "$2/four.json"
-    ' sh "$ONCE_BIN" "$WORKSPACE"
+    ' sh "$STRUO_BIN" "$WORKSPACE"
     The status should be success
     The stdout should equal 'true'
   End
@@ -882,9 +882,9 @@ def pytest_collection_modifyitems(config, items):
             callobj=lambda: None,
         ))
 PY
-    once --format json test tests >/dev/null
+    struo --format json test tests >/dev/null
 
-    When call once --format json test tests --jobs 2
+    When call struo --format json test tests --jobs 2
     The status should be failure
     The stdout should include 'unrequested test unit'
     The stdout should include 'runner must honor exact filtering'
@@ -892,58 +892,58 @@ PY
   End
 
   It 'requires an explicit target for batch selection'
-    When call once --format json test --test-batch invalid
+    When call struo --format json test --test-batch invalid
     The status should be failure
     The stderr should include 'TARGET'
   End
 
   It 'discovers and schedules RSpec files as parallel batches'
     create_rspec_workspace
-    once --format json test tests >/dev/null
+    struo --format json test tests >/dev/null
 
-    When call once --format json test --jobs 2 tests
+    When call struo --format json test --jobs 2 tests
     The status should be success
     The stdout should include '"workers":2'
     The stdout should include 'tests::./spec/math_spec.rb'
     The stdout should include 'tests::./spec/string_spec.rb'
     The stdout should include '/test/batches/'
-    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include '"total":2'
-    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'spec/math_spec.rb'
-    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'spec/string_spec.rb'
+    The contents of file "$WORKSPACE/.struo/out/tests/test/test_results.json" should include '"total":2'
+    The contents of file "$WORKSPACE/.struo/out/tests/test/test_results.json" should include 'spec/math_spec.rb'
+    The contents of file "$WORKSPACE/.struo/out/tests/test/test_results.json" should include 'spec/string_spec.rb'
   End
 
   It 'discovers and schedules Vitest files as parallel batches'
     create_vitest_workspace
-    once --format json test tests >/dev/null
-    once --format json test --jobs 2 tests >/dev/null
+    struo --format json test tests >/dev/null
+    struo --format json test --jobs 2 tests >/dev/null
 
-    When call once --format json test --jobs 2 tests
+    When call struo --format json test --jobs 2 tests
     The status should be success
     The stdout should include '"workers":2'
     The stdout should include '"cache":"hit"'
     The stdout should include 'tests%2Fmath.test.js'
     The stdout should include 'tests%2Fstring.test.js'
     The stdout should include '/test/batches/'
-    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include '"total":2'
-    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'tests/math.test.js'
-    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'tests/string.test.js'
+    The contents of file "$WORKSPACE/.struo/out/tests/test/test_results.json" should include '"total":2'
+    The contents of file "$WORKSPACE/.struo/out/tests/test/test_results.json" should include 'tests/math.test.js'
+    The contents of file "$WORKSPACE/.struo/out/tests/test/test_results.json" should include 'tests/string.test.js'
   End
 
   It 'discovers and schedules Jest files as parallel batches'
     create_jest_workspace
-    once --format json test tests >/dev/null
-    once --format json test --jobs 2 tests >/dev/null
+    struo --format json test tests >/dev/null
+    struo --format json test --jobs 2 tests >/dev/null
 
-    When call once --format json test --jobs 2 tests
+    When call struo --format json test --jobs 2 tests
     The status should be success
     The stdout should include '"workers":2'
     The stdout should include '"cache":"hit"'
     The stdout should include 'tests%2Fmath.test.js'
     The stdout should include 'tests%2Fstring.test.js'
     The stdout should include '/test/batches/'
-    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include '"total":2'
-    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'tests/math.test.js'
-    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include 'tests/string.test.js'
+    The contents of file "$WORKSPACE/.struo/out/tests/test/test_results.json" should include '"total":2'
+    The contents of file "$WORKSPACE/.struo/out/tests/test/test_results.json" should include 'tests/math.test.js'
+    The contents of file "$WORKSPACE/.struo/out/tests/test/test_results.json" should include 'tests/string.test.js'
   End
 
   Describe 'JavaScript duplicate test names'
@@ -958,10 +958,10 @@ PY
 test("duplicate", () => expect(1).toBe(1));
 test("duplicate", () => expect(2).toBe(2));
 JS
-      once --format json test tests >/dev/null
-      once --format json query test-manifest tests > "$WORKSPACE/first-manifest.json"
-      once --format json test --jobs 2 tests > "$WORKSPACE/cached.json"
-      once --format json query test-manifest tests > "$WORKSPACE/manifest.json"
+      struo --format json test tests >/dev/null
+      struo --format json query test-manifest tests > "$WORKSPACE/first-manifest.json"
+      struo --format json test --jobs 2 tests > "$WORKSPACE/cached.json"
+      struo --format json query test-manifest tests > "$WORKSPACE/manifest.json"
 
       When call /bin/sh -ec '
         cmp "$1/first-manifest.json" "$1/manifest.json"
@@ -970,40 +970,40 @@ JS
       ' sh "$WORKSPACE"
       The status should be success
       The stdout should include 'true'
-      The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include '"selection_supported":false'
+      The contents of file "$WORKSPACE/.struo/out/tests/test/test_results.json" should include '"selection_supported":false'
     End
   End
 
   It 'discovers and runs one stable Rust test unit'
     create_multi_rust_test_workspace
-    once --format json test hello_tests >/dev/null
+    struo --format json test hello_tests >/dev/null
 
     When call /bin/sh -c '
       "$1" -C "$2" --format json query test-manifest hello_tests > "$2/manifest.json" &&
       "$1" -C "$2" --format json test hello_tests --test-unit "hello_tests::returns_greeting" &&
       "$1" -C "$2" --format json query test-manifest hello_tests > "$2/complete-manifest.json"
-    ' sh "$ONCE_BIN" "$WORKSPACE"
+    ' sh "$STRUO_BIN" "$WORKSPACE"
     The status should be success
-    The stdout should include 'once.test_schedule.v1'
-    The contents of file "$WORKSPACE/manifest.json" should include 'once.test_manifest.v1'
+    The stdout should include 'struo.test_schedule.v1'
+    The contents of file "$WORKSPACE/manifest.json" should include 'struo.test_manifest.v1'
     The contents of file "$WORKSPACE/manifest.json" should include '"case_filtering":"runner_args"'
     The contents of file "$WORKSPACE/manifest.json" should include 'hello_tests::returns_greeting'
     The contents of file "$WORKSPACE/manifest.json" should include 'hello_tests::other_greeting'
     The stdout should include '/test/batches/'
-    The contents of file "$WORKSPACE/.once/out/hello_tests/test/batches/"*/test_results.json should include '"total":1'
-    The contents of file "$WORKSPACE/.once/out/hello_tests/test/batches/"*/test_results.json should include 'hello_tests::returns_greeting'
-    The contents of file "$WORKSPACE/.once/out/hello_tests/test/batches/"*/test_results.json should not include 'hello_tests::other_greeting'
+    The contents of file "$WORKSPACE/.struo/out/hello_tests/test/batches/"*/test_results.json should include '"total":1'
+    The contents of file "$WORKSPACE/.struo/out/hello_tests/test/batches/"*/test_results.json should include 'hello_tests::returns_greeting'
+    The contents of file "$WORKSPACE/.struo/out/hello_tests/test/batches/"*/test_results.json should not include 'hello_tests::other_greeting'
     The contents of file "$WORKSPACE/complete-manifest.json" should include 'hello_tests::returns_greeting'
     The contents of file "$WORKSPACE/complete-manifest.json" should include 'hello_tests::other_greeting'
   End
 
   It 'rejects an unknown Rust test unit before execution'
     create_multi_rust_test_workspace
-    once --format json test hello_tests >/dev/null
+    struo --format json test hello_tests >/dev/null
 
-    When call once --format json test hello_tests --test-unit 'hello_tests::missing'
+    When call struo --format json test hello_tests --test-unit 'hello_tests::missing'
     The status should be failure
-    The stderr should include '"schema":"once.error.v1"'
+    The stderr should include '"schema":"struo.error.v1"'
     The stderr should include 'is not present in the current manifest'
     The stderr should include 'run the whole target to refresh discovery'
     The stderr should include 'session failed'
@@ -1012,7 +1012,7 @@ JS
   It 'rejects a build-only target while planning tests'
     create_rust_test_workspace
 
-    When call once --format json query test-plan --target hello
+    When call struo --format json query test-plan --target hello
     The status should be failure
     The stderr should include 'target `hello` does not expose the test capability'
     The stderr should include 'session failed'
@@ -1020,11 +1020,11 @@ JS
 
   It 'rejects unsupported test-unit filtering before execution'
     create_shellspec_test_workspace
-    once --format json test cli_e2e >/dev/null
+    struo --format json test cli_e2e >/dev/null
 
-    When call once --format json test cli_e2e --test-unit 'spec/cli_surface_spec.sh:8'
+    When call struo --format json test cli_e2e --test-unit 'spec/cli_surface_spec.sh:8'
     The status should be failure
-    The stderr should include '"schema":"once.error.v1"'
+    The stderr should include '"schema":"struo.error.v1"'
     The stderr should include 'does not support explicit test-unit filtering'
     The stderr should include 'session failed'
   End
@@ -1033,85 +1033,85 @@ JS
     Skip if 'Java toolchain unavailable on this host' java_toolchain_unavailable
     create_android_local_test_workspace
 
-    When call once --format json test libs/greeting/GreetingTests
+    When call struo --format json test libs/greeting/GreetingTests
     The status should be success
     The stdout should include '"target":"libs/greeting/GreetingTests"'
     The stdout should include '"capability":"test"'
-    The path "$WORKSPACE/.once/out/libs/greeting/GreetingTests/test/test_results.json" should be file
-    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingTests/test/test_results.json" should include '"runner":{"type":"android_local"'
-    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingTests/test/test_results.json" should include '"status":"passed"'
-    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingTests/test/test_results.json" should include 'GreetingTest.testMessage'
+    The path "$WORKSPACE/.struo/out/libs/greeting/GreetingTests/test/test_results.json" should be file
+    The contents of file "$WORKSPACE/.struo/out/libs/greeting/GreetingTests/test/test_results.json" should include '"runner":{"type":"android_local"'
+    The contents of file "$WORKSPACE/.struo/out/libs/greeting/GreetingTests/test/test_results.json" should include '"status":"passed"'
+    The contents of file "$WORKSPACE/.struo/out/libs/greeting/GreetingTests/test/test_results.json" should include 'GreetingTest.testMessage'
   End
 
   It 'discovers and runs one stable Kotlin local test unit'
     Skip if 'Java toolchain unavailable on this host' java_toolchain_unavailable
     create_android_local_test_workspace
-    once --format json test libs/greeting/GreetingTests >/dev/null
+    struo --format json test libs/greeting/GreetingTests >/dev/null
 
     When call /bin/sh -c '
-      unit="libs/greeting/GreetingTests::dev.once.greeting.GreetingTest.testMessage"
+      unit="libs/greeting/GreetingTests::dev.struo.greeting.GreetingTest.testMessage"
       "$1" -C "$2" --format json query test-manifest libs/greeting/GreetingTests > "$2/manifest.json" &&
       "$1" -C "$2" --format json test libs/greeting/GreetingTests --test-unit "$unit"
-    ' sh "$ONCE_BIN" "$WORKSPACE"
+    ' sh "$STRUO_BIN" "$WORKSPACE"
     The status should be success
-    The contents of file "$WORKSPACE/manifest.json" should include 'once.test_manifest.v1'
+    The contents of file "$WORKSPACE/manifest.json" should include 'struo.test_manifest.v1'
     The contents of file "$WORKSPACE/manifest.json" should include '"case_filtering":"runner_args"'
-    The stdout should include 'once.test_schedule.v1'
+    The stdout should include 'struo.test_schedule.v1'
     The stdout should include '/test/batches/'
-    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingTests/test/batches/"*/test_results.json should include 'GreetingTest.testMessage'
-    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingTests/test/batches/"*/test_results.json should include '"total":1'
+    The contents of file "$WORKSPACE/.struo/out/libs/greeting/GreetingTests/test/batches/"*/test_results.json should include 'GreetingTest.testMessage'
+    The contents of file "$WORKSPACE/.struo/out/libs/greeting/GreetingTests/test/batches/"*/test_results.json should include '"total":1'
   End
 
   It 'runs Android instrumentation test targets end to end'
     Skip if 'Java toolchain unavailable on this host' java_toolchain_unavailable
     create_android_instrumentation_test_workspace
 
-    When call once --format json test libs/greeting/GreetingDeviceTests
+    When call struo --format json test libs/greeting/GreetingDeviceTests
     The status should be success
     The stdout should include '"target":"libs/greeting/GreetingDeviceTests"'
     The stdout should include '"capability":"test"'
-    The path "$WORKSPACE/.once/out/libs/greeting/GreetingDeviceTests/test/test_results.json" should be file
-    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingDeviceTests/test/test_results.json" should include '"runner":{"type":"android_instrumentation"'
-    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingDeviceTests/test/test_results.json" should include '"status":"passed"'
-    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingDeviceTests/test/test_results.json" should include 'GreetingInstrumentedTest.useAppContext'
+    The path "$WORKSPACE/.struo/out/libs/greeting/GreetingDeviceTests/test/test_results.json" should be file
+    The contents of file "$WORKSPACE/.struo/out/libs/greeting/GreetingDeviceTests/test/test_results.json" should include '"runner":{"type":"android_instrumentation"'
+    The contents of file "$WORKSPACE/.struo/out/libs/greeting/GreetingDeviceTests/test/test_results.json" should include '"status":"passed"'
+    The contents of file "$WORKSPACE/.struo/out/libs/greeting/GreetingDeviceTests/test/test_results.json" should include 'GreetingInstrumentedTest.useAppContext'
   End
 
   It 'runs one stable Android instrumentation test unit'
     Skip if 'Java toolchain unavailable on this host' java_toolchain_unavailable
     create_android_instrumentation_test_workspace
-    once --format json test libs/greeting/GreetingDeviceTests >/dev/null
+    struo --format json test libs/greeting/GreetingDeviceTests >/dev/null
 
     When call /bin/sh -c '
-      unit="libs/greeting/GreetingDeviceTests::dev.once.greeting.GreetingInstrumentedTest.useAppContext"
+      unit="libs/greeting/GreetingDeviceTests::dev.struo.greeting.GreetingInstrumentedTest.useAppContext"
       "$1" -C "$2" --format json test libs/greeting/GreetingDeviceTests --test-unit "$unit"
-    ' sh "$ONCE_BIN" "$WORKSPACE"
+    ' sh "$STRUO_BIN" "$WORKSPACE"
     The status should be success
-    The stdout should include 'once.test_schedule.v1'
+    The stdout should include 'struo.test_schedule.v1'
     The stdout should include '/test/batches/'
-    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingDeviceTests/test/batches/"*/native_results.txt should include '-e class dev.once.greeting.GreetingInstrumentedTest#useAppContext'
-    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingDeviceTests/test/batches/"*/test_results.json should include '"total":1'
+    The contents of file "$WORKSPACE/.struo/out/libs/greeting/GreetingDeviceTests/test/batches/"*/native_results.txt should include '-e class dev.struo.greeting.GreetingInstrumentedTest#useAppContext'
+    The contents of file "$WORKSPACE/.struo/out/libs/greeting/GreetingDeviceTests/test/batches/"*/test_results.json should include '"total":1'
   End
 
   It 'fails Android instrumentation when the device-side process crashes'
     Skip if 'Java toolchain unavailable on this host' java_toolchain_unavailable
     create_android_instrumentation_test_workspace
 
-    When call /bin/sh -c 'ONCE_ANDROID_INSTRUMENTATION_CRASH=1 "$1" -C "$2" --format json test libs/greeting/GreetingDeviceTests' sh "$ONCE_BIN" "$WORKSPACE"
+    When call /bin/sh -c 'STRUO_ANDROID_INSTRUMENTATION_CRASH=1 "$1" -C "$2" --format json test libs/greeting/GreetingDeviceTests' sh "$STRUO_BIN" "$WORKSPACE"
     The status should be failure
-    The stderr should include '"schema":"once.error.v1"'
+    The stderr should include '"schema":"struo.error.v1"'
     The stderr should include 'android_instrumentation_test'
     The stderr should include 'session failed'
-    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingDeviceTests/test/test_results.json" should include '"status":"failed"'
-    The contents of file "$WORKSPACE/.once/out/libs/greeting/GreetingDeviceTests/test/android-instrumentation-test.log" should include 'Process crashed'
+    The contents of file "$WORKSPACE/.struo/out/libs/greeting/GreetingDeviceTests/test/test_results.json" should include '"status":"failed"'
+    The contents of file "$WORKSPACE/.struo/out/libs/greeting/GreetingDeviceTests/test/android-instrumentation-test.log" should include 'Process crashed'
   End
 
   It 'queries normalized shellspec test results'
     create_shellspec_test_workspace
-    once --format json test cli_e2e >/dev/null
+    struo --format json test cli_e2e >/dev/null
 
-    When call once --format json query test-results cli_e2e
+    When call struo --format json query test-results cli_e2e
     The status should be success
-    The stdout should include '"schema":"once.test_results.v1"'
+    The stdout should include '"schema":"struo.test_results.v1"'
     The stdout should include '"target":"cli_e2e"'
     The stdout should include '"status":"passed"'
     The stdout should include '"id":"spec/cli_surface_spec.sh:8"'
@@ -1122,12 +1122,12 @@ JS
 
   It 'queries summarized shellspec test results without case records'
     create_shellspec_test_workspace
-    once --format json test cli_e2e >/dev/null
+    struo --format json test cli_e2e >/dev/null
 
-    When call once --format json query test-results cli_e2e --summary-only
+    When call struo --format json query test-results cli_e2e --summary-only
     The status should be success
-    The stdout should include '"schema":"once.test_results_summary.v1"'
-    The stdout should include '"source_schema":"once.test_results.v1"'
+    The stdout should include '"schema":"struo.test_results_summary.v1"'
+    The stdout should include '"source_schema":"struo.test_results.v1"'
     The stdout should include '"target":"cli_e2e"'
     The stdout should include '"status":"passed"'
     The stdout should not include 'spec/cli_surface_spec.sh:8'

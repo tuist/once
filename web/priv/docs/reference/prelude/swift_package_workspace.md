@@ -10,7 +10,7 @@ tests into the existing Apple target kinds. The package manifest remains
 authoritative for products, target dependencies, source layout, compiler
 settings, resources, and platform constraints.
 
-When a target does not use the default `Sources/<target>` layout, Once asks
+When a target does not use the default `Sources/<target>` layout, Struo asks
 Swift Package Manager for the computed target path, including layouts such as
 `Source/<target>`. Explicit paths remain authoritative.
 
@@ -38,8 +38,8 @@ compiled executable is a declared build output alongside the bundle metadata.
 First-party package executables are also built and staged beside test bundles
 as runtime tools, matching SwiftPM tests that locate example commands there.
 
-Once discovers a workspace automatically from `Package.swift`. A repository
-without `once.toml` can therefore query and build its first-party package
+Struo discovers a workspace automatically from `Package.swift`. A repository
+without `struo.toml` can therefore query and build its first-party package
 targets directly. Discovery skips generated package-manager state such as
 `.build` and `.swiftpm`.
 
@@ -54,7 +54,7 @@ target it exports, even when one target has the same name as the product.
 For source-control dependencies, the resolver uses `Package.resolved` or asks
 Swift Package Manager to create it when it is absent. It materializes the
 pinned sources and lowers their package targets into the same Apple target
-kinds. Once compiles those targets directly with the selected Swift compiler.
+kinds. Struo compiles those targets directly with the selected Swift compiler.
 Swift Package Manager supplies manifest and lockfile metadata, but does not
 build the dependency products. Registry dependencies are not supported by
 native package lowering yet.
@@ -64,7 +64,7 @@ Package Manager hands the linker every object file a target produced. A source
 file whose only contribution is a protocol conformance would otherwise be
 dropped, and the conformance would be missing at runtime.
 
-Package traits follow the declarations in `Package.swift`. Once enables the
+Package traits follow the declarations in `Package.swift`. Struo enables the
 root package's defaults, combines traits requested by all packages that use a
 dependency, and expands traits that enable other traits. Explicit dependency
 trait lists replace that dependency declaration's defaults; an empty list
@@ -102,8 +102,8 @@ build products.
 Inspect the automatically derived graph without writing a manifest:
 
 ```sh
-once query workspace
-once query targets
+struo query workspace
+struo query targets
 ```
 
 To configure the resolver explicitly, author a seed equivalent to:

@@ -1,0 +1,108 @@
+[[target]]
+name = "struo"
+kind = "rust_binary"
+deps = [
+  "crates/struo-cas/struo_cas",
+  "crates/struo-host-tree/struo_host_tree",
+  "crates/struo-core/struo_core",
+  "crates/struo-events-client/struo_events_client",
+  "crates/struo-frontend/struo_frontend",
+  "cargo_dependencies",
+]
+srcs = ["src/**/*.rs"]
+
+[target.attrs]
+crate_name = "struo"
+crate_root = "src/main.rs"
+edition = "2021"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/struo-cli"
+CARGO_PKG_NAME = "struo-cli"
+CARGO_PKG_VERSION = "0.0.0"
+STRUO_VERSION = "0.0.0"
+
+# Tests
+
+[[target]]
+name = "struo_unit_tests"
+kind = "rust_test"
+deps = [
+  "crates/struo-cas/struo_cas",
+  "crates/struo-host-tree/struo_host_tree",
+  "crates/struo-core/struo_core",
+  "crates/struo-events-client/struo_events_client",
+  "crates/struo-frontend/struo_frontend",
+  "cargo_dependencies",
+]
+srcs = ["src/**/*.rs"]
+
+[target.attrs]
+crate_name = "struo"
+crate_root = "src/main.rs"
+edition = "2021"
+cargo_package = "struo-cli"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/struo-cli"
+CARGO_PKG_NAME = "struo-cli"
+CARGO_PKG_VERSION = "0.0.0"
+STRUO_VERSION = "0.0.0"
+
+[[target]]
+name = "lint_tests"
+kind = "rust_test"
+deps = [
+  "crates/struo-cas/struo_cas",
+  "crates/struo-host-tree/struo_host_tree",
+  "crates/struo-core/struo_core",
+  "crates/struo-events-client/struo_events_client",
+  "crates/struo-frontend/struo_frontend",
+  "cargo_dependencies",
+]
+srcs = ["tests/lint.rs"]
+
+[target.dependencies]
+bin_deps = ["crates/struo-cli/struo"]
+
+[target.attrs]
+crate_name = "lint"
+crate_root = "tests/lint.rs"
+edition = "2021"
+cargo_package = "struo-cli"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/struo-cli"
+CARGO_PKG_NAME = "struo-cli"
+CARGO_PKG_VERSION = "0.0.0"
+
+[[target]]
+name = "test_architecture_tests"
+kind = "rust_test"
+deps = [
+  "crates/struo-cas/struo_cas",
+  "crates/struo-host-tree/struo_host_tree",
+  "crates/struo-core/struo_core",
+  "crates/struo-events-client/struo_events_client",
+  "crates/struo-frontend/struo_frontend",
+  "cargo_dependencies",
+]
+srcs = ["tests/test_architecture.rs"]
+
+[target.attrs]
+crate_name = "test_architecture"
+crate_root = "tests/test_architecture.rs"
+edition = "2021"
+cargo_package = "struo-cli"
+# The architecture tests read production sources at run time.
+data = [
+  "src/**/*.rs",
+  "../struo-core/src/**/*.rs",
+  "../struo-events-client/src/**/*.rs",
+  "../struo-frontend/src/**/*.rs",
+]
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/struo-cli"
+CARGO_PKG_NAME = "struo-cli"
+CARGO_PKG_VERSION = "0.0.0"

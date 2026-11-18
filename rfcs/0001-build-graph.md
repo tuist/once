@@ -1,22 +1,22 @@
-# RFC 0001: Once Build Graph
+# RFC 0001: Struo Build Graph
 
 ## Summary
 
-Once is expanding around a graph and action model for repository automation.
+Struo is expanding around a graph and action model for repository automation.
 Scripts remain the adapter for existing work: teams can make automation
 cacheable first, then move the same work into typed graph target kinds when they need
 richer target relationships, queries, diagnostics, and agent-driven edits.
 
 The first product slice should focus on Apple platforms. The goal is to model
 Apple libraries, frameworks, applications, application runs, and tests well
-enough that Once can build and run real iOS, macOS, watchOS, tvOS, and
+enough that Struo can build and run real iOS, macOS, watchOS, tvOS, and
 visionOS workflows over time. Buck2 is the strongest architectural inspiration,
 especially its Rust core, Starlark target kind layer, phase model, query model, and
 incremental computation engine. Bazel and Buck Apple target kinds are the strongest
 domain references for target shapes, providers, toolchain concerns, and common
 Apple build products.
 
-Once should be Buck2-inspired, not Buck2-compatible. It should borrow the good
+Struo should be Buck2-inspired, not Buck2-compatible. It should borrow the good
 architecture while designing the graph, edit API, diagnostics, and query model
 for coding agents from the beginning.
 
@@ -29,10 +29,10 @@ for coding agents from the beginning.
   build outputs.
 - Run tests through an explicit test capability with structured test results.
 - Keep scripts as first-class adapters into the action model instead of
-  replacing the existing `once exec` workflow.
+  replacing the existing `struo exec` workflow.
 - Give agents schema introspection, structured graph operations, structured
   diagnostics, repair suggestions, and explanation queries.
-- Preserve Once's action cache, content-addressed storage, remote execution,
+- Preserve Struo's action cache, content-addressed storage, remote execution,
   and runtime API as the execution substrate.
 
 ## Non-Goals
@@ -46,7 +46,7 @@ for coding agents from the beginning.
 
 ## Product Model
 
-Once has a small set of durable concepts:
+Struo has a small set of durable concepts:
 
 1. Targets: named units in the workspace.
 2. Capabilities: operations a target exposes, such as `build`, `run`, and
@@ -65,7 +65,7 @@ structured test results.
 
 ## Graph Source Of Truth
 
-Canonical `once.toml` files are the at-rest source of truth. The graph is
+Canonical `struo.toml` files are the at-rest source of truth. The graph is
 loaded from files, but agents should not edit those files directly. Agents use
 validated graph operations that rewrite canonical files and return semantic and
 textual diffs for review.
@@ -97,7 +97,7 @@ deps = ["apps/ios/AppKit"]
 
 [target.attrs]
 platform = "ios"
-bundle_id = "dev.once.App"
+bundle_id = "dev.struo.App"
 minimum_os = "17.0"
 resources = ["Resources/**"]
 entitlements = "App.entitlements"
@@ -126,7 +126,7 @@ A target can expose more than one capability. For example:
 - `script`: `run`, and optionally `test` if the script reports tests
 
 Ambiguous capability selection must fail with a structured error that lists the
-available capabilities. Once should not silently choose a default when a target
+available capabilities. Struo should not silently choose a default when a target
 supports multiple workflows.
 
 `run` must declare the build outputs it needs. An app run should depend on the
@@ -218,7 +218,7 @@ should work locally and remotely, even when some actions must run on macOS.
 
 ## Presets, Subtargets, And Visibility
 
-Once should not support arbitrary target-declaration macros. Reusable
+Struo should not support arbitrary target-declaration macros. Reusable
 conventions should be modeled with typed presets and target kind-generated subtargets.
 
 Presets provide schema-checked defaults for matching target kind types. For example, an
@@ -269,7 +269,7 @@ Agents should be able to preview an edit without committing it.
 
 ## Diagnostics And Repairs
 
-Once diagnostics are structured first and raw stderr second. Every diagnostic
+Struo diagnostics are structured first and raw stderr second. Every diagnostic
 should identify as much of the following as possible:
 
 - target id
@@ -299,26 +299,26 @@ visibility, and proposes a structured `graph.add_dep` operation.
 
 ## Queries
 
-The user-facing query surface should be `once query`, with phase-aware query
+The user-facing query surface should be `struo query`, with phase-aware query
 modes rather than Buck or Bazel command names.
 
 Required query families:
 
-- `once query targets`: list declared or configured targets.
-- `once query capabilities <target>`: list build, run, test, output groups,
+- `struo query targets`: list declared or configured targets.
+- `struo query capabilities <target>`: list build, run, test, output groups,
   and required inputs.
-- `once query why-changed <target>`: explain rebuilds, cache reuse, and cache
+- `struo query why-changed <target>`: explain rebuilds, cache reuse, and cache
   misses.
-- `once query why-dep <from> <to>`: explain dependency provenance through
+- `struo query why-dep <from> <to>`: explain dependency provenance through
   direct deps, presets, target kind-generated deps, toolchains, or observed repairs.
-- `once query affected-tests`: combine graph reachability, observed inputs,
+- `struo query affected-tests`: combine graph reachability, observed inputs,
   historical results, and target kind metadata.
-- `once query cost`: estimate rebuild and test cost from historical action
+- `struo query cost`: estimate rebuild and test cost from historical action
   timings, cache hit rates, and local or remote outcomes.
 
 ## Execution And Snapshots
 
-Once actions remain content-addressed and cacheable. Local execution, remote
+Struo actions remain content-addressed and cacheable. Local execution, remote
 execution, and hybrid execution are first-class action properties. Apple support
 must account for platform constraints, especially macOS-only work and simulator
 or device interactions.
@@ -352,11 +352,11 @@ Suggested order:
 
 1. Define typed target, label, attr, capability, output group, provider, and
    diagnostic models in Rust.
-2. Load canonical `once.toml` target declarations without changing existing
+2. Load canonical `struo.toml` target declarations without changing existing
    script execution.
 3. Represent script adapter targets so scripts appear in graph queries.
 4. Add schema introspection for a small built-in Apple target kind set.
-5. Add `once query targets` and `once query capabilities`.
+5. Add `struo query targets` and `struo query capabilities`.
 6. Add configured graph and action graph placeholders for Apple build, run, and
    test capabilities.
 7. Add structured diagnostics before adding broad target kind execution.
@@ -372,7 +372,7 @@ The first proof should show:
 ## Open Questions
 
 - Which Apple target kind names should be final once implementation begins?
-- How much of Xcode project generation should Once avoid, replace, or
+- How much of Xcode project generation should Struo avoid, replace, or
   interoperate with?
 - Should SwiftPM packages be imported as external modules, generated graph
   targets, or both?

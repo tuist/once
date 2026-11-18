@@ -12,7 +12,7 @@ import PackagePlugin
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         if target.name == "CGenerated" {
             let header = root.appending(path: "include/Config.h")
-            let source = root.appending(path: ProcessInfo.processInfo.environment["ONCE_GENERATED_CXX"] == "1" ? "Generated.cpp" : "Generated.c")
+            let source = root.appending(path: ProcessInfo.processInfo.environment["STRUO_GENERATED_CXX"] == "1" ? "Generated.cpp" : "Generated.c")
             return [.buildCommand(displayName: "Generate C configuration", executable: tool,
                 arguments: ["header", header.path, source.path], environment: environment, outputFiles: [header, source])]
         }

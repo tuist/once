@@ -5,7 +5,7 @@ next: false
 
 # C and C++
 
-Once can compile C and C++ sources into object files and archive them as a
+Struo can compile C and C++ sources into object files and archive them as a
 static library. This guide starts with the shipped C library example, then
 shows how the same target accepts C++ sources.
 
@@ -25,7 +25,7 @@ different executable paths.
 
 ## Declare a Static Library
 
-Create `native/math/once.toml`:
+Create `native/math/struo.toml`:
 
 ```toml
 [[target]]
@@ -42,7 +42,7 @@ Use this source layout:
 
 ```text
 native/math/
-├── once.toml
+├── struo.toml
 ├── include/
 │   └── native_math.h
 └── src/
@@ -57,26 +57,26 @@ and consumers include it as `#include "native_math.h"`.
 Inspect the target and the complete `c_library` contract:
 
 ```sh
-once query targets --kind c_library
-once query capabilities native/math/native_math
-once query schema c_library
+struo query targets --kind c_library
+struo query capabilities native/math/native_math
+struo query schema c_library
 ```
 
 The target exposes `build`. There is no shipped C or C++ binary or test target,
-so this guide does not use `once run` or `once test`.
+so this guide does not use `struo run` or `struo test`.
 
 ## Build the Library
 
 Build the static archive:
 
 ```sh
-once build native/math/native_math
+struo build native/math/native_math
 ```
 
 On macOS and Linux, the default archive is
-`.once/out/native/math/native_math/libnative_math.a`. On Windows, it is
-`.once/out/native/math/native_math/native_math.lib`. Compiled objects appear
-under `.once/out/native/math/native_math/objects/` and preserve the source
+`.struo/out/native/math/native_math/libnative_math.a`. On Windows, it is
+`.struo/out/native/math/native_math/native_math.lib`. Compiled objects appear
+under `.struo/out/native/math/native_math/objects/` and preserve the source
 path, which prevents similarly named sources from colliding.
 
 Set `output_name` to change the archive name without changing the target
@@ -98,7 +98,7 @@ hdrs = ["include/native_math.h", "include/native_stats.hpp"]
 includes = ["include"]
 ```
 
-Once selects `cc` for `.c` files and `c++` for `.cc`, `.cpp`, and `.cxx`
+Struo selects `cc` for `.c` files and `c++` for `.cc`, `.cpp`, and `.cxx`
 files. The C++ compiler is not required for a target that contains only C
 sources.
 

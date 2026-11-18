@@ -1,7 +1,7 @@
 #shellcheck shell=bash
-# End-to-end specs for `once toolchain inspect`.
+# End-to-end specs for `struo toolchain inspect`.
 
-Describe 'once toolchain inspect'
+Describe 'struo toolchain inspect'
   BeforeEach 'setup_workspace'
   AfterEach 'cleanup_workspace'
 
@@ -14,7 +14,7 @@ shellspec = "latest"
 [env]
 RUST_BACKTRACE = "1"
 EOF
-    When call once toolchain inspect
+    When call struo toolchain inspect
     The status should be success
     The stdout should include 'source: mise'
     The stdout should include 'config: mise.toml'
@@ -30,7 +30,7 @@ EOF
 [tools]
 rust = "1.86"
 EOF
-    When call "$ONCE_BIN" --format json -C "$WORKSPACE" toolchain inspect
+    When call "$STRUO_BIN" --format json -C "$WORKSPACE" toolchain inspect
     The status should be success
     The stdout should include '"source":"mise"'
     The stdout should include '"config":"mise.toml"'
@@ -50,7 +50,7 @@ EOF
 version = "1.86.0"
 backend = "core:rust"
 EOF
-    When call "$ONCE_BIN" --format json -C "$WORKSPACE" toolchain inspect
+    When call "$STRUO_BIN" --format json -C "$WORKSPACE" toolchain inspect
     The status should be success
     The stdout should include '"lock":"mise.lock"'
     The stdout should include '"locked":'
@@ -72,7 +72,7 @@ backend = "core:rust"
 checksum = "sha256:linux"
 url = "https://example.test/rust-linux.tar.gz"
 EOF
-    When call "$ONCE_BIN" --format json -C "$WORKSPACE" toolchain inspect --platform linux-x64
+    When call "$STRUO_BIN" --format json -C "$WORKSPACE" toolchain inspect --platform linux-x64
     The status should be success
     The stdout should include '"mise":"linux-x64"'
     The stdout should include '"key":"linux-x64"'
@@ -80,7 +80,7 @@ EOF
   End
 
   It 'fails clearly when mise.toml is missing'
-    When call once toolchain inspect
+    When call struo toolchain inspect
     The status should not equal 0
     The stderr should include 'no mise.toml found'
   End

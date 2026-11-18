@@ -3,7 +3,7 @@ title: Correct local and multi-platform Apple dependency graphs
 date: 2026-09-14
 ---
 
-Once now follows transitive local Swift package dependencies without requiring
+Struo now follows transitive local Swift package dependencies without requiring
 a lockfile for an entirely local graph. Remote dependencies introduced by local
 packages still use the root package's dependency resolution.
 

@@ -73,10 +73,10 @@ library but does not need the complete source build.
 
 | Output | Location |
 | --- | --- |
-| Classes jar | `.once/out/<target>/<name>.jar` |
-| AAR | `.once/out/<target>/<name>.aar` |
-| Static resource package | `.once/out/<target>/resources.apk` |
-| R text symbols | `.once/out/<target>/R.txt` |
+| Classes jar | `.struo/out/<target>/<name>.jar` |
+| AAR | `.struo/out/<target>/<name>.aar` |
+| Static resource package | `.struo/out/<target>/resources.apk` |
+| R text symbols | `.struo/out/<target>/R.txt` |
 
 ## Limitations
 
@@ -98,6 +98,6 @@ kind = "android_library"
 srcs = ["src/**/*.kt"]
 
 [target.attrs]
-namespace = "dev.once.greeting"
+namespace = "dev.struo.greeting"
 manifest = "AndroidManifest.xml"
 ```

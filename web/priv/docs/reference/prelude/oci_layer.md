@@ -7,7 +7,7 @@ do not need a Dockerfile or a package-installation step.
 ## Inputs and configuration
 
 Declare source files with `srcs`. The `programs` dependency role accepts
-`once_executable` providers and places their executables in `program_dir`,
+`struo_executable` providers and places their executables in `program_dir`,
 which defaults to `/usr/local/bin`. Source and runtime data use `data_dir`,
 which defaults to `/app`.
 
@@ -27,8 +27,8 @@ Layer order determines which files are visible in the final filesystem.
 Inspect the complete contract and fetch a starter:
 
 ```sh
-once query schema oci_layer
-once query example oci_layer oci-image-minimal
+struo query schema oci_layer
+struo query example oci_layer oci-image-minimal
 ```
 
 Continue with [Container Images](/guide/graph/containers) for an executable,

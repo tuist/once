@@ -5,14 +5,14 @@ next: false
 
 # Go
 
-Once can build Go source groups, package archives, executables, exported C
+Struo can build Go source groups, package archives, executables, exported C
 libraries, and tests. It imports vendored modules as typed graph targets, keeps
 ordinary builds offline, supports destination operating system and architecture
 selection, and exposes normalized test results and coverage.
 
 The target kinds adapt the public [Bazel rules_go](https://github.com/bazel-contrib/rules_go)
 and [Buck2 Go prelude](https://github.com/facebook/buck2/tree/main/prelude/go)
-behavior to Once actions. Once invokes the Go command directly. Source
+behavior to Struo actions. Struo invokes the Go command directly. Source
 selection, module inputs, generated outputs, cache directories, and test
 artifacts stay visible to the action model.
 
@@ -27,7 +27,7 @@ mise exec -- go version
 
 ## Declare a Module
 
-Create `once.toml` beside `go.mod`:
+Create `struo.toml` beside `go.mod`:
 
 ```toml
 [[target]]
@@ -79,7 +79,7 @@ cgo belong under the `cdeps` role.
 ## Import External Modules
 
 Go remains authoritative for version selection and source verification. Update
-and vendor dependencies before an ordinary Once build:
+and vendor dependencies before an ordinary Struo build:
 
 ```sh
 go mod tidy
@@ -92,7 +92,7 @@ those selections against `vendor/modules.txt`. It emits one `go_module` target
 for every vendored module that contributes a package. Each generated target
 carries its exact module path, version, source checksum, package list, and
 complete vendored source tree. The Go vendoring workflow verifies source before
-it is committed, while Once hashes the committed tree into every consuming
+it is committed, while Struo hashes the committed tree into every consuming
 action.
 
 Build and test actions use `-mod=vendor`, `GOPROXY=off`, and `GOSUMDB=off`.
@@ -110,24 +110,24 @@ workspace-relative file.
 Inspect the graph before executing it:
 
 ```sh
-once query target-kinds
-once query schema go_binary
-once query targets --kind go_module
-once query capabilities Hello
+struo query target-kinds
+struo query schema go_binary
+struo query targets --kind go_module
+struo query capabilities Hello
 ```
 
 Then use the shared capability commands:
 
 ```sh
-once build Hello
-once run Hello
-once test GreetingTests
+struo build Hello
+struo run Hello
+struo test GreetingTests
 ```
 
 The test target compiles one native Go test binary, runs it through `go tool
 test2json`, and writes [JavaScript Object Notation](https://www.json.org/json-en.html)
-events, a readable log, and `once.test_results.v1` output. Exact test names from
-`once query test-manifest` can be scheduled independently. Coverage writes a
+events, a readable log, and `struo.test_results.v1` output. Exact test names from
+`struo query test-manifest` can be scheduled independently. Coverage writes a
 native Go coverage profile alongside those results.
 
 ## Cross-Compile and Export Native Libraries
@@ -154,13 +154,13 @@ address sanitizer, profile-guided optimization, stripping, and link-time string
 definitions are also available through typed attributes.
 
 Set `build_mode` to `c-archive` or `c-shared` to expose a Go `main` package to
-native consumers. Once returns the generated header and library through its
+native consumers. Struo returns the generated header and library through its
 generic C provider, including the Android
 [Application Binary Interface](https://developer.android.com/ndk/guides/abis)
 record when `android_abi` is set. Other supported build modes are `exe`, `pie`,
 `plugin`, `shared`, and `archive`.
 
-Cross-compiled executables can be built on the host. `once run` and `once test`
+Cross-compiled executables can be built on the host. `struo run` and `struo test`
 require a binary for the host operating system and architecture. Cross-platform
 cgo also requires destination-compatible `cc` and `c++` commands.
 
@@ -171,5 +171,5 @@ source group, a runnable executable, a Linux cross-compiled executable, exact
 tests with coverage, and the vendored `github.com/pkg/errors` module:
 
 ```sh
-once query example go_binary go-comprehensive --format json
+struo query example go_binary go-comprehensive --format json
 ```

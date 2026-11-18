@@ -1,11 +1,11 @@
 # `zig_configure_binary`
 
-Once-native configured Zig executable target.
+Struo-native configured Zig executable target.
 
 ## Description
 
 Compiles a Zig executable with `zig build-exe`, with configuration declared
-directly on the target. This is the Once shape for configured Zig binaries:
+directly on the target. This is the Struo shape for configured Zig binaries:
 use target attributes such as `mode`, `threaded`, `zig_version`, and `zigopt`
 instead of wrapping another target through a transition.
 

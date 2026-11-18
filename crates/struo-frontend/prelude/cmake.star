@@ -1,0 +1,628 @@
+_CMAKE_BUILD_DRIVER = """
+cmake_minimum_required(VERSION 3.20)
+
+foreach(_struo_required STRUO_SOURCE_DIR STRUO_BUILD_DIR)
+  if(NOT DEFINED ${_struo_required} OR "${${_struo_required}}" STREQUAL "")
+    message(FATAL_ERROR "${_struo_required} is required")
+  endif()
+endforeach()
+
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" "-S" "${STRUO_SOURCE_DIR}" "-B" "${STRUO_BUILD_DIR}"@STRUO_CONFIGURE_ARGS@
+  RESULT_VARIABLE _struo_configure_result
+  COMMAND_ECHO STDOUT
+)
+if(NOT _struo_configure_result EQUAL 0)
+  message(FATAL_ERROR "CMake configuration failed with exit code ${_struo_configure_result}")
+endif()
+
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" "--build" "${STRUO_BUILD_DIR}"@STRUO_BUILD_ARGS@
+  RESULT_VARIABLE _struo_build_result
+  COMMAND_ECHO STDOUT
+)
+if(NOT _struo_build_result EQUAL 0)
+  message(FATAL_ERROR "CMake build failed with exit code ${_struo_build_result}")
+endif()
+"""
+
+def _cmake_attr(ctx, key, default):
+    return _configured_attr(ctx, key, default)
+
+def _cmake_package_path(ctx, path):
+    if not path or path == ".":
+        return ctx["label"]["package"] or "."
+    return _package_relative(ctx, path)
+
+def _cmake_path_attrs(ctx, key):
+    return [_package_relative(ctx, path) for path in _cmake_attr(ctx, key, [])]
+
+def _cmake_globs(patterns):
+    return glob(patterns) if patterns else []
+
+def _cmake_collect(deps, key, own):
+    values = []
+    values.extend(own)
+    for dep in deps:
+        values.extend(dep.get(key) or [])
+    return _unique(values)
+
+# Arguments are rendered as quoted CMake arguments because passing them through
+# a CMake list loses boundaries at `;`, doubles `\`, and merges at unbalanced `[`.
+def _cmake_quoted_args(values):
+    return "".join(["\n    \"" + value.replace("\\", "\\\\").replace("\"", "\\\"").replace("$", "\\$") + "\"" for value in values])
+
+def _cmake_build_driver(generator, build_type, configure_args, build_targets, build_args):
+    configure = (["-G", generator] if generator else []) + (["-DCMAKE_BUILD_TYPE=" + build_type] if build_type else []) + configure_args
+    build = (["--config", build_type] if build_type else []) + (["--target"] + build_targets if build_targets else []) + build_args
+    return _CMAKE_BUILD_DRIVER.replace("@STRUO_CONFIGURE_ARGS@", _cmake_quoted_args(configure)).replace("@STRUO_BUILD_ARGS@", _cmake_quoted_args(build))
+
+def _cmake_product_tokens():
+    os = host_os()
+    return {
+        "{static_prefix}": "" if os == "windows" else "lib",
+        "{static_suffix}": ".lib" if os == "windows" else ".a",
+        "{shared_prefix}": "" if os == "windows" else "lib",
+        "{shared_suffix}": ".dll" if os == "windows" else (".dylib" if os == "macos" else ".so"),
+        "{exe_suffix}": ".exe" if os == "windows" else "",
+    }
+
+def _cmake_product_path(ctx, product):
+    path = product.replace("\\", "/")
+    if not path or path.startswith("/") or (len(path) > 1 and path[1] == ":"):
+        fail(ctx["label"]["id"] + ": CMake product paths must be non-empty and relative to the generated build directory")
+    for component in path.split("/"):
+        if component == "..":
+            fail(ctx["label"]["id"] + ": CMake product path `" + product + "` must stay inside the generated build directory")
+    for token, value in _cmake_product_tokens().items():
+        path = path.replace(token, value)
+    return path
+
+def _cmake_static_library(path):
+    return _ends_with(path, ".a") or _ends_with(path, ".lib")
+
+def _cmake_dynamic_library(path):
+    return _ends_with(path, ".so") or _ends_with(path, ".dylib") or _ends_with(path, ".dll")
+
+def _cmake_project_inputs(ctx, headers):
+    inputs = glob(ctx["srcs"])
+    inputs.extend(headers)
+    inputs.extend(_cmake_globs(_cmake_attr(ctx, "data", [])))
+    for dep in ctx["deps"]:
+        inputs.extend(dep.get("transitive_headers") or [])
+        inputs.extend(dep.get("transitive_static_libraries") or [])
+        inputs.extend(dep.get("transitive_dynamic_libraries") or [])
+        inputs.extend(dep.get("transitive_data") or [])
+    return _unique(inputs)
+
+def _cmake_build_program(ctx, generator):
+    requested = _cmake_attr(ctx, "build_program", "")
+    if not requested and generator == "Ninja":
+        requested = "ninja"
+    if not requested:
+        return ("", "")
+    program = _resolve_host_executable(requested)
+    if not program:
+        fail(ctx["label"]["id"] + ": generated build program `" + requested + "` was not found")
+    return (program, host_command([program, "--version"]).strip())
+
+def _cmake_project_impl(ctx):
+    products = [_cmake_product_path(ctx, product) for product in _cmake_attr(ctx, "products", [])]
+    if not products:
+        fail(ctx["label"]["id"] + ": products must list at least one file produced under the generated CMake build directory")
+
+    cmake = _resolve_host_executable(_cmake_attr(ctx, "cmake", "cmake"))
+    if not cmake:
+        fail(ctx["label"]["id"] + ": CMake executable was not found")
+    version = host_command([cmake, "--version"]).strip()
+    source_dir = _cmake_package_path(ctx, _cmake_attr(ctx, "source_dir", "."))
+    build_root = ctx["scratch_dir"] + "/cmake-build"
+    driver = ctx["scratch_dir"] + "/StruoCMakeBuild.cmake"
+    generator = _cmake_attr(ctx, "generator", "Ninja")
+    build_type = _cmake_attr(ctx, "build_type", "Debug")
+    build_program, build_program_version = _cmake_build_program(ctx, generator)
+    configure_args = _cmake_attr(ctx, "configure_args", [])
+    if build_program:
+        configure_args = ["-DCMAKE_MAKE_PROGRAM:FILEPATH=" + build_program] + configure_args
+    raw_products = [build_root + "/" + product for product in products]
+    headers = _unique(_cmake_path_attrs(ctx, "hdrs") + _cmake_globs(_cmake_attr(ctx, "header_globs", [])))
+    inputs = _cmake_project_inputs(ctx, headers)
+
+    action_env = dict(_cmake_attr(ctx, "env", {}))
+    if not action_env.get("PATH"):
+        action_env["PATH"] = host_env("PATH")
+    write_path(driver, _cmake_build_driver(generator, build_type, configure_args, _cmake_attr(ctx, "build_targets", []), _cmake_attr(ctx, "build_args", [])))
+    run_action(
+        display_name = "Configure and build CMake project · " + ctx["label"]["name"],
+        history = _action_history(ctx, "cmake", "configure-and-build"),
+        presentation = _action_metadata(context = [_action_context("cmake.generator", generator), _action_context("cmake.build_type", build_type)]),
+        source_files = _action_source_files(_unique(inputs + [driver])),
+        argv = [
+            cmake,
+            "-DSTRUO_SOURCE_DIR:PATH=" + execution_path(source_dir),
+            "-DSTRUO_BUILD_DIR:PATH=" + execution_path(build_root),
+            "-P", execution_path(driver),
+        ],
+        inputs = _unique(inputs + [driver]),
+        outputs = raw_products,
+        clean_paths = [build_root],
+        env = action_env,
+        toolchain_identity = "struo.cmake.project.v1\x00" + version + "\x00" + generator + "\x00" + build_program + "\x00" + build_program_version + "\x00" + build_type,
+        cacheable = False,
+        identifier = ctx["label"]["id"] + ":cmake-build",
+    )
+
+    staged_products = []
+    for index in range(len(products)):
+        staged = declare_output("products/" + products[index])
+        copy_path(
+            raw_products[index],
+            staged,
+            inputs = [raw_products[index]],
+            toolchain_identity = "struo.cmake.product.v1",
+            identifier = ctx["label"]["id"] + ":cmake-product:" + products[index],
+            source_files = _action_source_files([raw_products[index]]),
+        )
+        staged_products.append(staged)
+
+    own_static = [path for path in staged_products if _cmake_static_library(path)]
+    own_dynamic = [path for path in staged_products if _cmake_dynamic_library(path)]
+    include_dirs = _cmake_path_attrs(ctx, "includes")
+    defines = _cmake_attr(ctx, "defines", [])
+    linkopts = _cmake_attr(ctx, "linkopts", [])
+    data = _cmake_globs(_cmake_attr(ctx, "data", []))
+    transitive_headers = _cmake_collect(ctx["deps"], "transitive_headers", headers)
+    transitive_include_dirs = _cmake_collect(ctx["deps"], "transitive_include_dirs", include_dirs)
+    transitive_defines = _cmake_collect(ctx["deps"], "transitive_defines", defines)
+    transitive_static = _cmake_collect(ctx["deps"], "transitive_static_libraries", own_static)
+    transitive_dynamic = _cmake_collect(ctx["deps"], "transitive_dynamic_libraries", own_dynamic)
+    transitive_linkopts = _cmake_collect(ctx["deps"], "transitive_linkopts", linkopts)
+    transitive_data = _cmake_collect(ctx["deps"], "transitive_data", data)
+    archive = own_static[0] if own_static else ""
+    return {
+        "cmake_project": True,
+        "c_provider": True,
+        "label_id": ctx["label"]["id"],
+        "target_kind": "cmake_project",
+        "products": staged_products,
+        "archive": archive,
+        "static_library": archive,
+        "static_libraries": own_static,
+        "dynamic_libraries": own_dynamic,
+        "headers": headers,
+        "include_dirs": include_dirs,
+        "defines": defines,
+        "linkopts": linkopts,
+        "transitive_headers": transitive_headers,
+        "transitive_include_dirs": transitive_include_dirs,
+        "transitive_quote_include_dirs": _cmake_collect(ctx["deps"], "transitive_quote_include_dirs", []),
+        "transitive_system_include_dirs": _cmake_collect(ctx["deps"], "transitive_system_include_dirs", []),
+        "transitive_framework_include_dirs": _cmake_collect(ctx["deps"], "transitive_framework_include_dirs", []),
+        "transitive_defines": transitive_defines,
+        "transitive_static_libraries": transitive_static,
+        "transitive_dynamic_libraries": transitive_dynamic,
+        "transitive_linkopts": transitive_linkopts,
+        "transitive_data": transitive_data,
+        "transitive_archives": transitive_static,
+        "affected_inputs": _unique(inputs + transitive_data),
+        "default_output": staged_products[0],
+    }
+
+_CMAKE_TEST_PATH_GUARD = """
+cmake_minimum_required(VERSION 3.20)
+get_filename_component(_struo_expected "${STRUO_EXPECTED_ROOT}" REALPATH)
+get_filename_component(_struo_actual "${STRUO_EXECUTION_ROOT}" REALPATH)
+if(NOT _struo_expected STREQUAL _struo_actual)
+  message(FATAL_ERROR "cmake_test requires execution at its original workspace path; relocated sandbox and remote execution are unsupported")
+endif()
+"""
+
+def _cmake_test_impl(ctx):
+    cmake = _resolve_host_executable(_cmake_attr(ctx, "cmake", "cmake"))
+    test_targets = _cmake_attr(ctx, "test_targets", [])
+    ctest = _resolve_host_executable(_cmake_attr(ctx, "ctest", "ctest")) if not test_targets else ""
+    if not cmake or (not test_targets and not ctest):
+        fail(ctx["label"]["id"] + ": cmake_test requires CMake and, unless test_targets is set, CTest executables")
+    jobs = _cmake_attr(ctx, "jobs", 1)
+    if jobs < 1:
+        fail(ctx["label"]["id"] + ": jobs must be positive")
+    timeout_ms = _cmake_attr(ctx, "timeout_ms", None)
+    if timeout_ms != None and timeout_ms <= 0:
+        fail(ctx["label"]["id"] + ": timeout_ms must be positive")
+    build_root = ctx["build_dir"] + "/cmake-build"
+    test_dir = ctx["build_dir"] + "/test"
+    results = test_dir + "/test_results.json"
+    log = test_dir + ("/cmake-test.log" if test_targets else "/ctest.log")
+    native_results = test_dir + "/ctest.xml"
+    native_artifacts = [] if test_targets else [native_results]
+    suite_name = "CMake test targets" if test_targets else "CTest suite"
+    driver = ctx["scratch_dir"] + "/StruoCTest.cmake"
+    action_env = dict(_cmake_attr(ctx, "env", {}))
+    if not action_env.get("PATH"):
+        action_env["PATH"] = host_env("PATH")
+    if not action_env.get("CMAKE_BUILD_PARALLEL_LEVEL"):
+        action_env["CMAKE_BUILD_PARALLEL_LEVEL"] = str(jobs)
+    path_args = [
+        "-DSTRUO_EXPECTED_ROOT:PATH=" + workspace_root(),
+        "-DSTRUO_EXECUTION_ROOT:PATH=" + execution_path("."),
+    ]
+    argv = [cmake] + path_args + [
+        "-DSTRUO_BUILD_DIR:PATH=" + execution_path(build_root),
+        "-DSTRUO_TEST_DIR:PATH=" + execution_path(test_dir),
+        "-DSTRUO_RESULTS:FILEPATH=" + execution_path(results),
+        "-DSTRUO_LOG:FILEPATH=" + execution_path(log),
+        "-DSTRUO_JUNIT:FILEPATH=" + execution_path(native_results),
+        "-P", execution_path(driver),
+    ]
+    info = {
+        "schema": "struo.test_info.v1",
+        "target": ctx["label"]["id"],
+        "runner": {"type": "cmake_test", "display_name": suite_name, "metadata": {}},
+        "command": {"argv": argv, "env": action_env, "cwd": "."},
+        "outputs": {"results": results, "logs": [log], "native_results": native_artifacts, "coverage": []},
+        "listing": {"supported": False, "strategy": "suite"},
+        "filtering": {"case_filtering": "unsupported"},
+        "sharding": {"supported": False},
+        "retries": {"supported": False, "default_attempts": 1},
+        "execution": {"cacheable": False, "timeout_ms": timeout_ms, "run_from_workspace_root": True},
+        "labels": _cmake_attr(ctx, "labels", []),
+        "metadata": {"counts": "suite", "path_bound": True},
+    }
+    provider = {"label_id": ctx["label"]["id"], "target_kind": "cmake_test", "default_output": build_root, "test_info": info}
+    if ctx["capability"] == "metadata":
+        return provider
+
+    build_type = _cmake_attr(ctx, "build_type", "Debug")
+    generator = _cmake_attr(ctx, "generator", "Ninja")
+    program, program_version = _cmake_build_program(ctx, generator)
+    configure_args = _cmake_attr(ctx, "configure_args", [])
+    if program:
+        configure_args = ["-DCMAKE_MAKE_PROGRAM:FILEPATH=" + program] + configure_args
+    inputs = _unique(glob(ctx["srcs"]) + _cmake_globs(_cmake_attr(ctx, "data", [])))
+    identity = "struo.cmake.test.v1\x00" + host_os() + "\x00" + host_arch() + "\x00" + content_sha256(workspace_root()) + "\x00" + host_command([cmake, "--version"]) + "\x00" + program_version
+    build_driver = ctx["scratch_dir"] + "/StruoCTestBuild.cmake"
+    write_path(build_driver, _CMAKE_TEST_PATH_GUARD + _cmake_build_driver(generator, build_type, configure_args, _cmake_attr(ctx, "build_targets", []), ["--parallel", str(jobs)]))
+    run_action(
+        argv = [cmake] + path_args + [
+            "-DSTRUO_SOURCE_DIR:PATH=" + execution_path(_cmake_package_path(ctx, _cmake_attr(ctx, "source_dir", "."))),
+            "-DSTRUO_BUILD_DIR:PATH=" + execution_path(build_root),
+            "-P", execution_path(build_driver),
+        ],
+        inputs = inputs + [build_driver],
+        outputs = [build_root],
+        clean_paths = [build_root],
+        env = action_env,
+        toolchain_identity = identity,
+        cacheable = False,
+        resources = {"cpu_slots": jobs, "memory_bytes": jobs * 1024 * 1024 * 1024},
+        identifier = ctx["label"]["id"] + ":cmake-test-build",
+        display_name = "Build CMake test suite · " + ctx["label"]["name"],
+    )
+    test_argv = [ctest, "--test-dir", "${STRUO_BUILD_DIR}", "--build-config", build_type, "--parallel", str(jobs), "--output-on-failure", "--no-tests=error", "--output-junit", "${STRUO_JUNIT}"]
+    if test_targets:
+        test_argv = [cmake, "--build", "${STRUO_BUILD_DIR}", "--config", build_type, "--parallel", str(jobs), "--target"] + test_targets
+    command = " ".join(['"' + arg.replace("\\", "\\\\").replace('"', '\\"') + '"' for arg in test_argv])
+    normalized = '{"schema":"struo.test_results.v1","target":' + _json_string(ctx["label"]["id"]) + ',"runner":{"type":"cmake_test","metadata":{}},"status":"@status@","summary":{"total":1,"passed":@passed@,"failed":@failed@,"skipped":0,"flaky":0},"cases":[{"id":' + _json_string(ctx["label"]["id"] + "::suite") + ',"name":' + _json_string(ctx["label"]["name"]) + ',"suite":' + _json_string(ctx["label"]["id"]) + ',"status":"@status@","attempts":[{"status":"@status@"}],"runner_metadata":{}}],"artifacts":{"logs":[' + _json_string(log) + '],"native_results":[' + ",".join([_json_string(path) for path in native_artifacts]) + ']}}'
+    timeout = " TIMEOUT " + str(timeout_ms) + "e-3" if timeout_ms != None else ""
+    write_path(driver, _CMAKE_TEST_PATH_GUARD + """
+file(MAKE_DIRECTORY "${STRUO_TEST_DIR}")
+execute_process(COMMAND """ + command + """
+  RESULT_VARIABLE code OUTPUT_FILE "${STRUO_LOG}" ERROR_FILE "${STRUO_LOG}"
+  """ + timeout + """
+)
+if(code EQUAL 0)
+  set(status passed)
+  set(passed 1)
+  set(failed 0)
+else()
+  set(status failed)
+  set(passed 0)
+  set(failed 1)
+  file(APPEND "${STRUO_LOG}" "\\nCMake test runner failed: ${code}\\n")
+endif()
+set(normalized [====[""" + normalized + """ ]====])
+string(CONFIGURE "${normalized}" normalized @ONLY)
+file(WRITE "${STRUO_RESULTS}" "${normalized}\\n")
+file(READ "${STRUO_LOG}" output LIMIT 65536)
+message("${output}")
+file(SIZE "${STRUO_LOG}" output_size)
+if(output_size GREATER 65536)
+  message("CMake test console output truncated; full output is retained in ${STRUO_LOG}")
+endif()
+if(NOT code EQUAL 0)
+  message(FATAL_ERROR "CMake test runner failed: ${code}")
+endif()
+""")
+    if ctx["capability"] == "test":
+        run_action(
+            argv = argv,
+            inputs = _unique([build_root, driver] + inputs),
+            outputs = [test_dir],
+            clean_paths = [test_dir],
+            env = action_env,
+            toolchain_identity = identity + "\x00" + (host_command([ctest, "--version"]) if ctest else "cmake-test-targets"),
+            cacheable = False,
+            resources = {"cpu_slots": jobs, "memory_bytes": jobs * 1024 * 1024 * 1024},
+            identifier = ctx["label"]["id"] + ":ctest-run",
+            display_name = "Run " + suite_name + " · " + ctx["label"]["name"],
+        )
+    return provider
+
+def _cmake_resolver_file(ctx, path, description):
+    key = path[2:] if path.startswith("./") else path
+    content = (ctx.get("files") or {}).get(key)
+    if content == None:
+        fail(ctx["label"]["id"] + ": " + description + " `" + path + "` must be included in resolver_inputs, or srcs when resolver_inputs is omitted")
+    return content
+
+def _cmake_snapshot_inputs(ctx):
+    attrs = ctx.get("attrs") or ctx.get("attr") or {}
+    return _resolver_snapshot_inputs(ctx.get("files") or {}, [attrs.get("snapshot") or ""])
+
+def _cmake_snapshot_selection(ctx):
+    attrs = ctx.get("attrs") or ctx.get("attr") or {}
+    return {
+        "source_dir": attrs.get("source_dir") or ".",
+        "generator": attrs.get("generator") or "Ninja",
+        "build_type": attrs.get("build_type") or "Debug",
+    }
+
+def _cmake_validate_snapshot(ctx, snapshot, path):
+    if snapshot.get("schema") != "struo.cmake.snapshot.v1":
+        fail(ctx["label"]["id"] + ": CMake snapshot `" + path + "` must use schema `struo.cmake.snapshot.v1`")
+    binding = snapshot.get("struo_snapshot")
+    if type(binding) != type({}):
+        fail(ctx["label"]["id"] + ": CMake snapshot `" + path + "` has no struo_snapshot provenance")
+    expected_inputs = _cmake_snapshot_inputs(ctx)
+    bound_inputs = binding.get("inputs")
+    if type(bound_inputs) != type({}) or sorted(bound_inputs.keys()) != sorted(expected_inputs.keys()):
+        fail(ctx["label"]["id"] + ": CMake snapshot `" + path + "` input set does not match resolver_inputs")
+    for input_path, content in expected_inputs.items():
+        if bound_inputs.get(input_path) != content:
+            fail(ctx["label"]["id"] + ": CMake snapshot `" + path + "` is stale relative to `" + input_path + "`")
+    selection = binding.get("selection")
+    if type(selection) != type({}):
+        fail(ctx["label"]["id"] + ": CMake snapshot `" + path + "` has no configuration selection provenance")
+    for key, value in _cmake_snapshot_selection(ctx).items():
+        if selection.get(key) != value:
+            fail(ctx["label"]["id"] + ": CMake snapshot `" + path + "` selection `" + key + "` does not match the target")
+    if not binding.get("fingerprint"):
+        fail(ctx["label"]["id"] + ": CMake snapshot `" + path + "` has no normalized fingerprint")
+
+def _cmake_snapshot_targets(snapshot):
+    targets = snapshot.get("targets")
+    if type(targets) != type([]):
+        fail("CMake snapshot targets must be a list")
+    by_name = {}
+    for target in targets:
+        if type(target) != type({}):
+            fail("CMake snapshot targets must contain only records")
+        name = target.get("struo_name")
+        if not name:
+            fail("CMake snapshot target has no struo_name")
+        if name in by_name:
+            fail("CMake snapshot contains duplicate target `" + name + "`")
+        by_name[name] = target
+    for target in targets:
+        for dep in target.get("deps") or []:
+            if dep not in by_name:
+                fail("CMake snapshot target `" + target["struo_name"] + "` references missing dependency `" + dep + "`")
+    return (targets, by_name)
+
+def _cmake_selected_target_names(ctx, snapshot, targets, by_name):
+    requested = (ctx.get("attrs") or {}).get("exports") or snapshot.get("exports") or []
+    selected = {}
+    for value in requested:
+        match = value if value in by_name else ""
+        if not match:
+            for target in targets:
+                if target.get("name") == value:
+                    match = target["struo_name"]
+                    break
+        if not match:
+            fail(ctx["label"]["id"] + ": requested CMake export `" + value + "` is absent from the snapshot")
+        selected[match] = True
+    if not selected:
+        for target in targets:
+            selected[target["struo_name"]] = True
+    for _ in range(len(targets) + 1):
+        for target in targets:
+            if selected.get(target["struo_name"]):
+                for dep in target.get("deps") or []:
+                    selected[dep] = True
+    return selected
+
+def _cmake_target_spec(target):
+    return {
+        "name": target["struo_name"],
+        "kind": "cmake_target",
+        "deps": target.get("deps") or [],
+        "srcs": target.get("sources") or [],
+        "attrs": {
+            "cmake_name": target.get("name") or target["struo_name"],
+            "cmake_type": target.get("type") or "",
+            "artifacts": target.get("artifacts") or [],
+            "include_dirs": target.get("include_dirs") or [],
+            "compile_definitions": target.get("compile_definitions") or [],
+            "snapshot_fingerprint": target.get("snapshot_fingerprint") or "",
+            "_cmake_resolved": True,
+        },
+    }
+
+def _cmake_workspace_resolver(ctx):
+    attrs = ctx.get("attrs") or {}
+    path = attrs.get("snapshot") or ""
+    if not path:
+        fail(ctx["label"]["id"] + ": snapshot is required")
+    snapshot = json_decode(_cmake_resolver_file(ctx, path, "CMake snapshot"))
+    _cmake_validate_snapshot(ctx, snapshot, path)
+    targets, by_name = _cmake_snapshot_targets(snapshot)
+    selected = _cmake_selected_target_names(ctx, snapshot, targets, by_name)
+    specs = [_cmake_target_spec(target) for target in targets if selected.get(target["struo_name"])]
+    roots = []
+    requested = attrs.get("exports") or snapshot.get("exports") or []
+    if requested:
+        for value in requested:
+            if value in by_name:
+                roots.append(value)
+            else:
+                for target in targets:
+                    if target.get("name") == value:
+                        roots.append(target["struo_name"])
+                        break
+    else:
+        roots = [spec["name"] for spec in specs]
+    binding = snapshot["struo_snapshot"]
+    return {
+        "targets": specs,
+        "roots": _unique(roots),
+        "attrs": {
+            "_cmake_resolved": True,
+            "_cmake_snapshot_fingerprint": binding["fingerprint"],
+            "_cmake_exports": _unique(roots),
+        },
+    }
+
+def _cmake_workspace_impl(ctx):
+    if not _cmake_attr(ctx, "_cmake_resolved", False):
+        fail(ctx["label"]["id"] + ": cmake_workspace must be expanded by its graph resolver before analysis")
+    return {
+        "cmake_workspace": True,
+        "label_id": ctx["label"]["id"],
+        "snapshot_fingerprint": _cmake_attr(ctx, "_cmake_snapshot_fingerprint", ""),
+        "exports": _cmake_attr(ctx, "_cmake_exports", []),
+        "targets": ctx["deps"],
+    }
+
+def _cmake_target_impl(ctx):
+    if not _cmake_attr(ctx, "_cmake_resolved", False):
+        fail(ctx["label"]["id"] + ": cmake_target is resolver-owned and must come from cmake_workspace")
+    return {
+        "cmake_target": True,
+        "label_id": ctx["label"]["id"],
+        "cmake_name": _cmake_attr(ctx, "cmake_name", ctx["label"]["name"]),
+        "cmake_type": _cmake_attr(ctx, "cmake_type", ""),
+        "artifacts": _cmake_attr(ctx, "artifacts", []),
+        "sources": glob(ctx["srcs"]),
+        "include_dirs": _cmake_attr(ctx, "include_dirs", []),
+        "compile_definitions": _cmake_attr(ctx, "compile_definitions", []),
+        "snapshot_fingerprint": _cmake_attr(ctx, "snapshot_fingerprint", ""),
+        "dependencies": [dep.get("label_id") for dep in ctx["deps"]],
+    }
+
+_CMAKE_EXAMPLES = [
+    example(
+        "cmake-project-minimal",
+        name = "CMake static library bridge",
+        use_when = "Use this when CMake remains authoritative while Struo builds declared products and imports a checked logical target snapshot.",
+    ),
+]
+
+_CMAKE_SOURCE_REFERENCES = [
+    source_reference(
+        "CMake",
+        "cmake",
+        "https://cmake.org/cmake/help/latest/manual/cmake.1.html",
+        "Use this for the authoritative configure and generated-build invocation contract.",
+    ),
+    source_reference(
+        "CMake",
+        "file-based application programming interface",
+        "https://cmake.org/cmake/help/latest/manual/cmake-file-api.7.html",
+        "Use this to import configured targets, dependencies, sources, artifacts, and toolchain metadata without parsing CMakeLists.txt.",
+    ),
+]
+
+cmake_project = target_kind(
+    docs = "Coarse bridge that keeps CMake authoritative, runs uncached configure and build, stages only declared products, and exposes native link providers. Compiler selection remains native to CMake and is not assumed from default host tools.",
+    attrs = [
+        attr("cmake", "string", default = "\"cmake\"", docs = "CMake executable name, absolute path, or workspace-relative path.", configurable = False),
+        attr("source_dir", "string", default = "\".\"", docs = "Package-relative CMake source directory.", configurable = False),
+        attr("generator", "string", default = "\"Ninja\"", docs = "CMake generated-build backend.", configurable = False),
+        attr("build_program", "string", docs = "Generated-build executable. Defaults to resolving `ninja` for the Ninja generator.", configurable = False),
+        attr("build_type", "string", default = "\"Debug\"", docs = "CMake build configuration passed during configure and build."),
+        attr("configure_args", "list<string>", default = "[]", docs = "Additional arguments passed to CMake configuration. Each item is one argument, so `-DNAME=a;b` sets a CMake list.", configurable = False),
+        attr("build_targets", "list<string>", default = "[]", docs = "Optional native CMake targets passed to the generated build.", configurable = False),
+        attr("build_args", "list<string>", default = "[]", docs = "Additional arguments passed to `cmake --build`, each item as one argument.", configurable = False),
+        attr("products", "list<string>", required = True, docs = "Files expected under the generated build directory. Product tokens support static, shared, and executable platform suffixes.", configurable = False),
+        attr("hdrs", "list<string>", default = "[]", docs = "Public package-relative headers exposed to native dependents.", configurable = False),
+        attr("header_globs", "list<string>", default = "[]", docs = "Public header glob patterns exposed to native dependents.", configurable = False),
+        attr("includes", "list<string>", default = "[]", docs = "Public include directories propagated to native dependents.", configurable = False),
+        attr("defines", "list<string>", default = "[]", docs = "Preprocessor definitions propagated to native dependents.", configurable = False),
+        attr("linkopts", "list<string>", default = "[]", docs = "Linker options propagated to native dependents.", configurable = False),
+        attr("data", "list<string>", default = "[]", docs = "Runtime data globs propagated to dependents.", configurable = False),
+        attr("env", "map<string,string>", default = "{}", docs = "Environment variables passed to CMake configuration and build.", configurable = False),
+    ],
+    deps = [dep("deps", ["c_provider"], "Native dependency files included in the CMake action input tree.")],
+    providers = ["cmake_project", "c_provider", "native_linkable", "apple_linkable"],
+    capabilities = [capability("build", ["default", "products", "library"])],
+    tools = [tool("cmake")],
+    examples = _CMAKE_EXAMPLES,
+    source_references = _CMAKE_SOURCE_REFERENCES,
+    impl = _cmake_project_impl,
+)
+
+cmake_test = target_kind(
+    docs = "Builds and runs a CTest suite or explicit native CMake test targets uncached at its original local workspace path, preserving native compiler selection. Reports suite-level results, native JUnit for CTest, and normalized failure on timeout.",
+    attrs = [
+        attr("cmake", "string", default = "\"cmake\"", docs = "CMake executable name or path.", configurable = False),
+        attr("ctest", "string", default = "\"ctest\"", docs = "CTest executable name or path, requiring CTest 3.21 or newer.", configurable = False),
+        attr("source_dir", "string", default = "\".\"", docs = "Package-relative CMake source directory.", configurable = False),
+        attr("generator", "string", default = "\"Ninja\"", docs = "CMake generated-build backend.", configurable = False),
+        attr("build_program", "string", docs = "Generated-build executable. Defaults to ninja for Ninja.", configurable = False),
+        attr("build_type", "string", default = "\"Debug\"", docs = "Build configuration, preserving native debug information."),
+        attr("configure_args", "list<string>", default = "[]", docs = "Additional CMake configure arguments. Enable upstream tests here. Each item is one argument, so `-DNAME=a;b` sets a CMake list.", configurable = False),
+        attr("build_targets", "list<string>", default = "[]", docs = "Optional native build targets. Defaults to building all targets, including test executables.", configurable = False),
+        attr("test_targets", "list<string>", default = "[]", docs = "Native CMake targets to execute as the test suite through cmake --build. Empty uses CTest with no-tests=error. Explicit targets own test discovery and failure reporting; no native JUnit is assumed.", configurable = False),
+        attr("jobs", "int", default = "1", docs = "Native build and CTest concurrency, reserved through the action resource pool.", configurable = False),
+        attr("data", "list<string>", default = "[]", docs = "Runtime and configuration input globs.", configurable = False),
+        attr("env", "map<string,string>", default = "{}", docs = "Declared build and test environment.", configurable = False),
+        attr("labels", "list<string>", default = "[]", docs = "Labels exposed through test discovery.", configurable = False),
+        attr("timeout_ms", "int", docs = "Optional positive suite timeout in milliseconds, excluding configure and build. A timeout retains normalized failed results; native JUnit may be incomplete.", configurable = False),
+    ],
+    providers = ["struo_test_info"],
+    capabilities = [capability("build", ["default"]), capability("test", ["default"])],
+    tools = [tool("cmake"), tool("ctest")],
+    examples = [example("cmake-test-minimal", name = "CTest suite", use_when = "Keep an existing CMake test suite authoritative and report one normalized suite with native JUnit.")],
+    source_references = _CMAKE_SOURCE_REFERENCES,
+    impl = _cmake_test_impl,
+)
+
+cmake_workspace = target_kind(
+    docs = "Imports a checked CMake file-interface snapshot as queryable synthetic targets while leaving execution with cmake_project.",
+    attrs = [
+        attr("snapshot", "string", required = True, docs = "Package-relative normalized CMake snapshot with exact resolver-input provenance.", configurable = False),
+        attr("resolver_inputs", "list<string>", default = "[]", docs = "Package-relative text globs supplied to the resolver. Include the snapshot and every bound configuration input.", configurable = False),
+        attr("source_dir", "string", default = "\".\"", docs = "Package-relative source directory recorded in snapshot selection provenance.", configurable = False),
+        attr("generator", "string", default = "\"Ninja\"", docs = "CMake generated-build backend recorded in snapshot selection provenance.", configurable = False),
+        attr("build_type", "string", default = "\"Debug\"", docs = "CMake build configuration recorded in snapshot selection provenance."),
+        attr("exports", "list<string>", default = "[]", docs = "CMake names or generated Struo names to expose. Defaults to snapshot exports.", configurable = False),
+        attr("_cmake_resolved", "bool", default = "false", docs = "Resolver-owned marker indicating that the snapshot was expanded.", configurable = False),
+        attr("_cmake_snapshot_fingerprint", "string", docs = "Resolver-owned normalized snapshot fingerprint.", configurable = False),
+        attr("_cmake_exports", "list<string>", default = "[]", docs = "Resolver-owned generated export names.", configurable = False),
+    ],
+    deps = [dep("deps", ["cmake_target"], "Resolver-generated logical CMake targets.")],
+    providers = ["cmake_workspace"],
+    examples = _CMAKE_EXAMPLES,
+    source_references = _CMAKE_SOURCE_REFERENCES,
+    resolver = _cmake_workspace_resolver,
+    impl = _cmake_workspace_impl,
+)
+
+cmake_target = target_kind(
+    docs = "Resolver-generated logical CMake target used for graph queries, dependency explanations, and affected-input reasoning.",
+    attrs = [
+        attr("cmake_name", "string", required = True, docs = "Original configured CMake target name.", configurable = False),
+        attr("cmake_type", "string", required = True, docs = "Configured CMake target type.", configurable = False),
+        attr("artifacts", "list<string>", default = "[]", docs = "Normalized artifacts reported by CMake.", configurable = False),
+        attr("include_dirs", "list<string>", default = "[]", docs = "Normalized include directories reported by CMake.", configurable = False),
+        attr("compile_definitions", "list<string>", default = "[]", docs = "Configured compile definitions reported by CMake.", configurable = False),
+        attr("snapshot_fingerprint", "string", required = True, docs = "Normalized snapshot fingerprint shared by imported targets.", configurable = False),
+        attr("_cmake_resolved", "bool", default = "false", docs = "Resolver-owned marker preventing direct manifest authoring.", configurable = False),
+    ],
+    deps = [dep("deps", ["cmake_target"], "Configured logical CMake target dependencies.")],
+    providers = ["cmake_target"],
+    examples = _CMAKE_EXAMPLES,
+    source_references = _CMAKE_SOURCE_REFERENCES,
+    impl = _cmake_target_impl,
+)

@@ -3,7 +3,7 @@ title: Terminal status, live links, and smoother progress
 date: 2026-10-08
 ---
 
-Once now reports whether a build, test, lint, or run command is working,
+Struo now reports whether a build, test, lint, or run command is working,
 finished, or failed to supporting terminals. Terminals can display that state
 without interpreting spinner characters or command output, and status reporting
 works without a reporting account or network connection.

@@ -1,6 +1,6 @@
 # Live run event protocol
 
-This reference is generated from the versioned wire definition during the documentation build. It describes the service, event variants, fields, and enum values shipped by Once.
+This reference is generated from the versioned wire definition during the documentation build. It describes the service, event variants, fields, and enum values shipped by Struo.
 
 The client publishes ordered batches and the service acknowledges the contiguous durable frontier. The server may return a dashboard link after run creation.
 
@@ -209,7 +209,7 @@ Every call carries the bearer token in the `authorization` metadata. Clients als
 | --- | --- | ---: | --- |
 | `external_group_id` | `string` | 1 | Coordinator-owned UUID, empty for native portable execution. |
 | `partition_index` | `uint32` | 2 | Nonnegative coordinator partition, meaningful only with an external group. |
-| `plan_id` | `string` | 3 | Original portable Once plan identity, shared by all assigned partitions. |
+| `plan_id` | `string` | 3 | Original portable Struo plan identity, shared by all assigned partitions. |
 | `batch_id` | `string` | 4 | Native semantic batch identity, never a case identity or worker number. |
 
 ## message `ArgvToken`

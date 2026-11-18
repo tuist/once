@@ -12,7 +12,7 @@ Locked external packages use the same fine-grained lowering as
 `cargo_dependencies`.
 
 Cargo remains authoritative for workspace membership, targets, features,
-renamed dependencies, build scripts, versions, and checksums. By default, Once
+renamed dependencies, build scripts, versions, and checksums. By default, Struo
 snapshots locked external package trees from Cargo's local cache into each
 target's output. The repository stays unchanged. A pre-existing vendored source
 directory can be selected explicitly.
@@ -28,7 +28,7 @@ with Cargo separately. Each generated test runs from its own package root
 and receives a `CARGO_BIN_EXE_<name>` entry for every binary in its package,
 matching what Cargo gives an integration test. Entries in the `[env]` table of
 Cargo configuration reach the compiler, the build scripts, the test processes,
-and `once run`.
+and `struo run`.
 
 Packages are compiled once for the execution host. A second, host-only build
 of a package appears only when it would differ: when `target` names something
@@ -48,7 +48,7 @@ dependencies outside that list remain ordinary dependency targets.
 | `resolver_inputs` | list&lt;string&gt; | no | `srcs` | Text inputs available while deriving the graph |
 | `metadata_file` | string | no |  | Optional checked Cargo metadata snapshot |
 | `host_metadata_file` | string | no |  | Optional host metadata snapshot for cross-compilation |
-| `vendor_dir` | string | no | Once-managed | Optional package-relative pre-vendored external sources |
+| `vendor_dir` | string | no | Struo-managed | Optional package-relative pre-vendored external sources |
 | `build_script_sources` | map&lt;string, map&lt;string, string&gt;&gt; | no | `{}` | External consumer selector to sibling destination to locked package source file; see [sibling sources](/guide/graph/rust/#build-scripts-that-read-sibling-packages) |
 | `features` | list&lt;string&gt; | no | `[]` | Selected Cargo features |
 | `all_features` | bool | no | `false` | Select every Cargo feature |
@@ -73,17 +73,17 @@ The target emits `cargo_workspace`.
 ## Direct Use
 
 On a fresh clone, the first graph load can access the network while Cargo
-resolves or downloads dependencies. Once then imports the pinned graph from
+resolves or downloads dependencies. Struo then imports the pinned graph from
 `Cargo.lock` and Cargo's local source cache.
 
 Inspect the automatically derived graph:
 
 ```sh
-once query workspace
-once query targets
+struo query workspace
+struo query targets
 ```
 
-No `once.toml` is required. To configure the resolver explicitly, author a
+No `struo.toml` is required. To configure the resolver explicitly, author a
 target equivalent to:
 
 ```toml
@@ -96,7 +96,7 @@ srcs = ["Cargo.toml"]
 resolver_inputs = ["Cargo.toml", "Cargo.lock", "**/Cargo.toml", ".cargo/config", ".cargo/config.toml"]
 ```
 
-Keep this seed as the only Once target while Cargo metadata describes the
+Keep this seed as the only Struo target while Cargo metadata describes the
 complete build. Add explicit targets beside it for exceptional cross-language
 or packaging boundaries. Use a project Starlark module only when those
 exceptions share reusable behavior that the built-in target kinds cannot

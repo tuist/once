@@ -4,7 +4,7 @@ date: 2026-11-12
 ---
 
 Jest and Vitest targets no longer fail an ordinary complete run just because
-multiple assertions share a full test name in the same file. Once keeps the
+multiple assertions share a full test name in the same file. Struo keeps the
 complete native report and reports one whole-target result instead, preserving
 native failures and successful action caching.
 

@@ -8,7 +8,7 @@ public struct Greeting: Sendable {
     }
 
     public static let demo = Greeting(
-        title: "Hello from Once",
+        title: "Hello from Struo",
         subtitle: "Built without Xcode projects."
     )
 }

@@ -1,4 +1,4 @@
-This is a Phoenix application that serves the Once marketing site and the documentation (under `/docs`).
+This is a Phoenix application that serves the Struo marketing site and the documentation (under `/docs`).
 
 ## CSS And Styling
 

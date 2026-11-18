@@ -6,11 +6,11 @@ next:
 
 # Manual Cache Access
 
-Annotated scripts are the usual way to cache automation because Once owns the
-lookup, execution, and output restoration. Use `once cache` when an existing
+Annotated scripts are the usual way to cache automation because Struo owns the
+lookup, execution, and output restoration. Use `struo cache` when an existing
 tool must perform those steps itself or when you need to inspect the cache.
 
-Once exposes two related stores:
+Struo exposes two related stores:
 
 - The blob cache stores bytes under their content digest.
 - The action cache maps a digest of declared inputs to an exit code, captured
@@ -24,15 +24,15 @@ Put a file or standard input into the blob cache. The command prints its
 [BLAKE3](https://www.blake3.io/) content digest:
 
 ```sh
-digest=$(printf 'hello from Once\n' | once cache blob put)
+digest=$(printf 'hello from Struo\n' | struo cache blob put)
 printf '%s\n' "$digest"
 ```
 
 Use that digest to check for the blob and retrieve it:
 
 ```sh
-once cache blob exists "$digest"
-once cache blob get "$digest"
+struo cache blob exists "$digest"
+struo cache blob get "$digest"
 ```
 
 `exists` exits with status zero when the blob is present and status one when it
@@ -58,13 +58,13 @@ inputs=(
   --input package-lock.json
 )
 
-if once cache action get "${inputs[@]}" --if-success; then
+if struo cache action get "${inputs[@]}" --if-success; then
   printf 'tests already passed for these inputs\n'
   exit 0
 fi
 
 npm test
-once cache action put "${inputs[@]}"
+struo cache action put "${inputs[@]}"
 ```
 
 `put` records exit code zero by default. The next lookup succeeds only when the
@@ -74,13 +74,13 @@ Use an output mapping when the result includes an artifact:
 
 ```sh
 artifact_inputs=(--input src --input package-lock.json)
-artifact_digest=$(once cache blob put build/archive.tar)
-once cache action put "${artifact_inputs[@]}" \
+artifact_digest=$(struo cache blob put build/archive.tar)
+struo cache action put "${artifact_inputs[@]}" \
   --output build/archive.tar="$artifact_digest"
 ```
 
 Read the action result with `--format json` to obtain the output digest, then
-pass that digest to `once cache blob get` when restoring the artifact.
+pass that digest to `struo cache blob get` when restoring the artifact.
 
 ## Input Declarations
 
@@ -99,14 +99,14 @@ key from declaring `b` followed by `a`.
 
 | Command | Purpose |
 | --- | --- |
-| `once cache blob put [<path>]` | Stores bytes from a file or standard input and prints the digest. |
-| `once cache blob get <digest>` | Retrieves bytes by digest. |
-| `once cache blob exists <digest>` | Checks whether a digest is present. |
-| `once cache action get --input <declaration> ...` | Looks up a result derived from ordered inputs. |
-| `once cache action get ... --if-success` | Succeeds only for a hit whose recorded exit code is zero. |
-| `once cache action put --input <declaration> ...` | Records an action result and optional stream or output digests. |
-| `once cache action forget <digest>` | Removes an action result by its precomputed digest. |
-| `once cache stats` | Reports entry counts and local disk usage. |
+| `struo cache blob put [<path>]` | Stores bytes from a file or standard input and prints the digest. |
+| `struo cache blob get <digest>` | Retrieves bytes by digest. |
+| `struo cache blob exists <digest>` | Checks whether a digest is present. |
+| `struo cache action get --input <declaration> ...` | Looks up a result derived from ordered inputs. |
+| `struo cache action get ... --if-success` | Succeeds only for a hit whose recorded exit code is zero. |
+| `struo cache action put --input <declaration> ...` | Records an action result and optional stream or output digests. |
+| `struo cache action forget <digest>` | Removes an action result by its precomputed digest. |
+| `struo cache stats` | Reports entry counts and local disk usage. |
 
 Blob reads and action lookups use the remote provider configured for the
 workspace when the requested data is not available locally.

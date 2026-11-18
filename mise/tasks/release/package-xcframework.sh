@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-#MISE description="Build and package the Once XCFramework"
+#MISE description="Build and package the Struo XCFramework"
 #USAGE flag "--version <version>" help="Version number to validate the release input"
-#USAGE flag "--slices <dir>" help="Directory of prebuilt <target>/libonce.a slices; builds them when omitted"
+#USAGE flag "--slices <dir>" help="Directory of prebuilt <target>/libstruo.a slices; builds them when omitted"
 set -Eeuo pipefail
 
 release_tasks_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -75,7 +75,7 @@ require_lipo_archs() {
 }
 
 staticlib_path() {
-  printf '%s/%s/libonce.a\n' "${slices_dir}" "$1"
+  printf '%s/%s/libstruo.a\n' "${slices_dir}" "$1"
 }
 
 for tool in ditto lipo swiftc xcodebuild; do
@@ -178,49 +178,49 @@ fi
 lipo -create \
   "$(staticlib_path aarch64-apple-darwin)" \
   "$(staticlib_path x86_64-apple-darwin)" \
-  -output "${stage_dir}/macos/libonce.a"
-require_lipo_archs "${stage_dir}/macos/libonce.a" arm64 x86_64
+  -output "${stage_dir}/macos/libstruo.a"
+require_lipo_archs "${stage_dir}/macos/libstruo.a" arm64 x86_64
 
 lipo -create \
   "$(staticlib_path aarch64-apple-ios-sim)" \
   "$(staticlib_path x86_64-apple-ios)" \
-  -output "${stage_dir}/ios-simulator/libonce.a"
+  -output "${stage_dir}/ios-simulator/libstruo.a"
 require_lipo_archs "$(staticlib_path aarch64-apple-ios)" arm64
-require_lipo_archs "${stage_dir}/ios-simulator/libonce.a" arm64 x86_64
+require_lipo_archs "${stage_dir}/ios-simulator/libstruo.a" arm64 x86_64
 
 release_dir="${stage_dir}/release"
 mkdir -p "${release_dir}"
 
-rm -rf "${release_dir}/Once.xcframework"
+rm -rf "${release_dir}/Struo.xcframework"
 xcodebuild -create-xcframework \
-  -library "${stage_dir}/macos/libonce.a" -headers "crates/once/include/Once" \
-  -library "$(staticlib_path aarch64-apple-ios)" -headers "crates/once/include/Once" \
-  -library "${stage_dir}/ios-simulator/libonce.a" -headers "crates/once/include/Once" \
-  -output "${release_dir}/Once.xcframework"
+  -library "${stage_dir}/macos/libstruo.a" -headers "crates/struo/include/Struo" \
+  -library "$(staticlib_path aarch64-apple-ios)" -headers "crates/struo/include/Struo" \
+  -library "${stage_dir}/ios-simulator/libstruo.a" -headers "crates/struo/include/Struo" \
+  -output "${release_dir}/Struo.xcframework"
 
-if [[ ! -d "${release_dir}/Once.xcframework" ]]; then
-  echo "xcodebuild did not create Once.xcframework" >&2
+if [[ ! -d "${release_dir}/Struo.xcframework" ]]; then
+  echo "xcodebuild did not create Struo.xcframework" >&2
   exit 1
 fi
 
 swiftc -typecheck \
-  -module-name OnceBridge \
-  -I crates/once/include/Once \
-  crates/once/swift/Once.swift
+  -module-name StruoBridge \
+  -I crates/struo/include/Struo \
+  crates/struo/swift/Struo.swift
 
 if [[ -n "${APPLE_DEVELOPER_ID_CERTIFICATE_ENCRYPTION_PASSWORD:-}" ]]; then
   codesign --force \
     --timestamp \
     --options runtime \
     --sign "${APPLE_DEVELOPER_ID_CERTIFICATE_NAME}" \
-    "${release_dir}/Once.xcframework"
-  codesign --verify --strict --verbose=2 "${release_dir}/Once.xcframework"
+    "${release_dir}/Struo.xcframework"
+  codesign --verify --strict --verbose=2 "${release_dir}/Struo.xcframework"
 fi
 
-asset="Once.xcframework.zip"
+asset="Struo.xcframework.zip"
 (
   cd "${release_dir}"
-  ditto -c -k --keepParent Once.xcframework "${OLDPWD}/dist/${asset}"
+  ditto -c -k --keepParent Struo.xcframework "${OLDPWD}/dist/${asset}"
 )
 
 if [[ -n "${APPLE_DEVELOPER_ID_CERTIFICATE_ENCRYPTION_PASSWORD:-}" ]]; then

@@ -1,8 +1,0 @@
-[[target]]
-name = "image"
-kind = "dockerfile_image"
-
-[target.attrs]
-tag = "once-instructions:latest"
-pull = false
-network = "none"

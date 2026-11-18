@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
-# once input "../input.txt"
-# once cwd ".."
+# struo input "../input.txt"
+# struo cwd ".."
 cat input.txt

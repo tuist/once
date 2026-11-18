@@ -1,0 +1,50 @@
+//! gRPC client for the Struo live run event protocol.
+//!
+//! Implements the client half of `once.events.v1.RunEventService`.
+//! The protocol is specified in `rfcs/0008-live-run-event-protocol.md`;
+//! this crate owns the wire types (compiled from the `.proto` file
+//! shipped alongside it), the ring buffer with reserved terminal
+//! capacity, the mutable loss interval set that produces the batch's
+//! `gap_advances` control records, the four-case batch acceptance
+//! logic that drives the client's reaction to acknowledgements, and
+//! the bounded final drain.
+//!
+//! The types map from the internal [`struo_core::RunEvent`] bus onto
+//! the wire proto. Any compatible service can ingest and project it.
+
+/// Generated Rust bindings for the wire proto.
+#[allow(
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery,
+    unreachable_pub,
+    missing_docs
+)]
+pub mod proto {
+    // The wire package keeps its legacy `once` name: the Tuist server routes
+    // `/once.events.v1.RunEventService/*` and has no `struo` alias yet.
+    tonic::include_proto!("once.events.v1");
+}
+
+pub mod environment;
+
+mod dashboard;
+
+mod bridge;
+mod buffer;
+mod loss;
+mod metadata;
+mod presentation;
+mod session;
+mod source_files;
+mod transport;
+
+pub use bridge::{heartbeat_payload, translate, Translated};
+pub use buffer::{PendingEvent, RingBuffer, RingPushOutcome};
+pub use loss::{LossIntervals, LossPushOutcome};
+pub use session::{AckAction, AckDisposition, EventSession, SessionLimits};
+pub use source_files::SourceFileSnapshot;
+pub use transport::{
+    CredentialsError, EventClient, ReconnectPolicy, RunCancellation, TransportConfig,
+    TransportError, PROJECT_ID_METADATA,
+};

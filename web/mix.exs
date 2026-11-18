@@ -1,16 +1,16 @@
-defmodule OnceSite.MixProject do
+defmodule StruoSite.MixProject do
   use Mix.Project
 
   def project do
     [
-      app: :once_site,
+      app: :struo_site,
       version: "0.1.0",
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
-      compilers: [:phoenix_live_view] ++ Mix.compilers() ++ [:once_reference],
+      compilers: [:phoenix_live_view] ++ Mix.compilers() ++ [:struo_reference],
       listeners: [Phoenix.CodeReloader]
     ]
   end
@@ -20,7 +20,7 @@ defmodule OnceSite.MixProject do
   # Type `mix help compile.app` for more information.
   def application do
     [
-      mod: {OnceSite.Application, []},
+      mod: {StruoSite.Application, []},
       extra_applications: [:logger, :runtime_tools]
     ]
   end
@@ -77,12 +77,12 @@ defmodule OnceSite.MixProject do
     [
       setup: ["deps.get", "assets.setup", "assets.build"],
       "assets.setup": ["esbuild.install --if-missing"],
-      "assets.build": ["compile", "esbuild once_site", "esbuild docs"],
+      "assets.build": ["compile", "esbuild struo_site", "esbuild docs"],
       "assets.deploy": [
         "compile",
         "docs.gen.og_images",
         "marketing.gen.og_images",
-        "esbuild once_site --minify",
+        "esbuild struo_site --minify",
         "esbuild docs --minify",
         "phx.digest"
       ],

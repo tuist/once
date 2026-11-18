@@ -1,13 +1,13 @@
 # Become an Infrastructure Provider
 
-This guide walks through integrating a shared-cache service with Once, from
+This guide walks through integrating a shared-cache service with Struo, from
 defining the service contract to verifying reuse from a fresh local cache.
 Use the [cache provider contract](/reference/infrastructure/cache) for the
 exact operations, formats, and acceptance checks.
 
 **Integration requirement:** a new provider currently needs an adapter in
-Once. Adding a service URL or a new `kind` to `once.toml` does not register a
-provider. Plan for changes in Once alongside your service implementation.
+Struo. Adding a service URL or a new `kind` to `struo.toml` does not register a
+provider. Plan for changes in Struo alongside your service implementation.
 
 ## Define the Cache Service
 
@@ -18,7 +18,7 @@ Your service provides two things:
 - **Action results:** look up and publish the result associated with an
   action key, including its exit code and references to output and log blobs.
 
-Once computes action keys, maintains the local cache, and captures and restores
+Struo computes action keys, maintains the local cache, and captures and restores
 outputs. The service treats action keys and stored output data as opaque: it
 stores and returns bytes rather than interpreting artifacts or deciding when a
 build can reuse them. See [content and action results](/reference/infrastructure/cache#content-and-action-results).
@@ -42,7 +42,7 @@ Before implementing the integration, decide:
 ## Implement the Adapter and Service Together
 
 Implement the [provider-neutral cache operations](/reference/infrastructure/cache#provider-neutral-operations)
-and register your provider kind with Once's manifest parsing and provider
+and register your provider kind with Struo's manifest parsing and provider
 resolution. The [provider reference](/reference/infrastructure/) maps those
 parts of the code.
 
@@ -52,11 +52,11 @@ Preserve these behaviors in the adapter:
 - Publish referenced blobs before publishing the action result.
 - Verify downloaded bytes before making them available locally; use bounded
   streaming and the shared transfer budget for large objects.
-- Preserve the distinction between missing data and failures so Once can
+- Preserve the distinction between missing data and failures so Struo can
   apply its cache policy.
 
 The existing Tuist adapter uses a Bazel-compatible cache protocol (REAPI).
-If you reuse this transport, preserve its digest mappings and Once result
+If you reuse this transport, preserve its digest mappings and Struo result
 metadata, along with authentication, endpoint discovery, and tenant scoping. See the
 [wire contract](/reference/infrastructure/cache#existing-reapi-transport).
 Other transports must preserve the same provider-neutral behavior.
@@ -71,7 +71,7 @@ Start with a manually provisioned account and project, documented credentials,
 and a working cache binding. Automated project creation is not required for
 the cache to work.
 
-If you also support `once connect`, implement session detection, project
+If you also support `struo connect`, implement session detection, project
 listing and creation, and useful permission and conflict errors. The current
 provisioner and login dispatch support Tuist only; another provider needs its
 own integration, not a copy of Tuist's HTTP routes. See
@@ -100,7 +100,7 @@ describe the expected outcomes. Use disposable data for these tests.
 
 Before customers use the integration, publish:
 
-- The supported Once revision, provider kind, `once.toml` example, and
+- The supported Struo revision, provider kind, `struo.toml` example, and
   developer/CI authentication instructions.
 - Storage and transfer limits, retention and eviction policies, and the
   permissions needed to read and publish entries.

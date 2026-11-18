@@ -65,13 +65,13 @@ The target emits `kotlin_jvm_library` and `java_library`.
 
 | Output | Location |
 | --- | --- |
-| Java archive | `.once/out/<target>/<output>` |
+| Java archive | `.struo/out/<target>/<output>` |
 
 With `manifest`, compilation emits a declared classes tree and a separate
 archive action packages it with the supplied manifest using JDK 17 or newer
 `jar`. Archive entry timestamps are fixed, and the manifest contents and archive
 tool identity participate in caching. Without `manifest`, `kotlinc` continues
-to emit the archive directly. Once does not infer publication metadata or
+to emit the archive directly. Struo does not infer publication metadata or
 invent library versions.
 
 ## Example

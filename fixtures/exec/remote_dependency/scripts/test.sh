@@ -1,10 +1,10 @@
 #!/bin/sh
-# once needs "./install.sh"
-# once input "../src"
-# once input "../tests"
-# once output "../reports"
-# once cwd ".."
-# once remote "remote_tests"
+# struo needs "./install.sh"
+# struo input "../src"
+# struo input "../tests"
+# struo output "../reports"
+# struo cwd ".."
+# struo remote "remote_tests"
 set -eu
 test ! -e undeclared.txt
 ./node_modules/.bin/vitest run --reporter=json --outputFile=reports/vitest.json >/dev/null

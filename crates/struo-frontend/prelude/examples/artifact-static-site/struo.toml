@@ -1,0 +1,11 @@
+[[target]]
+name = "site"
+kind = "artifact"
+srcs = ["public/**/*"]
+
+[target.attrs.interfaces."dev.struo.static-http.v1"]
+payload = "content"
+
+[target.attrs.interfaces."dev.struo.static-http.v1".spec]
+root = "public"
+index = "index.html"

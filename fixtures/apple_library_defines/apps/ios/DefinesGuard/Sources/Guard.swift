@@ -1,5 +1,5 @@
-#if !ONCE_DEFINES_PRESENT
-#error("ONCE_DEFINES_PRESENT must be set via the `defines` attribute")
+#if !STRUO_DEFINES_PRESENT
+#error("STRUO_DEFINES_PRESENT must be set via the `defines` attribute")
 #endif
 
 public struct Guard {

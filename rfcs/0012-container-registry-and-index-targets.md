@@ -23,9 +23,9 @@ contexts through the `images` and `programs` roles.
 ## Why a registry client and not BuildKit
 
 BuildKit can push a layout, but it re-composes manifests it did not produce:
-an image assembled by Once was republished under a different manifest digest,
+an image assembled by Struo was republished under a different manifest digest,
 and an index under a different index digest. Publishing must preserve the
-digest Once computed, because the digest is how deployments pin an image. A
+digest Struo computed, because the digest is how deployments pin an image. A
 registry client that copies the layout verbatim preserves it, so pull and push
 use `crane` and the Docker credential configuration. Neither needs Docker.
 

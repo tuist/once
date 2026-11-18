@@ -1,0 +1,54 @@
+[[target]]
+name = "struo_cas"
+kind = "rust_library"
+deps = ["cargo_dependencies"]
+srcs = ["src/**/*.rs"]
+
+[target.attrs]
+crate_name = "struo_cas"
+crate_root = "src/lib.rs"
+edition = "2021"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/struo-cas"
+CARGO_PKG_NAME = "struo-cas"
+CARGO_PKG_VERSION = "0.0.0"
+
+# Tests
+
+[[target]]
+name = "struo_cas_unit_tests"
+kind = "rust_test"
+deps = ["cargo_dependencies"]
+srcs = ["src/**/*.rs"]
+
+[target.attrs]
+crate_name = "struo_cas"
+crate_root = "src/lib.rs"
+edition = "2021"
+cargo_package = "struo-cas"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/struo-cas"
+CARGO_PKG_NAME = "struo-cas"
+CARGO_PKG_VERSION = "0.0.0"
+
+[[target]]
+name = "persistence_tests"
+kind = "rust_test"
+deps = [
+  "crates/struo-cas/struo_cas",
+  "cargo_dependencies",
+]
+srcs = ["tests/persistence.rs"]
+
+[target.attrs]
+crate_name = "persistence"
+crate_root = "tests/persistence.rs"
+edition = "2021"
+cargo_package = "struo-cas"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/struo-cas"
+CARGO_PKG_NAME = "struo-cas"
+CARGO_PKG_VERSION = "0.0.0"

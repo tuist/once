@@ -1,7 +1,7 @@
 # Configurations
 
 A target's behavior can vary by configuration: which platform it targets,
-which dependencies it pulls in, or which build mode it uses. Once keeps the
+which dependencies it pulls in, or which build mode it uses. Struo keeps the
 declared graph static while letting its configured projection change between
 invocations. The same target identifier can resolve to different dependencies
 and actions without editing the manifest.
@@ -25,27 +25,27 @@ arch = "arm64"
 tokens = ["release"]
 ```
 
-Once normalizes common names (`darwin` to `macos`, `arm64` to `aarch64`,
+Struo normalizes common names (`darwin` to `macos`, `arm64` to `aarch64`,
 `amd64` to `x86_64`) and derives an ordered set of selection tokens from the
 operating system and architecture, then appends the extra `tokens` and
-`default`. Inspect the resolved set with `once query workspace`. The
+`default`. Inspect the resolved set with `struo query workspace`. The
 [manifest reference](/reference/manifest) describes the table and
 normalization in full.
 
 ## Override per invocation
 
-Pass `--config KEY=VALUE` to `once build`, `once lint`, `once run`, or
-`once test` to override the workspace defaults for a single invocation.
+Pass `--config KEY=VALUE` to `struo build`, `struo lint`, `struo run`, or
+`struo test` to override the workspace defaults for a single invocation.
 Recognized keys are `os`, `arch`, and `token`:
 
 ```sh
-once build apps/Support --config os=ios --config arch=arm64
-once build apps/Support --config token=simulator
+struo build apps/Support --config os=ios --config arch=arm64
+struo build apps/Support --config token=simulator
 ```
 
 `os` and `arch` replace the workspace values; each `token` is appended to the
 selection tokens. When an override changes the operating system or
-architecture, Once re-derives the platform tokens for the new target platform
+architecture, Struo re-derives the platform tokens for the new target platform
 so stale tokens do not survive. Overrides apply on top of the workspace
 defaults, and only the resulting values affect target identity, not the flags
 that produced them.
@@ -54,8 +54,8 @@ Because the effective configuration scopes outputs and receipts, building the
 same target under two configurations from one checkout keeps both results:
 
 ```sh
-once build apps/Support                         # default configuration
-once build apps/Support --config token=release  # separate, scoped outputs
+struo build apps/Support                         # default configuration
+struo build apps/Support --config token=release  # separate, scoped outputs
 ```
 
 A later invocation with the same overrides reuses the scoped receipt and

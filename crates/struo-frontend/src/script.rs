@@ -1,0 +1,478 @@
+use std::fs;
+use std::path::Path;
+
+use crate::error::{Error, Result, ScriptHeaderError};
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScriptAnnotations {
+    pub runtime: String,
+    pub runtime_args: Vec<String>,
+    pub needs: Vec<String>,
+    pub fingerprints: Vec<String>,
+    pub inputs: Vec<String>,
+    pub outputs: Vec<String>,
+    pub env_vars: Vec<String>,
+    pub cwd: Option<String>,
+    pub remote: Option<String>,
+    pub output_symlinks: Option<String>,
+}
+
+pub fn parse_script_annotations(path: &Path, display_name: &str) -> Result<ScriptAnnotations> {
+    let content = fs::read_to_string(path).map_err(|source| Error::Read {
+        path: path.display().to_string(),
+        source,
+    })?;
+    let mut lines = content.lines();
+    let shebang = lines.next().ok_or_else(|| Error::ScriptHeader {
+        path: display_name.to_string(),
+        kind: ScriptHeaderError::Empty,
+    })?;
+    let (runtime, runtime_args) = parse_shebang(shebang, display_name, path)?;
+    let mut annotations = ScriptAnnotations {
+        runtime,
+        runtime_args,
+        ..Default::default()
+    };
+
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some(rest) = annotation_payload(trimmed) else {
+            if looks_like_comment(trimmed) {
+                continue;
+            }
+            break;
+        };
+        parse_annotation_line(&mut annotations, rest, display_name)?;
+    }
+
+    Ok(annotations)
+}
+
+pub fn script_has_struo_directives(path: &Path) -> Result<bool> {
+    let content = fs::read_to_string(path).map_err(|source| Error::Read {
+        path: path.display().to_string(),
+        source,
+    })?;
+    Ok(content
+        .lines()
+        .any(|line| annotation_payload(line.trim()).is_some()))
+}
+
+fn parse_shebang(line: &str, display_name: &str, _path: &Path) -> Result<(String, Vec<String>)> {
+    let Some(raw) = line.strip_prefix("#!") else {
+        return Err(Error::ScriptHeader {
+            path: display_name.to_string(),
+            kind: ScriptHeaderError::MissingShebang,
+        });
+    };
+    let mut parts = raw.split_whitespace();
+    let Some(first) = parts.next() else {
+        return Err(Error::ScriptHeader {
+            path: display_name.to_string(),
+            kind: ScriptHeaderError::EmptyShebang,
+        });
+    };
+
+    if first.ends_with("/env") || first == "env" {
+        let mut runtime = None;
+        let mut runtime_args = Vec::new();
+        for part in parts.by_ref() {
+            if runtime.is_none() && part.starts_with('-') {
+                continue;
+            }
+            if runtime.is_none() {
+                runtime = Some(part.to_string());
+            } else {
+                runtime_args.push(part.to_string());
+            }
+        }
+        let Some(runtime) = runtime else {
+            return Err(Error::ScriptHeader {
+                path: display_name.to_string(),
+                kind: ScriptHeaderError::MissingRuntime,
+            });
+        };
+        return Ok(parse_struo_exec_shebang(runtime, runtime_args));
+    }
+
+    Ok((first.to_string(), parts.map(ToString::to_string).collect()))
+}
+
+fn parse_struo_exec_shebang(runtime: String, runtime_args: Vec<String>) -> (String, Vec<String>) {
+    if (runtime == "struo" || runtime.ends_with("/struo"))
+        && runtime_args.first().is_some_and(|arg| arg == "exec")
+        && runtime_args.get(1).is_some_and(|arg| arg == "--script")
+        && runtime_args.get(2).is_some()
+    {
+        let actual_runtime = runtime_args[2].clone();
+        let actual_runtime_args = runtime_args[3..].to_vec();
+        return (actual_runtime, actual_runtime_args);
+    }
+    if (runtime == "struo" || runtime.ends_with("/struo"))
+        && runtime_args.first().is_some_and(|arg| arg == "exec")
+        && runtime_args.get(1).is_some_and(|arg| arg == "--")
+        && runtime_args.get(2).is_some()
+    {
+        let actual_runtime = runtime_args[2].clone();
+        let actual_runtime_args = runtime_args[3..].to_vec();
+        return (actual_runtime, actual_runtime_args);
+    }
+    (runtime, runtime_args)
+}
+
+fn annotation_payload(line: &str) -> Option<&str> {
+    const COMMENT_PREFIXES: &[&str] = &["#", "//", ";", "--", "%", "'"];
+    COMMENT_PREFIXES.iter().find_map(|prefix| {
+        let rest = line.strip_prefix(prefix)?.trim_start();
+        strip_struo_marker(rest).map(str::trim_start)
+    })
+}
+
+fn strip_struo_marker(rest: &str) -> Option<&str> {
+    let split = rest.find(char::is_whitespace).unwrap_or(rest.len());
+    let marker = &rest[..split];
+    if !marker.eq_ignore_ascii_case("struo") {
+        return None;
+    }
+    Some(&rest[split..])
+}
+
+fn looks_like_comment(line: &str) -> bool {
+    ["#", "//", ";", "--", "%", "'"]
+        .iter()
+        .any(|prefix| line.starts_with(prefix))
+}
+
+fn parse_annotation_line(
+    annotations: &mut ScriptAnnotations,
+    line: &str,
+    display_name: &str,
+) -> Result<()> {
+    if let Some(raw) = line.strip_prefix("input ") {
+        annotations
+            .inputs
+            .push(parse_quoted(raw, "input", display_name)?);
+        return Ok(());
+    }
+    if let Some(raw) = line.strip_prefix("needs ") {
+        annotations
+            .needs
+            .push(parse_quoted(raw, "needs", display_name)?);
+        return Ok(());
+    }
+    if let Some(raw) = line.strip_prefix("fingerprint ") {
+        annotations
+            .fingerprints
+            .push(parse_quoted(raw, "fingerprint", display_name)?);
+        return Ok(());
+    }
+    if let Some(raw) = line.strip_prefix("output ") {
+        annotations
+            .outputs
+            .push(parse_quoted(raw, "output", display_name)?);
+        return Ok(());
+    }
+    if let Some(raw) = line.strip_prefix("env ") {
+        annotations
+            .env_vars
+            .push(parse_quoted(raw, "env", display_name)?);
+        return Ok(());
+    }
+    if let Some(raw) = line.strip_prefix("cwd ") {
+        annotations.cwd = Some(parse_quoted(raw, "cwd", display_name)?);
+        return Ok(());
+    }
+    if let Some(raw) = line.strip_prefix("remote ") {
+        annotations.remote = Some(parse_quoted(raw, "remote", display_name)?);
+        return Ok(());
+    }
+    if let Some(raw) = line.strip_prefix("output-symlinks ") {
+        annotations.output_symlinks = Some(parse_quoted(raw, "output-symlinks", display_name)?);
+        return Ok(());
+    }
+    Err(Error::ScriptHeader {
+        path: display_name.to_string(),
+        kind: ScriptHeaderError::UnknownDirective {
+            directive: line.to_string(),
+        },
+    })
+}
+
+fn parse_quoted(raw: &str, name: &str, display_name: &str) -> Result<String> {
+    let raw = raw.trim();
+    let Some(rest) = raw.strip_prefix('"') else {
+        return Err(Error::ScriptHeader {
+            path: display_name.to_string(),
+            kind: ScriptHeaderError::DirectiveExpectedQuote {
+                directive: name.to_string(),
+            },
+        });
+    };
+    let Some(end) = rest.find('"') else {
+        return Err(Error::ScriptHeader {
+            path: display_name.to_string(),
+            kind: ScriptHeaderError::DirectiveMissingClosingQuote {
+                directive: name.to_string(),
+            },
+        });
+    };
+    if !rest[end + 1..].trim().is_empty() {
+        return Err(Error::ScriptHeader {
+            path: display_name.to_string(),
+            kind: ScriptHeaderError::DirectiveExtraArgument {
+                directive: name.to_string(),
+            },
+        });
+    }
+    Ok(rest[..end].to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn parses_bash_script_annotations() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("build.sh");
+        fs::write(
+            &path,
+            r#"#!/usr/bin/env bash
+# struo input "src/**/*.ts"
+# struo needs "../tools/codegen.sh"
+# struo fingerprint "node --version"
+# struo output "dist/"
+# struo env "NODE_ENV"
+# struo cwd "."
+# struo output-symlinks "preserve"
+
+echo hi
+"#,
+        )
+        .unwrap();
+
+        let annotations = parse_script_annotations(&path, "build.sh").unwrap();
+        assert_eq!(annotations.runtime, "bash");
+        assert_eq!(annotations.inputs, vec!["src/**/*.ts".to_string()]);
+        assert_eq!(annotations.needs, vec!["../tools/codegen.sh".to_string()]);
+        assert_eq!(annotations.fingerprints, vec!["node --version".to_string()]);
+        assert_eq!(annotations.outputs, vec!["dist/".to_string()]);
+        assert_eq!(annotations.env_vars, vec!["NODE_ENV".to_string()]);
+        assert_eq!(annotations.cwd.as_deref(), Some("."));
+        assert_eq!(annotations.output_symlinks.as_deref(), Some("preserve"));
+    }
+
+    #[test]
+    fn parses_remote_script_annotation() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("build.sh");
+        fs::write(
+            &path,
+            r#"#!/usr/bin/env bash
+# struo remote "microsandbox"
+
+echo hi
+"#,
+        )
+        .unwrap();
+
+        let annotations = parse_script_annotations(&path, "build.sh").unwrap();
+        assert_eq!(annotations.remote.as_deref(), Some("microsandbox"));
+    }
+
+    #[test]
+    fn accepts_legacy_uppercase_struo_marker() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("build.sh");
+        fs::write(
+            &path,
+            r#"#!/usr/bin/env bash
+# STRUO input "src/**/*.ts"
+# STRUO output "dist/"
+
+echo hi
+"#,
+        )
+        .unwrap();
+
+        let annotations = parse_script_annotations(&path, "build.sh").unwrap();
+        assert_eq!(annotations.inputs, vec!["src/**/*.ts".to_string()]);
+        assert_eq!(annotations.outputs, vec!["dist/".to_string()]);
+    }
+
+    #[test]
+    fn parses_env_dash_s_runtime_args() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("build.js");
+        fs::write(
+            &path,
+            r#"#!/usr/bin/env -S node --no-warnings
+console.log("hi");
+"#,
+        )
+        .unwrap();
+
+        let annotations = parse_script_annotations(&path, "build.js").unwrap();
+        assert_eq!(annotations.runtime, "node");
+        assert_eq!(annotations.runtime_args, vec!["--no-warnings".to_string()]);
+    }
+
+    #[test]
+    fn parses_multiple_comment_styles_for_script_annotations() {
+        let tmp = TempDir::new().unwrap();
+        for (name, runtime) in [
+            ("build.py", "python3"),
+            ("build.rb", "ruby"),
+            ("build.exs", "elixir"),
+        ] {
+            let path = tmp.path().join(name);
+            fs::write(
+                &path,
+                format!(
+                    r#"#!/usr/bin/env {runtime}
+# struo input "src/**/*"
+# struo output "dist/"
+# struo env "APP_ENV"
+# struo cwd "."
+
+print("hi")
+"#
+                ),
+            )
+            .unwrap();
+
+            let annotations = parse_script_annotations(&path, name).unwrap();
+            assert_eq!(annotations.runtime, runtime);
+            assert_eq!(annotations.inputs, vec!["src/**/*".to_string()]);
+            assert_eq!(annotations.outputs, vec!["dist/".to_string()]);
+            assert_eq!(annotations.env_vars, vec!["APP_ENV".to_string()]);
+            assert_eq!(annotations.cwd.as_deref(), Some("."));
+        }
+    }
+
+    #[test]
+    fn parses_struo_exec_script_shebang() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("build.py");
+        fs::write(
+            &path,
+            r#"#!/usr/bin/env -S struo exec --script python3
+# struo input "src/**/*.py"
+print("hi")
+"#,
+        )
+        .unwrap();
+
+        let annotations = parse_script_annotations(&path, "build.py").unwrap();
+        assert_eq!(annotations.runtime, "python3");
+        assert_eq!(annotations.inputs, vec!["src/**/*.py".to_string()]);
+    }
+
+    #[test]
+    fn parses_struo_exec_separator_shebang() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("build.py");
+        fs::write(
+            &path,
+            r#"#!/usr/bin/env -S struo exec -- python3
+# struo input "src/**/*.py"
+print("hi")
+"#,
+        )
+        .unwrap();
+
+        let annotations = parse_script_annotations(&path, "build.py").unwrap();
+        assert_eq!(annotations.runtime, "python3");
+        assert_eq!(annotations.inputs, vec!["src/**/*.py".to_string()]);
+    }
+
+    #[test]
+    fn rejects_unknown_directive() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("bad.sh");
+        fs::write(
+            &path,
+            r#"#!/bin/sh
+# struo unknown "thing"
+echo hi
+"#,
+        )
+        .unwrap();
+
+        let err = parse_script_annotations(&path, "bad.sh").unwrap_err();
+        assert!(err.to_string().contains("unknown struo directive"));
+        assert!(script_has_struo_directives(&path).unwrap());
+    }
+
+    #[test]
+    fn unknown_directive_error_carries_the_typed_directive_name() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("bad.sh");
+        fs::write(
+            &path,
+            r#"#!/bin/sh
+# struo wibble "thing"
+echo hi
+"#,
+        )
+        .unwrap();
+
+        let err = parse_script_annotations(&path, "bad.sh").unwrap_err();
+        match err {
+            Error::ScriptHeader {
+                kind: ScriptHeaderError::UnknownDirective { directive },
+                ..
+            } => {
+                assert!(
+                    directive.starts_with("wibble"),
+                    "directive did not carry the offending token: {directive:?}"
+                );
+            }
+            other => panic!("expected ScriptHeader::UnknownDirective, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_script_surfaces_typed_variant() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("empty.sh");
+        fs::write(&path, "").unwrap();
+
+        let err = parse_script_annotations(&path, "empty.sh").unwrap_err();
+        assert!(matches!(
+            err,
+            Error::ScriptHeader {
+                kind: ScriptHeaderError::Empty,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn unknown_directive_message_lists_the_accepted_directives() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("bad.sh");
+        fs::write(
+            &path,
+            r#"#!/bin/sh
+# struo wibble "thing"
+echo hi
+"#,
+        )
+        .unwrap();
+
+        let err = parse_script_annotations(&path, "bad.sh")
+            .unwrap_err()
+            .to_string();
+        for accepted in ["input", "needs", "fingerprint", "output", "env", "cwd"] {
+            assert!(
+                err.contains(accepted),
+                "message should hint at accepted directive `{accepted}`:\n{err}"
+            );
+        }
+    }
+}

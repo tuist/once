@@ -3682,194 +3682,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "once"
-version = "0.0.0"
-dependencies = [
- "blake3",
- "once-cas",
- "once-core",
- "once-frontend",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
-]
-
-[[package]]
-name = "once-cas"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "bazel-remote-apis",
- "blake3",
- "futures",
- "hex",
- "http-body",
- "prost",
- "reqwest 0.13.5",
- "schlussel",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "tokio-util",
- "tonic",
- "tracing",
- "uuid",
- "zstd",
-]
-
-[[package]]
-name = "once-cli"
-version = "0.0.0"
-dependencies = [
- "anstyle-query",
- "anyhow",
- "base64 0.23.1",
- "bazel-remote-apis",
- "blake3",
- "chrono",
- "console",
- "fd-lock",
- "flate2",
- "futures",
- "glob",
- "hex",
- "indicatif",
- "libc",
- "nix 0.30.1",
- "notify",
- "once-cas",
- "once-core",
- "once-events-client",
- "once-frontend",
- "once-host-tree",
- "reqwest 0.13.5",
- "rodio",
- "rustix 1.1.4",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "signal-hook 0.4.6",
- "sysinfo",
- "tar",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "tokio-util",
- "toml",
- "tonic",
- "toon-format",
- "tracing",
- "tracing-subscriber",
- "tree-sitter",
- "tree-sitter-cypher",
- "usage-rs",
- "uuid",
- "walkdir",
-]
-
-[[package]]
-name = "once-core"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "base64 0.23.1",
- "blake3",
- "fd-lock",
- "flate2",
- "futures",
- "hex",
- "jsonwebtoken",
- "libc",
- "microsandbox",
- "once-cas",
- "once-host-tree",
- "once-presentation",
- "reqwest 0.13.5",
- "rustix 1.1.4",
- "same-file",
- "sea-orm",
- "sea-orm-migration",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "sysinfo",
- "tar",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "tokio-util",
- "tracing",
- "zip",
-]
-
-[[package]]
-name = "once-events-client"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "once-core",
- "prost",
- "protoc-bin-vendored",
- "thiserror 2.0.21",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tonic",
- "tonic-build",
- "tonic-prost",
- "tonic-prost-build",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "once-frontend"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "base64 0.23.1",
- "futures",
- "glob",
- "include_dir",
- "once-core",
- "once-host-tree",
- "once-presentation",
- "plist",
- "quick-xml",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "starlark",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "toml",
- "toml_edit",
- "walkdir",
-]
-
-[[package]]
-name = "once-host-tree"
-version = "0.0.0"
-dependencies = [
- "sha2 0.11.0",
- "tempfile",
-]
-
-[[package]]
-name = "once-presentation"
-version = "0.0.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5915,6 +5727,194 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "struo"
+version = "0.0.0"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
+ "struo-cas",
+ "struo-core",
+ "struo-frontend",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "struo-cas"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "bazel-remote-apis",
+ "blake3",
+ "futures",
+ "hex",
+ "http-body",
+ "prost",
+ "reqwest 0.13.5",
+ "schlussel",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "tonic",
+ "tracing",
+ "uuid",
+ "zstd",
+]
+
+[[package]]
+name = "struo-cli"
+version = "0.0.0"
+dependencies = [
+ "anstyle-query",
+ "anyhow",
+ "base64 0.23.1",
+ "bazel-remote-apis",
+ "blake3",
+ "chrono",
+ "console",
+ "fd-lock",
+ "flate2",
+ "futures",
+ "glob",
+ "hex",
+ "indicatif",
+ "libc",
+ "nix 0.30.1",
+ "notify",
+ "reqwest 0.13.5",
+ "rodio",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "signal-hook 0.4.6",
+ "struo-cas",
+ "struo-core",
+ "struo-events-client",
+ "struo-frontend",
+ "struo-host-tree",
+ "sysinfo",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "toml",
+ "tonic",
+ "toon-format",
+ "tracing",
+ "tracing-subscriber",
+ "tree-sitter",
+ "tree-sitter-cypher",
+ "usage-rs",
+ "uuid",
+ "walkdir",
+]
+
+[[package]]
+name = "struo-core"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "base64 0.23.1",
+ "blake3",
+ "fd-lock",
+ "flate2",
+ "futures",
+ "hex",
+ "jsonwebtoken",
+ "libc",
+ "microsandbox",
+ "reqwest 0.13.5",
+ "rustix 1.1.4",
+ "same-file",
+ "sea-orm",
+ "sea-orm-migration",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "struo-cas",
+ "struo-host-tree",
+ "struo-presentation",
+ "sysinfo",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "zip",
+]
+
+[[package]]
+name = "struo-events-client"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "prost",
+ "protoc-bin-vendored",
+ "struo-core",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tonic",
+ "tonic-build",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "struo-frontend"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "base64 0.23.1",
+ "futures",
+ "glob",
+ "include_dir",
+ "plist",
+ "quick-xml",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "starlark",
+ "struo-core",
+ "struo-host-tree",
+ "struo-presentation",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml",
+ "toml_edit",
+ "walkdir",
+]
+
+[[package]]
+name = "struo-host-tree"
+version = "0.0.0"
+dependencies = [
+ "sha2 0.11.0",
+ "tempfile",
+]
+
+[[package]]
+name = "struo-presentation"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

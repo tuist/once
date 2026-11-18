@@ -22,7 +22,7 @@ plus the link and run attributes below.
 | `static` | string | `auto` | Static linking policy: `auto`, `on`, or `off` |
 | `android_abi` | string | inferred | Android [Application Binary Interface](https://developer.android.com/ndk/guides/abis) directory for C shared outputs |
 | `generate_exported_header` | bool | `false` | Buck2-compatible request for the header emitted by C archive and C shared modes |
-| `args` | list&lt;string&gt; | `[]` | Arguments passed by `once run` |
+| `args` | list&lt;string&gt; | `[]` | Arguments passed by `struo run` |
 | `run_env` | map&lt;string, string&gt; | `{}` | Runtime environment values |
 | `env_inherit` | list&lt;string&gt; | `[]` | Host environment names inherited before `run_env` overrides |
 
@@ -42,11 +42,11 @@ header and transitive native metadata.
 | `run` | `default` | `binary` |
 
 Only `exe` and `pie` can run. Other build modes remain buildable outputs.
-`once run` writes its log and result marker under `.once/out/<target>/run/`.
+`struo run` writes its log and result marker under `.struo/out/<target>/run/`.
 
 ## Starter
 
 The `go-binary-minimal` starter contains one executable and no external
-dependencies. Discover its descriptor through `once query schema go_binary`,
-then create it with `once edit materialize-example go_binary
+dependencies. Discover its descriptor through `struo query schema go_binary`,
+then create it with `struo edit materialize-example go_binary
 go-binary-minimal`.

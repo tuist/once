@@ -4,19 +4,19 @@ prev: false
 
 # Infrastructure
 
-Once works locally without configuration. Infrastructure becomes useful when
+Struo works locally without configuration. Infrastructure becomes useful when
 you want to run an action on another machine or share a cached result with
 another developer or coding agent.
 
 [Artifacts](/guide/infrastructure/artifacts) describes a third
 independent capability: retain immutable build products for distribution.
-Once publishes the content; infrastructure decides how people use it.
+Struo publishes the content; infrastructure decides how people use it.
 
 ## Build an Integration
 
 If you operate an infrastructure service, start with
 [Become an Infrastructure Provider](/guide/infrastructure/providers). It
-walks through shared caching, the adapter work required in Once,
+walks through shared caching, the adapter work required in Struo,
 authentication, validation, and the customer handoff. The
 [provider contracts](/reference/infrastructure/) give exact behavior and links
 to the implementations and tests.
@@ -26,17 +26,17 @@ to the implementations and tests.
 Provision a remote project and bind this repository to it in one command:
 
 ```sh
-once connect --provider tuist --create
+struo connect --provider tuist --create
 ```
 
-Once signs you in when needed, creates the project with the provider, and
-records the binding in the repository root `once.toml`. Read
+Struo signs you in when needed, creates the project with the provider, and
+records the binding in the repository root `struo.toml`. Read
 [Connect A Project](/guide/infrastructure/connect) for account selection,
 binding an existing project, and previewing the write.
 
 ## Run An Action Somewhere Else
 
-Choose a named execution provider in the repository root `once.toml`:
+Choose a named execution provider in the repository root `struo.toml`:
 
 ```toml
 [infrastructures.remote_tests]
@@ -50,11 +50,11 @@ provider = "remote_tests"
 Then run a literal command through that provider:
 
 ```sh
-once exec --remote -- node --version
+struo exec --remote -- node --version
 ```
 
 Annotated scripts can select the same provider with
-`# once remote "remote_tests"`. Once creates a clean execution root, transfers
+`# struo remote "remote_tests"`. Struo creates a clean execution root, transfers
 only declared inputs, runs the command, retrieves declared outputs after a
 successful exit, and deletes the machine.
 
@@ -93,10 +93,10 @@ It can also use either capability on its own.
 ## Keep A Local Escape Hatch
 
 The local cache remains available after a shared cache is configured. Set
-`ONCE_CACHE_PROVIDER=local` for one invocation:
+`STRUO_CACHE_PROVIDER=local` for one invocation:
 
 ```sh
-ONCE_CACHE_PROVIDER=local ./scripts/greet.sh
+STRUO_CACHE_PROVIDER=local ./scripts/greet.sh
 ```
 
 For execution, omit `--remote` to run on the current computer. Pass

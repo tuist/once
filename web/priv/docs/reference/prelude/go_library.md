@@ -19,7 +19,7 @@ embedded binary migrations.
 ## Providers, Capabilities, and Outputs
 
 The target emits `go_package`. `build` exposes the `library` output group and
-writes `.once/out/<target>/lib<target>.a`, or the destination platform archive
+writes `.struo/out/<target>/lib<target>.a`, or the destination platform archive
 extension.
 
 ## Example

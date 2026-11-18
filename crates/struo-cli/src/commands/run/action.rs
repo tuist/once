@@ -1,0 +1,73 @@
+mod script;
+mod task;
+
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+use struo_cas::Digest;
+use struo_core::{Action, InputDigestBuilder, WorkspacePath};
+
+pub(super) struct ActionPlan {
+    pub(super) action: Action,
+    pub(super) output: String,
+    pub(super) output_dir: Option<PathBuf>,
+}
+
+pub(super) async fn action_for(
+    workspace: &Path,
+    target: &struo_frontend::Target,
+    xdg: &struo_core::Xdg,
+) -> Result<ActionPlan> {
+    match target.kind.as_str() {
+        "script" | "runtime_script" => script::script_action(workspace, target, xdg).await,
+        "task" | "runtime_task" | "runner_task" => task::task_action(workspace, target),
+        other => anyhow::bail!("running `{other}` targets is not yet supported"),
+    }
+}
+
+fn parse_attr<T>(target: &struo_frontend::Target, name: &str) -> Result<Option<T>>
+where
+    T: std::str::FromStr,
+    T::Err: std::error::Error + Send + Sync + 'static,
+{
+    target
+        .attrs
+        .get(name)
+        .map(|value| {
+            value
+                .parse::<T>()
+                .with_context(|| format!("parsing {name} for {}", target.id()))
+        })
+        .transpose()
+}
+
+fn source_path(target: &struo_frontend::Target, src: &str) -> Result<WorkspacePath> {
+    WorkspacePath::from_package_relative(&target.package, src)
+        .with_context(|| format!("invalid source path `{src}` in {}", target.id()))
+}
+
+fn input_digest(workspace: &Path, target: &struo_frontend::Target) -> Result<Option<Digest>> {
+    let paths = input_paths(target)?;
+    if paths.is_empty() {
+        return Ok(None);
+    }
+
+    let mut builder = InputDigestBuilder::new(b"");
+    for path in &paths {
+        builder
+            .push_source(workspace, path.as_str())
+            .with_context(|| format!("hashing source input `{path}`"))?;
+    }
+    Ok(Some(builder.finish()))
+}
+
+fn input_paths(target: &struo_frontend::Target) -> Result<Vec<WorkspacePath>> {
+    let mut paths: Vec<_> = target
+        .srcs
+        .iter()
+        .map(|src| source_path(target, src))
+        .collect::<Result<_>>()?;
+    paths.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    paths.dedup_by(|a, b| a.as_str() == b.as_str());
+    Ok(paths)
+}

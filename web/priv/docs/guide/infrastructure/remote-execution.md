@@ -1,6 +1,6 @@
 # Remote Execution
 
-Remote execution in Once means that the script contract stays in the
+Remote execution in Struo means that the script contract stays in the
 repository while the process runs in a fresh environment supplied by an
 infrastructure provider.
 
@@ -8,7 +8,7 @@ The important boundary is the action, not the test framework. Vitest is the
 program being run. Docker, Microsandbox, E2B, and Daytona are execution providers.
 
 Declared build graphs can also dispatch command actions with
-`once build --remote --compute <provider>`. Once keeps dependency scheduling and
+`struo build --remote --compute <provider>`. Struo keeps dependency scheduling and
 caching on the coordinator; each uncached command runs through the selected
 adapter. Start with [Docker execution](/guide/infrastructure/docker) for local
 validation, including the toolchain-matching requirements and current limits.
@@ -18,7 +18,7 @@ worker pool or a distributed artifact service.
 
 ## What Moves To The Machine
 
-For each remote action, Once performs this lifecycle:
+For each remote action, Struo performs this lifecycle:
 
 1. Resolve the named provider and requested environment reference. Use an
    immutable image or template when reproducibility matters; a tag or label
@@ -44,11 +44,11 @@ package manifests, and produces `node_modules`:
 
 ```sh
 #!/bin/sh
-# once input "../package.json"
-# once input "../package-lock.json"
-# once output "../node_modules"
-# once cwd ".."
-# once remote "remote_tests"
+# struo input "../package.json"
+# struo input "../package-lock.json"
+# struo output "../node_modules"
+# struo cwd ".."
+# struo remote "remote_tests"
 
 npm clean-install --no-audit --no-fund
 ```
@@ -57,12 +57,12 @@ The test script depends on that action and consumes its output:
 
 ```sh
 #!/bin/sh
-# once needs "./install.sh"
-# once input "../src"
-# once input "../tests"
-# once output "../reports"
-# once cwd ".."
-# once remote "remote_tests"
+# struo needs "./install.sh"
+# struo input "../src"
+# struo input "../tests"
+# struo output "../reports"
+# struo cwd ".."
+# struo remote "remote_tests"
 
 ./node_modules/.bin/vitest run \
   --reporter=json \
@@ -85,7 +85,7 @@ across fresh containers with a locally prepared image. Use
 [Microsandbox](/guide/infrastructure/microsandbox) to test the contract on
 a supported local computer. Use [E2B](/guide/infrastructure/e2b) when you have
 a prepared hosted template. Use [Daytona](/guide/infrastructure/daytona) when
-you want Once to start from a container image.
+you want Struo to start from a container image.
 Use [Tuist](/guide/infrastructure/tuist#run-actions-on-tuist-workers) to run
 graph actions on a Tuist project's remote execution workers.
 
@@ -110,7 +110,7 @@ hosted provider aliases share that quota, so adding another name does not add
 capacity within that scheduler. Its default is the number of default-sized
 local actions that fit in the host budget. These budgets belong to a shared
 scheduler within one process, not a machine-wide or account-wide quota.
-Separate CLI invocations do not share them. The service schedules its own physical machines; Once does not
+Separate CLI invocations do not share them. The service schedules its own physical machines; Struo does not
 reserve the remote guest's CPU or memory estimate on your computer.
 
 A hosted request still reserves a fixed host-memory estimate for input
@@ -138,10 +138,10 @@ A named infrastructure with `kind = "local"` selects native execution, including
 its usual sandbox and network policies. It retains a separate cache identity
 from an otherwise identical command without that binding. Provider names,
 resource estimates, and environment bindings remain part of action identity;
-Once does not yet claim that different providers run equivalent environments.
+Struo does not yet claim that different providers run equivalent environments.
 
 Sandbox-provider adapters currently cannot enforce `--network deny` or
-stdout/stderr path redirection, or a non-default output-symlink policy. Once
+stdout/stderr path redirection, or a non-default output-symlink policy. Struo
 rejects these requirements instead of
 silently ignoring them. Selecting one executor never implicitly falls back to
 another executor on a command or infrastructure failure. Explicit execution
@@ -158,7 +158,7 @@ no external service performed network work.
 
 ## Machine Cleanup
 
-Once waits for provider deletion after every normal success or failure. It
+Struo waits for provider deletion after every normal success or failure. It
 also schedules deletion if the executing task is cancelled while a Tokio
 runtime is still active. Execution-budget leases stay with that cleanup task
 until the cleanup attempt completes, rather than being returned as soon as the
@@ -191,7 +191,7 @@ The hosted providers add a second line of defense:
 - Daytona receives an ephemeral policy with immediate deletion after stop.
 
 If the provider refuses a delete request after an otherwise successful action,
-Once reports the action as failed. On an action failure, Once preserves the
+Struo reports the action as failed. On an action failure, Struo preserves the
 original failure and records a cleanup failure in its internal log.
 
 ## How This Compares With Bazel
@@ -205,11 +205,11 @@ The Tuist adapter uses this protocol: it uploads only the input blobs the
 project cache is missing and reads outputs back by digest.
 
 The E2B and Daytona adapters currently upload one complete archive of the
-declared inputs for each cache miss. This gives Once the same correctness
+declared inputs for each cache miss. This gives Struo the same correctness
 boundary, but it is not yet as bandwidth-efficient as Bazel. The provider
 interface leaves room for a missing-content exchange so a future adapter can
 deduplicate files without changing script annotations.
 
-Once also keeps the executor boundary wider than the Bazel protocol. A local
+Struo also keeps the executor boundary wider than the Bazel protocol. A local
 micro-virtual-machine, a hosted sandbox service, and a content-addressed worker
 fleet can all consume the same prepared action.

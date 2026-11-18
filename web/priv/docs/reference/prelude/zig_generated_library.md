@@ -4,7 +4,7 @@ Generates a Zig module by running a declared host executable. The resulting
 `zig_module` can be imported by ordinary Zig libraries, binaries, and tests.
 This models build-time code generation without wrapping a native build system.
 
-Declare exactly one `once_executable` dependency in the `generator` role.
+Declare exactly one `struo_executable` dependency in the `generator` role.
 Use `srcs` to declare every file the generator reads. Arguments are passed
 directly, without a shell, from the workspace root. At least one argument must
 contain `{output}`, which is replaced with the declared generated module path.

@@ -27,7 +27,7 @@ The `deps` edge accepts exactly one `react_native_dependency_set`.
 Apple and Android application targets can consume the provider to stage this
 target's declared JavaScript sources for native non-debug bundling.
 
-On macOS, x86-64 Linux, and x86-64 Windows, Once resolves the Hermes compiler
+On macOS, x86-64 Linux, and x86-64 Windows, Struo resolves the Hermes compiler
 through the locked React Native package. This supports both hoisted and
 isolated dependency layouts. Other hosts fail during analysis with a clear
 unsupported-host message.

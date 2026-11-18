@@ -1,12 +1,12 @@
 # Tuist
 
 [Tuist](https://tuist.dev) provides shared caching, live run reporting and
-artifact publication for Once, with application previews for supported native
+artifact publication for Struo, with application previews for supported native
 interfaces. Configure the capabilities your project needs
 independently.
 
 ::: info Trigger orchestration is coming
-Tuist support for [Once triggers](/guide/infrastructure/triggers) is coming.
+Tuist support for [Struo triggers](/guide/infrastructure/triggers) is coming.
 This page covers caching, run reporting and application previews, not CI
 orchestration.
 :::
@@ -16,17 +16,17 @@ orchestration.
 Provision a Tuist project and bind this repository to it in one command:
 
 ```sh
-once connect --provider tuist --create
+struo connect --provider tuist --create
 ```
 
-Once signs you in when needed, creates the project under your personal account,
-and writes the provider binding into the repository root `once.toml`. Read
+Struo signs you in when needed, creates the project under your personal account,
+and writes the provider binding into the repository root `struo.toml`. Read
 [Connect A Project](/guide/infrastructure/connect) for account and project
 selection. The result is the same configuration described below.
 
 ## Configure The Cache
 
-Add a Tuist provider and cache binding to the repository root `once.toml`:
+Add a Tuist provider and cache binding to the repository root `struo.toml`:
 
 ```toml
 [infrastructures.tuist]
@@ -43,22 +43,22 @@ shared entries.
 
 ## Authenticate A Developer Machine
 
-Sign in once:
+Sign in struo:
 
 ```sh
-once auth login --provider tuist
+struo auth login --provider tuist
 ```
 
-Once reuses the stored session for cache reads, cache writes and artifact
+Struo reuses the stored session for cache reads, cache writes and artifact
 publication. Remove it when the machine should no longer access the provider:
 
 ```sh
-once auth logout --provider tuist
+struo auth logout --provider tuist
 ```
 
 ## Verify A Shared Result
 
-Use two machines with the same `once.toml`, script, and input. On the first
+Use two machines with the same `struo.toml`, script, and input. On the first
 machine, run the [example scripted workflow](/guide/scripted/):
 
 ```sh
@@ -69,7 +69,7 @@ The first run reports a cache miss. On a second machine whose local cache has
 not seen this result, create the same `message.txt` and run the script again:
 
 ```sh
-printf 'hello from Once\n' > message.txt
+printf 'hello from Struo\n' > message.txt
 ./scripts/greet.sh
 ```
 
@@ -80,7 +80,7 @@ confirms that Tuist supplied the recorded result.
 ## Publish Application Previews
 
 Configure Tuist as the artifact publication provider in the repository root
-`once.toml`. If the project already defines this provider for caching, reuse
+`struo.toml`. If the project already defines this provider for caching, reuse
 that definition and add only the artifact binding:
 
 ```toml
@@ -94,8 +94,8 @@ name = "tuist"
 ```
 
 ```sh
-once auth login --provider tuist
-once artifact publish MyApplication --track review
+struo auth login --provider tuist
+struo artifact publish MyApplication --track review
 ```
 
 Tuist receives the full immutable artifact closure through its authenticated
@@ -114,8 +114,8 @@ publish_on_build = ["MyApplication"]
 ```
 
 ```sh
-once artifact publish MyApplication --allow-on-build
-once build MyApplication
+struo artifact publish MyApplication --allow-on-build
+struo build MyApplication
 ```
 
 All requested builds must succeed, and the producer must approve the entire
@@ -135,13 +135,13 @@ closure to 20 GiB. Known native interfaces additionally create previews using
 the project's default preview visibility and existing Tuist distribution surfaces.
 Generic artifact contents remain private even in public projects:
 
-- `apple_application` exports `dev.once.apple-install.v2` on macOS, alongside
+- `apple_application` exports `dev.struo.apple-install.v2` on macOS, alongside
   its v1 installation description. The v2 interface points to the bundle ZIP
   and `spec.metadata_payload` with `once.apple_application.v1` metadata, and
   `spec.icon_payload` names a PNG icon when the bundle has one.
   Ad-hoc signed macOS and simulator applications are eligible for automatic
   publication and preview projection. Physical-device applications are not.
-- `android_binary` exports `dev.once.android-install.v1`, pointing to the APK
+- `android_binary` exports `dev.struo.android-install.v1`, pointing to the APK
   and `spec.metadata_payload` with `once.android_application.v1` metadata.
   `spec.icon_payload` names a PNG icon when the APK has one.
   Debug-signed, non-instrumentation APKs approve automatic publication.
@@ -160,14 +160,14 @@ The returned URL is not a permanent-byte availability guarantee.
 
 ## Follow Runs Live
 
-Once streams build and test runs to Tuist when the provider is configured and
+Struo streams build and test runs to Tuist when the provider is configured and
 the machine is authenticated. Each run publishes ordered event batches to the
 project's account and project, and the service returns a dashboard link that
-Once prints as the run starts. Open it to follow the graph, cache decisions,
+Struo prints as the run starts. Open it to follow the graph, cache decisions,
 and captured output while the run progresses.
 
 Live reporting is best-effort: a missing endpoint or an expired session is
-logged and never fails the run. Re-authenticate with `once auth login
+logged and never fails the run. Re-authenticate with `struo auth login
 --provider tuist` when the session expires.
 
 ## Authenticate Automation
@@ -190,7 +190,7 @@ supported automation runner. Log in without opening a browser before running
 cacheable commands:
 
 ```sh
-once auth login --provider tuist --no-browser
+struo auth login --provider tuist --no-browser
 ./scripts/greet.sh
 ```
 
@@ -203,7 +203,7 @@ permissions:
 
 steps:
   - uses: actions/checkout@v6
-  - run: once auth login --provider tuist --no-browser
+  - run: struo auth login --provider tuist --no-browser
   - run: ./scripts/greet.sh
 ```
 
@@ -211,7 +211,7 @@ The resulting session remains available for the rest of the job.
 
 ## Connection recovery
 
-Once retries transient cache failures during blob existence checks, uploads, and
+Struo retries transient cache failures during blob existence checks, uploads, and
 action-result publication with at most three attempts per RPC. This includes
 HTTP/2 connection retirement, where the cache asks the client to use a new
 connection. Interrupted uploads restart from the beginning with a fresh upload
@@ -226,7 +226,7 @@ three. Retries do not provide resumable uploads.
 
 When remote execution is enabled for the account, Tuist runs graph command
 actions on single-use Linux workers through the Bazel Remote Execution API.
-Once uploads only the input files the project cache does not already hold,
+Struo uploads only the input files the project cache does not already hold,
 asks the service to run the action, and reads outputs back from the same cache.
 Dependencies still decide when each action starts, and results stay in the
 project cache for later builds and other machines.
@@ -249,10 +249,10 @@ execution_image = "sha-REPLACE_WITH_THE_IMAGE_TAG"
 ```
 
 ```sh
-once build --remote your_target
+struo build --remote your_target
 ```
 
-The credential needs read and write access to the project. Once fails before
+The credential needs read and write access to the project. Struo fails before
 uploading anything when the account has no execution capacity, when the cache
 and execution name different projects, or when `execution_image` differs from
 the image the service advertises. Changing the image partitions build
@@ -260,15 +260,15 @@ configuration and cached results.
 
 The Tuist server must advertise the worker image, the cache endpoint, the
 account's execution concurrency, and the absolute directory where workers run
-actions. Once fails before uploading anything against a server that omits the
+actions. Struo fails before uploading anything against a server that omits the
 execution directory, because it cannot place outputs and working directories
 safely without it.
 
-Once keeps at most as many actions in flight as the account's advertised
+Struo keeps at most as many actions in flight as the account's advertised
 concurrency. When the service answers that its queue is full or that it is
-serving too many streams, Once waits with backoff and tries again instead of
-failing. If the service rejects the credential during a long build, Once
-refreshes it once and retries. Once waits for an action up to its timeout
+serving too many streams, Struo waits with backoff and tries again instead of
+failing. If the service rejects the credential during a long build, Struo
+refreshes it once and retries. Struo waits for an action up to its timeout
 plus twenty minutes, which covers the fifteen minutes Tuist keeps an action
 queued.
 
@@ -276,7 +276,7 @@ Workers run `linux/amd64`. Commands must resolve their tools inside the worker
 image, not on the computer that started the build, and declared outputs must
 sit beneath the command's working directory. Workers look up a bare program
 name such as `sh` only through the action's `PATH`. When an action declares no
-`PATH`, Once sends `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
+`PATH`, Struo sends `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
 the default of most Linux images. An action that times out on a worker fails as
 a timeout and its logs are still shown. The service may run an action
 more than once, for example after it loses an operation during a restart, so
@@ -285,7 +285,7 @@ such as network denial or a timeout longer than ten minutes, fail instead of
 running locally.
 
 Inputs go to the cache endpoint the execution service advertises. When
-`TUIST_CACHE_ENDPOINT` is set, Once uses it instead and logs a warning if it
+`TUIST_CACHE_ENDPOINT` is set, Struo uses it instead and logs a warning if it
 differs, so set it only to an endpoint the workers read from.
 
 ## Next
@@ -293,4 +293,4 @@ differs, so set it only to an endpoint the workers read from.
 Add an [execution provider](/guide/infrastructure/remote-execution) when the
 command should also run away from the current computer. Read
 [Memory](/guide/memory/) to inspect the status, cache state, and action identity
-that Once records for each run.
+that Struo records for each run.

@@ -44,11 +44,11 @@ fetch_elixir_deps() {
 }
 
 persist_shell_env() {
-  local marker="# once: mise shims"
+  local marker="# struo: mise shims"
   if ! grep -Fqx "$marker" "$HOME/.bash_profile" 2>/dev/null; then
     cat >>"$HOME/.bash_profile" <<'EOF'
 
-# once: mise shims
+# struo: mise shims
 case ":$PATH:" in
   *":$HOME/.local/share/mise/shims:"*) ;;
   *) export PATH="$HOME/.local/share/mise/shims:$PATH" ;;

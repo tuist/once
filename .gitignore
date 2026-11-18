@@ -1,6 +1,6 @@
 /target
-/.once/
-**/.once/
+/.struo/
+**/.struo/
 /.blick/runs/
 /.amp/portals/*
 /vendor

@@ -31,7 +31,7 @@ because there is no single rlib output for downstream host Rust compilation.
 | `env` | map&lt;string, string&gt; | no | `{}` | Environment variables for `rustc`, matching Buck2's `env` attribute |
 | `rustc_env` | map&lt;string, string&gt; | no | `{}` | Bazel-compatible `rustc` environment variables |
 | `rustc_env_files` | list&lt;string&gt; | no | `[]` | Files with `NAME=value` entries merged into the rustc environment before `env` and `rustc_env` |
-| `rustc_flags` | list&lt;string&gt; | no | `[]` | Additional `rustc` flags appended after Once-managed flags |
+| `rustc_flags` | list&lt;string&gt; | no | `[]` | Additional `rustc` flags appended after Struo-managed flags |
 | `cap_lints` | string | no | empty | Optional `rustc` lint cap passed as `--cap-lints`; generated Cargo dependencies use `allow` |
 | `linker_flags` | list&lt;string&gt; | no | `[]` | Additional linker flags lowered to `-C link-arg=...` |
 | `native_linkopts` | list&lt;string&gt; | no | `[]` | Linker flags propagated to Apple app or framework targets |
@@ -80,8 +80,8 @@ materialize `android_abi`, `dylib`, `android_native_libraries`, and
 
 | Output | Location |
 | --- | --- |
-| Apple static library | `.once/out/<consumer>/rust-mobile/<target>/apple/lib<crate_name>.a` or `.lib` |
-| Android shared library | `.once/out/<consumer>/rust-mobile/<target>/android/lib<crate_name>.so` |
+| Apple static library | `.struo/out/<consumer>/rust-mobile/<target>/apple/lib<crate_name>.a` or `.lib` |
+| Android shared library | `.struo/out/<consumer>/rust-mobile/<target>/android/lib<crate_name>.so` |
 
 ## Example
 

@@ -7,7 +7,7 @@ Runs ExUnit tests against an `elixir_app` provider already compiled with
 
 `elixir_test` depends on exactly one target that provides a complete
 `elixir_app` record, such as `elixir_library` or `mix_project`. The application
-must compile with `mix_env = "test"`. During the test action, Once creates a
+must compile with `mix_env = "test"`. During the test action, Struo creates a
 test layout with copies of the compiled application and dependency bytecode,
 then runs the tests without recompiling the application.
 
@@ -18,10 +18,10 @@ A changed library source invalidates both the compiled library and the dependent
 test result.
 By default, tests run through direct ExUnit with `elixir`, so a package does not
 need `mix.exs`. A `mix_project` dependency selects Mix mode automatically.
-Once includes declared project, configuration, data, tool, test, and lockfile
+Struo includes declared project, configuration, data, tool, test, and lockfile
 inputs in the action identity before running `mix test --no-compile
 --no-deps-check`. By default, the command runs in the original package directory,
-with a separate build tree. Library bytecode must already be built by Once in
+with a separate build tree. Library bytecode must already be built by Struo in
 both modes. Mix mode retains native test aliases while consuming the
 already-compiled application. It loads
 modules used by Mix's recompilation probes without rerunning project compilers.
@@ -54,11 +54,11 @@ This avoids differences between Elixir versions and summary-looking test output.
 | `no_start` | bool | no | `false` | Pass `--no-start` to `mix test` when `mix_config` enables Mix mode |
 | `ez_deps` | list&lt;string&gt; | no | `[]` | Reserved archive dependencies |
 | `tools` | list&lt;string&gt; | no | `[]` | Package-relative executable or support-file globs available to the test setup command |
-| `labels` | list&lt;string&gt; | no | `[]` | Labels exposed through `once_test_info` |
+| `labels` | list&lt;string&gt; | no | `[]` | Labels exposed through `struo_test_info` |
 | `timeout_ms` | int | no | empty | Optional test timeout in milliseconds |
 | `cacheable` | bool | no | `true` | Whether successful test results may be restored from the action cache |
 
-A non-empty `ez_deps` value fails validation because Once cannot place Erlang
+A non-empty `ez_deps` value fails validation because Struo cannot place Erlang
 archives on the ExUnit code path.
 
 `elixir_opts` applies only to direct ExUnit mode. When `mix_config` selects Mix
@@ -72,14 +72,14 @@ retain the cacheable default.
 ### Private native test layout
 
 Set `staged_workspace = true` for Mix suites that write or read paths relative
-to `_build/test/lib`. Once recreates a private workspace from declared project,
+to `_build/test/lib`. Struo recreates a private workspace from declared project,
 test, configuration, data, tool, manifest, lockfile, and dependency source inputs.
 Workspace-relative sibling path dependencies keep their layout. Unlisted files,
 developer build outputs, and repository metadata are not copied implicitly.
 Declare every fixture and dynamically loaded script through `srcs`, `data`,
 `config`, or `tools`, as appropriate.
 
-Before each execution, Once removes the previous private workspace and copies
+Before each execution, Struo removes the previous private workspace and copies
 fresh application and dependency trees, including their native `.mix` metadata,
 to its `_build/test/lib` directory. Mix application lookup and cwd-relative
 `_build` paths use the same tree. Tests cannot contaminate later runs by leaving
@@ -96,7 +96,7 @@ Symbolic-link inputs and application trees are rejected rather than permitting
 writes through links outside the private tree. Direct ExUnit mode and shell
 `setup` are unsupported with this option; use exact `setup_tasks` vectors for
 Mix setup. Test discovery reports the staged cwd and a `staged_workspace`
-metadata flag. The private cwd is prepared by Once, not a standalone command
+metadata flag. The private cwd is prepared by Struo, not a standalone command
 that can be executed before staging.
 
 For generated native test targets, configure
@@ -120,7 +120,7 @@ setup_tasks = [
 
 ## Providers
 
-The target emits `once_test_info`.
+The target emits `struo_test_info`.
 
 ## Capabilities
 

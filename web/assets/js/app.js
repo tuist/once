@@ -22,7 +22,7 @@ import "phoenix_html"
 // Establish Phoenix Socket and LiveView configuration.
 import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
-import {hooks as colocatedHooks} from "phoenix-colocated/once_site"
+import {hooks as colocatedHooks} from "phoenix-colocated/struo_site"
 import topbar from "../vendor/topbar"
 import {setupCodeCopy} from "../docs/shared/hooks/code-copy.js"
 

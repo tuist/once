@@ -1,15 +1,15 @@
 # Memory
 
-The cache answers whether Once can reuse a result. Memory records evidence about
+The cache answers whether Struo can reuse a result. Memory records evidence about
 work that already ran, so a person or tool can inspect its status and provenance
 without scraping terminal output.
 
-Once currently records action evidence after:
+Struo currently records action evidence after:
 
-- `once exec`
-- `once run`
-- `once build`
-- `once test`
+- `struo exec`
+- `struo run`
+- `struo build`
+- `struo test`
 
 Each record identifies its subject, pass or fail status, action digest, cache
 state, exit code, captured stream digests, and declared output digests when they

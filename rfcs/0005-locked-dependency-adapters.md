@@ -2,11 +2,11 @@
 
 ## Summary
 
-Once should integrate external ecosystems by importing the native package
+Struo should integrate external ecosystems by importing the native package
 manager's locked result into the typed build graph. The native manager remains
 authoritative for manifests, registry policy, version selection, and lockfile
 serialization. A Starlark resolver turns that result into ordinary synthetic
-targets that Once can validate, query, cache, and schedule.
+targets that Struo can validate, query, cache, and schedule.
 
 The first adapters cover Cargo for Rust, Mix and Hex for Elixir, Swift Package
 Manager, and Zig packages. They share one graph expansion contract and do not
@@ -14,7 +14,7 @@ add ecosystem branches to the Rust implementation.
 
 ## Decision
 
-A target kind may declare `resolver = function`. During graph loading, Once:
+A target kind may declare `resolver = function`. During graph loading, Struo:
 
 1. Reads the resolver target's declared text sources.
 2. Evaluates the resolver with typed attributes, source patterns, file
@@ -40,14 +40,14 @@ artifacts, build roles, and lockfile compatibility.
 
 Reimplementing those rules in each Starlark module would create a second
 package manager that can disagree with the native one. It would also make
-native command-line workflows and Once builds observe different dependency
+native command-line workflows and Struo builds observe different dependency
 graphs.
 
 The [PubGrub version-solving algorithm](https://github.com/dart-lang/pub/blob/master/doc/solver.md)
 remains useful when an ecosystem has no authoritative solver, or for explaining
 conflicts in normalized constraints. It is an optional backend, not the module
 contract. Hex and Swift Package Manager already use PubGrub-family solving, so
-Once should import their result instead of solving it again.
+Struo should import their result instead of solving it again.
 
 ## Evidence From Other Build Systems
 
@@ -70,7 +70,7 @@ managers, then its
 and [package graph parser](https://github.com/nrwl/nx/blob/master/packages/nx/src/plugins/js/lock-file/npm-parser.ts)
 create external graph nodes for tracking and pruning. Its name-and-version
 identity is intentionally sufficient for invalidation but too lossy for builds.
-Once preserves source, integrity, feature, platform, patch, and role context in
+Struo preserves source, integrity, feature, platform, patch, and role context in
 target attributes and labels.
 
 ## Lock And Source Model
@@ -150,7 +150,7 @@ dependency metadata.
   normalized records are unchanged.
 - Graph expansion is deterministic and rejects duplicate labels.
 - Native network access requires explicit opt-in when a locked Swift package is
-  not fully vendored. Once does not independently sandbox the package manager.
+  not fully vendored. Struo does not independently sandbox the package manager.
 
 ## Diagnostics And Agent Use
 
@@ -172,7 +172,7 @@ tools may not accept.
 This hides the package graph, serializes independent work, and invalidates the
 whole dependency set for small changes.
 
-### Checked-in generated Once manifests
+### Checked-in generated Struo manifests
 
 This makes manifest, native lock, generated targets, and source state drift
 independently. Deterministic graph expansion provides reviewable query output

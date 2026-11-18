@@ -10,6 +10,6 @@ templates still produce a warning and are retried rather than saved as failures.
 
 Xcode and native Swift package workspaces acquire independent pinned Git
 repositories concurrently before reading their manifests. Acquisition shares
-Once's CPU and memory admission budget with build execution, including
+Struo's CPU and memory admission budget with build execution, including
 `--cpu-limit` and `--memory-limit`. Shared repository locking, offline reuse,
 pinned revisions and ordinary-fetch fallback remain unchanged.

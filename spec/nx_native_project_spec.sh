@@ -1,6 +1,6 @@
 #shellcheck shell=bash
-# End-to-end specs for the graph Once derives from an Nx workspace without a
-# manifest of its own. Nx's project graph API provides the graph that Once
+# End-to-end specs for the graph Struo derives from an Nx workspace without a
+# manifest of its own. Nx's project graph API provides the graph that Struo
 # translates into task targets so it can schedule and cache them.
 
 Describe 'nx native project'
@@ -22,37 +22,37 @@ Describe 'nx native project'
   }
 
   target_ids() {
-    once --format json query targets | jq -r '.[] | "\(.kind) \(.id)"' | sort
+    struo --format json query targets | jq -r '.[] | "\(.kind) \(.id)"' | sort
   }
 
   rebuild_without_output() {
-    once --format json build probe || return
+    struo --format json build probe || return
     rm "$WORKSPACE/packages/app/result.txt"
-    once --format json build probe
+    struo --format json build probe
   }
 
   optional_outputs() {
-    result=$(once --format json build probe) || return
+    result=$(struo --format json build probe) || return
     printf '%s\n' "$result" | jq -er '.cache == "miss"' >/dev/null || return
     test ! -e "$WORKSPACE/packages/app/coverage" || return
-    result=$(once --format json build probe) || return
+    result=$(struo --format json build probe) || return
     printf '%s\n' "$result" | jq -er '.cache == "hit"' >/dev/null || return
     printf present > "$WORKSPACE/packages/app/mode"
-    result=$(once --format json build probe) || return
+    result=$(struo --format json build probe) || return
     printf '%s\n' "$result" | jq -er '.cache == "miss"' >/dev/null || return
     test -f "$WORKSPACE/packages/app/coverage/result.txt" || return
     rm -rf "$WORKSPACE/packages/app/coverage"
-    result=$(once --format json build probe) || return
+    result=$(struo --format json build probe) || return
     printf '%s\n' "$result" | jq -er '.cache == "hit"' >/dev/null || return
     printf fail > "$WORKSPACE/packages/app/mode"
-    if once --format json build probe > "$WORKSPACE/failure.stdout" 2> "$WORKSPACE/failure.stderr"; then
+    if struo --format json build probe > "$WORKSPACE/failure.stdout" 2> "$WORKSPACE/failure.stderr"; then
       return 1
     fi
     grep -q 'exit code 13' "$WORKSPACE/failure.stderr" || return
     printf 'miss hit miss hit; failure propagated\n'
   }
 
-  It 'derives Nx tasks with no once.toml present'
+  It 'derives Nx tasks with no struo.toml present'
     nx_toolchain_unavailable && Skip 'node and npm are required'
     copy_fixture nx_hello
     install_fixture || Skip 'npm install failed; skipping (offline?)'
@@ -63,7 +63,7 @@ Describe 'nx native project'
     The stdout should include 'nx_task hello_world__build'
     The stdout should include 'nx_test hello_world__test'
     The stdout should include 'nx_task greeter__build'
-    The path "$WORKSPACE/once.toml" should not be exist
+    The path "$WORKSPACE/struo.toml" should not be exist
   End
 
   It 'runs package-local executables and restores their declared outputs from cache'
@@ -72,7 +72,7 @@ Describe 'nx native project'
     printf '#!/bin/sh\nprintf workspace\n' > "$WORKSPACE/node_modules/.bin/nx-probe"
     printf '#!/bin/sh\nprintf package > result.txt\n' > "$WORKSPACE/packages/app/node_modules/.bin/nx-probe"
     chmod +x "$WORKSPACE/node_modules/.bin/nx-probe" "$WORKSPACE/packages/app/node_modules/.bin/nx-probe"
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [[target]]
 name = "probe"
 kind = "nx_task"
@@ -110,7 +110,7 @@ if (mode === 'present') {
   fs.writeFileSync('coverage/result.txt', 'actual coverage');
 }
 JS
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [[target]]
 name = "probe"
 kind = "nx_task"
@@ -133,19 +133,19 @@ TOML
   End
 
   generated_dependency_changes() {
-    SEED=first once --format json build consumer >/dev/null || return
+    SEED=first struo --format json build consumer >/dev/null || return
     test "$(cat "$WORKSPACE/result.txt")" = first || return
-    SEED=second once --format json build consumer >/dev/null || return
+    SEED=second struo --format json build consumer >/dev/null || return
     test "$(cat "$WORKSPACE/result.txt")" = second || return
     rm "$WORKSPACE/generated.txt" "$WORKSPACE/result.txt"
-    SEED=second once --format json build consumer >/dev/null || return
+    SEED=second struo --format json build consumer >/dev/null || return
     test "$(cat "$WORKSPACE/generated.txt")" = second || return
     cat "$WORKSPACE/result.txt"
   }
 
   It 'invalidates consumers when generated dependency contents change without source changes'
     command -v node >/dev/null 2>&1 || Skip 'node is required'
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [[target]]
 name = "generate"
 kind = "nx_task"
@@ -181,7 +181,7 @@ TOML
 
   It 'does not skip failing test prerequisites of builds'
     command -v node >/dev/null 2>&1 || Skip 'node is required'
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [[target]]
 name = "check"
 kind = "nx_test"
@@ -205,7 +205,7 @@ commands = ["printf built > result.txt"]
 outputs = ["result.txt"]
 TOML
 
-    When call once build consumer
+    When call struo build consumer
     The status should be failure
     The stderr should include 'exit code 7'
     The path "$WORKSPACE/result.txt" should not be exist
@@ -216,7 +216,7 @@ TOML
     printf '%s\n' '{"private":true,"devDependencies":{"nx":"^23.0.0","@nx/devkit":"^23.0.0"}}' > "$WORKSPACE/package.json"
     install_fixture || Skip 'npm install failed; skipping (offline?)'
     printf '%s\n' '{/* native Nx accepts comments */ "parallel":1,}' > "$WORKSPACE/nx.json"
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [[target]]
 name = "probe"
 kind = "nx_task"
@@ -228,17 +228,17 @@ executor = "nx:noop"
 executor_graph = '{"nodes":{"app":{"name":"app","type":"app","data":{"root":".","targets":{"build":{"executor":"nx:noop"}}}}},"dependencies":{}}'
 TOML
 
-    When call once --format json build probe
+    When call struo --format json build probe
     The status should be success
     The stderr should be blank
     The stdout should include '"status":"completed"'
   End
 
   compiler_dependency_outputs() {
-    result=$(once --format json build app__build) || return
+    result=$(struo --format json build app__build) || return
     printf '%s\n' "$result" | jq -er '.cache == "miss"' >/dev/null || return
     rm -rf "$WORKSPACE/dist"
-    result=$(once --format json build app__build) || return
+    result=$(struo --format json build app__build) || return
     printf '%s\n' "$result" | jq -er '.cache == "hit"' >/dev/null || return
     (cd "$WORKSPACE" && node -e 'console.log(require("./dist/app/index.js").answer, require("./dist/app/package.json").dependencies.tslib)')
   }
@@ -250,13 +250,13 @@ TOML
 JSON
     install_fixture || Skip 'npm install failed; skipping (offline?)'
     printf '%s\n' '{"plugins":["./dotenv-plugin.cjs"]}' > "$WORKSPACE/nx.json"
-    printf '%s\n' 'ONCE_NX_GRAPH_BASE=loaded' 'ONCE_NX_GRAPH_VALUE=${ONCE_NX_GRAPH_BASE}-local' > "$WORKSPACE/.local.env"
-    printf '%s\n' 'ONCE_NX_GRAPH_VALUE=wrong' > "$WORKSPACE/.env.local"
+    printf '%s\n' 'STRUO_NX_GRAPH_BASE=loaded' 'STRUO_NX_GRAPH_VALUE=${STRUO_NX_GRAPH_BASE}-local' > "$WORKSPACE/.local.env"
+    printf '%s\n' 'STRUO_NX_GRAPH_VALUE=wrong' > "$WORKSPACE/.env.local"
     cat > "$WORKSPACE/dotenv-plugin.cjs" <<'JS'
 module.exports = {
   name: 'dotenv-probe',
   createNodes: ['**/project.json', () => {
-    if (process.env.ONCE_NX_GRAPH_VALUE !== 'loaded-local') {
+    if (process.env.STRUO_NX_GRAPH_VALUE !== 'loaded-local') {
       throw new Error('root dotenv precedence and expansion were not preserved');
     }
     return { projects: {} };

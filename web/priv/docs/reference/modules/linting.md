@@ -2,17 +2,17 @@
 
 Use a project-local lint target kind when no built-in integration covers an
 analyzer. The module owns tool-specific command behavior and report
-conversion. Once provides generic action execution, caching, normalized
+conversion. Struo provides generic action execution, caching, normalized
 findings, failure policy, and evidence.
 
 Start by checking whether a built-in integration already exists:
 
 ```sh
-once query target-kinds
+struo query target-kinds
 ```
 
 The [Linting guide](/guide/graph/linting) introduces the built-in analyzers and
-the `once lint` workflow.
+the `struo lint` workflow.
 
 ## Choose an integration shape
 
@@ -25,14 +25,14 @@ There are two useful shapes:
    that converts it.
 
 Keep conversion in the target kind. Do not add analyzer names or native report
-parsers to Once's Rust execution layer.
+parsers to Struo's Rust execution layer.
 
 ## Get the current authoring contract
 
-Ask the installed Once version for its exact Starlark contract:
+Ask the installed Struo version for its exact Starlark contract:
 
 ```sh
-once query module-contract --format json
+struo query module-contract --format json
 ```
 
 The result contains `lint_starter`, `lint_target_starter`,
@@ -97,7 +97,7 @@ def _scripted_lint_impl(ctx):
         "target_kind": "scripted_lint",
         "affected_inputs": inputs,
         "lint_info": {
-            "schema": "once.lint_info.v1",
+            "schema": "struo.lint_info.v1",
             "target": ctx["label"]["id"],
             "analyzer": {
                 "type": ctx["attr"]["analyzer"],
@@ -131,7 +131,7 @@ scripted_lint = target_kind(
         attr("args", "list<string>", default = "[]", configurable = False),
         attr("findings_exit_code", "int", default = "1", configurable = False),
     ],
-    providers = ["once_lint_info"],
+    providers = ["struo_lint_info"],
     capabilities = [capability("lint", ["default", "lint_results"])],
     tools = [tool("python", executables = ["python3", "python"])],
     impl = _scripted_lint_impl,
@@ -150,14 +150,14 @@ Important parts of this contract:
 - `success_exit_codes` separates valid findings from tool crashes.
 - `lint_info.outputs.sarif` names the portable report produced by the action.
 - `lint_info.outputs.results` reserves the normalized result written by
-  `once lint` after it reads the portable report.
-- Both output fields must contain non-empty workspace-relative paths. Once
+  `struo lint` after it reads the portable report.
+- Both output fields must contain non-empty workspace-relative paths. Struo
   validates them before running the target actions and returns a structured
   repair diagnostic when the provider contract is incomplete.
 
 ## Register and declare the target
 
-Register the module and target in the root `once.toml`:
+Register the module and target in the root `struo.toml`:
 
 ```toml
 [modules]
@@ -180,7 +180,7 @@ Pin the adapter runtime in the repository:
 mise use python@latest
 ```
 
-The `lint_adapter_starter` returned by `once query module-contract` is a
+The `lint_adapter_starter` returned by `struo query module-contract` is a
 complete adapter that reports lines containing `TODO`. Save it as
 `tools/lint_adapter.py`, or replace it with an adapter for the analyzer being
 integrated.
@@ -253,23 +253,23 @@ converter change invalidates only the conversion and its downstream result.
 Validate the module before registering or executing it:
 
 ```sh
-once query validate-module modules/scripted_lint.star --format json
-once query validate-workspace
-once query schema scripted_lint
+struo query validate-module modules/scripted_lint.star --format json
+struo query validate-workspace
+struo query schema scripted_lint
 ```
 
 Probe its filesystem contract in a private validation sandbox:
 
 ```sh
-once query validate-actions lint --capability lint
+struo query validate-actions lint --capability lint
 ```
 
 Run it twice and inspect the current normalized result and durable evidence:
 
 ```sh
-once lint lint
-once --format json lint lint
-once query evidence lint --limit 2
+struo lint lint
+struo --format json lint lint
+struo query evidence lint --limit 2
 ```
 
 The second unchanged run should reuse the report. Verify that findings contain
@@ -288,6 +288,6 @@ Before publishing or sharing a lint target kind, confirm that:
 - the analyzer version and adapter behavior participate in action identity;
 - only documented finding codes appear in `success_exit_codes`;
 - invalid or missing reports fail instead of becoming empty successful runs;
-- the target emits `once_lint_info` and the `lint` capability;
+- the target emits `struo_lint_info` and the `lint` capability;
 - a real starter can be materialized, validated, and executed;
 - repeated unchanged execution demonstrates cache reuse.

@@ -4,7 +4,7 @@ date: 2026-11-03
 ---
 
 `apple_application` now accepts `signing = "development"` with a
-`signing_identity` and `provisioning_profile`. Once embeds the profile, derives
+`signing_identity` and `provisioning_profile`. Struo embeds the profile, derives
 the application identifier, team, and `get-task-allow` entitlements from it,
 rejects entitlements the profile does not grant, and signs embedded frameworks
 and resource bundles with the same identity before the application.

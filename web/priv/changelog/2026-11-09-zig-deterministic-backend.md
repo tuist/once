@@ -15,5 +15,5 @@ silently switching backends.
 
 Unstripped compilation also bypasses caching because LLVM debug and symbol
 metadata can differ across identical builds. Debug information remains enabled
-by default. Explicitly enabling stripping permits caching with LLVM; Once does
+by default. Explicitly enabling stripping permits caching with LLVM; Struo does
 not remove debugging information automatically.

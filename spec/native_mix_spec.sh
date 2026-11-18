@@ -86,7 +86,7 @@ defmodule AppTest do
     assert TestSupport.value() == :test
   end
   test "native test environment and host tools" do
-    assert System.get_env("ONCE_NATIVE_TEST_VALUE") == "present"
+    assert System.get_env("STRUO_NATIVE_TEST_VALUE") == "present"
     assert System.find_executable("native-test-helper")
   end
 end
@@ -96,16 +96,16 @@ EX
     chmod +x "$SPEC_ROOT/host-tools/native-test-helper"
   }
 
-  native_once() {
-    (cd "$WORKSPACE/app" && PATH="$SPEC_ROOT/host-tools:$PATH" ONCE_NATIVE_TEST_VALUE=present "$ONCE_BIN" --format json "$@")
+  native_struo() {
+    (cd "$WORKSPACE/app" && PATH="$SPEC_ROOT/host-tools:$PATH" STRUO_NATIVE_TEST_VALUE=present "$STRUO_BIN" --format json "$@")
   }
 
   exercise_dependency_free_tests() {
     mkdir -p "$WORKSPACE/app"
-    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/mix-workspace-native-project/." "$WORKSPACE/app/"
-    rm "$WORKSPACE/app/once.toml"
-    native_once test > "$SPEC_ROOT/test.json" 2> "$SPEC_ROOT/test.err" || { cat "$SPEC_ROOT/test.err"; return 1; }
-    python3 - "$WORKSPACE/app/.once/out/mix_tests/test/test_results.json" <<'PY'
+    cp -R "$REPO_ROOT/crates/struo-frontend/prelude/examples/mix-workspace-native-project/." "$WORKSPACE/app/"
+    rm "$WORKSPACE/app/struo.toml"
+    native_struo test > "$SPEC_ROOT/test.json" 2> "$SPEC_ROOT/test.err" || { cat "$SPEC_ROOT/test.err"; return 1; }
+    python3 - "$WORKSPACE/app/.struo/out/mix_tests/test/test_results.json" <<'PY'
 import json, sys
 result = json.load(open(sys.argv[1]))
 assert result["status"] == "passed", result
@@ -115,28 +115,28 @@ PY
   }
 
   exercise_native_commands() {
-    native_once build > "$SPEC_ROOT/build.json" 2> "$SPEC_ROOT/build.err" || { cat "$SPEC_ROOT/build.err"; return 1; }
-    rm -rf "$WORKSPACE/.once/out"
-    native_once build > "$SPEC_ROOT/restored.json" 2> "$SPEC_ROOT/restored.err" || { cat "$SPEC_ROOT/restored.err"; return 1; }
+    native_struo build > "$SPEC_ROOT/build.json" 2> "$SPEC_ROOT/build.err" || { cat "$SPEC_ROOT/build.err"; return 1; }
+    rm -rf "$WORKSPACE/.struo/out"
+    native_struo build > "$SPEC_ROOT/restored.json" 2> "$SPEC_ROOT/restored.err" || { cat "$SPEC_ROOT/restored.err"; return 1; }
     grep -q '"cache":"hit"' "$SPEC_ROOT/restored.json" || return
-    test -f "$WORKSPACE/.once/out/app/mix_application_dev/mix/dev/lib/app/priv/compiled" || return
-    MIX_ENV=test native_once build > "$SPEC_ROOT/test-build.json" 2> "$SPEC_ROOT/test-build.err" || { cat "$SPEC_ROOT/test-build.err"; return 1; }
-    test -f "$WORKSPACE/.once/out/app/mix_application_test/mix/test/lib/app/ebin/Elixir.TestSupport.beam" || return
-    rm -rf "$WORKSPACE/.once/tmp"
-    native_once test > "$SPEC_ROOT/test.json" 2> "$SPEC_ROOT/test.err" || { cat "$SPEC_ROOT/test.json" "$SPEC_ROOT/test.err" "$WORKSPACE/.once/out/app/mix_tests/test/elixir-test.log"; return 1; }
-    rm -rf "$WORKSPACE/.once/tmp"
-    native_once test > "$SPEC_ROOT/retest.json" 2> "$SPEC_ROOT/retest.err" || { cat "$SPEC_ROOT/retest.json" "$SPEC_ROOT/retest.err" "$WORKSPACE/.once/out/app/mix_tests/test/elixir-test.log"; return 1; }
+    test -f "$WORKSPACE/.struo/out/app/mix_application_dev/mix/dev/lib/app/priv/compiled" || return
+    MIX_ENV=test native_struo build > "$SPEC_ROOT/test-build.json" 2> "$SPEC_ROOT/test-build.err" || { cat "$SPEC_ROOT/test-build.err"; return 1; }
+    test -f "$WORKSPACE/.struo/out/app/mix_application_test/mix/test/lib/app/ebin/Elixir.TestSupport.beam" || return
+    rm -rf "$WORKSPACE/.struo/tmp"
+    native_struo test > "$SPEC_ROOT/test.json" 2> "$SPEC_ROOT/test.err" || { cat "$SPEC_ROOT/test.json" "$SPEC_ROOT/test.err" "$WORKSPACE/.struo/out/app/mix_tests/test/elixir-test.log"; return 1; }
+    rm -rf "$WORKSPACE/.struo/tmp"
+    native_struo test > "$SPEC_ROOT/retest.json" 2> "$SPEC_ROOT/retest.err" || { cat "$SPEC_ROOT/retest.json" "$SPEC_ROOT/retest.err" "$WORKSPACE/.struo/out/app/mix_tests/test/elixir-test.log"; return 1; }
     [ "$(wc -l < "$WORKSPACE/app/setup-runs.txt" | tr -d ' ')" = 2 ] || return
-    test ! -f "$WORKSPACE/once.toml" || return
-    test ! -f "$WORKSPACE/app/once.toml" || return
-    python3 - "$WORKSPACE/.once/out/app/mix_tests/test/test_results.json" <<'PY'
+    test ! -f "$WORKSPACE/struo.toml" || return
+    test ! -f "$WORKSPACE/app/struo.toml" || return
+    python3 - "$WORKSPACE/.struo/out/app/mix_tests/test/test_results.json" <<'PY'
 import json, sys
 result = json.load(open(sys.argv[1]))
 assert result["status"] == "passed", result
 assert result["summary"]["total"] == 2, result
 assert result["summary"]["passed"] == 2, result
 assert result["summary"]["failed"] == 0, result
-assert result["artifacts"]["logs"] == [".once/out/app/mix_tests/test/elixir-test.log"], result
+assert result["artifacts"]["logs"] == [".struo/out/app/mix_tests/test/elixir-test.log"], result
 PY
   }
 
@@ -150,9 +150,9 @@ defmodule FailingTest do
   end
 end
 EX
-    native_once test > "$SPEC_ROOT/failed.json" 2> "$SPEC_ROOT/failed.err"
+    native_struo test > "$SPEC_ROOT/failed.json" 2> "$SPEC_ROOT/failed.err"
     [ "$?" = 1 ] || return 1
-    python3 - "$WORKSPACE/.once/out/app/mix_tests/test/test_results.json" <<'PY'
+    python3 - "$WORKSPACE/.struo/out/app/mix_tests/test/test_results.json" <<'PY'
 import json, sys
 result = json.load(open(sys.argv[1]))
 assert result["status"] == "failed", result
@@ -165,9 +165,9 @@ PY
   exercise_resource_invalidation() {
     exercise_native_commands || return
     printf '2.0.0' > "$WORKSPACE/app/VERSION"
-    native_once test > "$SPEC_ROOT/changed-resource.json" 2> "$SPEC_ROOT/changed-resource.err" || { cat "$SPEC_ROOT/changed-resource.err" "$WORKSPACE/.once/out/app/mix_tests/test/elixir-test.log"; return 1; }
-    native_once build > "$SPEC_ROOT/changed-build.json" 2> "$SPEC_ROOT/changed-build.err" || return
-    native_once build > "$SPEC_ROOT/unchanged-build.json" 2> "$SPEC_ROOT/unchanged-build.err" || return
+    native_struo test > "$SPEC_ROOT/changed-resource.json" 2> "$SPEC_ROOT/changed-resource.err" || { cat "$SPEC_ROOT/changed-resource.err" "$WORKSPACE/.struo/out/app/mix_tests/test/elixir-test.log"; return 1; }
+    native_struo build > "$SPEC_ROOT/changed-build.json" 2> "$SPEC_ROOT/changed-build.err" || return
+    native_struo build > "$SPEC_ROOT/unchanged-build.json" 2> "$SPEC_ROOT/unchanged-build.err" || return
     grep -q '"cache":"hit"' "$SPEC_ROOT/unchanged-build.json"
   }
 
@@ -183,8 +183,8 @@ defmodule NoiseTest do
   test "skipped", do: :ok
 end
 EX
-    native_once test > "$SPEC_ROOT/noise.json" 2> "$SPEC_ROOT/noise.err" || { cat "$SPEC_ROOT/noise.err" "$WORKSPACE/.once/out/app/mix_tests/test/elixir-test.log"; return 1; }
-    python3 - "$WORKSPACE/.once/out/app/mix_tests/test/test_results.json" <<'PY'
+    native_struo test > "$SPEC_ROOT/noise.json" 2> "$SPEC_ROOT/noise.err" || { cat "$SPEC_ROOT/noise.err" "$WORKSPACE/.struo/out/app/mix_tests/test/elixir-test.log"; return 1; }
+    python3 - "$WORKSPACE/.struo/out/app/mix_tests/test/test_results.json" <<'PY'
 import json, sys
 result = json.load(open(sys.argv[1]))
 assert result["status"] == "passed", result
@@ -200,9 +200,9 @@ defmodule InvalidTest do
   test "invalid", do: :ok
 end
 EX
-    native_once test > "$SPEC_ROOT/invalid.json" 2> "$SPEC_ROOT/invalid.err"
+    native_struo test > "$SPEC_ROOT/invalid.json" 2> "$SPEC_ROOT/invalid.err"
     [ "$?" = 1 ] || return 1
-    python3 - "$WORKSPACE/.once/out/app/mix_tests/test/test_results.json" <<'PY'
+    python3 - "$WORKSPACE/.struo/out/app/mix_tests/test/test_results.json" <<'PY'
 import json, sys
 result = json.load(open(sys.argv[1]))
 assert result["status"] == "failed", result
@@ -211,13 +211,13 @@ PY
   }
 
   exercise_source_location() {
-    native_once build > "$SPEC_ROOT/location-first.json" 2> "$SPEC_ROOT/location-first.err" || return
+    native_struo build > "$SPEC_ROOT/location-first.json" 2> "$SPEC_ROOT/location-first.err" || return
     destination="$SPEC_ROOT/other-workspace"
     mkdir -p "$destination/.git"
     cp -R "$WORKSPACE/app" "$WORKSPACE/helper" "$destination/"
     WORKSPACE="$destination"
-    native_once build > "$SPEC_ROOT/location-second.json" 2> "$SPEC_ROOT/location-second.err" || return
-    (cd "$WORKSPACE/app" && elixir -pa "$WORKSPACE/.once/out/app/mix_application_dev/mix/dev/lib/app/ebin" -e 'unless App.source_root() == File.cwd!(), do: raise("cached bytecode retained a different source directory")')
+    native_struo build > "$SPEC_ROOT/location-second.json" 2> "$SPEC_ROOT/location-second.err" || return
+    (cd "$WORKSPACE/app" && elixir -pa "$WORKSPACE/.struo/out/app/mix_application_dev/mix/dev/lib/app/ebin" -e 'unless App.source_root() == File.cwd!(), do: raise("cached bytecode retained a different source directory")')
   }
 
   prepare_staged_tests() {
@@ -226,14 +226,14 @@ PY
     printf 'developer output' > "$WORKSPACE/app/_build/test/lib/app/developer-sentinel"
     printf 'not declared' > "$WORKSPACE/app/undeclared-only"
     printf 'first' > "$WORKSPACE/app/test/fixtures/value"
-    printf '[workspace]\ninclude = ["app/once.toml"]\n' > "$WORKSPACE/once.toml"
+    printf '[workspace]\ninclude = ["app/struo.toml"]\n' > "$WORKSPACE/struo.toml"
     cat >> "$WORKSPACE/app/mix.exs" <<'EX'
 defmodule Mix.Tasks.PrivateSetup do
   use Mix.Task
   def run([argument]), do: File.write!("private-setup-marker", argument)
 end
 EX
-    cat > "$WORKSPACE/app/once.toml" <<'TOML'
+    cat > "$WORKSPACE/app/struo.toml" <<'TOML'
 [[target]]
 name = "dependencies"
 kind = "mix_dependencies"
@@ -281,7 +281,7 @@ defmodule StagedTest do
     refute File.exists?("previous-cwd-write")
     home = System.user_home!()
     refute File.exists?(Path.join(home, "previous-home-write"))
-    assert System.get_env("ONCE_NATIVE_TEST_VALUE") == "present"
+    assert System.get_env("STRUO_NATIVE_TEST_VALUE") == "present"
     assert System.find_executable("native-test-helper")
     assert File.read!("../helper/mix.exs") =~ "Helper.MixProject"
     File.write!(Path.join(app, "previous-test-write"), "private")
@@ -294,22 +294,22 @@ EX
   }
 
   exercise_staged_tests() {
-    native_once -C "$WORKSPACE" test app/staged_tests > "$SPEC_ROOT/staged-first.json" 2> "$SPEC_ROOT/staged-first.err" || { cat "$SPEC_ROOT/staged-first.err"; return 1; }
-    grep -q 'fixture=first' "$WORKSPACE/.once/out/app/staged_tests/test/elixir-test.log" || return
-    native_once -C "$WORKSPACE" test app/staged_tests > "$SPEC_ROOT/staged-repeat.json" 2> "$SPEC_ROOT/staged-repeat.err" || { cat "$SPEC_ROOT/staged-repeat.err"; return 1; }
+    native_struo -C "$WORKSPACE" test app/staged_tests > "$SPEC_ROOT/staged-first.json" 2> "$SPEC_ROOT/staged-first.err" || { cat "$SPEC_ROOT/staged-first.err"; return 1; }
+    grep -q 'fixture=first' "$WORKSPACE/.struo/out/app/staged_tests/test/elixir-test.log" || return
+    native_struo -C "$WORKSPACE" test app/staged_tests > "$SPEC_ROOT/staged-repeat.json" 2> "$SPEC_ROOT/staged-repeat.err" || { cat "$SPEC_ROOT/staged-repeat.err"; return 1; }
     printf 'second' > "$WORKSPACE/app/test/fixtures/value"
-    native_once -C "$WORKSPACE" test app/staged_tests > "$SPEC_ROOT/staged-changed.json" 2> "$SPEC_ROOT/staged-changed.err" || return
-    grep -q 'fixture=second' "$WORKSPACE/.once/out/app/staged_tests/test/elixir-test.log" || return
+    native_struo -C "$WORKSPACE" test app/staged_tests > "$SPEC_ROOT/staged-changed.json" 2> "$SPEC_ROOT/staged-changed.err" || return
+    grep -q 'fixture=second' "$WORKSPACE/.struo/out/app/staged_tests/test/elixir-test.log" || return
     cat >> "$WORKSPACE/app/test/staged_test.exs" <<'EX'
 defmodule StagedFailureTest do
   use ExUnit.Case
   test "intentional staged failure", do: flunk("intentional staged failure")
 end
 EX
-    native_once -C "$WORKSPACE" test app/staged_tests > "$SPEC_ROOT/staged-failed.json" 2> "$SPEC_ROOT/staged-failed.err"
+    native_struo -C "$WORKSPACE" test app/staged_tests > "$SPEC_ROOT/staged-failed.json" 2> "$SPEC_ROOT/staged-failed.err"
     [ "$?" = 2 ] || return 1
-    grep -q 'intentional staged failure' "$WORKSPACE/.once/out/app/staged_tests/test/elixir-test.log" || return
-    python3 - "$WORKSPACE/.once/out/app/staged_tests/test/test_results.json" <<'PY'
+    grep -q 'intentional staged failure' "$WORKSPACE/.struo/out/app/staged_tests/test/elixir-test.log" || return
+    python3 - "$WORKSPACE/.struo/out/app/staged_tests/test/test_results.json" <<'PY'
 import json, sys
 result = json.load(open(sys.argv[1]))
 assert result["status"] == "failed", result
@@ -321,13 +321,13 @@ PY
     [ "$(cat "$WORKSPACE/app/_build/test/lib/app/developer-sentinel")" = 'developer output' ] || return
     [ ! -e "$WORKSPACE/app/previous-cwd-write" ] || return
     [ ! -e "$WORKSPACE/app/private-setup-marker" ] || return
-    [ ! -e "$WORKSPACE/.once/out/app/application/mix/test/lib/app/previous-test-write" ] || return
+    [ ! -e "$WORKSPACE/.struo/out/app/application/mix/test/lib/app/previous-test-write" ] || return
     [ ! -e "$HOME/previous-home-write" ] || return
     ln -s "$WORKSPACE/app/VERSION" "$WORKSPACE/app/test/fixtures/value-link"
     printf '\n' > "$WORKSPACE/app/test/staged_test.exs"
-    sed 's|data = \["test/fixtures/value"\]|data = ["test/fixtures/*"]|' "$WORKSPACE/app/once.toml" > "$SPEC_ROOT/staged.toml"
-    mv "$SPEC_ROOT/staged.toml" "$WORKSPACE/app/once.toml"
-    native_once -C "$WORKSPACE" test app/staged_tests > "$SPEC_ROOT/staged-link.json" 2> "$SPEC_ROOT/staged-link.err"
+    sed 's|data = \["test/fixtures/value"\]|data = ["test/fixtures/*"]|' "$WORKSPACE/app/struo.toml" > "$SPEC_ROOT/staged.toml"
+    mv "$SPEC_ROOT/staged.toml" "$WORKSPACE/app/struo.toml"
+    native_struo -C "$WORKSPACE" test app/staged_tests > "$SPEC_ROOT/staged-link.json" 2> "$SPEC_ROOT/staged-link.err"
     [ "$?" != 0 ] || return 1
     grep -q 'staged_workspace does not support symbolic links' "$SPEC_ROOT/staged-link.err"
   }

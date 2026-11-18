@@ -1,0 +1,124 @@
+[[target]]
+name = "struo_frontend"
+kind = "rust_library"
+deps = [
+  "crates/struo-presentation/struo_presentation",
+  "crates/struo-host-tree/struo_host_tree",
+  "crates/struo-core/struo_core",
+  "cargo_dependencies",
+]
+srcs = ["src/**/*.rs", "prelude/**/*.star", "prelude/examples/**"]
+
+[target.attrs]
+crate_name = "struo_frontend"
+crate_root = "src/lib.rs"
+edition = "2021"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/struo-frontend"
+CARGO_PKG_NAME = "struo-frontend"
+CARGO_PKG_VERSION = "0.0.0"
+
+# Tests
+
+[[target]]
+name = "struo_frontend_unit_tests"
+kind = "rust_test"
+deps = [
+  "crates/struo-presentation/struo_presentation",
+  "crates/struo-host-tree/struo_host_tree",
+  "crates/struo-core/struo_core",
+  "cargo_dependencies",
+]
+srcs = [
+  "src/**/*.rs",
+  "prelude/**/*.star",
+  "prelude/examples/**",
+]
+
+[target.attrs]
+crate_name = "struo_frontend"
+crate_root = "src/lib.rs"
+edition = "2021"
+cargo_package = "struo-frontend"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/struo-frontend"
+CARGO_PKG_NAME = "struo-frontend"
+CARGO_PKG_VERSION = "0.0.0"
+
+[[target]]
+name = "cmake_tests"
+kind = "rust_test"
+deps = [
+  "crates/struo-frontend/struo_frontend",
+  "crates/struo-host-tree/struo_host_tree",
+  "cargo_dependencies",
+]
+srcs = ["tests/cmake.rs"]
+
+[target.attrs]
+crate_name = "cmake"
+crate_root = "tests/cmake.rs"
+edition = "2021"
+cargo_package = "struo-frontend"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/struo-frontend"
+CARGO_PKG_NAME = "struo-frontend"
+CARGO_PKG_VERSION = "0.0.0"
+
+[[target]]
+name = "examples_tests"
+kind = "rust_test"
+deps = [
+  "crates/struo-frontend/struo_frontend",
+  "crates/struo-host-tree/struo_host_tree",
+  "cargo_dependencies",
+]
+srcs = ["tests/examples.rs", "../../fixtures/xcode_asset_symbols/**"]
+
+[target.attrs]
+crate_name = "examples"
+crate_root = "tests/examples.rs"
+edition = "2021"
+cargo_package = "struo-frontend"
+# These tests load and build examples with the host toolchains on PATH,
+# which are not declared inputs, so their results are never replayed.
+env_inherit = ["PATH", "HOME"]
+cacheable = false
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/struo-frontend"
+CARGO_PKG_NAME = "struo-frontend"
+CARGO_PKG_VERSION = "0.0.0"
+
+[[target]]
+name = "prelude_tests"
+kind = "rust_test"
+deps = [
+  "crates/struo-frontend/struo_frontend",
+  "crates/struo-host-tree/struo_host_tree",
+  "crates/struo-core/struo_core",
+  "cargo_dependencies",
+]
+srcs = [
+  "tests/prelude.rs",
+  "tests/prelude/**/*.rs",
+  "prelude/**",
+]
+
+[target.attrs]
+crate_name = "prelude"
+crate_root = "tests/prelude.rs"
+edition = "2021"
+cargo_package = "struo-frontend"
+# These tests load and build examples with the host toolchains on PATH,
+# which are not declared inputs, so their results are never replayed.
+env_inherit = ["PATH", "HOME"]
+cacheable = false
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/struo-frontend"
+CARGO_PKG_NAME = "struo-frontend"
+CARGO_PKG_VERSION = "0.0.0"

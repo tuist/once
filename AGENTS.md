@@ -1,4 +1,4 @@
-# Working on Once
+# Working on Struo
 
 Conventions for humans and AI agents contributing to this repo.
 
@@ -21,36 +21,36 @@ inside each module file. Cross-module integration tests go under
 
 ## Manifest Files
 
-Once has one configuration family: workspace and package `once.toml`
-files plus in-source script `# once` headers. Do not add a new
-Once-owned dotfile, a parallel config format, or a second layer that
-overrides `once.toml`. Ecosystem manifests that Once reads
-cooperatively (such as `Cargo.toml` and `Package.swift`) are not Once
+Struo has one configuration family: workspace and package `struo.toml`
+files plus in-source script `# struo` headers. Do not add a new
+Struo-owned dotfile, a parallel config format, or a second layer that
+overrides `struo.toml`. Ecosystem manifests that Struo reads
+cooperatively (such as `Cargo.toml` and `Package.swift`) are not Struo
 configuration and are unaffected by this rule.
 
-- Per-package manifests are named `once.toml`.
-- The `.once/` directory at the workspace root is cache and runtime
+- Per-package manifests are named `struo.toml`.
+- The `.struo/` directory at the workspace root is cache and runtime
   state, not a manifest. It is gitignored.
-- Root `once.toml` configures workspace-level settings such as cache
-  providers. Package `once.toml` files may grow build graph declarations
-  as Once expands beyond script-only workflows.
-- Scripts declare their execution metadata with `# once` headers in the
+- Root `struo.toml` configures workspace-level settings such as cache
+  providers. Package `struo.toml` files may grow build graph declarations
+  as Struo expands beyond script-only workflows.
+- Scripts declare their execution metadata with `# struo` headers in the
   script file.
 
 ## Scope
 
-Once starts with cacheable and remotely executable scripts plus the
+Struo starts with cacheable and remotely executable scripts plus the
 runtime API, and is expanding toward build-system capabilities. Scripts
-remain the migration ramp into the Once build graph. Build graph work
+remain the migration ramp into the Struo build graph. Build graph work
 should follow RFCs and keep the agent-facing graph model typed,
 queryable, and structurally editable.
 
 Keep the current CLI surface centered on:
 
-- `once exec` for literal commands and annotated script files
-- `once cache` for CAS and action-cache primitives
-- `once runtime` for JSON-RPC runtime sessions
-- `once auth` and `once toolchain` for supporting infrastructure
+- `struo exec` for literal commands and annotated script files
+- `struo cache` for CAS and action-cache primitives
+- `struo runtime` for JSON-RPC runtime sessions
+- `struo auth` and `struo toolchain` for supporting infrastructure
 
 New build graph CLI, target kind, and query surfaces should be introduced
 deliberately and documented in the relevant RFC or implementation plan.
@@ -65,7 +65,7 @@ same shape instead of requiring parallel CLI or MCP surfaces.
 
 ## Graph Modules
 
-Once exposes a doc-less surface for coding agents: an agent should be
+Struo exposes a doc-less surface for coding agents: an agent should be
 able to discover what target kinds exist, pull a runnable starter, validate a
 draft, and commit an edit using MCP tool calls alone, without reading
 prose docs. When adding support for a new toolchain (Android, JVM,
@@ -80,7 +80,7 @@ execution policy that target kinds can compose to express their needs.
 
 Target kind actions should not shell out to `/bin/sh -c` to do
 filesystem or environment setup. A hand-built shell script bakes in
-assumptions about the host that do not hold everywhere Once runs: a
+assumptions about the host that do not hold everywhere Struo runs: a
 POSIX shell on `PATH`, the flags and semantics of `rm`, `mkdir`, `ln`,
 and `cd`, shell quoting rules, and how environment variables expand. It
 also hides that work from the action model, so inputs, outputs, and
@@ -106,8 +106,8 @@ not require Rust executor changes.
 
 Every new toolchain target kind should preserve these invariants:
 
-- The target kind is discoverable through `once_list_target_kinds` and its full
-  contract is fetchable through `once_query_schema`.
+- The target kind is discoverable through `struo_list_target_kinds` and its full
+  contract is fetchable through `struo_query_schema`.
 - The target kind ships at least one runnable starter example as a real
   directory owned by the module package (manifest plus sources). The
   exported Starlark target kind symbol declares it through
@@ -117,13 +117,13 @@ Every new toolchain target kind should preserve these invariants:
   inside it so target kinds can be published through a registry as a portable
   unit.
 - Every example loads under the examples integration test
-  (`crates/once-frontend/tests/examples.rs`) without emitting any
+  (`crates/struo-frontend/tests/examples.rs`) without emitting any
   diagnostics. If the target kind has an `impl`, the example must build.
 - User-visible failures surface through the structured `Diagnostic`
   shape (`code`, `target`, `attribute`, `repairs`). Validation lives
   in `target_validator`; the editor in `manifest_editor` reuses the
   same shape so retries are single-shot for the agent.
-- Every MCP tool has a matching `once query` or `once edit` CLI
+- Every MCP tool has a matching `struo query` or `struo edit` CLI
   subcommand so a human can reproduce what an agent does from the
   terminal.
 
@@ -134,7 +134,7 @@ wiring a new toolchain.
 
 ## Native Graph Reproductions
 
-`once query graph-repro` (MCP `once_export_graph_repro`) exports a
+`struo query graph-repro` (MCP `struo_export_graph_repro`) exports a
 native project with its `manifests` copied and every other file empty,
 plus `repro.json` with the loaded graph or loading error, a drafted
 `ISSUE.md`, and `graph-repro.tar.gz` to attach to it. When a user
@@ -142,7 +142,7 @@ reports a native graph that fails to load or disagrees with the native
 build system, ask them for this export instead of their sources. To fix
 one, load the export's `workspace/` to reproduce the gap, reduce it to a
 fixture under `fixtures/native_graphs/` or a prelude test in
-`crates/once-frontend/tests/prelude/native_graphs.rs`, confirm the test
+`crates/struo-frontend/tests/prelude/native_graphs.rs`, confirm the test
 fails, then fix the target kind. When a resolver needs a file's contents
 to derive the graph, add its glob to that `native_project`'s `manifests`
 so later exports carry it.
@@ -152,7 +152,7 @@ so later exports carry it.
 Do not invent a path-like target grammar. When a target can be
 identified by a native package name (a Cargo crate, a SwiftPM product,
 an Xcode scheme, an npm workspace) or by a filesystem path relative to
-the workspace, use that. Reserve any Once-specific selector for cases
+the workspace, use that. Reserve any Struo-specific selector for cases
 where native naming genuinely cannot express the intent, and mirror
 filesystem path semantics rather than a parallel notation.
 
@@ -163,11 +163,11 @@ error that only echoes what the user typed is a bug.
 
 ## Resource Budgeting
 
-Once's design requires that resources be bounded and budgeted. Every
+Struo's design requires that resources be bounded and budgeted. Every
 command that admits concurrent work operates within an explicit memory
 budget, defaulted to two thirds of the memory visible to the host or
 container and overridable with `--memory-limit`. The
-`ResourceLimits`/`ResourcePool` types in `once-core` own this budget.
+`ResourceLimits`/`ResourcePool` types in `struo-core` own this budget.
 Each local action reserves its declared memory estimate (defaulting to
 250 mebibytes when undeclared) before it starts; the scheduler admits
 more work only when the combined reservations fit within the budget.
@@ -183,7 +183,7 @@ the resource limits configuration.
 
 ## SDK API And Docs
 
-The `once` crate root and `crates/once/swift/Once.swift` are public SDK
+The `struo` crate root and `crates/struo/swift/Struo.swift` are public SDK
 surfaces. Keep them centered on cache access unless an explicit product
 decision expands them. Do not expose script execution, runtime sessions,
 frontend parsing, or provider internals through the SDK by accident.
@@ -203,9 +203,9 @@ the pull request description.
 
 ## Internal Logging
 
-Every `once` CLI invocation creates a UUIDv7 session log under the
+Every `struo` CLI invocation creates a UUIDv7 session log under the
 platform log directory. On Linux this follows XDG state directory
-conventions; on macOS logs land under `~/Library/Logs/Once` so they are
+conventions; on macOS logs land under `~/Library/Logs/Struo` so they are
 visible from Console.app.
 
 Use `tracing` for internal execution logs instead of printing debug
@@ -263,11 +263,11 @@ in `mise.toml`.
 - No roadmap-phase numbers in code or doc comments. Describe behavior,
   not milestones, since milestones rename and the comments rot.
 - No source code paths in user-facing docs. The website and release
-  notes describe what Once does and how to use it, never where the
+  notes describe what Struo does and how to use it, never where the
   code lives. Source paths rot under refactors, mean nothing to a
   reader who isn't editing the repo, and leak implementation detail
   through the public surface. Describe behavior, link to the
-  reference, or quote `once.toml` shapes instead.
+  reference, or quote `struo.toml` shapes instead.
 - Default to writing no comments. Add one only when the why is
   non-obvious.
 
@@ -289,8 +289,8 @@ mise exec -- cargo fmt --all -- --check
 mise exec -- cargo build --release
 mise exec -- shellspec
 
-mise exec -- target/release/once exec -- cargo check --workspace
-mise exec -- target/release/once exec -- /bin/sh -c 'printf hello'
+mise exec -- target/release/struo exec -- cargo check --workspace
+mise exec -- target/release/struo exec -- /bin/sh -c 'printf hello'
 ```
 
 `mise exec --` is required because the project's toolchain is mise-managed;
@@ -298,7 +298,7 @@ calling `cargo` directly will miss the pinned rustc.
 
 ## Action presentation
 
-`crates/once-presentation/` owns the bounded, ecosystem-neutral package/platform/context contract; see its AGENTS.md. Emit only selected, resolved metadata in Starlark kinds, not guesses from labels or worker placement. Preserve presentation in deferred expansions and reusable action outcomes without adding it to action identity or execution fingerprints. Declare resolver-emitted presentation-only attributes in their target-kind schemas and validate generated starter graphs, not only action-lowering tests.
+`crates/struo-presentation/` owns the bounded, ecosystem-neutral package/platform/context contract; see its AGENTS.md. Emit only selected, resolved metadata in Starlark kinds, not guesses from labels or worker placement. Preserve presentation in deferred expansions and reusable action outcomes without adding it to action identity or execution fingerprints. Declare resolver-emitted presentation-only attributes in their target-kind schemas and validate generated starter graphs, not only action-lowering tests.
 
 ## Logical action history
 
@@ -306,4 +306,4 @@ calling `cargo` directly will miss the pinned rustc.
 
 ## Live action reporting
 
-Subscribe before publishing the first run event and drain queued completions before shutting down the reporter. Authentication applies to every event service call. Target summaries must not stand in for declared actions: persist per-action identity with reusable target outcomes and replay each as a cache hit. Cover transport delivery in `once-events-client/tests/end_to_end.rs` and retained action identity in the graph target-outcome tests. Source-file statuses are presentation only: classify against the exact reported commit once per run, reclassify cached action paths at event ingestion, and trim paths and their packed statuses together. Failed or incomplete Git tree collection must report UNKNOWN for every path, never legacy empty statuses. A streaming run that receives SIGINT or SIGTERM completes as cancelled with the signal name as its reason, drains for at most a few seconds, and then exits by that signal; a second signal exits at once (the same signal repeated within a quarter of a second counts as the same request), and runs that never connected keep the default signal behavior. A test schedule forwards the first signal to its batch processes, which stream their own runs, and waits for them before exiting. Cover signal handling with the spawned-process tests in `once-cli/tests/cancelled_run.rs`.
+Subscribe before publishing the first run event and drain queued completions before shutting down the reporter. Authentication applies to every event service call. Target summaries must not stand in for declared actions: persist per-action identity with reusable target outcomes and replay each as a cache hit. Cover transport delivery in `struo-events-client/tests/end_to_end.rs` and retained action identity in the graph target-outcome tests. Source-file statuses are presentation only: classify against the exact reported commit once per run, reclassify cached action paths at event ingestion, and trim paths and their packed statuses together. Failed or incomplete Git tree collection must report UNKNOWN for every path, never legacy empty statuses. A streaming run that receives SIGINT or SIGTERM completes as cancelled with the signal name as its reason, drains for at most a few seconds, and then exits by that signal; a second signal exits at once (the same signal repeated within a quarter of a second counts as the same request), and runs that never connected keep the default signal behavior. A test schedule forwards the first signal to its batch processes, which stream their own runs, and waits for them before exiting. Cover signal handling with the spawned-process tests in `struo-cli/tests/cancelled_run.rs`.

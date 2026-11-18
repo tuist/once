@@ -6,7 +6,7 @@ date: 2026-10-29
 Pinned Swift package checkouts now reuse commits already present locally and
 fall back to a full fetch when a Git server rejects shallow clients. The
 `xcodebuild` wrapper accepts custom configuration names when they match the
-Once seed, including `Development`.
+Struo seed, including `Development`.
 
 Native package lowering now honors linked libraries, frameworks, unsafe linker
 flags, and per-language warning policies. Manifest evaluation tracks a hash of
@@ -14,7 +14,7 @@ the inherited environment so changes to manifest switches invalidate cached
 resolution without recording their values.
 
 Discovery skips invalid local package templates with a warning. Resolver
-failures make `once query targets` and its MCP equivalent fail rather than
+failures make `struo query targets` and its MCP equivalent fail rather than
 present an incomplete graph as successful. Literal directory exclusions prune
 descendants, and nested targets validate workspace runtime sources correctly.
 

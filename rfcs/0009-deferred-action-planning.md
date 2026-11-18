@@ -5,7 +5,7 @@ Status: implemented for compiler-driven Apple module discovery.
 ## Motivation
 
 Bazel's rules_swift 4.0.1 makes explicit modules opt-in and adds strict Swift
-dependency checking. Once needs compiler-derived module actions while retaining
+dependency checking. Struo needs compiler-derived module actions while retaining
 native Xcode and Swift package declarations. A source import parser cannot
 reproduce compiler conditionals, Clang module variants, or textual interface
 dependencies reliably.
@@ -73,7 +73,7 @@ Artifact-ready cross-target scheduling, relocatable scan plans, packaged Apple
 toolchains, and stricter standalone C-family imports remain separate changes.
 Broader signing, device testing and product packaging parity cannot be inferred
 from explicit module support. Symbolic macros and Bzlmod are Bazel authoring
-and dependency-management mechanisms, not formats Once needs to adopt.
+and dependency-management mechanisms, not formats Struo needs to adopt.
 
 ## Sources
 

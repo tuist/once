@@ -1,5 +1,5 @@
 /* Marketing site styling, built on the Noora design tokens (imported below) so
-   it matches the documentation surface: the Once type pairing, warm
+   it matches the documentation surface: the Struo type pairing, warm
    neutrals, and the indigo accent. */
 
 @import "noora/noora.css";
@@ -426,7 +426,7 @@ a {
   padding: 22px;
   height: 150px;
   overflow: hidden;
-  background: var(--once-card-gradient);
+  background: var(--struo-card-gradient);
 }
 
 [data-part="feature-card"] [data-part="icon"] {

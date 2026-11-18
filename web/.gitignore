@@ -21,10 +21,10 @@ erl_crash.dump
 
 # Temporary files, for example, from tests.
 /tmp/
-/.once-site-dev-instance
+/.struo-site-dev-instance
 
 # Ignore package tarball (built via "mix hex.build").
-once_site-*.tar
+struo_site-*.tar
 
 # Ignore assets that are produced by build tools.
 /priv/static/assets/
@@ -32,8 +32,8 @@ once_site-*.tar
 /priv/static/docs/og/
 /priv/static/images/og/
 
-# CLI reference pages generated at compile time by the `once reference` command.
-# (mcp/tools.md stays committed because crates/once-cli asserts against it.)
+# CLI reference pages generated at compile time by the `struo reference` command.
+# (mcp/tools.md stays committed because crates/struo-cli asserts against it.)
 /priv/docs/reference/cli/
 
 # Ignore digested assets cache.

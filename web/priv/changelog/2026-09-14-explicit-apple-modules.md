@@ -3,7 +3,7 @@ title: Explicit modules for native Apple builds
 date: 2026-09-14
 ---
 
-Once can now use the Swift compiler's dependency scan to build imported Swift
+Struo can now use the Swift compiler's dependency scan to build imported Swift
 and Clang modules as separate cacheable actions. Enable `explicit_modules`
 on an Apple target or a native Xcode or Swift package workspace. Native Xcode
 projects also honor `SWIFT_ENABLE_EXPLICIT_MODULES = YES`.

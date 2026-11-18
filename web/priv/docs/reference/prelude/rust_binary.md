@@ -22,7 +22,7 @@ identity.
 | `env` | map&lt;string, string&gt; | no | `{}` | Environment variables for rustc, matching Buck2's `env` attribute |
 | `rustc_env` | map&lt;string, string&gt; | no | `{}` | Bazel-compatible rustc environment variables |
 | `rustc_env_files` | list&lt;string&gt; | no | `[]` | Files with `NAME=value` entries merged into the rustc environment before `env` and `rustc_env` |
-| `rustc_flags` | list&lt;string&gt; | no | `[]` | Additional `rustc` flags appended after Once-managed flags |
+| `rustc_flags` | list&lt;string&gt; | no | `[]` | Additional `rustc` flags appended after Struo-managed flags |
 | `cap_lints` | string | no | empty | Optional rustc lint cap passed as `--cap-lints`; generated Cargo dependencies use `allow` |
 | `linker` | string | no | empty | Optional linker path passed as `-C linker=...`; defaults to `cc` for host Unix binary-like targets and to the Android NDK clang wrapper for Android targets when available |
 | `linker_flags` | list&lt;string&gt; | no | `[]` | Additional linker flags lowered to `-C link-arg=...` |
@@ -33,16 +33,16 @@ identity.
 | `android_abi` | string | no | inferred | Android ABI directory for dynamic library outputs, such as `arm64-v8a` |
 | `android_api` | int | no | `23` | Android API level used to select the NDK clang wrapper for Android targets |
 | `android_ndk` | string | no | `ANDROID_NDK_HOME` | Android NDK root used to find clang wrapper linkers |
-| `data` | list&lt;string&gt; | no | `[]` | Runtime data file globs available during `once run` and propagated from Rust dependencies |
+| `data` | list&lt;string&gt; | no | `[]` | Runtime data file globs available during `struo run` and propagated from Rust dependencies |
 | `compile_data` | list&lt;string&gt; | no | `[]` | Bazel-compatible compile-time data file globs included in the rustc action inputs |
 | `crate_aliases` | map&lt;string, string&gt; | no | `{}` | Map dependency label, package name, or crate name to the local extern crate name |
 | `aliases` | map&lt;string, string&gt; | no | `{}` | Bazel-compatible alias map from dependency label or crate name to local extern crate name |
 | `named_deps` | map&lt;string, string&gt; | no | `{}` | Buck-compatible alias map from local extern crate name to dependency label or crate name |
 | `cargo_package` | string | no | empty | Cargo package name used to select direct external deps from a `cargo_dependencies` dependency set, and to inherit that package's Cargo compile environment, such as `CARGO_PKG_NAME`, `CARGO_PKG_VERSION`, and `CARGO_MANIFEST_DIR`, below the target's own `rustc_env`. Defaults to `CARGO_PKG_NAME` when present |
 | `build_script` | string | no | empty | Package-relative Cargo build script path run before `rustc`; common `cargo:rustc-*` stdout directives are consumed, dependency `cargo:rustc-link-search` outputs are replayed downstream, and direct dependency `links` metadata is consumed |
-| `args` | list&lt;string&gt; | no | `[]` | Arguments passed to the executable during `once run`, before any given on the command line |
-| `run_env` | map&lt;string, string&gt; | no | `{}` | Environment variables passed to the executable during `once run` |
-| `env_inherit` | list&lt;string&gt; | no | `[]` | Host environment variable names inherited during `once run` before `run_env` overrides |
+| `args` | list&lt;string&gt; | no | `[]` | Arguments passed to the executable during `struo run`, before any given on the command line |
+| `run_env` | map&lt;string, string&gt; | no | `{}` | Environment variables passed to the executable during `struo run` |
+| `env_inherit` | list&lt;string&gt; | no | `[]` | Host environment variable names inherited during `struo run` before `run_env` overrides |
 | `build_script_tools` | list&lt;string&gt; | no | `[]` | Host tool names the build script invokes; each is resolved on the search path during graph loading |
 | `cargo_config_env` | map&lt;string, string&gt; | no | `{}` | Environment declared by Cargo configuration, applied below `env`, `rustc_env`, and `run_env` |
 
@@ -75,9 +75,9 @@ The target emits `rust_binary`.
 
 | Output | Location |
 | --- | --- |
-| Executable | `.once/out/<target>/<crate_name>` or `.exe` for Windows targets |
-| Run result | `.once/out/<target>/run/run.json` |
-| Run log | `.once/out/<target>/run/stdout.log` |
+| Executable | `.struo/out/<target>/<crate_name>` or `.exe` for Windows targets |
+| Run result | `.struo/out/<target>/run/run.json` |
+| Run log | `.struo/out/<target>/run/stdout.log` |
 
 ## Example
 
@@ -92,5 +92,5 @@ crate_name = "hello"
 edition = "2021"
 ```
 
-Discover the complete `rust-binary-minimal` starter through `once query schema
+Discover the complete `rust-binary-minimal` starter through `struo query schema
 rust_binary`.

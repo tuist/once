@@ -5,23 +5,23 @@ next: false
 
 # Xcode Projects
 
-Once can read an Xcode project or workspace you already have and derive a typed
+Struo can read an Xcode project or workspace you already have and derive a typed
 graph from it. You do not migrate the project, generate a new one, or restate
-its targets in `once.toml`. The `.xcodeproj` stays the source of truth for
-targets, build settings, and file membership, and Once compiles what it finds
+its targets in `struo.toml`. The `.xcodeproj` stays the source of truth for
+targets, build settings, and file membership, and Struo compiles what it finds
 there.
 
-This is the fastest way to try Once against real code. A project at the
+This is the fastest way to try Struo against real code. A project at the
 repository root needs no manifest at all: run one query and see your
-application, frameworks, libraries, and test bundles as Once targets.
+application, frameworks, libraries, and test bundles as Struo targets.
 
 ## Prerequisites
 
-Once honors `SWIFT_ENABLE_EXPLICIT_MODULES = YES` on native targets. You can
+Struo honors `SWIFT_ENABLE_EXPLICIT_MODULES = YES` on native targets. You can
 also set `explicit_modules = true` on an `xcode_workspace` seed to enable the
 mode across its Swift targets and resolved packages. Optional
 `dependency_check = "error"` rejects undeclared workspace imports. Import edges
-inferred by Once do not count as declarations for this check. See
+inferred by Struo do not count as declarations for this check. See
 [explicit modules](/guide/graph/apple#explicit-modules-and-dependency-checks)
 for requirements and current limits.
 
@@ -34,10 +34,10 @@ xcrun --find swiftc
 plutil -help
 ```
 
-If the project depends on a package manager or code generator that Once does
-not run, complete that step first. Once reads the project as it stands on disk,
+If the project depends on a package manager or code generator that Struo does
+not run, complete that step first. Struo reads the project as it stands on disk,
 so run `pod install`, fetch vendored binaries, or execute a bootstrap script
-before pointing Once at the result.
+before pointing Struo at the result.
 
 ## Try It Without a Manifest
 
@@ -46,26 +46,26 @@ project, so there is nothing to write. From the directory holding the
 `.xcodeproj`:
 
 ```sh
-once query workspace
-once query targets
+struo query workspace
+struo query targets
 ```
 
-Once detects the project, supplies an ephemeral `xcode_workspace` seed, and
+Struo detects the project, supplies an ephemeral `xcode_workspace` seed, and
 resolves the graph. Build and test commands work against that graph
-immediately, with no `once.toml` in the repository.
+immediately, with no `struo.toml` in the repository.
 
 For the shortest end-to-end trial, build the discovered project:
 
 ```sh
-once build
-once test
+struo build
+struo test
 ```
 
-No scheme or Once target name is needed when the directory contains one
-discovered Xcode project. If Once discovers several project roots, use the
-identifiers from `once query targets` to choose one explicitly.
+No scheme or Struo target name is needed when the directory contains one
+discovered Xcode project. If Struo discovers several project roots, use the
+identifiers from `struo query targets` to choose one explicitly.
 
-Discovery does not write `once.toml`. The `.xcodeproj` stays authoritative for
+Discovery does not write `struo.toml`. The `.xcodeproj` stays authoritative for
 everything the seed resolves.
 
 ## Declare the Seed Explicitly
@@ -90,7 +90,7 @@ holds more than one project. Declare the target in the workspace root package
 and point `project` at the nested path when the project lives in a
 subdirectory.
 
-`srcs` supplies the resolver's inputs, which Once reads as text and hashes so
+`srcs` supplies the resolver's inputs, which Struo reads as text and hashes so
 that editing the project re-resolves the graph. Keep them to `project.pbxproj`
 and other text files such as `.xcconfig` and `.xcscheme`. A glob that pulls in
 binary assets fails resolution, because resolver inputs must be valid
@@ -102,7 +102,7 @@ text.
 Ask for the targets before building anything:
 
 ```sh
-once query targets
+struo query targets
 ```
 
 The output contains the seed target plus one target per native target in the
@@ -125,7 +125,7 @@ targets:
 Each native target is lowered into the Apple target kind that matches its
 product type:
 
-| Xcode product | Once target kind |
+| Xcode product | Struo target kind |
 | --- | --- |
 | Application, application extension | [`apple_application`](/reference/prelude/apple_application) |
 | Framework | [`apple_framework`](/reference/prelude/apple_framework) |
@@ -138,8 +138,8 @@ Because the result is an ordinary typed graph, every other command works on it.
 Inspect one lowered target and the contract it satisfies:
 
 ```sh
-once query target Client
-once query capabilities BrowserKit
+struo query target Client
+struo query capabilities BrowserKit
 ```
 
 ## Build and Test
@@ -149,28 +149,28 @@ projects build their application roots; library-only projects build their
 non-test products:
 
 ```sh
-once build
+struo build
 ```
 
 Building one lowered target builds only that target and its dependencies:
 
 ```sh
-once build BrowserKit
+struo build BrowserKit
 ```
 
 Run the same command twice. The second run is a cache hit, because the lowered
-targets are ordinary Once targets with content-addressed actions.
+targets are ordinary Struo targets with content-addressed actions.
 
 Test bundles lower to [`apple_test_bundle`](/reference/prelude/apple_test_bundle)
-targets carrying the `test` capability, so they schedule like any other Once
+targets carrying the `test` capability, so they schedule like any other Struo
 test target:
 
 ```sh
-once test ClientTests
+struo test ClientTests
 ```
 
-Run `once test` with no target to select the first-party test bundles rooted in
-the discovered project. `once test --all` includes tests from the complete
+Run `struo test` with no target to select the first-party test bundles rooted in
+the discovered project. `struo test --all` includes tests from the complete
 resolved graph.
 
 See [Testing and Scheduling](/guide/graph/testing) for selection and reporting,
@@ -178,26 +178,26 @@ and that target kind's limitations for the test shapes that are supported.
 
 ## Keep `xcodebuild` Commands
 
-Once can also sit behind the familiar `xcodebuild` command when a project uses
+Struo can also sit behind the familiar `xcodebuild` command when a project uses
 [mise](https://mise.jdx.dev/) command wrappers. Add this to the project's
 `mise.toml`, then run `mise reshim` and activate mise in the shell that starts
 the build:
 
 ```toml
 [wrappers.xcodebuild]
-command = "once"
+command = "struo"
 args = ["xcodebuild", "--"]
 ```
 
-The wrapper preserves the original arguments. The separator belongs to Once and
-is not passed to Xcode. Once uses the graph for a build
-when it can prove the request is equivalent: one resolved Once Xcode workspace
-seed for a discovered project, a scheme that exactly matches one reachable Once
+The wrapper preserves the original arguments. The separator belongs to Struo and
+is not passed to Xcode. Struo uses the graph for a build
+when it can prove the request is equivalent: one resolved Struo Xcode workspace
+seed for a discovered project, a scheme that exactly matches one reachable Struo
 build target, an explicit `-configuration` matching the seed's `configuration`
 attribute (default `Debug`), and the default or explicit `build` action. Custom
 names such as `Development` work when the seed selects that same configuration.
 An explicit `-project` or `-workspace` value must name the selected project or
-workspace, relative to the Once workspace root. For example:
+workspace, relative to the Struo workspace root. For example:
 
 ```sh
 xcodebuild -project Client.xcodeproj -scheme Client -configuration Debug build
@@ -207,14 +207,14 @@ For troubleshooting without mise, call the compatibility surface directly and
 put the separator before the Xcode arguments:
 
 ```sh
-once xcodebuild -- -project Client.xcodeproj -scheme Client -configuration Debug build
+struo xcodebuild -- -project Client.xcodeproj -scheme Client -configuration Debug build
 ```
 
 Every other request invokes the system `xcodebuild` with the same arguments and
 exit status. This includes tests, archives, exports, destinations, package
 resolution, custom build settings, missing or mismatched configurations,
 help, and version queries. The fallback lets editors, continuous integration,
-and coding agents keep their existing command vocabulary while Once takes over
+and coding agents keep their existing command vocabulary while Struo takes over
 only the forms it can model accurately.
 
 ## Work From a Workspace
@@ -232,7 +232,7 @@ srcs = ["App.xcworkspace/contents.xcworkspacedata", "App.xcodeproj/project.pbxpr
 project = "App.xcworkspace"
 ```
 
-Once enumerates each referenced `.xcodeproj`, lowers all of their native
+Struo enumerates each referenced `.xcodeproj`, lowers all of their native
 targets, and merges them into one graph, so a dependency that crosses a project
 boundary is wired. A workspace that references a project which is not on disk
 yet, such as a generated project or `Pods.xcodeproj` before `pod install`, has
@@ -284,7 +284,7 @@ than expected:
 A project containing both macOS and iPhone targets gets separate package
 targets for each destination. Each application and extension depends on the
 matching package graph, including platform-conditional dependencies and binary
-framework slices. Once shares manifest parsing across destinations. Local
+framework slices. Struo shares manifest parsing across destinations. Local
 products that Xcode references without a package reference are discovered from
 the repository's package manifests, including their transitive local dependencies.
 
@@ -295,15 +295,15 @@ Failed queries are retried rather than cached.
 
 ## Script Build Phases
 
-Once runs imported scripts using their declared shell and selected build
+Struo runs imported scripts using their declared shell and selected build
 configuration. It expands project and target settings, including custom
 settings from configuration files, into the script environment. Directory
 settings such as `SRCROOT`, `PROJECT_DIR`, `TARGET_BUILD_DIR`,
-`BUILT_PRODUCTS_DIR`, `DERIVED_FILE_DIR`, and `TARGET_TEMP_DIR` point to Once's
+`BUILT_PRODUCTS_DIR`, `DERIVED_FILE_DIR`, and `TARGET_TEMP_DIR` point to Struo's
 workspace and products, not an Xcode derived-data directory. Product settings
 such as `EXECUTABLE_PATH`, `INFOPLIST_PATH`, and
-`UNLOCALIZED_RESOURCES_FOLDER_PATH` describe the bundle Once actually creates.
-Configuration-specific Once output directories are reflected at execution.
+`UNLOCALIZED_RESOURCES_FOLDER_PATH` describe the bundle Struo actually creates.
+Configuration-specific Struo output directories are reflected at execution.
 Scripts inherit the caller's environment, with resolved build settings taking
 precedence. `DWARF_DSYM_FOLDER_PATH` and `DWARF_DSYM_FILE_NAME` identify the
 configured symbol-bundle location.
@@ -325,16 +325,16 @@ although individual compile actions can still hit the cache. Untracked
 post-build scripts capture the resulting bundle, including newly created
 resources, before final signing.
 Files deleted by a product script stay deleted in the resulting bundle.
-Installation-only phases do not run during `once build`.
+Installation-only phases do not run during `struo build`.
 
 ## Limitations
 
-Once compiles the project itself rather than delegating to `xcodebuild`, so
+Struo compiles the project itself rather than delegating to `xcodebuild`, so
 anything outside the project's own description has to be in place beforehand.
-Once does not install dependencies or bootstrap external native toolchains.
+Struo does not install dependencies or bootstrap external native toolchains.
 Run tools such as `pod install` first so their generated projects, scripts,
-and resources exist before Once imports the graph. Script phases in supported
-imported targets then run through Once.
+and resources exist before Struo imports the graph. Script phases in supported
+imported targets then run through Struo.
 Unresolved dependency-generated file-list settings do not prevent graph import,
 but building the affected target reports the missing setup. A resolved file-list
 path that does not exist is an import error.

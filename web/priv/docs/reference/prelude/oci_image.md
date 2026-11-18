@@ -25,8 +25,8 @@ engine, [`oci_push`](/reference/prelude/oci_push) to publish it, or
 [`oci_index`](/reference/prelude/oci_index) to combine platform-specific images.
 
 ```sh
-once query schema oci_image
-once query example oci_image oci-image-minimal
+struo query schema oci_image
+struo query example oci_image oci-image-minimal
 ```
 
 See [Container Images](/guide/graph/containers) for a complete manifest.

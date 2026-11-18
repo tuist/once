@@ -12,7 +12,7 @@ noora_static_path = Path.expand("../deps/noora/priv/static", __DIR__)
 
 config :esbuild,
   version: "0.25.4",
-  once_site: [
+  struo_site: [
     args:
       ~w(js/app.js css/app.css --bundle --target=es2022 --outdir=../priv/static/assets --entry-names=[dir]/[name] --external:/fonts/* --external:/images/* --external:/docs/*) ++
         ["--alias:@=.", "--alias:noora/noora.css=#{noora_static_path}/noora.css"],
@@ -49,20 +49,20 @@ config :lumis, artifact_source: :cloudflare
 # GitHub release headers exceed OTP's default limit; vendor mirrors retain checksums.
 config :mdex_native, syntax_highlighter: :lumis, artifact_source: :cloudflare
 
-# Configure the endpoint
-config :once_site, OnceSiteWeb.Endpoint,
-  url: [host: "localhost"],
-  adapter: Bandit.PhoenixAdapter,
-  render_errors: [
-    formats: [html: OnceSiteWeb.ErrorHTML, json: OnceSiteWeb.ErrorJSON],
-    layout: false
-  ],
-  pubsub_server: OnceSite.PubSub,
-  live_view: [signing_salt: "TloqJLzK"]
-
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
+
+# Configure the endpoint
+config :struo_site, StruoSiteWeb.Endpoint,
+  url: [host: "localhost"],
+  adapter: Bandit.PhoenixAdapter,
+  render_errors: [
+    formats: [html: StruoSiteWeb.ErrorHTML, json: StruoSiteWeb.ErrorJSON],
+    layout: false
+  ],
+  pubsub_server: StruoSite.PubSub,
+  live_view: [signing_salt: "TloqJLzK"]
 
 import_config "#{config_env()}.exs"

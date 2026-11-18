@@ -24,7 +24,7 @@ target. The package then compiles with its own Mix environment, as reported by
 the resolver.
 
 A Make-only manager or custom dependency compile command fails before actions
-are declared. This prevents Once from silently compiling a package with the
+are declared. This prevents Struo from silently compiling a package with the
 wrong semantics.
 
 ## Resolver-Owned Attributes

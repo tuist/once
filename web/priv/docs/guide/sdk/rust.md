@@ -5,15 +5,15 @@ next: false
 
 # Rust Software Development Kit
 
-The Rust library is the `once` crate. It exposes cache primitives for
-embedding Once in Rust applications and tools. Script execution belongs to
+The Rust library is the `struo` crate. It exposes cache primitives for
+embedding Struo in Rust applications and tools. Script execution belongs to
 the command line and is not part of this library. See the
 [language-library overview](/guide/sdk/) to compare the available bindings.
 
 ```rust
 #[tokio::main]
-async fn main() -> once::Result<()> {
-    let cache = once::Cache::new();
+async fn main() -> struo::Result<()> {
+    let cache = struo::Cache::new();
     let digest = cache.put_blob(b"hello").await?;
     let bytes = cache.get_blob(digest).await?;
 
@@ -28,7 +28,7 @@ Add the crate to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-once = { git = "https://github.com/tuist/once" }
+struo = { git = "https://github.com/tuist/struo" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -37,7 +37,7 @@ not currently published to the crates.io registry.
 
 ## Cache
 
-`once::Cache` is the high-level cache client. It is cheap to clone and can
+`struo::Cache` is the high-level cache client. It is cheap to clone and can
 be reused across blob and action-result operations.
 
 ### Constructors
@@ -54,8 +54,8 @@ constructor uses the same effective configuration as the command line.
 
 The default follows the
 [X Desktop Group base-directory convention](https://specifications.freedesktop.org/basedir-spec/latest/):
-its cache root is `$XDG_CACHE_HOME/once/cas` when
-`XDG_CACHE_HOME` is set, and `$HOME/.cache/once/cas` otherwise.
+its cache root is `$XDG_CACHE_HOME/struo/cas` when
+`XDG_CACHE_HOME` is set, and `$HOME/.cache/struo/cas` otherwise.
 
 ### Introspection
 
@@ -166,7 +166,7 @@ content digests in deterministic order.
 
 ```rust
 let source = cache.put_file("inputs/source").await?;
-let mut key = once::ActionKeyBuilder::new("example.compile");
+let mut key = struo::ActionKeyBuilder::new("example.compile");
 key.push_bytes("tool", "compiler")
     .push_bytes("configuration", "release")
     .push_digest("source", source);
@@ -188,13 +188,13 @@ stdout digest, stderr digest, and output digests.
 use std::collections::BTreeMap;
 
 #[tokio::main]
-async fn main() -> once::Result<()> {
-    let cache = once::Cache::new();
+async fn main() -> struo::Result<()> {
+    let cache = struo::Cache::new();
     let stdout = cache.put_blob(b"compiled").await?;
-    let mut key = once::ActionKeyBuilder::new("example.compile");
+    let mut key = struo::ActionKeyBuilder::new("example.compile");
     key.push_bytes("tool", "example");
     let action = key.finish();
-    let result = once::ActionResult {
+    let result = struo::ActionResult {
         exit_code: 0,
         stdout: Some(stdout),
         stderr: None,
@@ -225,7 +225,7 @@ digests belong in the cached result.
 
 These are the public supporting types exposed by the crate root. They are
 re-exported so embedders can model cache state without importing lower
-level Once modules.
+level Struo modules.
 
 | Type | Use |
 | --- | --- |
@@ -271,7 +271,7 @@ remote failures is unchanged.
 match cache.get_action_result(action).await {
     Ok(Some(result)) => replay(result),
     Ok(None) => run_and_store().await?,
-    Err(once::Error::Cache(error)) if error.is_unavailable() => run_without_cache().await?,
+    Err(struo::Error::Cache(error)) if error.is_unavailable() => run_without_cache().await?,
     Err(error) => return Err(error.into()),
 }
 ```

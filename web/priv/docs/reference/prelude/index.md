@@ -1,11 +1,11 @@
 # Target Kinds
 
-Once ships target kinds for supported languages and platforms. Each target
+Struo ships target kinds for supported languages and platforms. Each target
 kind defines its accepted attributes and dependencies, the providers it emits,
 and the capabilities it exposes. Its reference page also lists known
 limitations and a copyable declaration when one is available.
 
-Use [`once query schema`](/reference/cli/query/schema) to inspect the same
+Use [`struo query schema`](/reference/cli/query/schema) to inspect the same
 contract from the command line. See [Ecosystems](/guide/graph/ecosystems) for
 help choosing between typed target kinds and scripted automation.
 
@@ -13,7 +13,7 @@ Each schema reports whether an attribute is required, configurable, and
 implemented, plus any fixed set of allowed values. An attribute marked as not
 implemented remains discoverable for compatibility, but validation rejects it
 with a focused repair before analysis. Tool requirements list the executable
-alternatives Once can use, so an agent can discover missing setup without
+alternatives Struo can use, so an agent can discover missing setup without
 reading prose documentation.
 
 Every target kind includes at least one materializable starter. Repository
@@ -99,7 +99,7 @@ through the generic test capability with normalized results.
   project or workspace lowered into Apple application, framework, library,
   resource bundle, and test targets
 
-See [Xcode Projects](/guide/graph/apple/xcode) for pointing Once at a project
+See [Xcode Projects](/guide/graph/apple/xcode) for pointing Struo at a project
 you already have.
 
 ## Android target kinds
@@ -136,7 +136,7 @@ you already have.
 - [`kotlin_jvm_binary`](/reference/prelude/kotlin_jvm_binary): runnable Kotlin
   main class for the host Java virtual machine
 - [`kotlin_jvm_test`](/reference/prelude/kotlin_jvm_test): host-side Kotlin
-  tests with normalized Once test results
+  tests with normalized Struo test results
 - [`kotlin_apple_framework`](/reference/prelude/kotlin_apple_framework):
   Kotlin/Native framework bundle consumed by Apple application and test
   targets
@@ -215,7 +215,7 @@ you already have.
 - [`rust_binary`](/reference/prelude/rust_binary): Rust executable built
   from a main crate and Rust deps, with build and run capabilities
 - [`rust_test`](/reference/prelude/rust_test): Rust test crate compiled
-  with `rustc --test` and run through Once's test capability
+  with `rustc --test` and run through Struo's test capability
 - [`rust_crate`](/reference/prelude/rust_crate): resolved third-party
   Cargo package lowered into a Rust library target
 - [`rust_proc_macro`](/reference/prelude/rust_proc_macro): Rust
@@ -277,10 +277,10 @@ permit LLVM caching; debug information is never removed automatically. See the
 - [`zig_shared_library`](/reference/prelude/zig_shared_library): Zig
   shared library exposed to native linkers and Android packaging
 - [`zig_test`](/reference/prelude/zig_test): Zig test target compiled
-  and run through Once's test capability
+  and run through Struo's test capability
 - [`zig_configure`](/reference/prelude/zig_configure): configured Zig
-  library target using Once-native target attributes
+  library target using Struo-native target attributes
 - [`zig_configure_binary`](/reference/prelude/zig_configure_binary):
-  configured Zig executable target using Once-native target attributes
+  configured Zig executable target using Struo-native target attributes
 - [`zig_configure_test`](/reference/prelude/zig_configure_test):
-  configured Zig test target using Once-native target attributes
+  configured Zig test target using Struo-native target attributes

@@ -1,10 +1,10 @@
 # `rspec_test`
 
-[Ruby Specification (RSpec)](https://rspec.info/) tests run through Once.
+[Ruby Specification (RSpec)](https://rspec.info/) tests run through Struo.
 
 ## Start Here
 
-Once resolves the Ruby interpreter and the Ruby Specification runner as
+Struo resolves the Ruby interpreter and the Ruby Specification runner as
 separate tools. Each may be a name on the executable search path, an absolute
 path, or a workspace-relative path. A common direct installation is:
 
@@ -16,17 +16,17 @@ Retrieve the runnable starter when you want a complete declaration and sample
 specifications:
 
 ```sh
-once query example rspec_test rspec-test-minimal --format json
+struo query example rspec_test rspec-test-minimal --format json
 ```
 
-Copy the declaration below into `once.toml`, adjust `srcs` and the Ruby
+Copy the declaration below into `struo.toml`, adjust `srcs` and the Ruby
 environment for the project, then establish discovery and run the file
 batches:
 
 ```sh
-once test tests --format json
-once query test-manifest tests --format json
-once test tests --jobs 4 --format json
+struo test tests --format json
+struo query test-manifest tests --format json
+struo test tests --jobs 4 --format json
 ```
 
 The first command runs the complete target. Later runs can use the resulting
@@ -38,10 +38,10 @@ batching, and exact unit commands.
 
 `rspec_test` invokes the selected Ruby Specification command with its
 structured formatter, converts examples into stable target-qualified
-identifiers, and writes normalized Once results. Exact execution passes the
+identifiers, and writes normalized Struo results. Exact execution passes the
 native example identifier back to the runner.
 
-Once selects the formatter by its fully qualified RSpec class name, so its
+Struo selects the formatter by its fully qualified RSpec class name, so its
 reporting option does not look like an application's `--format json` option
 to tests that inspect command-line arguments.
 
@@ -74,7 +74,7 @@ A complete discovery run is required before smaller batches are planned.
 
 ## Providers and Capabilities
 
-The target emits `once_test_info` and exposes `test` with the `default`,
+The target emits `struo_test_info` and exposes `test` with the `default`,
 `test_results`, and `logs` output groups.
 
 ## Example

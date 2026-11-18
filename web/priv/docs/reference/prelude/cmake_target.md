@@ -7,9 +7,9 @@ Resolver-generated logical CMake target.
 `cmake_workspace` creates these targets from a checked configured graph. They
 make native CMake names, dependency edges, sources, artifacts, include
 directories, definitions, and configuration identity available to ordinary
-Once graph queries.
+Struo graph queries.
 
-The target is resolver-owned. Do not declare it directly in `once.toml`. It
+The target is resolver-owned. Do not declare it directly in `struo.toml`. It
 does not build independently; use the paired
 [`cmake_project`](/reference/prelude/cmake_project) target.
 
@@ -43,9 +43,9 @@ This target has no executable capability.
 ## Query Example
 
 ```sh
-once query targets --kind cmake_target
-once query target cmake-greeting
-once query 'MATCH (root:Target {id: "cmake-greeting"})-[:DEPENDS_ON*]->(dep:Target) RETURN dep.id, dep.kind'
+struo query targets --kind cmake_target
+struo query target cmake-greeting
+struo query 'MATCH (root:Target {id: "cmake-greeting"})-[:DEPENDS_ON*]->(dep:Target) RETURN dep.id, dep.kind'
 ```
 
 See the [CMake guide](/guide/graph/cmake) for the complete build and snapshot

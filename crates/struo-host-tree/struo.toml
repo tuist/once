@@ -1,0 +1,34 @@
+[[target]]
+name = "struo_host_tree"
+kind = "rust_library"
+deps = ["cargo_dependencies"]
+srcs = ["src/**/*.rs"]
+
+[target.attrs]
+crate_name = "struo_host_tree"
+crate_root = "src/lib.rs"
+edition = "2021"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/struo-host-tree"
+CARGO_PKG_NAME = "struo-host-tree"
+CARGO_PKG_VERSION = "0.0.0"
+
+# Tests
+
+[[target]]
+name = "struo_host_tree_unit_tests"
+kind = "rust_test"
+deps = ["cargo_dependencies"]
+srcs = ["src/**/*.rs"]
+
+[target.attrs]
+crate_name = "struo_host_tree"
+crate_root = "src/lib.rs"
+edition = "2021"
+cargo_package = "struo-host-tree"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/struo-host-tree"
+CARGO_PKG_NAME = "struo-host-tree"
+CARGO_PKG_VERSION = "0.0.0"

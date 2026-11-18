@@ -6,8 +6,8 @@ Describe 'elixir graph'
   AfterEach 'cleanup_workspace'
 
   create_elixir_graph_workspace() {
-    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/elixir-test-minimal/." "$WORKSPACE/"
-    rm -rf "$WORKSPACE/.once"
+    cp -R "$REPO_ROOT/crates/struo-frontend/prelude/examples/elixir-test-minimal/." "$WORKSPACE/"
+    rm -rf "$WORKSPACE/.struo"
   }
 
   create_elixir_graph_workspace_without_mix() {
@@ -17,7 +17,7 @@ Describe 'elixir graph'
 
   create_elixir_dependency_graph_workspace() {
     mkdir -p "$WORKSPACE/macro_helpers/lib" "$WORKSPACE/greeting/lib"
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [[target]]
 name = "macro_helpers"
 kind = "elixir_library"
@@ -55,7 +55,7 @@ EX
 
   create_elixir_same_target_macro_workspace() {
     mkdir -p "$WORKSPACE/lib"
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [[target]]
 name = "greeting"
 kind = "elixir_library"
@@ -84,7 +84,7 @@ EX
 
   create_elixir_test_support_workspace() {
     mkdir -p "$WORKSPACE/lib" "$WORKSPACE/test/support"
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [[target]]
 name = "greeting"
 kind = "elixir_library"
@@ -127,7 +127,7 @@ EX
 
   create_elixir_external_resource_workspace() {
     mkdir -p "$WORKSPACE/lib"
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [[target]]
 name = "app"
 kind = "elixir_library"
@@ -148,7 +148,7 @@ EX
 
   create_elixir_compile_env_workspace() {
     mkdir -p "$WORKSPACE/lib" "$WORKSPACE/config"
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [[target]]
 name = "app"
 kind = "elixir_library"
@@ -173,7 +173,7 @@ EX
 
   create_elixir_recompile_callback_workspace() {
     mkdir -p "$WORKSPACE/lib" "$WORKSPACE/messages"
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [[target]]
 name = "app"
 kind = "elixir_library"
@@ -200,7 +200,7 @@ EX
 
   create_elixir_protocol_workspace() {
     mkdir -p "$WORKSPACE/lib"
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [[target]]
 name = "app"
 kind = "elixir_library"
@@ -226,7 +226,7 @@ EX
 
   create_elixir_warning_workspace() {
     mkdir -p "$WORKSPACE/lib"
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [[target]]
 name = "app"
 kind = "elixir_library"
@@ -246,103 +246,103 @@ EX
   }
 
   elixir_eval() {
-    elixir -pa "$WORKSPACE/.once/out/app/ebin" -e "$1"
+    elixir -pa "$WORKSPACE/.struo/out/app/ebin" -e "$1"
   }
 
   It 'runs Elixir tests through the graph command without Mix compilation'
     create_elixir_graph_workspace_without_mix
 
-    When call once --format json test greeting_test
+    When call struo --format json test greeting_test
     The status should be success
     The stdout should include '"target":"greeting_test"'
     The stdout should include '"capability":"test"'
     The stdout should include '"cache":"miss"'
-    The path "$WORKSPACE/.once/out/greeting/ebin/Elixir.Greeting.beam" should be file
-    The path "$WORKSPACE/.once/out/greeting/ebin/Elixir.Greeting.Punctuation.beam" should be file
-    The path "$WORKSPACE/.once/out/greeting/ebin/greeting.app" should be file
-    The contents of file "$WORKSPACE/.once/out/greeting_test/test/elixir-test.log" should include 'Result: 1 passed'
-    The contents of file "$WORKSPACE/.once/out/greeting_test/test/elixir-test.log" should not include 'Compiling'
+    The path "$WORKSPACE/.struo/out/greeting/ebin/Elixir.Greeting.beam" should be file
+    The path "$WORKSPACE/.struo/out/greeting/ebin/Elixir.Greeting.Punctuation.beam" should be file
+    The path "$WORKSPACE/.struo/out/greeting/ebin/greeting.app" should be file
+    The contents of file "$WORKSPACE/.struo/out/greeting_test/test/elixir-test.log" should include 'Result: 1 passed'
+    The contents of file "$WORKSPACE/.struo/out/greeting_test/test/elixir-test.log" should not include 'Compiling'
   End
 
   It 'reuses unchanged whole-target Elixir compile actions'
     create_elixir_graph_workspace
-    once --format json test greeting_test >/dev/null
-    once --format json test greeting_test >/dev/null
+    struo --format json test greeting_test >/dev/null
+    struo --format json test greeting_test >/dev/null
 
-    When call sh -c '"$ONCE_BIN" -C "$WORKSPACE" --format json query evidence greeting:build | jq -e '"'"'any(.[]; .cache == "hit" and (.outputs | keys[] | contains("/modules")))'"'"' >/dev/null'
+    When call sh -c '"$STRUO_BIN" -C "$WORKSPACE" --format json query evidence greeting:build | jq -e '"'"'any(.[]; .cache == "hit" and (.outputs | keys[] | contains("/modules")))'"'"' >/dev/null'
     The status should be success
-    The contents of file "$WORKSPACE/.once/out/greeting_test/test/elixir-test.log" should include 'Result: 1 passed'
+    The contents of file "$WORKSPACE/.struo/out/greeting_test/test/elixir-test.log" should include 'Result: 1 passed'
   End
 
   It 'reruns whole-target Elixir compilation after a source changes'
     create_elixir_graph_workspace
-    once --format json test greeting_test >/dev/null
+    struo --format json test greeting_test >/dev/null
     sed -i.bak 's/"Hello, "/"Hi, "/' "$WORKSPACE/lib/greeting.ex"
-    sed -i.bak 's/Hello, Once!/Hi, Once!/' "$WORKSPACE/test/greeting_test.exs"
+    sed -i.bak 's/Hello, Struo!/Hi, Struo!/' "$WORKSPACE/test/greeting_test.exs"
 
-    When call once --format json test greeting_test
+    When call struo --format json test greeting_test
     The status should be success
     The stdout should include '"cache":"miss"'
-    The contents of file "$WORKSPACE/.once/out/greeting_test/test/elixir-test.log" should include 'Result: 1 passed'
+    The contents of file "$WORKSPACE/.struo/out/greeting_test/test/elixir-test.log" should include 'Result: 1 passed'
   End
 
   It 'builds same-target compile-time Elixir macros through one compile action'
     create_elixir_same_target_macro_workspace
 
-    When call once --format json build greeting
+    When call struo --format json build greeting
     The status should be success
     The stdout should include '"target":"greeting"'
-    The path "$WORKSPACE/.once/out/greeting/ebin/Elixir.MessageMacro.beam" should be file
-    The path "$WORKSPACE/.once/out/greeting/ebin/Elixir.Greeting.beam" should be file
+    The path "$WORKSPACE/.struo/out/greeting/ebin/Elixir.MessageMacro.beam" should be file
+    The path "$WORKSPACE/.struo/out/greeting/ebin/Elixir.Greeting.beam" should be file
     The path "$WORKSPACE/_build" should not be exist
   End
 
-  It 'builds compile-time Elixir dependencies through Once actions'
+  It 'builds compile-time Elixir dependencies through Struo actions'
     create_elixir_dependency_graph_workspace
 
-    When call once --format json build greeting
+    When call struo --format json build greeting
     The status should be success
     The stdout should include '"target":"greeting"'
-    The path "$WORKSPACE/.once/out/macro_helpers/ebin/Elixir.MessageMacro.beam" should be file
-    The path "$WORKSPACE/.once/out/greeting/ebin/Elixir.Greeting.beam" should be file
+    The path "$WORKSPACE/.struo/out/macro_helpers/ebin/Elixir.MessageMacro.beam" should be file
+    The path "$WORKSPACE/.struo/out/greeting/ebin/Elixir.Greeting.beam" should be file
     The path "$WORKSPACE/_build" should not be exist
   End
 
   It 'invalidates tests when support files loaded by test_helper change'
     create_elixir_test_support_workspace
-    once --format json test greeting_test >/dev/null
+    struo --format json test greeting_test >/dev/null
     cat > "$WORKSPACE/test/support/message.ex" <<'EX'
 defmodule TestMessage do
   def value, do: "two"
 end
 EX
 
-    When call once --format json test greeting_test
+    When call struo --format json test greeting_test
     The status should be success
     The stdout should include '"cache":"miss"'
-    The contents of file "$WORKSPACE/.once/out/greeting_test/test/elixir-test.log" should include 'Result: 1 passed'
+    The contents of file "$WORKSPACE/.struo/out/greeting_test/test/elixir-test.log" should include 'Result: 1 passed'
   End
 
   It 'invalidates Elixir compilation when external resources change'
     create_elixir_external_resource_workspace
-    once --format json build app >/dev/null
-    once --format json build app >/dev/null
+    struo --format json build app >/dev/null
+    struo --format json build app >/dev/null
     value_before=$(elixir_eval 'IO.write(App.message())')
     printf 'two\n' > "$WORKSPACE/message.txt"
 
-    When call once --format json build app
+    When call struo --format json build app
     The status should be success
     The stdout should include '"target":"app"'
     The variable value_before should equal one
     value_after=$(elixir_eval 'IO.write(App.message())')
     The variable value_after should equal two
-    The contents of file "$WORKSPACE/.once/out/app/compile-metadata.tsv" should include $'external\tmessage.txt'
+    The contents of file "$WORKSPACE/.struo/out/app/compile-metadata.tsv" should include $'external\tmessage.txt'
   End
 
   It 'loads config and invalidates Elixir compilation when compile env changes'
     create_elixir_compile_env_workspace
-    once --format json build app >/dev/null
-    once --format json build app >/dev/null
+    struo --format json build app >/dev/null
+    struo --format json build app >/dev/null
     value_before=$(elixir_eval 'IO.write(App.message())')
     cat > "$WORKSPACE/config/config.exs" <<'EXS'
 import Config
@@ -350,39 +350,39 @@ import Config
 config :app, message: "two"
 EXS
 
-    When call once --format json build app
+    When call struo --format json build app
     The status should be success
     The stdout should include '"target":"app"'
     The variable value_before should equal one
     value_after=$(elixir_eval 'IO.write(App.message())')
     The variable value_after should equal two
-    The contents of file "$WORKSPACE/.once/out/app/compile-metadata.tsv" should include 'compile_env'
+    The contents of file "$WORKSPACE/.struo/out/app/compile-metadata.tsv" should include 'compile_env'
   End
 
   It 'reruns Elixir compilation when __mix_recompile__? returns true'
     create_elixir_recompile_callback_workspace
-    once --format json build app >/dev/null
-    once --format json build app >/dev/null
+    struo --format json build app >/dev/null
+    struo --format json build app >/dev/null
     value_before=$(elixir_eval 'IO.write(App.count())')
     printf 'two\n' > "$WORKSPACE/messages/two.txt"
 
-    When call once --format json build app
+    When call struo --format json build app
     The status should be success
     The stdout should include '"target":"app"'
     The variable value_before should equal 1
     value_after=$(elixir_eval 'IO.write(App.count())')
     The variable value_after should equal 2
-    The contents of file "$WORKSPACE/.once/out/app/compile-metadata.tsv" should include $'recompile\tElixir.App'
+    The contents of file "$WORKSPACE/.struo/out/app/compile-metadata.tsv" should include $'recompile\tElixir.App'
   End
 
   It 'stages consolidated protocol bytecode into Elixir applications'
     create_elixir_protocol_workspace
 
-    When call once --format json build app
+    When call struo --format json build app
     The status should be success
     The stdout should include '"target":"app"'
-    The path "$WORKSPACE/.once/out/app/consolidated/Elixir.Size.beam" should be file
-    The path "$WORKSPACE/.once/out/app/ebin/Elixir.Size.beam" should be file
+    The path "$WORKSPACE/.struo/out/app/consolidated/Elixir.Size.beam" should be file
+    The path "$WORKSPACE/.struo/out/app/ebin/Elixir.Size.beam" should be file
     protocol_value=$(elixir_eval 'IO.write(Size.size(%Box{items: [1, 2, 3]}))')
     The variable protocol_value should equal 3
   End
@@ -390,10 +390,10 @@ EXS
   It 'persists Elixir compile warnings alongside compile metadata'
     create_elixir_warning_workspace
 
-    When call once --format json build app
+    When call struo --format json build app
     The status should be success
     The stdout should include '"target":"app"'
-    The contents of file "$WORKSPACE/.once/out/app/compile-warnings.log" should include 'unused'
-    The contents of file "$WORKSPACE/.once/out/app/compile-metadata.tsv" should include 'warning'
+    The contents of file "$WORKSPACE/.struo/out/app/compile-warnings.log" should include 'unused'
+    The contents of file "$WORKSPACE/.struo/out/app/compile-metadata.tsv" should include 'warning'
   End
 End

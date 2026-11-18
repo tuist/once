@@ -3,7 +3,7 @@ title: Bounded memory scheduling for local actions
 date: 2026-07-28
 ---
 
-Once now schedules concurrent local actions against a memory budget. The
+Struo now schedules concurrent local actions against a memory budget. The
 default is two thirds of the memory visible to the host or container, while the
 new global `--memory-limit` option lets constrained machines choose a smaller
 budget.

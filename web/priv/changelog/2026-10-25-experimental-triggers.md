@@ -3,7 +3,7 @@ title: Select graph capabilities with experimental triggers
 date: 2026-10-25
 ---
 
-Root `once.toml` triggers bind exact source refs to existing `build`, `test`,
+Root `struo.toml` triggers bind exact source refs to existing `build`, `test`,
 and `run` capabilities with explicit target configurations. An existing CI
 worker can execute those selections without maintaining another dependency
 graph. Inspection, validation, atomic editing, explicit activation, planning,

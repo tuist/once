@@ -43,8 +43,8 @@ The target emits `apple_thinned_package`.
 
 | Output | Location |
 | --- | --- |
-| Device-specific archives | `.once/out/<target>/ipas/*.ipa` |
-| Package manifest | `.once/out/<target>/thinned-packages.json` |
+| Device-specific archives | `.struo/out/<target>/ipas/*.ipa` |
+| Package manifest | `.struo/out/<target>/thinned-packages.json` |
 
 Archive names contain the product and device model. Runs of characters outside
 English letters, numbers, `.`, `_`, and `-` become one `-`, and leading or
@@ -52,7 +52,7 @@ trailing hyphens are removed. For example, `iPhone17,1` becomes `iPhone17-1`.
 When Xcode returns multiple records, every archive receives a one-based suffix
 such as `-1` or `-2`.
 
-The manifest uses the `once.apple.thinned-package.v1` schema. It records the
+The manifest uses the `struo.apple.thinned-package.v1` schema. It records the
 requested device model, every generated archive, and the installation targets
 reported by Xcode without retaining Xcode's host-specific temporary paths.
 
@@ -67,7 +67,7 @@ srcs = ["Sources/**/*.swift"]
 [target.attrs]
 platform = "ios"
 sdk_variant = "device"
-bundle_id = "dev.once.Hello"
+bundle_id = "dev.struo.Hello"
 minimum_os = "17.0"
 
 [[target]]
@@ -82,7 +82,7 @@ device_model = "iPhone17,1"
 Build the archive with:
 
 ```sh
-once build apps/Hello/HelloSizeAnalysis
+struo build apps/Hello/HelloSizeAnalysis
 ```
 
 ## Limitations
@@ -92,6 +92,6 @@ archive and cannot replace the provisioning and signing flow used to install
 an application on physical devices or submit it to an application store.
 
 Xcode exposes thinning through `ipatool`, an internal interface that may change
-between Xcode releases. Once validates that the requested model produced a
+between Xcode releases. Struo validates that the requested model produced a
 variant, includes the Xcode build version in the action cache identity, and
 fails without emitting a universal archive when thinning produces no match.

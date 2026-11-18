@@ -1,6 +1,6 @@
 # React Native
 
-Once models a current [React Native](https://reactnative.dev/) application as
+Struo models a current [React Native](https://reactnative.dev/) application as
 separate dependency, discovery, code generation, JavaScript bundle, native
 application, and development-server targets. The bundled starter uses React
 Native 0.86 and its
@@ -13,7 +13,7 @@ The package managers remain authoritative.
 [Yarn](https://yarnpkg.com/), or [Bun](https://bun.sh/) installs the exact
 JavaScript lockfile. [CocoaPods](https://cocoapods.org/) integrates Apple
 native dependencies, and [Gradle](https://gradle.org/) integrates Android
-native dependencies. Once places their work into explicit actions and cache
+native dependencies. Struo places their work into explicit actions and cache
 keys without replacing their resolution semantics.
 
 ## Start from the bundled application
@@ -21,9 +21,9 @@ keys without replacing their resolution semantics.
 Inspect and materialize the starter:
 
 ```sh
-once query example react_native_apple_application react-native-application-minimal --output ./HelloReactNative
+struo query example react_native_apple_application react-native-application-minimal --output ./HelloReactNative
 cd HelloReactNative
-once query validate-workspace
+struo query validate-workspace
 ```
 
 The same starter contains Apple and Android application targets, so it can
@@ -32,17 +32,17 @@ exercise both native projects from one package.
 Build the dependency graph and platform applications:
 
 ```sh
-once build Dependencies
-once build OnceBaseline
-once build OnceBaselineAndroid
+struo build Dependencies
+struo build StruoBaseline
+struo build StruoBaselineAndroid
 ```
 
 Build release JavaScript bundles separately when a distribution workflow needs
 them:
 
 ```sh
-once build AppleBundle
-once build AndroidBundle
+struo build AppleBundle
+struo build AndroidBundle
 ```
 
 Each bundle is produced by Metro, compiled to Hermes bytecode with the compiler
@@ -54,19 +54,19 @@ map.
 Start [Metro](https://metrobundler.dev/) against the live workspace:
 
 ```sh
-once run Metro
+struo run Metro
 ```
 
 In another terminal, launch a cached native application:
 
 ```sh
-once run OnceBaseline
+struo run StruoBaseline
 ```
 
 For Android:
 
 ```sh
-once run OnceBaselineAndroid
+struo run StruoBaselineAndroid
 ```
 
 The Android run capability installs the application package and forwards
@@ -74,7 +74,7 @@ Metro's port through the
 [Android Debug Bridge](https://developer.android.com/tools/adb). The Apple run
 capability installs and launches the application on a booted
 [iOS Simulator](https://developer.apple.com/documentation/xcode/running-your-app-in-simulator-or-on-a-device).
-Set `adb_serial` when more than one Android device is connected. Once waits for
+Set `adb_serial` when more than one Android device is connected. Struo waits for
 the selected device to become ready before installation.
 
 JavaScript and TypeScript sources belong to the Metro and bundle targets, not
@@ -119,7 +119,7 @@ scripts and their local inputs in the dependency target's `srcs`. Consumers
 still need an explicit source boundary for generated application sources.
 
 Native projects are staged from clean sources on an action miss. This prevents
-stale generated files from changing results. Unchanged builds use the Once
+stale generated files from changing results. Unchanged builds use the Struo
 action cache, while a native source change starts from a clean CocoaPods or
 Gradle project rather than reusing an undeclared local build directory.
 
@@ -129,15 +129,15 @@ additional project-specific output directories.
 Use repeated verbose builds to inspect individual cache decisions:
 
 ```sh
-once -vv build Dependencies
-once -vv build OnceBaseline
+struo -vv build Dependencies
+struo -vv build StruoBaseline
 ```
 
 ## Boundaries
 
 ### Package installation
 
-Once supports `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, and
+Struo supports `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, and
 `bun.lock`. It detects the manager from the target attributes, the
 `packageManager` field, or the declared lockfile. For a workspace, declare the
 dependency target at the installation root. Include every workspace package
@@ -174,7 +174,7 @@ remain relative to the staged workspace root. Declare every source and
 configuration file read by the script. The build invokes the dependency set's
 package manager and caches only the declared products. Builds start from a
 fresh workspace snapshot, so generated files cannot feed back into later keys.
-Package scripts retain their upstream shell semantics; Once does not synthesize
+Package scripts retain their upstream shell semantics; Struo does not synthesize
 a shell command for staging or cleanup.
 
 An Expo workspace can use its package manager's binary invocation through
@@ -188,7 +188,7 @@ tool output, so verify reproducibility before enabling bytecode for a pinned
 Expo version. An export does not produce an APK or an Apple application.
 Expo projects without native
 directories require a separate prebuild step before the native application
-targets can build them; Once does not automatically synthesize that step.
+targets can build them; Struo does not automatically synthesize that step.
 
 ### Native builds
 
@@ -203,7 +203,7 @@ Hermes artifact for distribution workflows.
 ### Development and execution
 
 Metro watches the application package and its locked dependencies. Packages
-outside that boundary require a project-specific Metro configuration. Once
-can build Apple simulator or signed-device products, but `once run` installs
+outside that boundary require a project-specific Metro configuration. Struo
+can build Apple simulator or signed-device products, but `struo run` installs
 simulator products only. Native builds still need the corresponding host
 toolchains. Live Metro uses a local dependency snapshot and workspace links.

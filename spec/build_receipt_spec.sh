@@ -13,7 +13,7 @@ Describe 'build receipts with uninspectable host directories'
       depth=$((depth + 1))
     done
     mkdir -p "$nested" "$WORKSPACE/modules"
-    cat > "$WORKSPACE/once.toml" <<TOML
+    cat > "$WORKSPACE/struo.toml" <<TOML
 [modules]
 paths = ["modules/*.star"]
 [[target]]
@@ -35,19 +35,19 @@ host_entries = target_kind(
 )
 STAR
     for attempt in 1 2 3; do
-      once build entries --quiet >/dev/null || return
-      cat "$WORKSPACE/.once/out/entries/entries.txt"
+      struo build entries --quiet >/dev/null || return
+      cat "$WORKSPACE/.struo/out/entries/entries.txt"
       printf '\n'
     done
     mkdir "$observed/new"
     for attempt in 1 2; do
-      once build entries --quiet >/dev/null || return
-      cat "$WORKSPACE/.once/out/entries/entries.txt"
+      struo build entries --quiet >/dev/null || return
+      cat "$WORKSPACE/.struo/out/entries/entries.txt"
       printf '\n'
     done
     mkdir "$observed/last"
-    once build entries --quiet >/dev/null || return
-    cat "$WORKSPACE/.once/out/entries/entries.txt"
+    struo build entries --quiet >/dev/null || return
+    cat "$WORKSPACE/.struo/out/entries/entries.txt"
   }
 
   It 'revalidates observable entries when recursive traversal keeps failing'

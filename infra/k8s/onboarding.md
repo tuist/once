@@ -1,18 +1,18 @@
-# Once Cluster Onboarding
+# Struo Cluster Onboarding
 
-This runbook covers one-time production cluster setup for Once. Day-to-day web
-deploys should only build the image, apply the Once Helm release, and run smoke
+This runbook covers one-time production cluster setup for Struo. Day-to-day web
+deploys should only build the image, apply the Struo website Helm release, and run smoke
 tests. Cluster-level controllers such as external-dns are installed here.
 
 ## DNS Controller
 
-external-dns watches the Once Ingress and keeps the `buildonce.dev` Cloudflare
+external-dns watches the Struo website Ingress and keeps the `buildonce.dev` Cloudflare
 record in sync with the ingress-nginx LoadBalancer address. Install it once per
 workload cluster after ingress-nginx is available.
 
 Prerequisites:
 
-- The current `KUBECONFIG` points at the Once production workload cluster.
+- The current `KUBECONFIG` points at the Struo production workload cluster (still named `once-production`).
 - The Cloudflare API token is stored at
   `op://once-k8s-production/cloudflare-buildonce-dns/credential`.
 - The token has `Zone:Read` and `DNS:Edit` permissions for `buildonce.dev`.

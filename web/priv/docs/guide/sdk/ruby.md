@@ -5,15 +5,15 @@ next: false
 
 # Ruby Software Development Kit
 
-The Ruby library is the `buildonce` gem. It exposes Once cache primitives for
+The Ruby library is the `buildstruo` gem. It exposes Struo cache primitives for
 Ruby applications and tools. Script execution belongs to the command line and
 is not part of this library. See the [language-library overview](/guide/sdk/)
 to compare the available bindings.
 
 ```ruby
-require "buildonce"
+require "buildstruo"
 
-cache = Once::Cache.new
+cache = Struo::Cache.new
 digest = cache.put_blob("hello")
 bytes = cache.get_blob(digest)
 
@@ -25,19 +25,19 @@ raise unless bytes == "hello"
 Install the gem from RubyGems:
 
 ```sh
-gem install buildonce
+gem install buildstruo
 ```
 
-The gem includes prebuilt native Once libraries for supported platforms.
-Set `ONCE_LIBRARY_PATH` when you need to load a custom `libonce` build.
+The gem includes prebuilt native Struo libraries for supported platforms.
+Set `STRUO_LIBRARY_PATH` when you need to load a custom `libstruo` build.
 
 ## Cache
 
-`Once::Cache` can open the default local cache, an explicit local root, or the
+`Struo::Cache` can open the default local cache, an explicit local root, or the
 effective provider for a workspace. The default follows the
 [X Desktop Group base-directory convention](https://specifications.freedesktop.org/basedir-spec/latest/):
-its cache root is `$XDG_CACHE_HOME/once/cas` when `XDG_CACHE_HOME` is
-set, and `$HOME/.cache/once/cas` otherwise.
+its cache root is `$XDG_CACHE_HOME/struo/cas` when `XDG_CACHE_HOME` is
+set, and `$HOME/.cache/struo/cas` otherwise.
 
 Ruby methods are synchronous. `digest(bytes)` only hashes bytes and
 does not touch storage. When `bytes` is a string, the library uses the
@@ -45,10 +45,10 @@ string's byte representation.
 
 | Application programming interface | Use |
 | --- | --- |
-| `Once::Cache.new` | Opens the default local cache using the operating-system convention. |
-| `Once::Cache.new(local_cache_root:)` | Opens an isolated local cache at a caller-owned root. |
-| `Once::Cache.new(workspace_root:)` | Resolves the effective provider for a workspace. |
-| `version` | Returns the linked Once version. |
+| `Struo::Cache.new` | Opens the default local cache using the operating-system convention. |
+| `Struo::Cache.new(local_cache_root:)` | Opens an isolated local cache at a caller-owned root. |
+| `Struo::Cache.new(workspace_root:)` | Resolves the effective provider for a workspace. |
+| `version` | Returns the linked Struo version. |
 | `digest(bytes)` | Returns the content digest for bytes without writing them to the cache. |
 | `put_blob(bytes)` | Stores bytes and returns their content digest. |
 | `put_file(path)` | Stores a file without loading its complete contents into Ruby memory. |
@@ -65,11 +65,11 @@ and other payloads whose size is not tightly bounded.
 
 ## Action Keys
 
-`Once::ActionKey` builds a versioned identity from ordered, labeled inputs:
+`Struo::ActionKey` builds a versioned identity from ordered, labeled inputs:
 
 ```ruby
 source = cache.put_file("inputs/source")
-action_digest = Once::ActionKey.new("example.compile")
+action_digest = Struo::ActionKey.new("example.compile")
                                .add_bytes("tool", "compiler")
                                .add_digest("source", source)
                                .digest
@@ -79,10 +79,10 @@ Input order is significant and must be deterministic.
 
 ## Types
 
-Use `Once::ActionResult` for cached action metadata:
+Use `Struo::ActionResult` for cached action metadata:
 
 ```ruby
-Once::ActionResult.new(
+Struo::ActionResult.new(
   exit_code: 0,
   stdout: stdout_digest,
   stderr: nil,
@@ -90,5 +90,5 @@ Once::ActionResult.new(
 )
 ```
 
-`stats` returns `Once::CacheStats` with `blob_count`, `blob_bytes`,
+`stats` returns `Struo::CacheStats` with `blob_count`, `blob_bytes`,
 `action_count`, and `action_bytes`.

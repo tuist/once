@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf-token" content={get_csrf_token()} />
+    <link rel="icon" type="image/png" href="/docs/favicon.png" />
+    <.live_title default="Struo" suffix=" · Struo">
+      {assigns[:page_title]}
+    </.live_title>
+
+    <% social_image =
+      StruoSiteWeb.Endpoint.url() <> (assigns[:og_image] || "/images/og/home.jpg") %>
+    <% social_image_alt = assigns[:og_image_alt] || assigns[:page_title] || "Struo" %>
+
+    <meta name="description" content={assigns[:meta_description] || default_description()} />
+    <link
+      rel="canonical"
+      href={assigns[:canonical_url] || StruoSiteWeb.Endpoint.url() <> @conn.request_path}
+    />
+    <link
+      rel="alternate"
+      type="application/rss+xml"
+      title={assigns[:alternate_feed_title] || "Struo changelog"}
+      href={
+        StruoSiteWeb.Endpoint.url() <>
+          (assigns[:alternate_feed_path] || "/changelog") <> "/feed.xml"
+      }
+    />
+    <link
+      rel="alternate"
+      type="application/atom+xml"
+      title={assigns[:alternate_feed_title] || "Struo changelog"}
+      href={
+        StruoSiteWeb.Endpoint.url() <>
+          (assigns[:alternate_feed_path] || "/changelog") <> "/feed.atom"
+      }
+    />
+
+    <meta property="og:type" content={assigns[:og_type] || "website"} />
+    <meta property="og:site_name" content="Struo" />
+    <meta property="og:title" content={assigns[:page_title] || "Struo"} />
+    <meta property="og:description" content={assigns[:meta_description] || default_description()} />
+    <meta
+      property="og:url"
+      content={assigns[:canonical_url] || StruoSiteWeb.Endpoint.url() <> @conn.request_path}
+    />
+    <meta
+      property="og:image"
+      content={social_image}
+    />
+    <meta property="og:image:type" content="image/jpeg" />
+    <meta property="og:image:width" content={StruoSiteWeb.Docs.OgImage.width()} />
+    <meta property="og:image:height" content={StruoSiteWeb.Docs.OgImage.height()} />
+    <meta property="og:image:alt" content={social_image_alt} />
+    <meta
+      :if={published_time = assigns[:published_time]}
+      property="article:published_time"
+      content={published_time}
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content="@buildoncedev" />
+    <meta name="twitter:title" content={assigns[:page_title] || "Struo"} />
+    <meta
+      name="twitter:description"
+      content={assigns[:meta_description] || default_description()}
+    />
+    <meta
+      name="twitter:image"
+      content={social_image}
+    />
+    <meta name="twitter:image:width" content={StruoSiteWeb.Docs.OgImage.width()} />
+    <meta name="twitter:image:height" content={StruoSiteWeb.Docs.OgImage.height()} />
+    <meta name="twitter:image:alt" content={social_image_alt} />
+
+    <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
+    <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
+    </script>
+  </head>
+  <body>
+    {@inner_content}
+  </body>
+</html>

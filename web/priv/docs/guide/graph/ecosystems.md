@@ -5,12 +5,12 @@ next: false
 # Ecosystems
 
 An ecosystem is a set of target kinds for one language, platform, or build
-domain. It gives Once enough information to validate dependencies, explain
+domain. It gives Struo enough information to validate dependencies, explain
 what a target can do, and cache work from declared inputs and outputs.
 
 ## Choose Between a Typed Target and a Script
 
-Use an ecosystem target kind when Once should understand the artifact and its
+Use an ecosystem target kind when Struo should understand the artifact and its
 relationships. This is a good fit when you want to:
 
 - query targets and capabilities before doing work;
@@ -21,7 +21,7 @@ relationships. This is a good fit when you want to:
 Use a [script target](/guide/scripted/) when the workflow is still exploratory
 or the native feature you need has not been modeled. A native package manager
 can remain the source of truth while a typed dependency target imports its
-locked result into Once. Scripts still participate in the graph, so a project
+locked result into Struo. Scripts still participate in the graph, so a project
 can begin there and adopt typed targets one boundary at a time.
 
 An existing build system can use the same bridge. For CMake,
@@ -33,7 +33,7 @@ configured graph for queries. CMake remains authoritative in both cases.
 ## Import Locked Third-Party Graphs
 
 Dependency targets do not replace package managers. The native manager owns
-manifest semantics, version selection, registry policy, and lock updates. Once
+manifest semantics, version selection, registry policy, and lock updates. Struo
 imports the locked result, creates one queryable target per package instance,
 and connects those targets to first-party consumers.
 
@@ -58,7 +58,7 @@ expect exact sources to be materialized before graph execution. Swift supports
 local packages or a complete vendored package-manager scratch tree. Use one of
 those Swift layouts to keep network access and mutable registry state outside
 compile actions. Live inspection of an unvendored remote Swift package requires
-an explicit `allow_network = true`. Once disables automatic version selection,
+an explicit `allow_network = true`. Struo disables automatic version selection,
 but it does not independently sandbox Swift Package Manager network access when
 a vendored scratch tree is incomplete. In every case, the actual source
 contents remain part of action keys.
@@ -69,7 +69,7 @@ Full build ecosystems have incremental guides with a first project,
 query-before-build workflow, current limitations, and follow-up steps:
 
 - [Bazel](/guide/graph/bazel) builds and tests an existing Bazel workspace
-  without a Once manifest while Bazel retains its native graph and cache.
+  without a Struo manifest while Bazel retains its native graph and cache.
 - [Apple](/guide/graph/apple) covers libraries, frameworks, applications, and
   tests written in Swift, Objective-C, C, and C++.
 - [Xcode Projects](/guide/graph/apple/xcode) covers reading an existing
@@ -84,7 +84,7 @@ query-before-build workflow, current limitations, and follow-up steps:
 - [CMake](/guide/graph/cmake) covers coarse native execution, exact products,
   checked graph snapshots, and incremental adoption.
 - [Container Images](/guide/graph/containers) builds an existing Dockerfile as
-  a discovered image target, with optional Once configuration for custom paths
+  a discovered image target, with optional Struo configuration for custom paths
   and cache policy.
 - [Elixir](/guide/graph/elixir) covers compiled applications and ExUnit tests.
 - [Kotlin](/guide/graph/kotlin) covers Java virtual machine libraries and
@@ -97,9 +97,9 @@ query-before-build workflow, current limitations, and follow-up steps:
 - [React Native](/guide/graph/react-native) covers New Architecture
   dependencies, native modules, JavaScript bundles, Apple and Android
   applications, and Fast Refresh.
-- [Nx](/guide/graph/nx) reads an existing Nx workspace, derives one Once
+- [Nx](/guide/graph/nx) reads an existing Nx workspace, derives one Struo
   target per project and task, and schedules `nx:run-commands` and
-  `nx:run-script` tasks directly through Once.
+  `nx:run-script` tasks directly through Struo.
 - [Zig](/guide/graph/zig) covers modules, binaries, tests, libraries, and C or
   C++ dependencies.
 
@@ -142,19 +142,19 @@ keeps toolchain and linking problems separate from the first graph setup.
 ## Adopt an Ecosystem Incrementally
 
 1. Pick the smallest artifact that has stable inputs and outputs.
-2. Declare one target and run `once query schema <kind>`.
-3. Run `once query capabilities <target>` and build that same target.
+2. Declare one target and run `struo query schema <kind>`.
+3. Run `struo query capabilities <target>` and build that same target.
 4. Connect one consumer through `deps` and query the resulting graph.
 5. Add run or test targets only after the artifact build is reliable.
 6. Keep unsupported edges behind scripts until a typed target kind covers
    them.
 
 This sequence leaves the native package manager or build system in place for
-the parts Once does not own. A project does not need to move an entire
+the parts Struo does not own. A project does not need to move an entire
 ecosystem at once.
 
 A coding harness can also fetch the authoritative external rule or plugin,
-query Once's live module-authoring contract, and maintain that local target
+query Struo's live module-authoring contract, and maintain that local target
 kind for the project. This is useful when the project needs a narrow dependency
 slice and a general built-in integration would be unnecessary. See
 [Coding harnesses](/guide/harness#adopt-an-unfamiliar-external-rule).
@@ -178,26 +178,26 @@ tell which system owns each step.
 
 ## Report a Native Graph That Loads Wrong
 
-When Once derives a project's graph from its native manifests and the result
+When Struo derives a project's graph from its native manifests and the result
 fails to load, or its targets, sources, or dependency edges disagree with what
 the native build system builds, export a redacted reproduction:
 
 ```sh
-once query graph-repro
+struo query graph-repro
 ```
 
-The export lands in `.once/graph-repro`. Its `workspace` directory mirrors
-every native project Once discovered: manifests and lockfiles keep their
+The export lands in `.struo/graph-repro`. Its `workspace` directory mirrors
+every native project Struo discovered: manifests and lockfiles keep their
 contents, and every other file is empty at the same path, so the graph loads
 the same way without any source code. Credentials in URLs, such as a private
-registry's, are replaced with `<redacted>` in copied files. `repro.json` records the Once version,
-the host platform, and the graph Once loaded or the error that stopped it, with
+registry's, are replaced with `<redacted>` in copied files. `repro.json` records the Struo version,
+the host platform, and the graph Struo loaded or the error that stopped it, with
 absolute workspace and home directory paths replaced by `$WORKSPACE` and
 `$HOME`, and the values of environment attributes replaced with `<redacted>`.
 Running the export again replaces only the files an earlier export wrote.
 
 The export also drafts the report. `ISSUE.md` holds an issue for the
-[Once repository](https://github.com/tuist/once/issues) built only from the
+[Struo repository](https://github.com/tuist/struo/issues) built only from the
 facts above, and `graph-repro.tar.gz` packs the whole export to attach to it.
 The command prints a link that opens the issue prefilled. Nothing is shared
 until you open it.
@@ -205,11 +205,11 @@ until you open it.
 Review the copied files and `repro.json` before opening the issue, since a
 manifest or an attribute can still name private hosts or hold a secret the
 export did not recognize. Then describe what the native build system builds
-that Once gets wrong, open the issue, and attach the archive. With the GitHub
+that Struo gets wrong, open the issue, and attach the archive. With the GitHub
 CLI:
 
 ```sh
-gh issue create --repo tuist/once --title "..." --body-file .once/graph-repro/ISSUE.md
+gh issue create --repo tuist/struo --title "..." --body-file .struo/graph-repro/ISSUE.md
 ```
 
 GitHub accepts attachments only in the browser, so add the archive there.
@@ -218,7 +218,7 @@ Most of the time a coding agent finds the gap first. When a resolver fails in
 a way it does not explain itself, the error carries a repair that tells the agent not to change the project to
 work around it, and to offer you this export and the issue it drafts instead. The repair appears in
 human output, in the structured error of `--format json`, and in
-[`once mcp`](/reference/mcp/) tool errors. Agents connected through `once mcp --allow-run`
-can run the export with the `once_export_graph_repro` tool, and are told to
+[`struo mcp`](/reference/mcp/) tool errors. Agents connected through `struo mcp --allow-run`
+can run the export with the `struo_export_graph_repro` tool, and are told to
 suggest it when a graph loads without errors but disagrees with the native
 build system.

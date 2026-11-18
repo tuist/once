@@ -3,7 +3,7 @@ title: Improve native Mix test discovery and dependency caching
 date: 2026-11-09
 ---
 
-Native Mix projects now report their test targets explicitly, so `once test`
+Native Mix projects now report their test targets explicitly, so `struo test`
 also selects tests in projects without shared development and test dependencies.
 
 Mix dependencies expose bytecode, private resources, and headers as separately

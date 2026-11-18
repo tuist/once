@@ -21,8 +21,8 @@ and `archive`. Use it as the `base` of [`oci_image`](/reference/prelude/oci_imag
 or as an `images` dependency of [`dockerfile_image`](/reference/prelude/dockerfile_image).
 
 ```sh
-once query schema oci_pull
-once query example oci_pull oci-pull-and-extend
+struo query schema oci_pull
+struo query example oci_pull oci-pull-and-extend
 ```
 
 See [Container Images](/guide/graph/containers) for authentication and composition.

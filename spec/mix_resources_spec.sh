@@ -9,7 +9,7 @@ Describe 'Mix compiler resources'
   }
 
   prepare_resource_dependency() {
-    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/elixir-library-with-mix-dependency/." "$WORKSPACE/"
+    cp -R "$REPO_ROOT/crates/struo-frontend/prelude/examples/elixir-library-with-mix-dependency/." "$WORKSPACE/"
     mkdir -p "$WORKSPACE/deps/locked_greeting/priv"
     printf 'static' > "$WORKSPACE/deps/locked_greeting/priv/static.txt"
     cat > "$WORKSPACE/deps/locked_greeting/mix.exs" <<'EOF'
@@ -45,14 +45,14 @@ EOF
   }
 
   build_and_restore_resources() {
-    once --format json build greeting > "$WORKSPACE/build.json" || return
-    app_dir="$WORKSPACE/.once/out/mix-locked-greeting/mix/prod/lib/locked_greeting"
+    struo --format json build greeting > "$WORKSPACE/build.json" || return
+    app_dir="$WORKSPACE/.struo/out/mix-locked-greeting/mix/prod/lib/locked_greeting"
     [ "$(cat "$app_dir/priv/native/generated.txt")" = generated ] || return
     if [ "${1:-}" != generated-only ]; then
       [ "$(cat "$app_dir/priv/static.txt")" = static ] || return
     fi
-    rm -rf "$WORKSPACE/.once/out"
-    once --format json build greeting > "$WORKSPACE/restored.json" || return
+    rm -rf "$WORKSPACE/.struo/out"
+    struo --format json build greeting > "$WORKSPACE/restored.json" || return
     [ "$(cat "$app_dir/priv/native/generated.txt")" = generated ] || return
     if [ "${1:-}" != generated-only ]; then
       [ "$(cat "$app_dir/priv/static.txt")" = static ] || return
@@ -61,11 +61,11 @@ EOF
   }
 
   compare_independent_dependency_builds() {
-    XDG_CACHE_HOME="$SPEC_ROOT/first-cache" once --format json build greeting > "$SPEC_ROOT/first.json" || return
-    manifest="$WORKSPACE/.once/out/mix-locked-greeting/mix/prod/lib/locked_greeting/.mix/volatile"
+    XDG_CACHE_HOME="$SPEC_ROOT/first-cache" struo --format json build greeting > "$SPEC_ROOT/first.json" || return
+    manifest="$WORKSPACE/.struo/out/mix-locked-greeting/mix/prod/lib/locked_greeting/.mix/volatile"
     cp "$manifest" "$SPEC_ROOT/first-manifest" || return
-    rm -rf "$WORKSPACE/.once"
-    XDG_CACHE_HOME="$SPEC_ROOT/second-cache" once --format json build greeting > "$SPEC_ROOT/second.json" || return
+    rm -rf "$WORKSPACE/.struo"
+    XDG_CACHE_HOME="$SPEC_ROOT/second-cache" struo --format json build greeting > "$SPEC_ROOT/second.json" || return
     python3 - "$SPEC_ROOT/first.json" "$SPEC_ROOT/second.json" "$SPEC_ROOT/first-manifest" "$manifest" <<'PY'
 import json, pathlib, sys
 first, second = [json.load(open(path)) for path in sys.argv[1:3]]
@@ -78,7 +78,7 @@ defmodule LockedGreeting do
   def message(name), do: "Changed, #{name}!"
 end
 EX
-    XDG_CACHE_HOME="$SPEC_ROOT/second-cache" once --format json build greeting > "$SPEC_ROOT/changed.json" || return
+    XDG_CACHE_HOME="$SPEC_ROOT/second-cache" struo --format json build greeting > "$SPEC_ROOT/changed.json" || return
     python3 - "$SPEC_ROOT/second.json" "$SPEC_ROOT/changed.json" <<'PY'
 import json, sys
 previous, changed = [json.load(open(path)) for path in sys.argv[1:]]
@@ -128,7 +128,7 @@ defmodule Helper.MixProject do
 end
 EX
     printf '%%{}\n' > "$WORKSPACE/mix.lock"
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [[target]]
 name = "dependencies"
 kind = "mix_dependencies"
@@ -156,9 +156,9 @@ TOML
   }
 
   release_and_restore_build_root_resources() {
-    once build release --format json > "$SPEC_ROOT/release-first.json" || return
-    rm -rf "$WORKSPACE/.once/out" "$WORKSPACE/.once/tmp"
-    once build release --format json > "$SPEC_ROOT/release-restored.json" || return
+    struo build release --format json > "$SPEC_ROOT/release-first.json" || return
+    rm -rf "$WORKSPACE/.struo/out" "$WORKSPACE/.struo/tmp"
+    struo build release --format json > "$SPEC_ROOT/release-restored.json" || return
     [ "$(cat "$WORKSPACE/compile-count")" = 1 ]
   }
 

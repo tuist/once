@@ -1,0 +1,71 @@
+[[target]]
+name = "struo_events_client"
+kind = "rust_library"
+deps = [
+  "crates/struo-core/struo_core",
+  "cargo_dependencies",
+]
+srcs = [
+  "src/**/*.rs",
+  "proto/**/*.proto",
+  "build.rs",
+]
+
+[target.attrs]
+crate_name = "struo_events_client"
+crate_root = "src/lib.rs"
+edition = "2021"
+build_script = "build.rs"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/struo-events-client"
+CARGO_PKG_NAME = "struo-events-client"
+CARGO_PKG_VERSION = "0.0.0"
+
+# Tests
+
+[[target]]
+name = "struo_events_client_unit_tests"
+kind = "rust_test"
+deps = [
+  "crates/struo-core/struo_core",
+  "cargo_dependencies",
+]
+srcs = [
+  "src/**/*.rs",
+  "proto/**/*.proto",
+  "build.rs",
+]
+
+[target.attrs]
+crate_name = "struo_events_client"
+crate_root = "src/lib.rs"
+edition = "2021"
+cargo_package = "struo-events-client"
+build_script = "build.rs"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/struo-events-client"
+CARGO_PKG_NAME = "struo-events-client"
+CARGO_PKG_VERSION = "0.0.0"
+
+[[target]]
+name = "end_to_end_tests"
+kind = "rust_test"
+deps = [
+  "crates/struo-events-client/struo_events_client",
+  "crates/struo-core/struo_core",
+  "cargo_dependencies",
+]
+srcs = ["tests/end_to_end.rs"]
+
+[target.attrs]
+crate_name = "end_to_end"
+crate_root = "tests/end_to_end.rs"
+edition = "2021"
+cargo_package = "struo-events-client"
+
+[target.attrs.rustc_env]
+CARGO_MANIFEST_DIR = "crates/struo-events-client"
+CARGO_PKG_NAME = "struo-events-client"
+CARGO_PKG_VERSION = "0.0.0"

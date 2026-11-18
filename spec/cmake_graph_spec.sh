@@ -9,16 +9,16 @@ Describe 'CTest graph target kind'
   }
 
   write_ctest_workspace() {
-    cp "$REPO_ROOT/crates/once-frontend/prelude/examples/cmake-test-minimal/"* "$WORKSPACE/"
+    cp "$REPO_ROOT/crates/struo-frontend/prelude/examples/cmake-test-minimal/"* "$WORKSPACE/"
   }
 
   restore_ctest_tree() {
     write_ctest_workspace
-    once --format json build Tests || return
-    rm -rf "$WORKSPACE/.once/out/Tests/cmake-build"
-    once --format json build Tests || return
-    once --format json test Tests || return
-    cat "$WORKSPACE/.once/out/Tests/test/test_results.json"
+    struo --format json build Tests || return
+    rm -rf "$WORKSPACE/.struo/out/Tests/cmake-build"
+    struo --format json build Tests || return
+    struo --format json test Tests || return
+    cat "$WORKSPACE/.struo/out/Tests/test/test_results.json"
   }
 
   It 'rebuilds a deleted native test tree and reports one passing suite'
@@ -27,15 +27,15 @@ Describe 'CTest graph target kind'
     The status should be success
     The stdout should include '"cache":"bypass"'
     The stdout should include '"total":1,"passed":1,"failed":0'
-    The contents of file "$WORKSPACE/.once/out/Tests/test/ctest.xml" should include 'check_sum'
+    The contents of file "$WORKSPACE/.struo/out/Tests/test/ctest.xml" should include 'check_sum'
   End
 
   fail_ctest_suite() {
     write_ctest_workspace
     printf '%s\n' 'int main(void) { return 7; }' > "$WORKSPACE/test.c"
-    once --format json test Tests > "$WORKSPACE/failure.json" 2>&1
+    struo --format json test Tests > "$WORKSPACE/failure.json" 2>&1
     code=$?
-    cat "$WORKSPACE/.once/out/Tests/test/test_results.json"
+    cat "$WORKSPACE/.struo/out/Tests/test/test_results.json"
     return "$code"
   }
 
@@ -44,15 +44,15 @@ Describe 'CTest graph target kind'
     When call fail_ctest_suite
     The status should be failure
     The stdout should include '"total":1,"passed":0,"failed":1'
-    The contents of file "$WORKSPACE/.once/out/Tests/test/ctest.xml" should include '<failure'
+    The contents of file "$WORKSPACE/.struo/out/Tests/test/ctest.xml" should include '<failure'
   End
 
   fail_empty_ctest_suite() {
     write_ctest_workspace
     printf '%s\n' 'cmake_minimum_required(VERSION 3.21)' 'project(Empty C)' 'enable_testing()' > "$WORKSPACE/CMakeLists.txt"
-    once --format json test Tests > "$WORKSPACE/failure.json" 2>&1
+    struo --format json test Tests > "$WORKSPACE/failure.json" 2>&1
     code=$?
-    cat "$WORKSPACE/.once/out/Tests/test/test_results.json"
+    cat "$WORKSPACE/.struo/out/Tests/test/test_results.json"
     return "$code"
   }
 
@@ -78,12 +78,12 @@ CMAKE
     case "$mode" in
       failure) printf '%s\n' 'int main(void) { return 7; }' > "$WORKSPACE/test.c" ;;
       missing) targets='"missing-check"' ;;
-      timeout) targets='"slow-check"'; printf '%s\n' 'timeout_ms = 100' >> "$WORKSPACE/once.toml" ;;
+      timeout) targets='"slow-check"'; printf '%s\n' 'timeout_ms = 100' >> "$WORKSPACE/struo.toml" ;;
     esac
-    printf 'test_targets = [%s]\nctest = "nonexistent-ctest"\n' "$targets" >> "$WORKSPACE/once.toml"
-    once --format json test Tests > "$WORKSPACE/run.json" 2>&1
+    printf 'test_targets = [%s]\nctest = "nonexistent-ctest"\n' "$targets" >> "$WORKSPACE/struo.toml"
+    struo --format json test Tests > "$WORKSPACE/run.json" 2>&1
     code=$?
-    cat "$WORKSPACE/.once/out/Tests/test/test_results.json"
+    cat "$WORKSPACE/.struo/out/Tests/test/test_results.json"
     return "$code"
   }
 
@@ -93,8 +93,8 @@ CMAKE
     The status should be success
     The stdout should include '"total":1,"passed":1,"failed":0'
     The stdout should include '"native_results":[]'
-    The contents of file "$WORKSPACE/.once/out/Tests/test/cmake-test.log" should include 'second suite executed'
-    The path "$WORKSPACE/.once/out/Tests/test/ctest.xml" should not be exist
+    The contents of file "$WORKSPACE/.struo/out/Tests/test/cmake-test.log" should include 'second suite executed'
+    The path "$WORKSPACE/.struo/out/Tests/test/ctest.xml" should not be exist
   End
 
   Describe 'custom native test failures'
@@ -109,17 +109,17 @@ CMAKE
       When call run_custom_cmake_suite "$1"
       The status should be failure
       The stdout should include '"total":1,"passed":0,"failed":1'
-      The contents of file "$WORKSPACE/.once/out/Tests/test/cmake-test.log" should include 'CMake test runner failed:'
+      The contents of file "$WORKSPACE/.struo/out/Tests/test/cmake-test.log" should include 'CMake test runner failed:'
     End
   End
 
   preserve_configure_argument_boundaries() {
     write_ctest_workspace
-    cat >> "$WORKSPACE/once.toml" <<'TOML'
+    cat >> "$WORKSPACE/struo.toml" <<'TOML'
 configure_args = ['-DPROBE_LIST=a;-DPROBE_SPLIT=b', '-DPROBE_PATH=C:\dir', '-DPROBE_BRACKET=[x', '-DPROBE_AFTER=y']
 TOML
-    once --format json test Tests > /dev/null || return
-    grep '^PROBE_' "$WORKSPACE/.once/out/Tests/cmake-build/CMakeCache.txt" | sort
+    struo --format json test Tests > /dev/null || return
+    grep '^PROBE_' "$WORKSPACE/.struo/out/Tests/cmake-build/CMakeCache.txt" | sort
   }
 
   It 'passes each configure argument to CMake as one native argument'
@@ -135,11 +135,11 @@ TOML
 
   reject_relocated_ctest_tree() {
     write_ctest_workspace
-    once --format json build Tests > "$WORKSPACE/original.json" || return
+    struo --format json build Tests > "$WORKSPACE/original.json" || return
     mkdir "$WORKSPACE/other"
-    cp "$WORKSPACE/once.toml" "$WORKSPACE/CMakeLists.txt" "$WORKSPACE/test.c" "$WORKSPACE/other/"
-    cp -R "$WORKSPACE/.once" "$WORKSPACE/other/.once"
-    "$ONCE_BIN" -C "$WORKSPACE/other" --format json build Tests > "$WORKSPACE/relocated.json" || return
+    cp "$WORKSPACE/struo.toml" "$WORKSPACE/CMakeLists.txt" "$WORKSPACE/test.c" "$WORKSPACE/other/"
+    cp -R "$WORKSPACE/.struo" "$WORKSPACE/other/.struo"
+    "$STRUO_BIN" -C "$WORKSPACE/other" --format json build Tests > "$WORKSPACE/relocated.json" || return
     "$SPEC_PYTHON3" - "$WORKSPACE" <<'PY'
 import json, pathlib, sys
 root = pathlib.Path(sys.argv[1])
@@ -147,7 +147,7 @@ original = json.loads((root / 'original.json').read_text())
 relocated = json.loads((root / 'relocated.json').read_text())
 assert original['action_digest'] != relocated['action_digest']
 assert relocated['cache'] == 'bypass', relocated
-cache = (root / 'other/.once/out/Tests/cmake-build/CMakeCache.txt').read_text()
+cache = (root / 'other/.struo/out/Tests/cmake-build/CMakeCache.txt').read_text()
 assert str(root / 'other') in cache
 print('different workspace: distinct actual key and cache bypass')
 PY
@@ -162,7 +162,7 @@ PY
 
   reject_sandboxed_ctest() {
     write_ctest_workspace
-    once --format json build --sandbox copied-inputs Tests
+    struo --format json build --sandbox copied-inputs Tests
   }
 
   It 'rejects sandbox relocation instead of caching an invalid native tree'
@@ -175,11 +175,11 @@ PY
 
   timeout_ctest_suite() {
     write_ctest_workspace
-    printf '%s\n' 'timeout_ms = 100' >> "$WORKSPACE/once.toml"
+    printf '%s\n' 'timeout_ms = 100' >> "$WORKSPACE/struo.toml"
     printf '%s\n' 'add_test(NAME slow COMMAND "${CMAKE_COMMAND}" -E sleep 3)' >> "$WORKSPACE/CMakeLists.txt"
-    once --format json test Tests > "$WORKSPACE/failure.json" 2>&1
+    struo --format json test Tests > "$WORKSPACE/failure.json" 2>&1
     code=$?
-    cat "$WORKSPACE/.once/out/Tests/test/test_results.json"
+    cat "$WORKSPACE/.struo/out/Tests/test/test_results.json"
     return "$code"
   }
 
@@ -188,7 +188,7 @@ PY
     When call timeout_ctest_suite
     The status should be failure
     The stdout should include '"status":"failed"'
-    The contents of file "$WORKSPACE/.once/out/Tests/test/ctest.log" should include 'Process terminated due to timeout'
+    The contents of file "$WORKSPACE/.struo/out/Tests/test/ctest.log" should include 'Process terminated due to timeout'
   End
 
   rebuild_changed_cmake_toolchain() {
@@ -208,7 +208,7 @@ C
       printf '#!/bin/sh\nexec "%s" "$@"\n' "$real_cc" > "$WORKSPACE/sdk/compiler"
       chmod +x "$WORKSPACE/sdk/compiler"
     fi
-    cat > "$WORKSPACE/once.toml" <<TOML
+    cat > "$WORKSPACE/struo.toml" <<TOML
 [[target]]
 name = "Tests"
 kind = "$kind"
@@ -217,10 +217,10 @@ srcs = ["CMakeLists.txt", "test.c"]
 configure_args = ["$configure"]
 TOML
     if [ "$kind" = cmake_project ]; then
-      printf '%s\n' 'products = ["check_sum"]' >> "$WORKSPACE/once.toml"
-      binary="$WORKSPACE/.once/out/Tests/products/check_sum"
+      printf '%s\n' 'products = ["check_sum"]' >> "$WORKSPACE/struo.toml"
+      binary="$WORKSPACE/.struo/out/Tests/products/check_sum"
     else
-      binary="$WORKSPACE/.once/out/Tests/cmake-build/check_sum"
+      binary="$WORKSPACE/.struo/out/Tests/cmake-build/check_sum"
     fi
     for value in 11 29; do
       if [ "$selection" = compiler ]; then
@@ -229,7 +229,7 @@ TOML
       else
         printf 'set(CMAKE_C_COMPILER "%s/sdk/compiler")\nset(CMAKE_C_FLAGS_INIT "-DBUILD_VALUE=%s")\n' "$WORKSPACE" "$value" > "$WORKSPACE/sdk/toolchain.cmake"
       fi
-      once --format json build Tests > "$WORKSPACE/build-$value.json" || return
+      struo --format json build Tests > "$WORKSPACE/build-$value.json" || return
       "$binary" > "$WORKSPACE/value-$value.txt" || return
     done
     first="$(cat "$WORKSPACE/value-11.txt")"

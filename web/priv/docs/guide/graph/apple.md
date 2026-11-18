@@ -5,13 +5,13 @@ next: false
 
 # Apple
 
-Once can build libraries, frameworks, applications, and test bundles for
+Struo can build libraries, frameworks, applications, and test bundles for
 Apple platforms. This guide starts with one iOS application and a library it
 depends on, then queries, builds, runs, and tests that same project.
 
 If you already have an Xcode project or workspace, you do not need to declare
 these targets by hand. [Xcode Projects](/guide/graph/apple/xcode) shows how to point
-Once at an existing `.xcodeproj` or `.xcworkspace` and get the same targets
+Struo at an existing `.xcodeproj` or `.xcworkspace` and get the same targets
 derived for you.
 
 ## Prerequisites
@@ -35,7 +35,7 @@ boundaries between building, provisioning, and device deployment.
 
 Set `explicit_modules = true` in an Apple target's attributes to turn imported
 Swift interfaces and Clang modules into separate cacheable build actions.
-Once first runs the Swift compiler's dependency scanner, builds the discovered
+Struo first runs the Swift compiler's dependency scanner, builds the discovered
 modules, then compiles the target with implicit module building disabled.
 Independent module actions share the command's memory budget, and identical
 module actions can reuse results across targets.
@@ -93,7 +93,7 @@ to complete, rather than releasing consumers as soon as one module is ready.
 
 ## Declare the Application
 
-Create `apps/Hello/once.toml` with a reusable library and an application that
+Create `apps/Hello/struo.toml` with a reusable library and an application that
 depends on it:
 
 ```toml
@@ -114,7 +114,7 @@ deps = ["./AppCore"]
 
 [target.attrs]
 platform = "ios"
-bundle_id = "dev.once.Hello"
+bundle_id = "dev.struo.Hello"
 minimum_os = "17.0"
 families = ["iphone"]
 ```
@@ -127,7 +127,7 @@ The smallest useful source layout is:
 
 ```text
 apps/Hello/
-├── once.toml
+├── struo.toml
 └── Sources/
     ├── AppCore/
     └── HelloApp/
@@ -141,10 +141,10 @@ The application source needs an entry point, such as a Swift type marked with
 Inspect the exact targets declared above:
 
 ```sh
-once query targets
-once query capabilities apps/Hello/AppCore
-once query capabilities apps/Hello/Hello
-once query schema apple_application
+struo query targets
+struo query capabilities apps/Hello/AppCore
+struo query capabilities apps/Hello/Hello
+struo query schema apple_application
 ```
 
 `AppCore` exposes `build`. `Hello` exposes `build` and `run`. The schema query
@@ -156,21 +156,21 @@ outputs without starting a compiler.
 Build the application bundle:
 
 ```sh
-once build apps/Hello/Hello
+struo build apps/Hello/Hello
 ```
 
-Once builds `AppCore` first because `Hello` depends on it. Outputs are
-materialized under `.once/out/<target>/`; the
+Struo builds `AppCore` first because `Hello` depends on it. Outputs are
+materialized under `.struo/out/<target>/`; the
 [`apple_application` reference](/reference/prelude/apple_application) lists
 the exact output groups.
 
 Launch the application in an iOS simulator:
 
 ```sh
-once run --visible apps/Hello/Hello
+struo run --visible apps/Hello/Hello
 ```
 
-Once selects or boots a simulator, installs the application bundle, and
+Struo selects or boots a simulator, installs the application bundle, and
 launches its bundle identifier. The launch runs on every invocation instead
 of replaying from the action cache. Omit `--visible` when Simulator does not
 need to be brought to the foreground.
@@ -198,7 +198,7 @@ deps = ["./AppCore"]
 [target.attrs]
 platform = "ios"
 sdk_variant = "device"
-bundle_id = "dev.once.Hello"
+bundle_id = "dev.struo.Hello"
 minimum_os = "17.0"
 families = ["iphone"]
 
@@ -214,7 +214,7 @@ device_model = "iPhone17,1"
 Build the device-specific archive:
 
 ```sh
-once build apps/Hello/HelloSizeAnalysis
+struo build apps/Hello/HelloSizeAnalysis
 ```
 
 The target writes one or more archives with the `.ipa` extension and a stable
@@ -230,7 +230,7 @@ for the exact outputs and validation rules.
 
 ## Add a Test Target
 
-Add a test target to the same `apps/Hello/once.toml`:
+Add a test target to the same `apps/Hello/struo.toml`:
 
 ```toml
 [[target]]
@@ -250,8 +250,8 @@ Place tests that use Swift Testing under `Tests/AppCoreTests/`, then inspect
 and run the new capability:
 
 ```sh
-once query capabilities apps/Hello/AppCoreTests
-once test apps/Hello/AppCoreTests
+struo query capabilities apps/Hello/AppCoreTests
+struo test apps/Hello/AppCoreTests
 ```
 
 Apple tests currently support macOS logic tests and iOS simulator bundles.
@@ -302,9 +302,9 @@ consumer again to confirm that the dependency contract is satisfied.
 Materialize the macOS starter in an empty directory:
 
 ```sh
-once edit materialize-example apple_application apple-application-macos
-once build Hello
-once run Hello
+struo edit materialize-example apple_application apple-application-macos
+struo build Hello
+struo run Hello
 ```
 
 The starter loads a text resource through `Bundle.main`. macOS applications
@@ -317,10 +317,10 @@ Existing scripts that assumed a flat macOS bundle must use the new paths.
 Native Xcode script phases receive the corresponding `EXECUTABLE_PATH`,
 `INFOPLIST_PATH`, and `UNLOCALIZED_RESOURCES_FOLDER_PATH` settings. iOS bundle
 paths are unchanged. When an existing generated macOS bundle has a root
-`Info.plist`, Once removes that legacy product before rebuilding so obsolete
+`Info.plist`, Struo removes that legacy product before rebuilding so obsolete
 flat files do not invalidate the new bundle's signature.
 
-Versioned prebuilt frameworks retain their symlinks and nested code. Once
+Versioned prebuilt frameworks retain their symlinks and nested code. Struo
 copies and ad-hoc signs the embedded copy, without changing the imported
 framework. Do not add a root `_CodeSignature` directory or signature-forwarding
 symlink: signing captures the complete framework tree, including the version's
@@ -330,11 +330,11 @@ XCFramework. Other archive layouts still require a project module; the built-in
 
 ### Keep Release Credentials Outside Cached Builds
 
-`once build` produces an ad-hoc signed bundle for local use. Developer ID
+`struo build` produces an ad-hoc signed bundle for local use. Developer ID
 signing and notarization are separate release steps, not `postbuild_actions`,
-annotated `once exec` scripts, or remotely cached target actions. Keep private
+annotated `struo exec` scripts, or remotely cached target actions. Keep private
 keys, keychain passwords, provisioning profiles, and notary credentials outside
-the workspace and Once's declared inputs, environment, outputs, and logs.
+the workspace and Struo's declared inputs, environment, outputs, and logs.
 
 Build first without release credentials. In a separate release job, copy the
 bundle into a private temporary directory. Import the authorized Developer ID
@@ -364,7 +364,7 @@ trap 'rm -rf "$work"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 app="$work/Hello.app"
-ditto .once/out/Hello/Hello.app "$app"
+ditto .struo/out/Hello/Hello.app "$app"
 codesign --force --sign "$DEVELOPER_ID_SHA1" --keychain "$SIGNING_KEYCHAIN" \
   --options runtime --timestamp "$app"
 codesign --verify --deep --strict "$app"
@@ -381,9 +381,9 @@ mkdir dist
 ditto -c -k --sequesterRsrc --keepParent "$app" dist/Hello-macos.zip
 ```
 
-Run this as an ordinary shell script, outside Once. Its caller owns keychain
+Run this as an ordinary shell script, outside Struo. Its caller owns keychain
 creation and cleanup. Never sign, change a property list, or staple the bundle
-under `.once/out` in place. Create update signatures and checksums from the
+under `.struo/out` in place. Create update signatures and checksums from the
 final stapled ZIP, not the submission archive.
 
 For applications with nested helpers, frameworks, XPC services, or extensions,
@@ -418,6 +418,6 @@ these attributes fails validation before the build starts.
 ## Next
 
 Continue with [Memory](/guide/memory/) once the application builds and tests.
-It shows how Once records durable context about graph work. If the application
+It shows how Struo records durable context about graph work. If the application
 also contains Android or Rust code, use [Ecosystems](/guide/graph/ecosystems)
 to choose the next independent integration.

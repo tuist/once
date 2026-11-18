@@ -11,9 +11,9 @@ srcs = ["src/**/*.kt"]
 ```
 
 Optional attributes are `detekt`, `config`, `data`, and `args`. The target
-emits `once_lint_info` and exposes the `lint` capability.
+emits `struo_lint_info` and exposes the `lint` capability.
 
-Use `once query schema detekt_lint` for the complete contract and
-`once query example detekt_lint detekt-lint-minimal` for the starter files.
+Use `struo query schema detekt_lint` for the complete contract and
+`struo query example detekt_lint detekt-lint-minimal` for the starter files.
 The [Linting guide](/guide/graph/linting) covers materialization, execution,
 failure policy, normalized findings, and cache verification.

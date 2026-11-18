@@ -1,0 +1,775 @@
+mod path_fingerprint;
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use struo_cas::Digest;
+use struo_core::SandboxMode;
+
+use super::capability::CapabilityRunRecord;
+use crate::commands::change_tracker::{ChangePosition, ChangeSnapshot};
+
+use self::path_fingerprint::PathFingerprint;
+
+const SCHEMA: &str = "struo.build-receipt.v7";
+
+#[derive(Debug, Deserialize, Serialize)]
+pub(super) struct BuildReceipt {
+    schema: String,
+    target: String,
+    sandbox: String,
+    /// Content digest of the effective build configuration. Defaults to
+    /// empty for receipts written before this field existed, which are
+    /// always the workspace-default configuration.
+    #[serde(default)]
+    configuration: String,
+    environment: BTreeMap<String, Option<String>>,
+    #[serde(default)]
+    inherited_environment_sha256: String,
+    host_paths: BTreeMap<String, Option<PathFingerprint>>,
+    source_digests: BTreeMap<String, Digest>,
+    /// What this build produced, by content.
+    ///
+    /// A build does not wait for the platform to report the writes it just
+    /// made, so the next invocation is the one told about them. This is how it
+    /// recognises them as ours rather than as someone else's edit.
+    #[serde(default)]
+    produced: BTreeMap<String, Digest>,
+    /// Outputs the build left in the cache rather than on disk because only
+    /// later actions of the same target read them.
+    #[serde(default)]
+    deferred: BTreeSet<String>,
+    executable_fingerprint: PathFingerprint,
+    position: ChangePosition,
+    record: CapabilityRunRecord,
+}
+
+pub(super) struct Observations<'a> {
+    pub environment: &'a BTreeMap<String, Option<String>>,
+    pub host_paths: &'a BTreeSet<PathBuf>,
+    pub source_digests: &'a BTreeMap<String, Digest>,
+    pub produced: &'a BTreeMap<String, Digest>,
+    pub deferred: &'a BTreeSet<String>,
+}
+
+pub(super) async fn read(
+    workspace: &Path,
+    target: &str,
+    sandbox: SandboxMode,
+    configuration_path_suffix: &str,
+) -> Option<BuildReceipt> {
+    let path = receipt_path(workspace, target, sandbox, configuration_path_suffix);
+    let raw = tokio::fs::read(&path).await.ok()?;
+    serde_json::from_slice::<BuildReceipt>(&raw).ok()
+}
+
+pub(super) fn position(receipt: &BuildReceipt) -> &ChangePosition {
+    &receipt.position
+}
+
+pub(super) async fn load(
+    workspace: &Path,
+    target: &str,
+    sandbox: SandboxMode,
+    configuration_path_suffix: &str,
+    snapshot: Option<&ChangeSnapshot>,
+    receipt: Option<BuildReceipt>,
+) -> Option<CapabilityRunRecord> {
+    // Receipt host-path fingerprints require a reliable inode change marker.
+    if !cfg!(unix) {
+        return None;
+    }
+    let snapshot = snapshot?;
+    let mut receipt = receipt?;
+    let changed_environment = changed_environment(&receipt.environment);
+    let changed_host_paths = path_fingerprint::changed(&receipt.host_paths);
+    let miss = if receipt.schema != SCHEMA {
+        Some("schema")
+    } else if receipt.target != target {
+        Some("target")
+    } else if receipt.sandbox != sandbox_key(sandbox) {
+        Some("sandbox")
+    } else if receipt.position.instance_id != snapshot.position.instance_id {
+        Some("filesystem tracker")
+    } else if receipt.position.source_generation != snapshot.position.source_generation
+        && !source_changes_match(
+            workspace,
+            &receipt.source_digests,
+            snapshot.source_changes.as_deref(),
+        )
+    {
+        Some("source change")
+    } else if receipt.position.output_generation != snapshot.position.output_generation
+        && !output_changes_are_our_own(
+            workspace,
+            &receipt.produced,
+            snapshot.output_changes.as_deref(),
+        )
+    {
+        Some("output change")
+    } else if !changed_environment.is_empty()
+        || receipt.inherited_environment_sha256
+            != struo_frontend::analysis::inherited_environment_sha256()
+    {
+        Some("environment")
+    } else if !changed_host_paths.is_empty() {
+        Some("host path")
+    } else if receipt.executable_fingerprint != executable_fingerprint()? {
+        Some("executable")
+    } else if receipt.record.outputs.is_empty() {
+        Some("no declared outputs")
+    } else if !receipt
+        .record
+        .outputs
+        .iter()
+        .filter(|output| !receipt.deferred.contains(*output))
+        .all(|output| workspace.join(output).symlink_metadata().is_ok())
+    {
+        Some("output")
+    } else {
+        None
+    };
+    if let Some(reason) = miss {
+        tracing::debug!(
+            target,
+            reason,
+            changed_environment = ?changed_environment,
+            changed_host_paths = ?changed_host_paths,
+            "build receipt requires validation"
+        );
+        return None;
+    }
+    if receipt.position != snapshot.position {
+        receipt.position = snapshot.position.clone();
+        receipt.source_digests.clear();
+        if let Err(error) = write_receipt(
+            &receipt_path(workspace, target, sandbox, configuration_path_suffix),
+            &receipt,
+        )
+        .await
+        {
+            tracing::debug!(%error, target, "failed to advance reconciled build receipt");
+        }
+    }
+    receipt.record.cache = "hit".to_string();
+    tracing::debug!(
+        target,
+        source_generation = snapshot.position.source_generation,
+        output_generation = snapshot.position.output_generation,
+        "reused unchanged build receipt"
+    );
+    Some(receipt.record)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn store(
+    workspace: &Path,
+    target: &str,
+    sandbox: SandboxMode,
+    configuration_path_suffix: &str,
+    configuration_digest: Digest,
+    snapshot: &ChangeSnapshot,
+    observations: Observations<'_>,
+    record: &CapabilityRunRecord,
+) {
+    if !cfg!(unix) {
+        return;
+    }
+    let Some(executable_fingerprint) = executable_fingerprint() else {
+        return;
+    };
+    let Some(host_paths) = path_fingerprint::capture(observations.host_paths) else {
+        tracing::debug!(
+            target,
+            "host path fingerprint failed; build receipt not stored"
+        );
+        clear(workspace, target, sandbox, configuration_path_suffix).await;
+        return;
+    };
+    let receipt = BuildReceipt {
+        schema: SCHEMA.to_string(),
+        target: target.to_string(),
+        sandbox: sandbox_key(sandbox),
+        configuration: configuration_digest.to_hex(),
+        environment: observations.environment.clone(),
+        inherited_environment_sha256: struo_frontend::analysis::inherited_environment_sha256(),
+        host_paths,
+        source_digests: observations.source_digests.clone(),
+        produced: observations.produced.clone(),
+        deferred: observations.deferred.clone(),
+        executable_fingerprint,
+        position: snapshot.position.clone(),
+        record: record.clone(),
+    };
+    if let Err(error) = write_receipt(
+        &receipt_path(workspace, target, sandbox, configuration_path_suffix),
+        &receipt,
+    )
+    .await
+    {
+        tracing::debug!(%error, target, "failed to persist build receipt");
+    }
+}
+
+pub(super) async fn clear(
+    workspace: &Path,
+    target: &str,
+    sandbox: SandboxMode,
+    configuration_path_suffix: &str,
+) {
+    let path = receipt_path(workspace, target, sandbox, configuration_path_suffix);
+    if let Err(error) = tokio::fs::remove_file(&path).await {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            tracing::debug!(%error, target, "failed to clear build receipt");
+        }
+    }
+}
+
+async fn write_receipt(path: &Path, receipt: &BuildReceipt) -> anyhow::Result<()> {
+    let parent = path
+        .parent()
+        .expect("build receipt path always has a parent");
+    tokio::fs::create_dir_all(parent).await?;
+    let temporary = path.with_extension(format!("json.tmp-{}", std::process::id()));
+    tokio::fs::write(&temporary, serde_json::to_vec(receipt)?).await?;
+    tokio::fs::rename(temporary, path).await?;
+    Ok(())
+}
+
+fn receipt_path(
+    workspace: &Path,
+    target: &str,
+    sandbox: SandboxMode,
+    configuration_path_suffix: &str,
+) -> PathBuf {
+    // The configuration suffix is part of the hashed key so two
+    // configurations of the same target never share a receipt file. The
+    // workspace-default suffix is empty, so baseline receipts land at the
+    // same path as before.
+    let key = Digest::of_bytes(
+        format!(
+            "{target}{configuration_path_suffix}\0{}",
+            sandbox_key(sandbox)
+        )
+        .as_bytes(),
+    );
+    workspace
+        .join(".struo")
+        .join("build-receipts")
+        .join(format!("{key}.json"))
+}
+
+fn sandbox_key(sandbox: SandboxMode) -> String {
+    format!("{sandbox:?}")
+}
+
+fn changed_environment(expected: &BTreeMap<String, Option<String>>) -> Vec<String> {
+    expected
+        .iter()
+        .filter(|(name, expected)| std::env::var(name).ok() != **expected)
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+/// Whether every reported output change is one this receipt's own build made.
+///
+/// A build does not wait for the platform to report the writes it just made:
+/// after a compiler writes its output that report takes hundreds of
+/// milliseconds to arrive, and waiting for it would put that on the end of
+/// every build. The writes are reported to the next invocation instead, which
+/// recognises them here by hashing what is on disk and comparing against what
+/// the build recorded producing.
+///
+/// Anything else, including a path inside an output that the build did not
+/// record, is a change by someone else and invalidates the receipt.
+fn output_changes_are_our_own(
+    workspace: &Path,
+    produced: &BTreeMap<String, Digest>,
+    changes: Option<&[String]>,
+) -> bool {
+    let Some(changes) = changes else {
+        return false;
+    };
+    if changes.is_empty() {
+        return true;
+    }
+    if produced.is_empty() {
+        return false;
+    }
+    let mut affected = BTreeSet::new();
+    for path in changes {
+        let Some(output) = produced
+            .keys()
+            .find(|output| *output == path || path.starts_with(&format!("{output}/")))
+        else {
+            return false;
+        };
+        affected.insert(output.clone());
+    }
+    let recorded = crate::commands::graph::analysis::RecordedDigests::open(workspace);
+    affected.iter().all(|output| {
+        produced
+            .get(output)
+            .is_some_and(|expected| recorded.output_matches(workspace, output, *expected))
+    })
+}
+
+fn source_changes_match(
+    workspace: &Path,
+    expected: &BTreeMap<String, Digest>,
+    changes: Option<&[String]>,
+) -> bool {
+    let Some(changes) = changes else {
+        return false;
+    };
+    changes.iter().all(|path| {
+        expected.get(path).is_some_and(|expected| {
+            struo_core::digest_source_path(workspace, path).is_ok_and(|actual| actual == *expected)
+        })
+    })
+}
+
+fn executable_fingerprint() -> Option<PathFingerprint> {
+    if !cfg!(unix) {
+        return None;
+    }
+    let executable = std::env::current_exe().ok()?;
+    path_fingerprint::fingerprint(&executable)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use struo_cas::ActionResult;
+    use struo_core::EvidenceCacheState;
+    use tempfile::TempDir;
+
+    use super::*;
+
+    const TEST_CONFIGURATION_PATH_SUFFIX: &str = "";
+
+    fn test_configuration_digest() -> Digest {
+        Digest::of_bytes(b"test-configuration")
+    }
+
+    fn record() -> CapabilityRunRecord {
+        CapabilityRunRecord {
+            target: "app".to_string(),
+            kind: "test".to_string(),
+            capability: "build".to_string(),
+            status: "completed".to_string(),
+            action_digest: "abc".to_string(),
+            cache: "miss".to_string(),
+            output_groups: vec!["binary".to_string()],
+            required_outputs: Vec::new(),
+            outputs: vec![".struo/out/app/app".to_string()],
+            test_results: None,
+            input_digest: None,
+            input_fingerprint: None,
+            cache_state: EvidenceCacheState::Miss,
+            result: ActionResult {
+                exit_code: 0,
+                stdout: None,
+                stderr: None,
+                outputs: BTreeMap::new(),
+            },
+        }
+    }
+
+    fn snapshot(source_generation: u64, output_generation: u64) -> ChangeSnapshot {
+        ChangeSnapshot {
+            position: ChangePosition {
+                instance_id: "tracker".to_string(),
+                source_generation,
+                output_generation,
+            },
+            source_changes: Some(Vec::new()),
+            output_changes: Some(Vec::new()),
+        }
+    }
+
+    /// An intermediate output the build left in the cache is not missing from
+    /// disk in any way that matters, so it must not cost every later
+    /// invocation a full graph visit. A final output still has to be there.
+    #[tokio::test]
+    async fn receipt_does_not_require_deferred_intermediate_outputs_on_disk() {
+        let temporary = TempDir::new().unwrap();
+        let output = temporary.path().join(".struo/out/app/app");
+        tokio::fs::create_dir_all(output.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&output, b"binary").await.unwrap();
+        let intermediate = ".struo/out/app/objects/main.o".to_string();
+        let mut record = record();
+        record.outputs.push(intermediate.clone());
+        let snapshot = snapshot(3, 5);
+        let environment = BTreeMap::new();
+        let no_host_paths = BTreeSet::new();
+        let source_digests = BTreeMap::new();
+        let stored = |deferred: BTreeSet<String>| {
+            let record = record.clone();
+            let snapshot = snapshot.clone();
+            let environment = environment.clone();
+            let no_host_paths = no_host_paths.clone();
+            let source_digests = source_digests.clone();
+            let workspace = temporary.path().to_path_buf();
+            async move {
+                store(
+                    &workspace,
+                    "app",
+                    SandboxMode::Off,
+                    TEST_CONFIGURATION_PATH_SUFFIX,
+                    test_configuration_digest(),
+                    &snapshot,
+                    Observations {
+                        environment: &environment,
+                        host_paths: &no_host_paths,
+                        source_digests: &source_digests,
+                        produced: &BTreeMap::new(),
+                        deferred: &deferred,
+                    },
+                    &record,
+                )
+                .await;
+                let receipt = read(
+                    &workspace,
+                    "app",
+                    SandboxMode::Off,
+                    TEST_CONFIGURATION_PATH_SUFFIX,
+                )
+                .await;
+                load(
+                    &workspace,
+                    "app",
+                    SandboxMode::Off,
+                    TEST_CONFIGURATION_PATH_SUFFIX,
+                    Some(&snapshot),
+                    receipt,
+                )
+                .await
+            }
+        };
+
+        assert!(stored(BTreeSet::new()).await.is_none());
+        assert!(stored(BTreeSet::from([intermediate.clone()]))
+            .await
+            .is_some());
+
+        tokio::fs::remove_file(&output).await.unwrap();
+        assert!(stored(BTreeSet::from([intermediate])).await.is_none());
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn receipt_requires_the_same_tracker_snapshot_and_outputs() {
+        let temporary = TempDir::new().unwrap();
+        let output = temporary.path().join(".struo/out/app/app");
+        tokio::fs::create_dir_all(output.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&output, b"binary").await.unwrap();
+        let snapshot = snapshot(3, 5);
+        let environment = BTreeMap::new();
+        let no_host_paths = BTreeSet::new();
+        let source_digests = BTreeMap::new();
+        store(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+            test_configuration_digest(),
+            &snapshot,
+            Observations {
+                environment: &environment,
+                host_paths: &no_host_paths,
+                source_digests: &source_digests,
+                produced: &BTreeMap::new(),
+                deferred: &BTreeSet::new(),
+            },
+            &record(),
+        )
+        .await;
+
+        let receipt = read(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+        )
+        .await;
+        let mut legacy = read(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+        )
+        .await
+        .unwrap();
+        legacy.schema = "struo.build-receipt.v5".to_owned();
+        assert!(load(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+            Some(&snapshot),
+            Some(legacy)
+        )
+        .await
+        .is_none());
+        let loaded = load(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+            Some(&snapshot),
+            receipt,
+        )
+        .await
+        .unwrap();
+        assert_eq!(loaded.cache, "hit");
+
+        let mut changed_environment = read(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+        )
+        .await
+        .unwrap();
+        changed_environment.inherited_environment_sha256 = "previous environment".to_owned();
+        assert!(load(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+            Some(&snapshot),
+            Some(changed_environment),
+        )
+        .await
+        .is_none());
+
+        let changed = ChangeSnapshot {
+            position: ChangePosition {
+                source_generation: 4,
+                ..snapshot.position.clone()
+            },
+            source_changes: None,
+            ..snapshot.clone()
+        };
+        let receipt = read(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+        )
+        .await;
+        assert!(load(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+            Some(&changed),
+            receipt,
+        )
+        .await
+        .is_none());
+
+        let host_tool = temporary.path().join("tool");
+        tokio::fs::write(&host_tool, b"one").await.unwrap();
+        tokio::time::sleep(struo_host_tree::SETTLE_WINDOW * 2).await;
+        let host_paths = BTreeSet::from([host_tool.clone()]);
+        store(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+            test_configuration_digest(),
+            &snapshot,
+            Observations {
+                environment: &environment,
+                host_paths: &host_paths,
+                source_digests: &source_digests,
+                produced: &BTreeMap::new(),
+                deferred: &BTreeSet::new(),
+            },
+            &record(),
+        )
+        .await;
+        let receipt = read(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+        )
+        .await;
+        assert!(load(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+            Some(&snapshot),
+            receipt,
+        )
+        .await
+        .is_some());
+
+        tokio::fs::write(host_tool, b"two").await.unwrap();
+        let receipt = read(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+        )
+        .await;
+        assert!(load(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+            Some(&snapshot),
+            receipt,
+        )
+        .await
+        .is_none());
+    }
+
+    #[tokio::test]
+    async fn receipt_without_declared_outputs_requires_validation() {
+        let temporary = TempDir::new().unwrap();
+        let snapshot = snapshot(3, 5);
+        let environment = BTreeMap::new();
+        let no_host_paths = BTreeSet::new();
+        let source_digests = BTreeMap::new();
+        let mut empty_output_record = record();
+        empty_output_record.outputs.clear();
+        store(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+            test_configuration_digest(),
+            &snapshot,
+            Observations {
+                environment: &environment,
+                host_paths: &no_host_paths,
+                source_digests: &source_digests,
+                produced: &BTreeMap::new(),
+                deferred: &BTreeSet::new(),
+            },
+            &empty_output_record,
+        )
+        .await;
+
+        let receipt = read(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+        )
+        .await;
+        assert!(load(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+            Some(&snapshot),
+            receipt,
+        )
+        .await
+        .is_none());
+    }
+
+    #[tokio::test]
+    async fn receipt_reconciles_an_identical_observed_source_rewrite() {
+        let temporary = TempDir::new().unwrap();
+        let source = temporary.path().join("src/main.rs");
+        let output = temporary.path().join(".struo/out/app/app");
+        tokio::fs::create_dir_all(source.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(output.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&source, b"source").await.unwrap();
+        tokio::fs::write(&output, b"binary").await.unwrap();
+        let initial = snapshot(3, 5);
+        let environment = BTreeMap::new();
+        let host_paths = BTreeSet::new();
+        let source_digests = BTreeMap::from([(
+            "src/main.rs".to_string(),
+            struo_core::digest_source_path(temporary.path(), "src/main.rs").unwrap(),
+        )]);
+        store(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+            test_configuration_digest(),
+            &initial,
+            Observations {
+                environment: &environment,
+                host_paths: &host_paths,
+                source_digests: &source_digests,
+                produced: &BTreeMap::new(),
+                deferred: &BTreeSet::new(),
+            },
+            &record(),
+        )
+        .await;
+
+        let changed = ChangeSnapshot {
+            position: ChangePosition {
+                source_generation: 4,
+                ..initial.position.clone()
+            },
+            source_changes: Some(vec!["src/main.rs".to_string()]),
+            ..initial.clone()
+        };
+        let receipt = read(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+        )
+        .await;
+        assert!(load(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+            Some(&changed),
+            receipt,
+        )
+        .await
+        .is_some());
+
+        tokio::fs::write(source, b"changed").await.unwrap();
+        let changed_again = ChangeSnapshot {
+            position: ChangePosition {
+                source_generation: 5,
+                ..initial.position
+            },
+            source_changes: Some(vec!["src/main.rs".to_string()]),
+            ..changed
+        };
+        let receipt = read(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+        )
+        .await;
+        assert!(load(
+            temporary.path(),
+            "app",
+            SandboxMode::Off,
+            TEST_CONFIGURATION_PATH_SUFFIX,
+            Some(&changed_again),
+            receipt,
+        )
+        .await
+        .is_none());
+    }
+}

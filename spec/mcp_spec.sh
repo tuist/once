@@ -1,21 +1,21 @@
 #shellcheck shell=bash
 # End-to-end specs for the MCP stdio protocol.
 
-Describe 'once mcp'
+Describe 'struo mcp'
   BeforeEach 'setup_workspace'
   AfterEach 'cleanup_workspace'
 
   It 'advertises and calls the evidence query tool over stdio'
-    once exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf mcp-evidence' >/dev/null 2>&1
+    struo exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf mcp-evidence' >/dev/null 2>&1
     cat > "$WORKSPACE/mcp.jsonl" <<'EOF'
 {"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"once_query_evidence","arguments":{}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"struo_query_evidence","arguments":{}}}
 EOF
 
-    When call /bin/sh -c 'cat "$1" | "$2" -C "$3" mcp' sh "$WORKSPACE/mcp.jsonl" "$ONCE_BIN" "$WORKSPACE"
+    When call /bin/sh -c 'cat "$1" | "$2" -C "$3" mcp' sh "$WORKSPACE/mcp.jsonl" "$STRUO_BIN" "$WORKSPACE"
     The status should be success
-    The stdout should include '"name":"once_query_evidence"'
-    The stdout should include 'once.evidence.v1'
+    The stdout should include '"name":"struo_query_evidence"'
+    The stdout should include 'struo.evidence.v1'
     The stdout should include 'action_result'
     The stdout should include 'passed'
   End
@@ -23,18 +23,18 @@ EOF
   It 'validates and executes an annotated script through the cache'
     cat > "$WORKSPACE/build.sh" <<'SH'
 #!/bin/sh
-# once input "input.txt"
-# once output "output.txt"
+# struo input "input.txt"
+# struo output "output.txt"
 cp input.txt output.txt
 SH
     printf '%s\n' 'hello from an annotated script' > "$WORKSPACE/input.txt"
     cat > "$WORKSPACE/mcp.jsonl" <<'EOF'
-{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"once_validate_script","arguments":{"path":"build.sh"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"once_exec_script","arguments":{"path":"build.sh"}}}
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"once_exec_script","arguments":{"path":"build.sh"}}}
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"struo_validate_script","arguments":{"path":"build.sh"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"struo_exec_script","arguments":{"path":"build.sh"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"struo_exec_script","arguments":{"path":"build.sh"}}}
 EOF
 
-    When call /bin/sh -c 'cat "$1" | "$2" -C "$3" mcp --allow-run' sh "$WORKSPACE/mcp.jsonl" "$ONCE_BIN" "$WORKSPACE"
+    When call /bin/sh -c 'cat "$1" | "$2" -C "$3" mcp --allow-run' sh "$WORKSPACE/mcp.jsonl" "$STRUO_BIN" "$WORKSPACE"
     The status should be success
     The stdout should include '"valid":true'
     The stdout should include '"cache":"hit"'
@@ -46,15 +46,15 @@ EOF
   It 'verifies scripts and retrieves the same retained report without execution permission'
     cat > "$WORKSPACE/build.sh" <<'SH'
 #!/bin/sh
-# once output "out.txt"
+# struo output "out.txt"
 printf stable > out.txt
 SH
     verify_then_query() {
-      printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"once_exec_script","arguments":{"path":"build.sh","verify_reproducible":true}}}' |
-        "$ONCE_BIN" -C "$WORKSPACE" mcp --allow-run > "$SPEC_ROOT/verified.json" || return
+      printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"struo_exec_script","arguments":{"path":"build.sh","verify_reproducible":true}}}' |
+        "$STRUO_BIN" -C "$WORKSPACE" mcp --allow-run > "$SPEC_ROOT/verified.json" || return
       id=$(jq -r '.result.structuredContent.result.id' "$SPEC_ROOT/verified.json")
-      printf '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"once_query_verification","arguments":{"id":"%s"}}}\n' "$id" |
-        "$ONCE_BIN" -C "$WORKSPACE" mcp > "$SPEC_ROOT/queried.json" || return
+      printf '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"struo_query_verification","arguments":{"id":"%s"}}}\n' "$id" |
+        "$STRUO_BIN" -C "$WORKSPACE" mcp > "$SPEC_ROOT/queried.json" || return
       jq -S '.result.structuredContent.result' "$SPEC_ROOT/verified.json" > "$SPEC_ROOT/first.json"
       jq -S '.result.structuredContent.result' "$SPEC_ROOT/queried.json" > "$SPEC_ROOT/second.json"
       cmp "$SPEC_ROOT/first.json" "$SPEC_ROOT/second.json" || return
@@ -62,20 +62,20 @@ SH
     }
     When call verify_then_query
     The status should be success
-    The stdout should equal '["once.verification.v1",true,true,2]'
+    The stdout should equal '["struo.verification.v1",true,true,2]'
     The path "$WORKSPACE/out.txt" should not be exist
   End
 
   It 'returns matching retained evidence and diagnostics without evaluating the current graph'
-    mkdir -p "$WORKSPACE/.once/out/tests/unit/test"
-    cat > "$WORKSPACE/.once/out/tests/unit/test/test_results.json" <<'EOF'
-{"schema":"once.test_results.v1","target":"tests/unit","status":"cancelled","runner":{"type":"native","metadata":{}},"summary":{"total":2,"passed":1,"failed":0,"skipped":0,"flaky":1},"cases":[{"id":"other","name":"other","suite":"unit","status":"passed","runner_metadata":{},"attempts":[{"status":"passed"}]},{"id":"retry","name":"retry","suite":"unit","status":"flaky","runner_metadata":{},"attempts":[{"status":"failed","timestamp":900,"failure":{"message":"first failure"},"producer_extension":{"n":7}},{"status":"producer_future_status","timestamp":100,"producer_extension":[3,1]}]}],"artifacts":{"logs":["../../never-read","https://invalid.example/private"],"native_results":[]}}
+    mkdir -p "$WORKSPACE/.struo/out/tests/unit/test"
+    cat > "$WORKSPACE/.struo/out/tests/unit/test/test_results.json" <<'EOF'
+{"schema":"struo.test_results.v1","target":"tests/unit","status":"cancelled","runner":{"type":"native","metadata":{}},"summary":{"total":2,"passed":1,"failed":0,"skipped":0,"flaky":1},"cases":[{"id":"other","name":"other","suite":"unit","status":"passed","runner_metadata":{},"attempts":[{"status":"passed"}]},{"id":"retry","name":"retry","suite":"unit","status":"flaky","runner_metadata":{},"attempts":[{"status":"failed","timestamp":900,"failure":{"message":"first failure"},"producer_extension":{"n":7}},{"status":"producer_future_status","timestamp":100,"producer_extension":[3,1]}]}],"artifacts":{"logs":["../../never-read","https://invalid.example/private"],"native_results":[]}}
 EOF
     cat > "$SPEC_ROOT/check_retained.py" <<'PY'
 import json, os, pathlib, subprocess
 root = pathlib.Path(os.environ['WORKSPACE'])
-command = [os.environ['ONCE_BIN'], '-C', str(root)]
-path = root / '.once/out/tests/unit/test/test_results.json'
+command = [os.environ['STRUO_BIN'], '-C', str(root)]
+path = root / '.struo/out/tests/unit/test/test_results.json'
 raw = path.read_bytes()
 retained = json.loads(raw)
 
@@ -93,7 +93,7 @@ def query(case=None, attempt=None, summary=False, error=None, attached=False, cl
         args['summary_only'] = True
         cli += ['--summary-only']
     direct = subprocess.run(cli, capture_output=True, text=True)
-    request = {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {'name': 'once_query_test_results', 'arguments': args}}
+    request = {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {'name': 'struo_query_test_results', 'arguments': args}}
     mcp = subprocess.run(command + ['mcp'], input=json.dumps(request)+'\n', capture_output=True, text=True)
     assert mcp.returncode == 0, mcp.stderr
     response = json.loads(mcp.stdout)['result']
@@ -116,7 +116,7 @@ def query(case=None, attempt=None, summary=False, error=None, attached=False, cl
 
 for manifest in (None, 'invalid [ TOML'):
     if manifest is not None:
-        (root / 'once.toml').write_text(manifest)
+        (root / 'struo.toml').write_text(manifest)
     before = {str(p.relative_to(root)): (p.read_bytes(), p.stat().st_mtime_ns) for p in root.rglob('*') if p.is_file()}
     first = query('retry', 1)
     latest = query('retry')
@@ -125,10 +125,10 @@ for manifest in (None, 'invalid [ TOML'):
     assert latest['attempt_result'] == retained['cases'][1]['attempts'][1]
     assert latest == query('retry', 2) and latest['attempt'] == latest['attempt_count'] == 2
     assert latest['target_artifacts'] == retained['artifacts'] and latest['artifact_availability'] == 'not_checked'
-    assert latest['rerun'] == {'argv': ['once', 'test', '--format', 'json', '--', 'tests/unit'], 'scope': 'target', 'configuration': 'current', 'reason': 'retained_evidence_only'}
+    assert latest['rerun'] == {'argv': ['struo', 'test', '--format', 'json', '--', 'tests/unit'], 'scope': 'target', 'configuration': 'current', 'reason': 'retained_evidence_only'}
     assert query('other')['case']['status'] == 'passed'
     assert query() == retained
-    assert query(summary=True)['schema'] == 'once.test_results_summary.v1'
+    assert query(summary=True)['schema'] == 'struo.test_results_summary.v1'
     query('missing', error='test_case_not_found')
     query('retry', 3, error='test_attempt_not_found')
     query('retry', 0, error='invalid_test_result_selection')
@@ -170,12 +170,12 @@ PY
   It 'keeps editing and execution tools out of the default catalog'
     printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' > "$WORKSPACE/mcp.jsonl"
 
-    When call /bin/sh -c 'cat "$1" | "$2" -C "$3" mcp | jq -r ".result.tools[].name"' sh "$WORKSPACE/mcp.jsonl" "$ONCE_BIN" "$WORKSPACE"
+    When call /bin/sh -c 'cat "$1" | "$2" -C "$3" mcp | jq -r ".result.tools[].name"' sh "$WORKSPACE/mcp.jsonl" "$STRUO_BIN" "$WORKSPACE"
     The status should be success
-    The stdout should include 'once_validate_script'
-    The stdout should include 'once_validate_workspace'
-    The stdout should not include 'once_exec_script'
-    The stdout should not include 'once_run_tests'
-    The stdout should not include 'once_apply_edit'
+    The stdout should include 'struo_validate_script'
+    The stdout should include 'struo_validate_workspace'
+    The stdout should not include 'struo_exec_script'
+    The stdout should not include 'struo_run_tests'
+    The stdout should not include 'struo_apply_edit'
   End
 End

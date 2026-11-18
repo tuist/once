@@ -1,4 +1,5 @@
-# Production values for the Once Helm chart.
+# Production values for the Struo website Helm chart. The release, namespace,
+# and secret names keep their original `once` identifiers so upgrades stay in place.
 #
 # This chart assumes the cluster has cert-manager, ingress-nginx,
 # external-dns, and external-secrets-operator with a 1Password

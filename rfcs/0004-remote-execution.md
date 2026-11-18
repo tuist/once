@@ -2,7 +2,7 @@
 
 ## Summary
 
-Once should turn an annotated script or graph action into one provider-neutral
+Struo should turn an annotated script or graph action into one provider-neutral
 execution request, then let an executor adapter place that request on a local
 Microsandbox, a hosted sandbox such as
 [Daytona](https://www.daytona.io/) or [E2B](https://e2b.dev/), or a service
@@ -19,7 +19,7 @@ headers, not by being rewritten as build graph rules.
 
 ## Decision
 
-Once will preserve the immutable action model used by Bazel and Buck2 while
+Struo will preserve the immutable action model used by Bazel and Buck2 while
 making the executor boundary broad enough for sandbox providers:
 
 1. Resolve a script header or command option to a named infrastructure
@@ -52,7 +52,7 @@ This is the correct network protocol for large shared fleets because it:
 - permits independent workers to materialize the same action;
 - records outputs without trusting a worker to choose undeclared paths.
 
-Once should support this protocol natively rather than translating it through
+Struo should support this protocol natively rather than translating it through
 a shell-based worker.
 
 ## What Buck2 Adds
@@ -65,16 +65,16 @@ three useful distinctions:
 - execution platform selection decides where it may run;
 - materialization decides when files must exist locally.
 
-Once should keep these decisions separate. A coding harness often needs the
+Struo should keep these decisions separate. A coding harness often needs the
 test result and captured streams, but it may not need every generated file
 materialized immediately.
 
-## Where Once Can Improve The Model
+## Where Struo Can Improve The Model
 
 Bazel's protocol is an excellent distributed transport, but it should not be
 the only executor interface. Daytona, E2B, and Microsandbox expose durable
 sandboxes, snapshots, and filesystem operations rather than the Bazel service
-shape. Once can normalize both families behind one prepared action:
+shape. Struo can normalize both families behind one prepared action:
 
 ```text
 script or graph action
@@ -101,7 +101,7 @@ Provisioning and execution have different ownership. A provider adapter creates
 or claims capacity, checks readiness, renews leases, drains obsolete images, and
 destroys resources. A prepared-command adapter stages inputs, starts a process,
 observes it, cancels it, and retrieves verified outputs. A REAPI service owns
-its fleet internally; Once should not require it to expose individual VMs.
+its fleet internally; Struo should not require it to expose individual VMs.
 
 Filter candidates for correctness before ranking them: execution OS and
 architecture, ABI, immutable tools/SDKs, isolation and network requirements,
@@ -226,10 +226,10 @@ files, and destroy the machine.
   language libraries. It remains a good candidate for a later adapter.
 - [Cloudflare Sandbox](https://developers.cloudflare.com/sandbox/) exposes a
   capable sandbox inside the Cloudflare Workers object model. It is not a
-  direct replacement for an executor called by a local Once process.
+  direct replacement for an executor called by a local Struo process.
 
 Provider popularity alone is not the contract. The deciding factor is whether
-Once can own the complete machine lifecycle and preserve declared filesystem
+Struo can own the complete machine lifecycle and preserve declared filesystem
 boundaries without embedding a provider library in scripts.
 
 ## Hosted Transfer And Cleanup
@@ -237,7 +237,7 @@ boundaries without embedding a provider library in scripts.
 E2B and Daytona receive one uncompressed archive containing only declared
 inputs. This preserves directory structure, executable modes, and safe
 symbolic links while avoiding one request per dependency file. A successful
-action packages only declared outputs into a second archive. Once validates
+action packages only declared outputs into a second archive. Struo validates
 that archive in a staging area before changing the workspace.
 
 This transport sends the full declared tree on every action cache miss. It is
@@ -246,7 +246,7 @@ Bazel protocol. It is an adapter implementation detail, so a provider can add
 content-addressed transfer later without changing the prepared action or
 script annotations.
 
-Each hosted action owns a fresh machine. Once explicitly waits for deletion
+Each hosted action owns a fresh machine. Struo explicitly waits for deletion
 after success and failure. E2B also receives a finite lifetime with
 kill-on-timeout behavior. Daytona also receives an ephemeral policy with
 immediate deletion after stop. These provider policies are safety nets for
@@ -287,7 +287,7 @@ it with a real local Microsandbox:
 - provider-level tests that verify deletion after both successful execution
   and transfer failure.
 
-The graph extension adds opt-in `once build --remote --compute <provider>` and
+The graph extension adds opt-in `struo build --remote --compute <provider>` and
 a Docker adapter with immutable local image IDs, caller-owned CPU/memory
 admission, fresh per-command containers, declared filesystem setup, bounded
 archive transfers, validated output installation, and journaled cleanup. Graph

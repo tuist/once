@@ -26,7 +26,7 @@ env:
   MISE_TASK_RUN_AUTO_INSTALL: "false"
   MISE_NOT_FOUND_AUTO_INSTALL: "false"
   MISE_EXEC_AUTO_INSTALL: "false"
-  ONCE_BOOTSTRAP_SOURCE: source
+  STRUO_BOOTSTRAP_SOURCE: source
 
 jobs:
   detect:
@@ -90,7 +90,7 @@ jobs:
         run: '"HOME=$env:USERPROFILE" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append'
       # Tuist runners keep the Cargo-built bootstrap on a cache volume, so
       # only changed crates rebuild. The prepared dependencies stay in the
-      # checkout: Once rejects resolver sources that resolve outside it.
+      # checkout: Struo rejects resolver sources that resolve outside it.
       - name: Attach cache volume
         if: startsWith(matrix.runner, 'tuist-')
         uses: tuist/cache-volume@dff0b58204ceca89edd5c89a333f7687c92c5576 # v1.13.0
@@ -121,25 +121,25 @@ jobs:
           key: release-deps-${{ matrix.runner }}-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', 'mise/tasks/release/prepare-rust-graph-deps.sh') }}
       - name: Add Rust target
         run: rustup target add ${{ matrix.target }}
-      - name: Select Once cache
-        run: ./mise/tasks/release/select-once-cache.sh
+      - name: Select Struo cache
+        run: ./mise/tasks/release/select-struo-cache.sh
         env:
           GH_TOKEN: ${{ github.token }}
-      - name: Resolve bootstrap Once
+      - name: Resolve bootstrap Struo
         run: |
-          once_bin="$(./mise/tasks/release/bootstrap-once.sh)"
-          echo "ONCE_BIN=${once_bin}" >> "$GITHUB_ENV"
+          struo_bin="$(./mise/tasks/release/bootstrap-struo.sh)"
+          echo "STRUO_BIN=${struo_bin}" >> "$GITHUB_ENV"
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Package release archive
         run: mise run release:package --target "${{ matrix.target }}" --version "${{ needs.detect.outputs.next-version }}"
         env:
           GH_TOKEN: ${{ github.token }}
-          # Stamped into the once-cli binary by `crates/once-cli/build.rs`
-          # so runtime `ActionCompleted.once_version` reports the version
+          # Stamped into the struo-cli binary by `crates/struo-cli/build.rs`
+          # so runtime `ActionCompleted.struo_version` reports the version
           # this workflow is publishing, not the placeholder in
           # `Cargo.toml`.
-          ONCE_RELEASE_VERSION: ${{ needs.detect.outputs.next-version }}
+          STRUO_RELEASE_VERSION: ${{ needs.detect.outputs.next-version }}
       - name: Upload release assets
         uses: actions/upload-artifact@v7
         with:
@@ -196,14 +196,14 @@ jobs:
         with:
           version: ${{ env.MISE_VERSION }}
           install_args: "rust jq"
-      - name: Select Once cache
-        run: ./mise/tasks/release/select-once-cache.sh
+      - name: Select Struo cache
+        run: ./mise/tasks/release/select-struo-cache.sh
         env:
           GH_TOKEN: ${{ github.token }}
-      - name: Resolve bootstrap Once
+      - name: Resolve bootstrap Struo
         run: |
-          once_bin="$(./mise/tasks/release/bootstrap-once.sh)"
-          echo "ONCE_BIN=${once_bin}" >> "$GITHUB_ENV"
+          struo_bin="$(./mise/tasks/release/bootstrap-struo.sh)"
+          echo "STRUO_BIN=${struo_bin}" >> "$GITHUB_ENV"
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Package XCFramework slice
@@ -217,7 +217,7 @@ jobs:
           path: dist/xcframework-slices/
 
   build-xcframework:
-    name: Build Once.xcframework
+    name: Build Struo.xcframework
     needs:
       - detect
       - build
@@ -243,8 +243,8 @@ jobs:
       - name: Upload release assets
         uses: actions/upload-artifact@v7
         with:
-          name: Once.xcframework
-          path: dist/Once.xcframework.zip*
+          name: Struo.xcframework
+          path: dist/Struo.xcframework.zip*
 
   build-sdk-libs:
     name: Build SDK libraries
@@ -275,7 +275,7 @@ jobs:
         with:
           pattern: '!sdk-libs-*'
           path: dist
-      # The XCFramework slices are inputs to Once.xcframework, not assets.
+      # The XCFramework slices are inputs to Struo.xcframework, not assets.
       - name: Flatten artifacts
         run: |
           rm -rf dist/xcframework-slice-*

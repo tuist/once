@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#MISE description="Materialize Cargo-resolved Rust dependencies for Once graph builds"
+#MISE description="Materialize Cargo-resolved Rust dependencies for Struo graph builds"
 #USAGE flag "--target <target>" help="Optional Rust target triple for metadata resolution"
 set -euo pipefail
 
@@ -106,7 +106,7 @@ if [[ -n "${schlussel_manifest}" && "${schlussel_manifest}" != "null" ]]; then
 fi
 
 # microsandbox-filesystem's build script downloads the arch-specific
-# `agentd` binary from GitHub at compile time. Under Once's hermetic
+# `agentd` binary from GitHub at compile time. Under Struo's hermetic
 # execution the child process cannot reach the network, so pre-stage the
 # binary where the crate's documented CI escape hatch looks for it:
 # `<workspace_root>/build/agentd`, where `workspace_root` is the vendored
@@ -149,7 +149,7 @@ if [[ -n "${microsandbox_version}" && "${microsandbox_version}" != "null" ]]; th
     mv third_party/rust/vendor/build/agentd.tmp third_party/rust/vendor/build/agentd
     chmod +x third_party/rust/vendor/build/agentd
     # The upstream build script only consults the pre-staged binary when it
-    # detects a CI environment; under Once's hermetic execution neither the
+    # detects a CI environment; under Struo's hermetic execution neither the
     # `CI` nor the `GITHUB_ACTIONS` markers necessarily reach the child
     # process, so patch the build script to consult the local file
     # unconditionally. The download branch stays as a fallback.
@@ -173,7 +173,7 @@ print(f"prepare-rust-graph-deps: patched {path} to always consult local agentd")
 PY
       # Cargo verifies vendored source integrity against a per-crate
       # `.cargo-checksum.json` file; overwrite the checksum for `build.rs`
-      # with the new hash so `cargo build --frozen` and Once's own hash
+      # with the new hash so `cargo build --frozen` and Struo's own hash
       # verification see the file as authentic.
       checksum_file="third_party/rust/vendor/microsandbox-filesystem-${microsandbox_version}/.cargo-checksum.json"
       if [[ -f "${checksum_file}" ]]; then

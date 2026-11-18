@@ -4,15 +4,15 @@ Locked Mix dependency graph consumed by Elixir targets.
 
 ## Description
 
-During graph loading, Once reads a checked-in graph snapshot or asks Mix to
-evaluate the dependencies active for the configured environment. Once reads package identity from the committed
+During graph loading, Struo reads a checked-in graph snapshot or asks Mix to
+evaluate the dependencies active for the configured environment. Struo reads package identity from the committed
 `mix.lock` and does not run a second version solver. Every active locked Hex or
 Git dependency becomes a synthetic `mix_package` target with its own source
 inputs, build action, and dependency edges.
 
 The lockfile is authoritative. Graph loading fails when an active Mix
 dependency has no lock entry, when the manifest or lockfile is not included in
-`resolver_inputs`, or when a selected source is outside the Once package. When
+`resolver_inputs`, or when a selected source is outside the Struo package. When
 `resolver_inputs` is empty or omitted, `srcs` supplies those files instead.
 Resolution does not fetch sources and never writes `mix.lock`. Native
 discovery can omit the lockfile when the complete active graph contains only
@@ -40,7 +40,7 @@ manifest records a different build timestamp.
 
 When dependency compilation reads root application configuration, declare
 `config_entry` and include that file plus every transitively imported
-configuration file in `config`. Once reads the root configuration with
+configuration file in `config`. Struo reads the root configuration with
 `mix_env` and `config_target`, then restores the dependency environment before
 running its compiler pipeline. This preserves the distinction between the
 root graph environment and each dependency's compilation environment.
@@ -50,7 +50,7 @@ one root environment. Separate development, test, and production dependency
 targets keep their configuration and action identities independent.
 
 The aggregate target depends only on the direct roots selected by Mix. The
-synthetic targets carry transitive edges, so Once still sees and schedules the
+synthetic targets carry transitive edges, so Struo still sees and schedules the
 complete graph. An optional `roots` list can expose a narrower set by Mix
 application name or Hex package name.
 
@@ -64,7 +64,7 @@ application name or Hex package name.
 | `resolver_inputs` | list&lt;string&gt; | no | `srcs` | Package-relative text globs supplied to the resolver |
 | `graph_file` | string | no |  | Checked-in [JavaScript Object Notation](https://www.json.org/json-en.html) snapshot with exact manifest, lockfile, Mix environment, and resolver input bindings |
 | `vendor_dir` | string | no | `deps` | Package-relative directory containing fetched dependency source trees |
-| `path_dependencies` | map&lt;string, string&gt; | no | `{}` | Active path dependency application names mapped to first-party Once targets |
+| `path_dependencies` | map&lt;string, string&gt; | no | `{}` | Active path dependency application names mapped to first-party Struo targets |
 | `mix_env` | string | no | `prod` | Mix environment used to evaluate dependency declarations |
 | `dependency_mix_env` | string | no | `prod` | Fallback Mix environment used to compile a dependency when Mix does not report one |
 | `config` | list&lt;string&gt; | no | `[]` | Root configuration inputs available while compiling dependencies |
@@ -76,7 +76,7 @@ application name or Hex package name.
 | `_mix_locked_roots` | list&lt;string&gt; | resolver-owned | `[]` | Records generated root target names |
 
 The underscore-prefixed attributes are produced by the resolver and should not
-be set in `once.toml`.
+be set in `struo.toml`.
 
 ## Dependency Edges
 
@@ -126,8 +126,8 @@ deps = ["./mix_dependencies"]
 ```
 
 The snapshot contains the exact `manifest` and `lockfile` text, the selected
-`mix_env`, a `once_inputs` map, the normalized `lock` object, and a
-`dependencies` array. `once_inputs` contains every exact resolver input except
+`mix_env`, a `struo_inputs` map, the normalized `lock` object, and a
+`dependencies` array. `struo_inputs` contains every exact resolver input except
 the snapshot itself. Include each path dependency manifest in
 `resolver_inputs`. Graph loading rejects any binding that differs from the
 target.
@@ -139,7 +139,7 @@ record the normalized result before restoring tool-free queries.
 
 Map every active path dependency to an ordinary first-party target. The mapped
 target participates in the imported root and transitive edges instead of being
-silently omitted. Once stages mapped projects at their workspace-relative
+silently omitted. Struo stages mapped projects at their workspace-relative
 source roots, so the path expression in `mix.exs` continues to resolve inside
 the isolated build workspace:
 

@@ -5,7 +5,7 @@ Describe 'Cargo build-script sibling source inputs'
   AfterEach 'cleanup_workspace'
 
   script_cache_is() {
-    once --format json query evidence backend-0.1.0:build --limit 100 |
+    struo --format json query evidence backend-0.1.0:build --limit 100 |
       jq -e --arg expected "$1" '
         map(select(any(.outputs | keys[]; endswith("/build-script.stdout")))) |
         max_by(.created_at_unix_ms).cache == $expected' >/dev/null
@@ -50,7 +50,7 @@ fn main() {
 RS
     printf 'pub fn value() -> &\x27static str { env!("GENERATED") }\n' > "$SPEC_ROOT/packages/backend/src/lib.rs"
     printf 'fn main() { println!("{}", backend::value()); }\n' > "$WORKSPACE/src/main.rs"
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [[target]]
 name = "cargo"
 kind = "cargo_workspace"
@@ -64,13 +64,13 @@ TOML
     kind="$1"
     create_source_fixture
     source_root="$SPEC_ROOT/packages"
-    binary="$WORKSPACE/.once/out/cargo_app_bin_app/app"
+    binary="$WORKSPACE/.struo/out/cargo_app_bin_app/app"
     if [ "$kind" = cargo_dependencies ]; then
       mkdir -p "$WORKSPACE/vendor"
       cp -R "$SPEC_ROOT/packages/backend" "$WORKSPACE/vendor/backend-0.1.0"
       cp -R "$SPEC_ROOT/packages/graphics" "$WORKSPACE/vendor/graphics-0.2.2"
       source_root="$WORKSPACE/vendor"
-      cat > "$WORKSPACE/once.toml" <<'TOML'
+      cat > "$WORKSPACE/struo.toml" <<'TOML'
 [[target]]
 name = "deps"
 kind = "cargo_dependencies"
@@ -88,37 +88,37 @@ deps = ["deps"]
 [target.attrs]
 cargo_package = "app"
 TOML
-      binary="$WORKSPACE/.once/out/app/app"
+      binary="$WORKSPACE/.struo/out/app/app"
       scene="$source_root/graphics-0.2.2/src/scene.rs"
       renderer="$source_root/backend-0.1.0/src/renderer.txt"
     else
       scene="$source_root/graphics/src/scene.rs"
       renderer="$source_root/backend/src/renderer.txt"
     fi
-    once build backend-0.1.0 --quiet >/dev/null || return
+    struo build backend-0.1.0 --quiet >/dev/null || return
     script_cache_is miss || return
-    once build --quiet >/dev/null || return
+    struo build --quiet >/dev/null || return
     "$binary" || return
-    once build backend-0.1.0 --quiet >/dev/null || return
+    struo build backend-0.1.0 --quiet >/dev/null || return
     script_cache_is hit || return
-    once build --quiet >/dev/null || return
+    struo build --quiet >/dev/null || return
     "$binary" || return
     printf 'two' > "$scene"
-    once build backend-0.1.0 --quiet >/dev/null || return
+    struo build backend-0.1.0 --quiet >/dev/null || return
     script_cache_is miss || return
-    once build --quiet >/dev/null || return
+    struo build --quiet >/dev/null || return
     "$binary" || return
     printf 'changed' > "$renderer"
-    once build backend-0.1.0 --quiet >/dev/null || return
+    struo build backend-0.1.0 --quiet >/dev/null || return
     script_cache_is miss || return
-    once build --quiet >/dev/null || return
+    struo build --quiet >/dev/null || return
     "$binary" || return
-    once build backend-0.1.0 --quiet >/dev/null || return
+    struo build backend-0.1.0 --quiet >/dev/null || return
     script_cache_is hit || return
-    once build --quiet >/dev/null || return
+    struo build --quiet >/dev/null || return
     "$binary" || return
     printf 'pub fn unrelated() {}\n' >> "$(dirname "$scene")/lib.rs"
-    once build backend-0.1.0 --quiet >/dev/null || return
+    struo build backend-0.1.0 --quiet >/dev/null || return
     script_cache_is hit || return
     if [ "$kind" = cargo_dependencies ]; then
       test ! -e "$WORKSPACE/vendor/graphics" || return
@@ -130,8 +130,8 @@ TOML
 
   exercise_removed_destination() {
     create_source_fixture
-    once build backend-0.1.0 --quiet >/dev/null || return
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    struo build backend-0.1.0 --quiet >/dev/null || return
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [[target]]
 name = "cargo"
 kind = "cargo_workspace"
@@ -141,12 +141,12 @@ srcs = ["Cargo.toml", "Cargo.lock"]
 TOML
     for state in warm cold; do
       if [ "$state" = cold ]; then
-        rm -rf "$WORKSPACE/.once"
+        rm -rf "$WORKSPACE/.struo"
       fi
-      if once build backend-0.1.0 --quiet > "$SPEC_ROOT/failure.log" 2>&1; then
+      if struo build backend-0.1.0 --quiet > "$SPEC_ROOT/failure.log" 2>&1; then
         return 1
       fi
-      renamed="$(find "$WORKSPACE/.once/out/backend-0.1.0/source-layout" -name other.rs)"
+      renamed="$(find "$WORKSPACE/.struo/out/backend-0.1.0/source-layout" -name other.rs)"
       test -f "$renamed" || return
       test ! -e "$(dirname "$renamed")/scene.rs" || return
       grep -q 'No such file or directory' "$SPEC_ROOT/failure.log" || return

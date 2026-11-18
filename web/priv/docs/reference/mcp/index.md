@@ -1,11 +1,11 @@
 # Model Context Protocol
 
-[`once mcp`](/reference/cli/mcp) runs a
+[`struo mcp`](/reference/cli/mcp) runs a
 [Model Context Protocol](https://modelcontextprotocol.io/) server over standard
 input and output. A coding agent can inspect the typed build graph, query
 project memory, and optionally run graph capabilities through the same
 [JavaScript Object Notation (JSON)](https://www.json.org/json-en.html) shapes
-emitted by [`once query`](/reference/cli/query) and the command-line execution
+emitted by [`struo query`](/reference/cli/query) and the command-line execution
 commands.
 
 This page covers transport, handshake, error model, an example
@@ -24,13 +24,13 @@ Spawn the server with the workspace as its working directory, or
 pass an explicit `--workspace <DIR>`:
 
 ```sh
-once -C ~/code/MyApp mcp
-once mcp --workspace ~/code/MyApp
+struo -C ~/code/MyApp mcp
+struo mcp --workspace ~/code/MyApp
 ```
 
 ## Protocol Handshake
 
-Once prefers protocol version `2025-11-25` and negotiates supported client
+Struo prefers protocol version `2025-11-25` and negotiates supported client
 versions back through `2024-11-05`. The expected sequence:
 
 1. Client → `initialize` request with its protocol version,
@@ -55,8 +55,8 @@ Server reply:
 { "jsonrpc": "2.0", "id": 0,
   "result": { "protocolVersion": "2025-11-25",
               "capabilities": { "tools": {} },
-              "serverInfo": { "name": "once-mcp", "version": "0.0.0" },
-              "instructions": "Once is a self-describing build graph…" } }
+              "serverInfo": { "name": "struo-mcp", "version": "0.0.0" },
+              "instructions": "Struo is a self-describing build graph…" } }
 ```
 
 ## Error model
@@ -75,22 +75,22 @@ agent surfaces the message instead of treating the channel as broken.
 
 ## Verification Reports
 
-With execution enabled, `once_build_target` and `once_exec_script` accept the
+With execution enabled, `struo_build_target` and `struo_exec_script` accept the
 optional boolean `verify_reproducible`, defaulting to `false`. When `true`, they
-return a `once.verification.v1` report instead of their normal execution record.
-The corresponding commands are `once build --verify-reproducible <target>`
-and `once exec --verify-reproducible --script -- <runtime> <script>`.
+return a `struo.verification.v1` report instead of their normal execution record.
+The corresponding commands are `struo build --verify-reproducible <target>`
+and `struo exec --verify-reproducible --script -- <runtime> <script>`.
 
-`once_query_verification` accepts an `id` containing the verification UUID and
+`struo_query_verification` accepts an `id` containing the verification UUID and
 returns the retained report without running commands. It is available without
-`--allow-run`, matching `once query verification <ID> --format json`. A failed
+`--allow-run`, matching `struo query verification <ID> --format json`. A failed
 check is inspectable as a report with `success: false`; failure to find or read
 the report is a tool-level error. Successfully reading a report does not mean
 the check passed.
 
 | Field | Meaning |
 | --- | --- |
-| `schema` | `once.verification.v1`. |
+| `schema` | `struo.verification.v1`. |
 | `id`, `subject` | Verification UUID and the command or target checked. |
 | `success` | Both trials succeeded, and either declared artifacts match or, when no artifacts are declared, captured logs match. This is the check's pass/fail decision. |
 | `execution_succeeded` | Both trials returned successful results without execution or artifact-retention errors. Identical failures cannot pass. |
@@ -101,15 +101,15 @@ the check passed.
 | `differences` | Result-level differences tagged by `kind`: `exit_code`, `stdout`, `stderr`, or `output`. Output records identify the declared path and both digests, with `null` for an absent value. |
 | `artifact_differences` | Bounded file-level details with a path, difference kind, a `log` flag for declared action logs, and, when available, the first differing byte offset and text excerpts from both trials. |
 | `differences_truncated` | Whether the file-level inventory or difference listing reached its limit. Full retained artifacts remain available for inspection. |
-| `trial_directories` | Workspace-relative paths to retained trial results, decoded declared artifacts, captured logs, and trial-local Once caches. |
+| `trial_directories` | Workspace-relative paths to retained trial results, decoded declared artifacts, captured logs, and trial-local Struo caches. |
 | `scope`, `limitations` | What was repeated and which sources of variation or external state were not isolated. |
 | `inspect_command` | Command for reading the same retained report again. |
 
 Both trials start from the same whole-workspace snapshot at the same private
-path, using separate, initially empty local Once caches. Script dependencies
+path, using separate, initially empty local Struo caches. Script dependencies
 and fingerprints run in each trial. Declared trial outputs do not replace
 outputs in the original workspace. Reports and artifacts remain local under
-`.once/verifications/<ID>/`; they are not automatically published as project
+`.struo/verifications/<ID>/`; they are not automatically published as project
 evidence. Retained files and excerpts may contain sensitive data.
 
 The comparison covers the selected command or target's declared result, not
@@ -135,7 +135,7 @@ A complete client/server exchange:
 → { "jsonrpc": "2.0", "id": 1, "method": "tools/list" }
 ← { "jsonrpc": "2.0", "id": 1, "result": { "tools": [ … ] } }
 → { "jsonrpc": "2.0", "id": 2, "method": "tools/call",
-    "params": { "name": "once_query_workspace", "arguments": {} } }
+    "params": { "name": "struo_query_workspace", "arguments": {} } }
 ← { "jsonrpc": "2.0", "id": 2,
     "result": { "content": [ { "type": "text",
                                "text": "{ … workspace state … }" } ],
@@ -146,13 +146,13 @@ Every advertised tool includes behavioral annotations, a strict root input
 schema, and an output schema. Text content remains available for older clients;
 newer clients can consume `structuredContent` directly.
 
-When editing and execution are enabled, `once_materialize_example` can create a
+When editing and execution are enabled, `struo_materialize_example` can create a
 complete starter without returning every file through the model context. It is
 idempotent for identical files and rejects the complete operation before
 writing when any destination conflicts.
 
 Some hosts probe optional resource, resource-template, or prompt catalogs even
-when a server does not advertise them. Once returns valid empty catalogs for
+when a server does not advertise them. Struo returns valid empty catalogs for
 those probes and responds to the standard liveness request. Workflow guidance
 comes from the initialization instructions and live tool catalog.
 
@@ -163,14 +163,14 @@ Add an entry to your `claude_desktop_config.json` under `mcpServers`:
 ```json
 {
   "mcpServers": {
-    "once": {
-      "command": "once",
+    "struo": {
+      "command": "struo",
       "args": ["--workspace", "/absolute/path/to/your/project", "mcp"]
     }
   }
 }
 ```
 
-Restart Claude Desktop. The read-only tools appear under the `once`
+Restart Claude Desktop. The read-only tools appear under the `struo`
 server in the connectors list and Claude can call them directly when
 planning against the graph and project memory.

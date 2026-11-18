@@ -1,0 +1,7 @@
+{
+  "name": "struo-eslint-example",
+  "private": true,
+  "devDependencies": {
+    "eslint": "^9.0.0"
+  }
+}

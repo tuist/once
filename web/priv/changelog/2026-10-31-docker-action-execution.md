@@ -3,8 +3,8 @@ title: Dispatch build actions through Docker
 date: 2026-10-31
 ---
 
-`once build --remote --compute <provider>` can dispatch declared graph command
-actions through an execution provider while Once retains dependency scheduling
+`struo build --remote --compute <provider>` can dispatch declared graph command
+actions through an execution provider while Struo retains dependency scheduling
 and caching. The new Docker provider makes that boundary testable locally:
 each uncached command receives its declared inputs in a fresh container, and
 validated outputs return to the coordinator for downstream actions.

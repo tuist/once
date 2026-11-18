@@ -5,15 +5,15 @@ Describe 'Dockerfile native project'
   AfterEach 'cleanup_workspace'
 
   discover_image_without_manifest() {
-    cp "$REPO_ROOT/crates/once-frontend/prelude/examples/dockerfile-image-instructions/Dockerfile" "$WORKSPACE/Dockerfile"
-    cp "$REPO_ROOT/crates/once-frontend/prelude/examples/dockerfile-image-instructions/message.txt" "$WORKSPACE/message.txt"
-    test ! -e "$WORKSPACE/once.toml" || return
-    once --format json query targets | jq -e 'any(.[]; .kind == "dockerfile_image" and .id == "image")' || return
-    once --format json query target image | jq -e '.kind == "dockerfile_image"' || return
-    once --format json lint image | jq -e '.status == "completed"' || return
+    cp "$REPO_ROOT/crates/struo-frontend/prelude/examples/dockerfile-image-instructions/Dockerfile" "$WORKSPACE/Dockerfile"
+    cp "$REPO_ROOT/crates/struo-frontend/prelude/examples/dockerfile-image-instructions/message.txt" "$WORKSPACE/message.txt"
+    test ! -e "$WORKSPACE/struo.toml" || return
+    struo --format json query targets | jq -e 'any(.[]; .kind == "dockerfile_image" and .id == "image")' || return
+    struo --format json query target image | jq -e '.kind == "dockerfile_image"' || return
+    struo --format json lint image | jq -e '.status == "completed"' || return
   }
 
-  It 'discovers and lints an image with no once.toml'
+  It 'discovers and lints an image with no struo.toml'
     When call discover_image_without_manifest
     The status should be success
     The stdout should include 'true'
@@ -29,13 +29,13 @@ Describe 'Dockerfile default builder'
   }
 
   build_native_image_with_default_builder() {
-    cp "$REPO_ROOT/crates/once-frontend/prelude/examples/dockerfile-image-instructions/Dockerfile" "$WORKSPACE/Dockerfile"
-    cp "$REPO_ROOT/crates/once-frontend/prelude/examples/dockerfile-image-instructions/message.txt" "$WORKSPACE/message.txt"
+    cp "$REPO_ROOT/crates/struo-frontend/prelude/examples/dockerfile-image-instructions/Dockerfile" "$WORKSPACE/Dockerfile"
+    cp "$REPO_ROOT/crates/struo-frontend/prelude/examples/dockerfile-image-instructions/message.txt" "$WORKSPACE/message.txt"
     export DOCKER_CONFIG="${DOCKER_CONFIG:-$SPEC_ORIGINAL_HOME/.docker}"
     unset BUILDX_BUILDER
-    test ! -e "$WORKSPACE/once.toml" || return
-    once --format json build image | jq -e '.status == "completed"' || return
-    test -s "$WORKSPACE/.once/out/image/image.docker.tar"
+    test ! -e "$WORKSPACE/struo.toml" || return
+    struo --format json build image | jq -e '.status == "completed"' || return
+    test -s "$WORKSPACE/.struo/out/image/image.docker.tar"
   }
 
   It 'builds a discovered image without configuring a builder'
@@ -51,26 +51,26 @@ Describe 'Dockerfile image layer caches'
   AfterEach 'cleanup_workspace'
 
   docker_builder_unconfigured() {
-    [ -z "${ONCE_DOCKER_TEST_BUILDER:-}" ]
+    [ -z "${STRUO_DOCKER_TEST_BUILDER:-}" ]
   }
 
   build_image_expect_cache() {
-    result="$(once --format json build image)" || return
+    result="$(struo --format json build image)" || return
     printf '%s\n' "$result"
     [ "$(printf '%s' "$result" | jq -r '.cache')" = "$1" ]
   }
 
   build_and_restore_images() {
-    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/dockerfile-image-layer-cache/." "$WORKSPACE/"
+    cp -R "$REPO_ROOT/crates/struo-frontend/prelude/examples/dockerfile-image-layer-cache/." "$WORKSPACE/"
     export DOCKER_CONFIG="${DOCKER_CONFIG:-$SPEC_ORIGINAL_HOME/.docker}"
-    cat > "$WORKSPACE/once.toml" <<EOF_MANIFEST
+    cat > "$WORKSPACE/struo.toml" <<EOF_MANIFEST
 [[target]]
 name = "base_image"
 kind = "dockerfile_image"
 srcs = ["Dockerfile", "message.txt"]
 [target.attrs]
 execution_mode = "buildkit"
-builder = "$ONCE_DOCKER_TEST_BUILDER"
+builder = "$STRUO_DOCKER_TEST_BUILDER"
 cacheable = true
 platform = "linux/arm64"
 export_cache = true
@@ -86,32 +86,32 @@ caches = ["base_image"]
 [target.attrs]
 execution_mode = "buildkit"
 dockerfile = "context.Dockerfile"
-builder = "$ONCE_DOCKER_TEST_BUILDER"
+builder = "$STRUO_DOCKER_TEST_BUILDER"
 cacheable = true
 platform = "linux/arm64"
 pull = false
 network = "none"
 EOF_MANIFEST
     build_image_expect_cache miss || return
-    test -s "$WORKSPACE/.once/out/base_image/layer-cache/index.json" || return
-    test -s "$WORKSPACE/.once/out/image/image.docker.tar" || return
-    rm -rf "$WORKSPACE/.once/out"
+    test -s "$WORKSPACE/.struo/out/base_image/layer-cache/index.json" || return
+    test -s "$WORKSPACE/.struo/out/image/image.docker.tar" || return
+    rm -rf "$WORKSPACE/.struo/out"
     build_image_expect_cache hit || return
-    test -s "$WORKSPACE/.once/out/base_image/layer-cache/index.json" || return
-    test -s "$WORKSPACE/.once/out/image/image.docker.tar" || return
+    test -s "$WORKSPACE/.struo/out/base_image/layer-cache/index.json" || return
+    test -s "$WORKSPACE/.struo/out/image/image.docker.tar" || return
     printf 'changed source\n' > "$WORKSPACE/message.txt"
     build_image_expect_cache miss || return
-    layers="$(tar -xOf "$WORKSPACE/.once/out/image/image.docker.tar" manifest.json | jq -r '.[0].Layers[]')" || return
+    layers="$(tar -xOf "$WORKSPACE/.struo/out/image/image.docker.tar" manifest.json | jq -r '.[0].Layers[]')" || return
     for layer in $layers; do
-      members="$(tar -xOf "$WORKSPACE/.once/out/image/image.docker.tar" "$layer" | tar -tf -)" || return
-      if printf '%s\n' "$members" | grep -E '(^|/)\.once(/|$)'; then
+      members="$(tar -xOf "$WORKSPACE/.struo/out/image/image.docker.tar" "$layer" | tar -tf -)" || return
+      if printf '%s\n' "$members" | grep -E '(^|/)\.struo(/|$)'; then
         return 1
       fi
     done
   }
 
   It 'imports declared layers and restores the archive and cache after output deletion'
-    Skip if 'set ONCE_DOCKER_TEST_BUILDER to a container or remote builder' docker_builder_unconfigured
+    Skip if 'set STRUO_DOCKER_TEST_BUILDER to a container or remote builder' docker_builder_unconfigured
     When call build_and_restore_images
     The status should be success
     The stdout should include '"cache":"miss"'
@@ -124,11 +124,11 @@ Describe 'Dockerfile instruction actions'
   AfterEach 'cleanup_workspace'
 
   instruction_builder_unconfigured() {
-    [ -z "${ONCE_DOCKER_TEST_BUILDER:-}" ]
+    [ -z "${STRUO_DOCKER_TEST_BUILDER:-}" ]
   }
 
   build_instruction_image() {
-    result="$(once --format json build image)" || return
+    result="$(struo --format json build image)" || return
     printf '%s\n' "$result"
     [ "$(printf '%s' "$result" | jq -r '.cache')" = "$1" ]
   }
@@ -150,36 +150,36 @@ CMD ["/result.txt"]
 EOF_RECIPE
     printf 'early\n' > "$WORKSPACE/early.txt"
     printf 'late\n' > "$WORKSPACE/late.txt"
-    cat > "$WORKSPACE/once.toml" <<EOF_MANIFEST
+    cat > "$WORKSPACE/struo.toml" <<EOF_MANIFEST
 [[target]]
 name = "image"
 kind = "dockerfile_image"
 srcs = ["Dockerfile", "early.txt", "late.txt"]
 [target.attrs]
-builder = "$ONCE_DOCKER_TEST_BUILDER"
+builder = "$STRUO_DOCKER_TEST_BUILDER"
 platform = "linux/arm64"
 cacheable = true
 pull = false
 network = "none"
 EOF_MANIFEST
     build_instruction_image miss || return
-    test -s "$WORKSPACE/.once/out/image/instructions/4/image/index.json" || return
-    rm -rf "$WORKSPACE/.once/out"
+    test -s "$WORKSPACE/.struo/out/image/instructions/4/image/index.json" || return
+    rm -rf "$WORKSPACE/.struo/out"
     build_instruction_image hit || return
-    test -s "$WORKSPACE/.once/out/image/instructions/4/image/index.json" || return
+    test -s "$WORKSPACE/.struo/out/image/instructions/4/image/index.json" || return
     printf 'changed late source\n' > "$WORKSPACE/late.txt"
     build_instruction_image miss || return
-    latest_log="$(ls -t "$(once_log_dir)"/*.log | head -1)"
+    latest_log="$(ls -t "$(struo_log_dir)"/*.log | head -1)"
     jq -s -e 'any(.[]; .fields.identifier == "image:4:run" and .fields.cache == "hit")' "$latest_log" >/dev/null || return
     jq -s -e 'any(.[]; .fields.identifier == "image:6:copy" and .fields.cache == "miss")' "$latest_log" >/dev/null || return
-    layer="$(tar -xOf "$WORKSPACE/.once/out/image/image.docker.tar" manifest.json | jq -r '.[0].Layers[-1]')" || return
-    content="$(tar -xOf "$WORKSPACE/.once/out/image/image.docker.tar" "$layer" | tar -xOf - result.txt)" || return
+    layer="$(tar -xOf "$WORKSPACE/.struo/out/image/image.docker.tar" manifest.json | jq -r '.[0].Layers[-1]')" || return
+    content="$(tar -xOf "$WORKSPACE/.struo/out/image/image.docker.tar" "$layer" | tar -xOf - result.txt)" || return
     [ "$content" = "$(printf 'early\nchanged late source')" ] || return
-    once --format json lint image || return
+    struo --format json lint image || return
   }
 
   It 'restores instruction snapshots and reuses the prefix when a later source changes'
-    Skip if 'set ONCE_DOCKER_TEST_BUILDER to a container or remote builder' instruction_builder_unconfigured
+    Skip if 'set STRUO_DOCKER_TEST_BUILDER to a container or remote builder' instruction_builder_unconfigured
     When call restore_and_invalidate_instructions
     The status should be success
     The stdout should include '"cache":"hit"'

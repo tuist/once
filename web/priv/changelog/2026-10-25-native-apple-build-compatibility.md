@@ -3,7 +3,7 @@ title: "Improve native Apple build and test compatibility"
 date: 2026-10-25
 ---
 
-Once handles more existing Xcode projects and Swift packages without changing
+Struo handles more existing Xcode projects and Swift packages without changing
 their sources or delegating compilation to Xcode.
 
 Swift packages use single-worker batch compilation by default, avoiding repeated

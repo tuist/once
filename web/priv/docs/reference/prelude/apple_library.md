@@ -13,7 +13,7 @@ merge them with `lipo`.
 On macOS, static archives use deterministic archive metadata. This removes
 member timestamps from the archive; it does not guarantee that compiler output,
 signatures, or every build artifact is bitwise reproducible. Use
-`once build --verify-reproducible` to compare independent cold executions.
+`struo build --verify-reproducible` to compare independent cold executions.
 
 Linux builds use Swift and xtool's Darwin SDK without `xcrun`. See
 [Build iOS Applications on Linux](/guide/graph/apple/linux) for installation,
@@ -217,14 +217,14 @@ for the guided overview.
 
 | Output | Location |
 | --- | --- |
-| Static archive | `.once/out/<target>/<module_name>.a` |
-| Swift module | `.once/out/<target>/<module_name>.swiftmodule` (single arch) or `.swiftmodule/<arch>.swiftmodule` (universal) |
-| Swift doc | `.once/out/<target>/<module_name>.swiftdoc` or `.swiftmodule/<arch>.swiftdoc` |
-| ObjC interop header | `.once/out/<target>/<module_name>-Swift.h` |
-| Modulemap | `.once/out/<target>/module.modulemap` (when `enable_modules = true`) |
-| Header map | `.once/out/<target>/<module_name>.hmap` (when `enable_modules = true`) |
-| Resource bundle | `.once/out/<target>/<resource_bundle_name>.bundle` (when `resource_bundle_name` is set) |
-| Per-source clang objects | `.once/out/<target>/<sanitised_source>[-<arch>].o` |
+| Static archive | `.struo/out/<target>/<module_name>.a` |
+| Swift module | `.struo/out/<target>/<module_name>.swiftmodule` (single arch) or `.swiftmodule/<arch>.swiftmodule` (universal) |
+| Swift doc | `.struo/out/<target>/<module_name>.swiftdoc` or `.swiftmodule/<arch>.swiftdoc` |
+| ObjC interop header | `.struo/out/<target>/<module_name>-Swift.h` |
+| Modulemap | `.struo/out/<target>/module.modulemap` (when `enable_modules = true`) |
+| Header map | `.struo/out/<target>/<module_name>.hmap` (when `enable_modules = true`) |
+| Resource bundle | `.struo/out/<target>/<resource_bundle_name>.bundle` (when `resource_bundle_name` is set) |
+| Per-source clang objects | `.struo/out/<target>/<sanitised_source>[-<arch>].o` |
 
 ## Example
 

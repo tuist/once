@@ -1,3 +1,3 @@
-Mimic.copy(OnceSite.Registry, type_check: true)
+Mimic.copy(StruoSite.Registry, type_check: true)
 
 ExUnit.start()

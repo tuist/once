@@ -36,9 +36,9 @@ verify_starter_example() {
   root="$WORKSPACE/starters/$kind-$slug"
   mkdir -p "$root"
 
-  starter_run "$kind $slug materialize" "$ONCE_BIN" -C "$root" edit materialize-example "$kind" "$slug" >/dev/null || return
+  starter_run "$kind $slug materialize" "$STRUO_BIN" -C "$root" edit materialize-example "$kind" "$slug" >/dev/null || return
   target_ids="$(
-    starter_run "$kind $slug query" "$ONCE_BIN" -C "$root" --format json query targets |
+    starter_run "$kind $slug query" "$STRUO_BIN" -C "$root" --format json query targets |
       jq -r --arg kind "$kind" '.[] | select(.kind == $kind) | .id'
   )" || return
   if [ -z "$target_ids" ]; then
@@ -48,7 +48,7 @@ verify_starter_example() {
 
   while IFS= read -r target_id; do
     [ -n "$target_id" ] || continue
-    starter_run "$kind $slug $capability $target_id" "$ONCE_BIN" -C "$root" "$capability" "$target_id" --quiet || return
+    starter_run "$kind $slug $capability $target_id" "$STRUO_BIN" -C "$root" "$capability" "$target_id" --quiet || return
   done <<EOF
 $target_ids
 EOF

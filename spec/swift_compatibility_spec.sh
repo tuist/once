@@ -19,7 +19,7 @@ SH
   }
 
   copy_native_package() {
-    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/swift-package-workspace-native-project/." "$WORKSPACE/"
+    cp -R "$REPO_ROOT/crates/struo-frontend/prelude/examples/swift-package-workspace-native-project/." "$WORKSPACE/"
   }
 
   test_manifest_build_settings() {
@@ -35,8 +35,8 @@ let package = Package(name: "Probe", products: [.executable(name: "Probe", targe
             linkerSettings: [.linkedLibrary("sqlite3"), .linkedLibrary("z"), .linkedLibrary("c++"),
                              .linkedFramework("Security"), .linkedFramework("Foundation")]),
     .executableTarget(name: "Probe", dependencies: ["Native"], swiftSettings: [
-        .define(environment["ONCE_PROBE_VALUE"] == "second" ? "SECOND" : "FIRST"),
-        .treatAllWarnings(as: environment["ONCE_PROBE_ALLOW_WARNING"] == "1" ? .warning : .error),
+        .define(environment["STRUO_PROBE_VALUE"] == "second" ? "SECOND" : "FIRST"),
+        .treatAllWarnings(as: environment["STRUO_PROBE_ALLOW_WARNING"] == "1" ? .warning : .error),
     ]),
 ])
 SWIFT
@@ -68,17 +68,17 @@ print("second:\(nativeValue())")
 print("first:\(nativeValue())")
 #endif
 SWIFT
-    if ONCE_PROBE_ALLOW_WARNING=0 once --memory-limit 2GiB build --quiet > "$WORKSPACE/fatal.out" 2> "$WORKSPACE/fatal.err"; then
+    if STRUO_PROBE_ALLOW_WARNING=0 struo --memory-limit 2GiB build --quiet > "$WORKSPACE/fatal.out" 2> "$WORKSPACE/fatal.err"; then
       return 1
     fi
     grep -q 'error: Swift warning policy probe' "$WORKSPACE/fatal.err" || return
-    ONCE_PROBE_ALLOW_WARNING=1 ONCE_PROBE_VALUE=first once --memory-limit 2GiB build --quiet > "$WORKSPACE/first.out" 2> "$WORKSPACE/first.err" || {
+    STRUO_PROBE_ALLOW_WARNING=1 STRUO_PROBE_VALUE=first struo --memory-limit 2GiB build --quiet > "$WORKSPACE/first.out" 2> "$WORKSPACE/first.err" || {
       cat "$WORKSPACE/first.err"
       return 1
     }
-    binary="$WORKSPACE/.once/out/SwiftPackage_Probe_Probe/Probe.app/Contents/MacOS/Probe"
+    binary="$WORKSPACE/.struo/out/SwiftPackage_Probe_Probe/Probe.app/Contents/MacOS/Probe"
     [ "$("$binary")" = first:23 ] || return 1
-    ONCE_PROBE_ALLOW_WARNING=1 ONCE_PROBE_VALUE=second once --memory-limit 2GiB build --quiet > "$WORKSPACE/second.out" 2> "$WORKSPACE/second.err" || {
+    STRUO_PROBE_ALLOW_WARNING=1 STRUO_PROBE_VALUE=second struo --memory-limit 2GiB build --quiet > "$WORKSPACE/second.out" 2> "$WORKSPACE/second.err" || {
       cat "$WORKSPACE/second.err"
       return 1
     }
@@ -145,29 +145,29 @@ final class DataTests: XCTestCase {
 }
 SWIFT
     mv "$WORKSPACE/Sources" "$WORKSPACE/Source"
-    once --memory-limit 2GiB --cpu-limit 2 test --quiet > "$WORKSPACE/test.out" 2> "$WORKSPACE/test.err" || {
+    struo --memory-limit 2GiB --cpu-limit 2 test --quiet > "$WORKSPACE/test.out" 2> "$WORKSPACE/test.err" || {
       cat "$WORKSPACE/test.out" "$WORKSPACE/test.err"
       return 1
     }
     jq -e '.summary.total == 1 and .summary.passed == 1 and .cases[0].status == "passed"' \
-      "$WORKSPACE/.once/out/SwiftPackage_ResourcePackage_DataTests/test/test_results.json" >/dev/null
+      "$WORKSPACE/.struo/out/SwiftPackage_ResourcePackage_DataTests/test/test_results.json" >/dev/null
   }
 
   clear_swift_build_outputs() {
-    find "$WORKSPACE/.once/out" -type f -delete
-    find "$WORKSPACE/.once/out" -depth -type d -exec rmdir {} \;
+    find "$WORKSPACE/.struo/out" -type f -delete
+    find "$WORKSPACE/.struo/out" -depth -type d -exec rmdir {} \;
   }
 
   swift_library_evidence() {
-    "$ONCE_BIN" -C "$WORKSPACE" --format json query evidence SwiftPackage_OnceNativeSwiftPackage_OnceNativeSwiftPackage:build
+    "$STRUO_BIN" -C "$WORKSPACE" --format json query evidence SwiftPackage_StruoNativeSwiftPackage_StruoNativeSwiftPackage:build
   }
 
   swift_consumer_evidence() {
-    "$ONCE_BIN" -C "$WORKSPACE" --format json query evidence SwiftPackage_OnceNativeSwiftPackage_OnceNativeConsumer:build
+    "$STRUO_BIN" -C "$WORKSPACE" --format json query evidence SwiftPackage_StruoNativeSwiftPackage_StruoNativeConsumer:build
   }
 
   swift_dependency_evidence() {
-    "$ONCE_BIN" -C "$WORKSPACE" --format json query evidence SwiftPackage_OnceNativeSwiftPackage_OnceNativeDependency:build
+    "$STRUO_BIN" -C "$WORKSPACE" --format json query evidence SwiftPackage_StruoNativeSwiftPackage_StruoNativeDependency:build
   }
 
   verify_swift_cache_evidence() {
@@ -190,10 +190,10 @@ SWIFT
       --slurpfile before "$WORKSPACE/dependency-before-evidence.json" \
       --slurpfile after "$WORKSPACE/dependency-after-evidence.json" '
       def latest_module(records):
-        [records[] | select(.outputs | has(".once/out/SwiftPackage_OnceNativeSwiftPackage_OnceNativeDependency/OnceNativeDependency.swiftmodule"))]
+        [records[] | select(.outputs | has(".struo/out/SwiftPackage_StruoNativeSwiftPackage_StruoNativeDependency/StruoNativeDependency.swiftmodule"))]
         | sort_by(.created_at_unix_ms)
         | last
-        | .outputs[".once/out/SwiftPackage_OnceNativeSwiftPackage_OnceNativeDependency/OnceNativeDependency.swiftmodule"];
+        | .outputs[".struo/out/SwiftPackage_StruoNativeSwiftPackage_StruoNativeDependency/StruoNativeDependency.swiftmodule"];
       (latest_module($before[0]) == latest_module($after[0])) and
       ($after[0] | sort_by(.created_at_unix_ms) | .[-4:] | ([.[] | select(.cache == "miss")] | length == 2)) and
       (sort_by(.created_at_unix_ms) | .[-2:] | length == 2 and all(.[]; .cache == "hit"))
@@ -203,18 +203,18 @@ SWIFT
   restore_swift_artifacts_from_cache() {
     copy_native_package
 
-    once swift -- build >/dev/null 2>&1
-    find "$WORKSPACE/.once/out" -type f -print | sort > "$WORKSPACE/first-artifacts"
+    struo swift -- build >/dev/null 2>&1
+    find "$WORKSPACE/.struo/out" -type f -print | sort > "$WORKSPACE/first-artifacts"
     swift_library_evidence > "$WORKSPACE/first-evidence.json"
     clear_swift_build_outputs
 
-    once swift -- build >/dev/null 2>&1
-    find "$WORKSPACE/.once/out" -type f -print | sort > "$WORKSPACE/second-artifacts"
+    struo swift -- build >/dev/null 2>&1
+    find "$WORKSPACE/.struo/out" -type f -print | sort > "$WORKSPACE/second-artifacts"
     swift_library_evidence > "$WORKSPACE/second-evidence.json"
 
-    printf '\npublic func cacheProbe() {}\n' >> "$WORKSPACE/Sources/OnceNativeSwiftPackage/Greeting.swift"
+    printf '\npublic func cacheProbe() {}\n' >> "$WORKSPACE/Sources/StruoNativeSwiftPackage/Greeting.swift"
     clear_swift_build_outputs
-    once swift -- build >/dev/null 2>&1
+    struo swift -- build >/dev/null 2>&1
     swift_library_evidence > "$WORKSPACE/third-evidence.json"
 
     verify_swift_cache_evidence
@@ -223,21 +223,21 @@ SWIFT
   reuse_consumer_when_module_is_unchanged() {
     copy_native_package
 
-    once swift -- build >/dev/null 2>&1
+    struo swift -- build >/dev/null 2>&1
     swift_dependency_evidence > "$WORKSPACE/dependency-before-evidence.json"
-    perl -0pi -e 's/"one"/"two"/' "$WORKSPACE/Sources/OnceNativeDependency/Dependency.swift"
+    perl -0pi -e 's/"one"/"two"/' "$WORKSPACE/Sources/StruoNativeDependency/Dependency.swift"
     clear_swift_build_outputs
-    once swift -- build >/dev/null 2>&1
+    struo swift -- build >/dev/null 2>&1
     swift_dependency_evidence > "$WORKSPACE/dependency-after-evidence.json"
     swift_consumer_evidence > "$WORKSPACE/consumer-evidence.json"
 
     verify_consumer_reuses_unchanged_module
   }
 
-  It 'passes unsupported invocations through without a Once trailer'
+  It 'passes unsupported invocations through without a Struo trailer'
     install_system_swift
 
-    When call env PATH="$WORKSPACE/tools:$PATH" "$ONCE_BIN" -C "$WORKSPACE" swift -- package resolve
+    When call env PATH="$WORKSPACE/tools:$PATH" "$STRUO_BIN" -C "$WORKSPACE" swift -- package resolve
     The status should be success
     The stdout should equal 'package resolve'
     The stderr should not include 'cache '
@@ -246,33 +246,33 @@ SWIFT
   It 'preserves the system swift exit status for unsupported invocations'
     install_system_swift
 
-    When call env SWIFT_EXIT_CODE=17 PATH="$WORKSPACE/tools:$PATH" "$ONCE_BIN" -C "$WORKSPACE" swift -- build -c release
+    When call env SWIFT_EXIT_CODE=17 PATH="$WORKSPACE/tools:$PATH" "$STRUO_BIN" -C "$WORKSPACE" swift -- build -c release
     The status should be failure
     The status should equal 17
     The stdout should equal 'build -c release'
   End
 
-  It 'routes a compatible debug build through Once'
+  It 'routes a compatible debug build through Struo'
     Skip if 'Apple Swift toolchain unavailable on this host' swift_package_tools_unavailable
     copy_native_package
 
-    When call once swift -- build
+    When call struo swift -- build
     The status should be success
-    The stdout should include 'once: build swift_package (swift_package_workspace)'
-    The stderr should include 'once  build swift_package'
+    The stdout should include 'struo: build swift_package (swift_package_workspace)'
+    The stderr should include 'struo  build swift_package'
     The stderr should include 'Done'
   End
 
-  It 'routes a compatible debug test through Once'
+  It 'routes a compatible debug test through Struo'
     Skip if 'Apple Swift toolchain unavailable on this host' swift_package_tools_unavailable
     copy_native_package
 
-    When call once swift -- test
+    When call struo swift -- test
     The status should be success
-    The stdout should include 'once: test SwiftPackage_OnceNativeSwiftPackage_OnceNativeSwiftPackageTests (apple_test_bundle)'
-    The stderr should include 'once  test SwiftPackage_OnceNativeSwiftPackage_OnceNativeSwiftPackageTests'
+    The stdout should include 'struo: test SwiftPackage_StruoNativeSwiftPackage_StruoNativeSwiftPackageTests (apple_test_bundle)'
+    The stderr should include 'struo  test SwiftPackage_StruoNativeSwiftPackage_StruoNativeSwiftPackageTests'
     The stderr should include 'Done'
-    The path "$WORKSPACE/.once/out/SwiftPackage_OnceNativeSwiftPackage_OnceNativeSwiftPackageTests/test/test_results.json" should be file
+    The path "$WORKSPACE/.struo/out/SwiftPackage_StruoNativeSwiftPackage_StruoNativeSwiftPackageTests/test/test_results.json" should be file
   End
 
   It 'loads dependency resources from a signed macOS test bundle'
@@ -281,7 +281,7 @@ SWIFT
     When call test_dependency_resources
     The status should be success
     The output should equal ''
-    The path "$WORKSPACE/.once/out/SwiftPackage_ResourcePackage_DataTests/DataTests.xctest/Contents/Resources/ResourcePackage_Data.bundle/value.txt" should be file
+    The path "$WORKSPACE/.struo/out/SwiftPackage_ResourcePackage_DataTests/DataTests.xctest/Contents/Resources/ResourcePackage_Data.bundle/value.txt" should be file
   End
 
   It 'honors package linking and warning policies and invalidates inherited manifest switches'
@@ -292,17 +292,17 @@ SWIFT
     The output should equal ''
   End
 
-  It 'builds and tests a discovered Swift package without a Once manifest'
+  It 'builds and tests a discovered Swift package without a Struo manifest'
     Skip if 'Apple Swift toolchain unavailable on this host' swift_package_tools_unavailable
     copy_native_package
-    rm "$WORKSPACE/once.toml"
+    rm "$WORKSPACE/struo.toml"
 
-    When call /bin/sh -c '"$1" -C "$2" build --quiet && "$1" -C "$2" test --quiet' sh "$ONCE_BIN" "$WORKSPACE"
+    When call /bin/sh -c '"$1" -C "$2" build --quiet && "$1" -C "$2" test --quiet' sh "$STRUO_BIN" "$WORKSPACE"
     The status should be success
-    The stdout should include 'once: build swift_package (swift_package_workspace)'
+    The stdout should include 'struo: build swift_package (swift_package_workspace)'
     The stdout should include 'test batches'
-    The path "$WORKSPACE/once.toml" should not be exist
-    The path "$WORKSPACE/.once/out/SwiftPackage_OnceNativeSwiftPackage_OnceNativeSwiftPackageTests/test/test_results.json" should be file
+    The path "$WORKSPACE/struo.toml" should not be exist
+    The path "$WORKSPACE/.struo/out/SwiftPackage_StruoNativeSwiftPackage_StruoNativeSwiftPackageTests/test/test_results.json" should be file
   End
 
   It 'restores every declared artifact and invalidates only changed Swift actions'
@@ -310,8 +310,8 @@ SWIFT
 
     When call restore_swift_artifacts_from_cache
     The status should be success
-    The path "$WORKSPACE/.once/out/SwiftPackage_OnceNativeSwiftPackage_OnceNativeSwiftPackage/OnceNativeSwiftPackage.a" should be file
-    The path "$WORKSPACE/.once/out/SwiftPackage_OnceNativeSwiftPackage_OnceNativeSwiftPackage/OnceNativeSwiftPackage.abi.json" should be file
+    The path "$WORKSPACE/.struo/out/SwiftPackage_StruoNativeSwiftPackage_StruoNativeSwiftPackage/StruoNativeSwiftPackage.a" should be file
+    The path "$WORKSPACE/.struo/out/SwiftPackage_StruoNativeSwiftPackage_StruoNativeSwiftPackage/StruoNativeSwiftPackage.abi.json" should be file
   End
 
   It 'reuses a consumer when a dependency implementation preserves its module'

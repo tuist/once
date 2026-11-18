@@ -1,0 +1,293 @@
+use super::*;
+
+#[test]
+fn preserves_outputless_phases_and_skips_install_only_phases() {
+    let source = format!(
+        r#"{}
+def workspace_root():
+    return "/workspace"
+objects = {{
+    "before": {{"isa": "PBXShellScriptBuildPhase", "shellScript": ["verify", "prepare"], "name": "Repeated name"}},
+    "sources": {{"isa": "PBXSourcesBuildPhase"}},
+    "after": {{"isa": "PBXShellScriptBuildPhase", "shellScript": "finish", "name": "Repeated name"}},
+    "install": {{"isa": "PBXShellScriptBuildPhase", "shellScript": "install", "runOnlyForDeploymentPostprocessing": "1"}},
+}}
+phases = _xcode_shell_script_phases(
+    {{"label": {{"package": "", "id": "Seed"}}, "attr": {{"project": "App.xcodeproj"}}}},
+    objects, {{"buildPhases": ["before", "sources", "after", "install"]}}, {{}}, "", "App",
+)
+result = repr([[json_decode(a)["id"], json_decode(a)["cacheable"], json_decode(a)["script"]] for a in phases["actions"] + phases["postbuild_actions"]])
+"#,
+        xcode_prelude_source()
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["before", False, "verify\nprepare"], ["after", False, "finish"]]"#
+    );
+}
+
+#[test]
+fn maps_script_paths_to_the_configured_action_directory() {
+    let source = format!(
+        r#"{}
+def workspace_root():
+    return "/workspace with spaces"
+result = repr(_apple_reconcile_build_action(
+    {{"build_dir": ".struo/out/configured/App"}},
+    {{"build_dir": ".struo/out/App", "inputs": ["Sources/main.swift", ".struo/out/App/before"], "outputs": [".struo/out/App/App.app/extra"], "env": {{"TARGET_BUILD_DIR": "/workspace with spaces/.struo/out/App", "CUSTOM": "/workspace with spaces/.struo/out/App/Intermediates/data"}}}},
+))
+"#,
+        apple_prelude_source()
+    );
+    let result = eval_prelude_source_to_repr(source).unwrap();
+    assert!(result.contains(".struo/out/configured/App/before"));
+    assert!(result.contains(".struo/out/configured/App/App.app/extra"));
+    assert!(result.contains("/workspace with spaces/.struo/out/configured/App/Intermediates/data"));
+    assert!(result.contains("Sources/main.swift"));
+}
+
+#[test]
+fn uncached_postbuild_scripts_publish_modified_product_bytes() {
+    let workspace = TempDir::new().unwrap();
+    let source = format!(
+        r#"{}
+ctx = {{"label": {{"id": "App"}}, "attr": {{}}, "build_dir": ".struo/out/App"}}
+_apple_run_postbuild_actions(ctx, {{"postbuild_actions": [_json_encode({{"id": "phase", "shell": "/bin/sh", "script": "modify-product", "cacheable": False}})]}}, [".struo/out/App/App.app/Info.plist", ".struo/out/App/App.app/App"])
+result = repr(True)
+"#,
+        apple_prelude_source()
+    );
+    let (store, result) = with_active_store(store_for(workspace.path(), ""), || {
+        eval_prelude_source_to_repr(source)
+    });
+    result.unwrap();
+    let action = action_by_identifier(&store, "postbuild_action:App:phase");
+    assert!(!action.cacheable);
+    assert!(action.inherit_parent_env);
+    assert!(action.depends_on_prior_actions);
+    assert_eq!(action.inputs, action.outputs);
+    assert_eq!(action.outputs.len(), 2);
+}
+
+#[test]
+fn file_lists_remain_inputs_and_have_separate_environment_counts() {
+    let source = format!(
+        r#"{}
+def workspace_root():
+    return "/workspace"
+def host_file_exists(path):
+    return path in ["/workspace/App/inputs.xcfilelist", "/workspace/App/outputs.xcfilelist"]
+def host_file_read(path):
+    return "Nested/../input.txt\n$(SRCROOT)/absolute.txt\n" if path.endswith("inputs.xcfilelist") else "$(TARGET_BUILD_DIR)/result.txt\n"
+phase = {{"isa": "PBXShellScriptBuildPhase", "shellScript": "generate", "inputPaths": ["Scripts/../script.sh"], "outputPaths": ["Vendor/Plugin.app"], "inputFileListPaths": ["inputs.xcfilelist"], "outputFileListPaths": ["$(SRCROOT)/outputs.xcfilelist"]}}
+phases = _xcode_shell_script_phases({{"label": {{"package": "", "id": "Seed"}}, "attr": {{"project": "App.xcodeproj"}}}}, {{"phase": phase}}, {{"buildPhases": ["phase"]}}, {{}}, "App", "App")
+action = json_decode(phases["actions"][0])
+result = repr([action["inputs"], action["outputs"], action["env"]["SCRIPT_INPUT_FILE_COUNT"], action["env"]["SCRIPT_INPUT_FILE_LIST_COUNT"], action["env"]["SCRIPT_OUTPUT_FILE_COUNT"], action["env"]["SCRIPT_OUTPUT_FILE_LIST_0"], action["env"]["SCRIPT_OUTPUT_FILE_0"], action["cwd"], action["cacheable"]])
+"#,
+        xcode_prelude_source()
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"[["App/script.sh", "App/input.txt", "App/absolute.txt", "App/inputs.xcfilelist", "App/outputs.xcfilelist"], ["App/Vendor/Plugin.app", ".struo/out/App/result.txt"], "1", "1", "1", "/workspace/App/outputs.xcfilelist", "/workspace/App/Vendor/Plugin.app", "App", True]"#
+    );
+}
+
+#[test]
+fn missing_file_lists_fail_instead_of_silently_weakening_the_contract() {
+    let source = format!(
+        r#"{}
+def workspace_root():
+    return "/workspace"
+def host_file_exists(path):
+    return False
+result = repr(_xcode_shell_phase_paths({{"inputFileListPaths": ["$(SRCROOT)/missing.xcfilelist"]}}, "inputPaths", "inputFileListPaths", {{"SRCROOT": "/workspace"}}))
+"#,
+        xcode_prelude_source()
+    );
+    assert!(eval_prelude_source_to_repr(source)
+        .unwrap_err()
+        .contains("Xcode script file list does not exist"));
+}
+
+#[test]
+fn rebasing_does_not_rewrite_a_neighboring_target_prefix() {
+    let source = format!(
+        r#"{}
+result = repr(_apple_rebase_build_value("-I/workspace/.struo/out/App/Headers:/workspace/.struo/out/AppOther", "/workspace/.struo/out/App", "/workspace/.struo/out/config/App"))
+"#,
+        apple_prelude_source()
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#""-I/workspace/.struo/out/config/App/Headers:/workspace/.struo/out/AppOther""#
+    );
+}
+
+#[test]
+fn postbuild_bundle_capture_tracks_undeclared_resources_and_clears_stale_signatures() {
+    let workspace = TempDir::new().unwrap();
+    let source = format!(
+        r#"{}
+ctx = {{"label": {{"id": "App"}}, "attr": {{}}, "build_dir": ".struo/out/App"}}
+result = repr(_apple_run_postbuild_actions(ctx, {{"postbuild_actions": [_json_encode({{"id": "phase", "shell": "/bin/sh", "script": "modify-product", "cacheable": False}})]}}, [".struo/out/App/App.app/App"], ".struo/out/App/App.app"))
+"#,
+        apple_prelude_source()
+    );
+    let (store, result) = with_active_store(store_for(workspace.path(), ""), || {
+        eval_prelude_source_to_repr(source)
+    });
+    assert_eq!(result.unwrap(), r#"[".struo/out/App/App.app"]"#);
+    let action = action_by_identifier(&store, "postbuild_action:App:phase");
+    assert!(action
+        .outputs
+        .contains(&".struo/out/App/App.app".to_string()));
+    assert!(!action
+        .outputs
+        .contains(&".struo/out/App/App.app/App".to_string()));
+    assert_eq!(
+        action.clean_paths,
+        [
+            ".struo/out/App/App.app/_CodeSignature",
+            ".struo/out/App/App.app/Contents/_CodeSignature"
+        ]
+    );
+}
+
+#[test]
+fn dependency_products_are_staged_for_the_native_environment() {
+    let workspace = TempDir::new().unwrap();
+    let source = format!(
+        r#"{}
+_apple_script_dependency_products({{
+    "label": {{"id": "App"}}, "build_dir": ".struo/out/config/App",
+    "attr": {{"postbuild_actions": [_json_encode({{"build_dir": ".struo/out/App", "inputs": [".struo/out/App/Dependency/Library.framework", ".struo/out/App/Support/Support.framework"]}})]}},
+    "deps": [
+        {{"framework_path": ".struo/out/Framework/Library.framework", "framework_files": [".struo/out/Framework/Library.framework/Library"]}},
+        {{"transitive_framework_bundles": [{{"path": ".struo/out/Support/Support.framework", "files": [".struo/out/Support/Support.framework/Support"]}}]}},
+        {{"app_path": ".struo/out/Tool/Tool.app", "app_executable": ".struo/out/Tool/Tool.app/Tool", "app_files": [".struo/out/Tool/Tool.app/Tool"]}},
+    ],
+}})
+result = repr(True)
+"#,
+        apple_prelude_source()
+    );
+    let (store, result) = with_active_store(store_for(workspace.path(), ""), || {
+        eval_prelude_source_to_repr(source)
+    });
+    result.unwrap();
+    let action = action_by_identifier(
+        &store,
+        "script_product:.struo/out/config/App/Library.framework",
+    );
+    assert!(action.cacheable);
+    assert_eq!(action.outputs, [".struo/out/config/App/Library.framework"]);
+    assert!(action
+        .inputs
+        .contains(&".struo/out/Framework/Library.framework/Library".to_string()));
+    let tool = action_by_identifier(&store, "script_product:.struo/out/config/App/Tool");
+    assert_eq!(tool.outputs, [".struo/out/config/App/Tool"]);
+    assert_eq!(tool.inputs, [".struo/out/Tool/Tool.app/Tool"]);
+    let nested = action_by_identifier(
+        &store,
+        "script_product:.struo/out/config/App/Dependency/Library.framework",
+    );
+    assert_eq!(nested.inputs, action.inputs);
+    let transitive = action_by_identifier(
+        &store,
+        "script_product:.struo/out/config/App/Support/Support.framework",
+    );
+    assert_eq!(
+        transitive.outputs,
+        [".struo/out/config/App/Support/Support.framework"]
+    );
+    assert!(transitive
+        .inputs
+        .contains(&".struo/out/Support/Support.framework/Support".to_string()));
+}
+
+#[test]
+fn native_scripts_use_the_selected_developer_directory() {
+    let source = format!(
+        r#"{}
+def workspace_root():
+    return "/workspace"
+phases = _xcode_shell_script_phases(
+    {{"label": {{"id": "Seed", "package": ""}}, "attr": {{"project": "App.xcodeproj", "xcode_developer_dir": "/opt/Selected Xcode/Contents/Developer"}}}},
+    {{"phase": {{"isa": "PBXShellScriptBuildPhase", "shellScript": "verify"}}}},
+    {{"buildPhases": ["phase"]}}, {{"CUSTOM_TOOL": "$(DEVELOPER_DIR)/Toolchains"}}, "", "App",
+)
+env = json_decode(phases["actions"][0])["env"]
+result = repr([env["DEVELOPER_DIR"], env["CUSTOM_TOOL"], env["TOOLCHAIN_DIR"], env["CODE_SIGNING_ALLOWED"], env["EXPANDED_CODE_SIGN_IDENTITY_NAME"]])
+"#,
+        xcode_prelude_source()
+    );
+    assert_eq!(
+        eval_prelude_source_to_repr(source).unwrap(),
+        r#"["/opt/Selected Xcode/Contents/Developer", "/opt/Selected Xcode/Contents/Developer/Toolchains", "/opt/Selected Xcode/Contents/Developer/Toolchains/XcodeDefault.xctoolchain", "YES", ""]"#
+    );
+}
+
+#[test]
+fn unresolved_script_paths_are_skipped_in_both_variable_syntaxes() {
+    let source = format!(
+        r#"{}
+def workspace_root():
+    return "/workspace"
+result = repr(_xcode_shell_phase_paths({{"inputPaths": ["${{UNKNOWN}}/a", "$(UNKNOWN)/b", "prefix/${{UNKNOWN}}/c", "prefix/$(UNKNOWN)/d", "$(SRCROOT)/known"]}}, "inputPaths", "", {{"SRCROOT": "/workspace"}}))
+"#,
+        xcode_prelude_source()
+    );
+    assert_eq!(eval_prelude_source_to_repr(source).unwrap(), r#"["known"]"#);
+}
+
+#[test]
+fn native_scripts_do_not_declare_dsym_inputs_for_any_debug_format() {
+    for format in [
+        "",
+        r#", "DEBUG_INFORMATION_FORMAT": "dwarf""#,
+        r#", "DEBUG_INFORMATION_FORMAT": "dwarf-with-dsym""#,
+    ] {
+        let source = format!(
+            r#"{}
+def workspace_root():
+    return "/workspace"
+phase = {{"isa": "PBXShellScriptBuildPhase", "shellScript": "upload", "inputPaths": ["${{DWARF_DSYM_FOLDER_PATH}}/${{DWARF_DSYM_FILE_NAME}}/Contents/Resources/DWARF/${{TARGET_NAME}}", "$(SRCROOT)/App.app/Info.plist", "$(SRCROOT)/App.app.dSYM.txt"]}}
+phases = _xcode_shell_script_phases({{"label": {{"package": "", "id": "Seed"}}, "attr": {{"project": "App.xcodeproj"}}}}, {{"phase": phase}}, {{"buildPhases": ["phase"]}}, {{"FULL_PRODUCT_NAME": "App.app", "TARGET_NAME": "App"{format}}}, "", "App")
+action = json_decode(phases["actions"][0])
+result = repr([sorted(action["inputs"]), action["env"]["SCRIPT_INPUT_FILE_0"].removeprefix("/workspace/")])
+"#,
+            xcode_prelude_source()
+        );
+        assert_eq!(
+            eval_prelude_source_to_repr(source).unwrap(),
+            r#"[["App.app.dSYM.txt", "App.app/Info.plist"], ".struo/out/App/App.app.dSYM/Contents/Resources/DWARF/App"]"#,
+            "{format}"
+        );
+    }
+}
+
+#[test]
+fn native_scripts_resolve_dsym_defaults_and_overrides() {
+    for (settings, folder, filename) in [
+        ("", "/workspace/.struo/out/App", "App.app.dSYM"),
+        (
+            r#", "DWARF_DSYM_FOLDER_PATH": "$(TARGET_BUILD_DIR)/Symbols", "DWARF_DSYM_FILE_NAME": "Custom.dSYM""#,
+            "/workspace/.struo/out/App/Symbols",
+            "Custom.dSYM",
+        ),
+    ] {
+        let source = format!(
+            r#"{}
+def workspace_root():
+    return "/workspace"
+phase = {{"isa": "PBXShellScriptBuildPhase", "shellScript": "verify", "inputPaths": ["${{DWARF_DSYM_FOLDER_PATH}}/${{DWARF_DSYM_FILE_NAME}}"]}}
+phases = _xcode_shell_script_phases({{"label": {{"package": "", "id": "Seed"}}, "attr": {{"project": "App.xcodeproj"}}}}, {{"phase": phase}}, {{"buildPhases": ["phase"]}}, {{"FULL_PRODUCT_NAME": "App.app"{settings}}}, "", "App")
+action = json_decode(phases["actions"][0])
+result = repr([action["env"]["DWARF_DSYM_FOLDER_PATH"], action["env"]["DWARF_DSYM_FILE_NAME"]])
+"#,
+            xcode_prelude_source()
+        );
+        let result = eval_prelude_source_to_repr(source).unwrap();
+        assert_eq!(result, format!(r#"["{folder}", "{filename}"]"#));
+    }
+}

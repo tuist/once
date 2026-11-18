@@ -26,13 +26,13 @@ Describe 'graph tools'
     wait_for_server_file "$WORKSPACE/tool-port" "$TOOL_SERVER_PID" || return
     tool_port="$(cat "$WORKSPACE/tool-port")"
 
-    cat > "$WORKSPACE/once.toml" <<'EOF'
+    cat > "$WORKSPACE/struo.toml" <<'EOF'
 [modules]
 paths = ["modules/*.star"]
 EOF
     cat > "$WORKSPACE/mise.toml" <<EOF
 [tools]
-"http:once-probe" = { version = "1.0.0", url = "http://127.0.0.1:$tool_port/probe" }
+"http:struo-probe" = { version = "1.0.0", url = "http://127.0.0.1:$tool_port/probe" }
 EOF
     cat > "$WORKSPACE/modules/probe.star" <<'EOF'
 def _probe_impl(ctx):
@@ -46,19 +46,19 @@ def _probe_impl(ctx):
 
 probe_action = target_kind(
     docs = "Runs a tool supplied by the workspace tool environment.",
-    tools = [tool("http:once-probe", executables = ["probe"])],
+    tools = [tool("http:struo-probe", executables = ["probe"])],
     capabilities = [capability("build", ["default"])],
     impl = _probe_impl,
 )
 EOF
-    cat > "$WORKSPACE/tools/probe/once.toml" <<'EOF'
+    cat > "$WORKSPACE/tools/probe/struo.toml" <<'EOF'
 [[target]]
 name = "Probe"
 kind = "probe_action"
 EOF
 
-    mise_version="$(once --format json toolchain inspect | sed -n 's/.*"mise_version":"\([^"]*\)".*/\1/p')"
-    managed_mise_dir="$XDG_DATA_HOME/once/tools/mise/$mise_version"
+    mise_version="$(struo --format json toolchain inspect | sed -n 's/.*"mise_version":"\([^"]*\)".*/\1/p')"
+    managed_mise_dir="$XDG_DATA_HOME/struo/tools/mise/$mise_version"
     mkdir -p "$managed_mise_dir"
     cp "$(command -v mise)" "$managed_mise_dir/mise"
     chmod +x "$managed_mise_dir/mise"
@@ -67,12 +67,12 @@ EOF
   It 'installs and exposes a declared mise tool to a graph action'
     create_graph_tool_workspace
 
-    When call env PATH=/usr/bin:/bin "$ONCE_BIN" -C "$WORKSPACE" --format json build tools/probe/Probe
+    When call env PATH=/usr/bin:/bin "$STRUO_BIN" -C "$WORKSPACE" --format json build tools/probe/Probe
     The status should be success
     The stdout should include '"target":"tools/probe/Probe"'
     The stdout should include '"status":"completed"'
-    The path "$XDG_DATA_HOME/once/tools/mise-data/installs/http-once-probe/1.0.0/probe" should be file
-    The path "$WORKSPACE/.once/out/tools/probe/Probe/probe.txt" should be file
-    The contents of file "$WORKSPACE/.once/out/tools/probe/Probe/probe.txt" should equal 'managed-tool:http:once-probe'
+    The path "$XDG_DATA_HOME/struo/tools/mise-data/installs/http-struo-probe/1.0.0/probe" should be file
+    The path "$WORKSPACE/.struo/out/tools/probe/Probe/probe.txt" should be file
+    The contents of file "$WORKSPACE/.struo/out/tools/probe/Probe/probe.txt" should equal 'managed-tool:http:struo-probe'
   End
 End

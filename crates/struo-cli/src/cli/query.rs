@@ -1,0 +1,284 @@
+use std::path::PathBuf;
+
+use usage::Subcommands;
+
+#[derive(Subcommands)]
+pub enum QueryCmd {
+    /// Describe the configured workspace and graph loading state.
+    ///
+    /// Reports the exact workspace root, root manifest state, normalized
+    /// target operating system and architecture, ordered selection tokens,
+    /// loaded packages, target count, graph loading errors, and suggested
+    /// discovery or validation calls.
+    Workspace,
+
+    /// List data-only root trigger declarations and their activated snapshot.
+    Triggers,
+
+    /// Validate a proposed trigger without evaluating project modules.
+    ValidateTrigger {
+        /// JSON document containing a trigger. Reads stdin when omitted.
+        #[usage(long, value_name = "PATH")]
+        file: Option<PathBuf>,
+    },
+
+    /// Simulate an event against an activated trigger without executing work.
+    TriggerPlan {
+        /// Activated trigger id.
+        id: String,
+        /// JSON event with event, ref, and full revision fields.
+        #[usage(long, value_name = "PATH")]
+        file: PathBuf,
+    },
+
+    /// List declared graph targets.
+    ///
+    /// Resolver failures return a non-zero exit status and a structured
+    /// diagnostic instead of listing an incomplete graph. Use query
+    /// validate-workspace to inspect all graph diagnostics.
+    Targets {
+        /// Only include targets with this target kind.
+        #[usage(long)]
+        kind: Option<String>,
+    },
+
+    /// List capabilities and output groups for a target.
+    Capabilities {
+        /// Target id, such as `apps/service/Service`.
+        target: String,
+    },
+
+    /// Inspect a target's artifact capability and portable export contract without building.
+    Artifacts { target: String },
+
+    /// Inspect a target kind schema.
+    Schema {
+        /// Target kind to inspect. Discover names with `struo query target-kinds`.
+        kind: String,
+    },
+
+    /// Return the files in a target kind starter example.
+    Example {
+        /// Target kind that owns the example.
+        kind: String,
+        /// Example slug from `struo query schema`.
+        slug: String,
+    },
+
+    /// List target kinds with their one-line docs and example slugs.
+    #[usage(alias = "rules")]
+    TargetKinds {
+        /// Match an ecosystem, target-kind family, or intent against the catalog.
+        ///
+        /// A family term takes priority over generic intent words. When no family
+        /// or kind segment matches, Struo searches docs, examples, and source references.
+        #[usage(long, value_name = "TEXT")]
+        query: Option<String>,
+    },
+
+    /// Return the project-module authoring contract, starters, and result examples.
+    ModuleContract,
+
+    /// Fetch public external rule, plugin, or build-system source text.
+    ExternalSource {
+        /// Public HTTPS address for source code, metadata, or documentation.
+        url: String,
+        /// Maximum response bytes to return.
+        #[usage(long, default = "262144", value_name = "COUNT")]
+        max_bytes: usize,
+    },
+
+    /// Resolve one target's kind, sources, dependency roles, attributes, and capabilities.
+    Target {
+        /// Target id, such as `packages/core/Core`.
+        target: String,
+    },
+
+    /// Compute a deterministic, content-addressed digest of the whole graph.
+    ///
+    /// Folds every target declaration, resolved source contents, the pinned
+    /// Mise toolchain (`mise.toml` and `mise.lock`), and the root workspace
+    /// manifest into one stable digest with categorized components.
+    GraphFingerprint {
+        /// Exclude resolved source file contents from the digest.
+        #[usage(long)]
+        no_sources: bool,
+        /// Exclude the Mise toolchain declarations from the digest.
+        #[usage(long)]
+        no_toolchain: bool,
+        /// Exclude the root workspace manifest from the digest.
+        #[usage(long)]
+        no_manifest: bool,
+    },
+
+    /// Export a redacted copy of the workspace's native projects for reproducing graph problems.
+    ///
+    /// Copies native manifests and lockfiles, writes every other project file
+    /// as an empty placeholder at the same path, records the loaded graph or
+    /// its loading error, and drafts an issue for the Struo repository with an
+    /// archive to attach. Nothing is shared. Review the copied files before
+    /// opening the issue.
+    GraphRepro {
+        /// Directory to write. Defaults to `.struo/graph-repro`. An earlier export there is replaced.
+        #[usage(long, value_name = "PATH")]
+        output: Option<PathBuf>,
+    },
+
+    /// List targets that expose the generic test capability.
+    Tests,
+
+    /// List test targets likely affected by changed workspace paths.
+    ///
+    /// Uses declared target inputs, package ownership, and reverse dependency
+    /// traversal. An otherwise unowned path belongs to its nearest package.
+    /// The root manifest, configured graph modules, and paths outside every
+    /// known package conservatively select every test.
+    AffectedTests {
+        /// Changed workspace-relative path. Repeat for multiple paths.
+        #[usage(long = "changed-path", value_name = "PATH")]
+        changed_paths: Vec<String>,
+    },
+
+    /// Export a replayable test plan with complete discovery and input bindings.
+    TestPlan {
+        /// Changed workspace-relative path. Repeat for multiple paths.
+        #[usage(long = "changed-path", value_name = "PATH", conflicts = "target")]
+        changed_paths: Vec<String>,
+        /// Create an explicit plan for this target instead of selecting by changed path.
+        #[usage(long, conflicts = "changed_paths")]
+        target: Option<String>,
+        /// Upload the plan to the configured host and emit a CI shard matrix.
+        #[usage(long, value_name = "COUNT")]
+        shards: Option<u32>,
+        /// Hosted execution reference. Defaults to `TUIST_SHARD_REFERENCE` or the CI run.
+        #[usage(long, requires = "shards")]
+        reference: Option<String>,
+    },
+
+    /// Read normalized `struo.test_results.v1` results for a target.
+    TestResults {
+        /// Target id, such as `tests/unit`.
+        target: String,
+        /// Return the normalized status and totals without case-level records.
+        #[usage(long)]
+        summary_only: bool,
+        /// Inspect an exact retained case id; conflicts with --summary-only.
+        #[usage(long)]
+        case: Option<String>,
+        /// One-based producer attempt position, requires --case; defaults to the last array element.
+        #[usage(long, allow_negative_numbers)]
+        attempt: Option<String>,
+    },
+
+    /// List stable test units discovered in a target's normalized results.
+    TestManifest {
+        /// Target identifier, such as `tests/unit`.
+        target: String,
+    },
+
+    /// List persisted test batch attempts and measured durations.
+    TestAttempts {
+        /// Only include attempts for this canonical target id.
+        #[usage(long)]
+        target: Option<String>,
+        /// Return only the newest matching attempts.
+        #[usage(long, value_name = "COUNT")]
+        limit: Option<usize>,
+    },
+
+    /// List durable evidence records, optionally filtered by subject.
+    ///
+    /// Evidence records are provenance for action outcomes. They record
+    /// what happened after `struo exec`, `struo run`, `struo build`, `struo lint`,
+    /// or `struo test`: the subject, status, action digest, input digest when
+    /// available, an input fingerprint manifest for declared graph actions,
+    /// cache state, exit code, and captured output digests when available.
+    /// Fingerprint components expose only their category, label, and digest,
+    /// not raw command or environment values. Evidence is queryable history;
+    /// it does not change action-cache reuse rules.
+    Evidence {
+        /// Subject id, e.g. `cli` or `cli:test`.
+        subject: Option<String>,
+        /// Return only the newest matching records.
+        #[usage(long, value_name = "COUNT")]
+        limit: Option<usize>,
+    },
+
+    /// Inspect a retained reproducibility check without executing it again.
+    Verification {
+        /// Verification UUID printed by a build or script check.
+        id: String,
+    },
+
+    /// Validate a proposed `[[target]]` table against its target kind schema.
+    ///
+    /// Reads `{ "target": { ... } }` from `--file` or, if omitted,
+    /// from stdin.
+    ValidateTarget {
+        /// Path to a JSON file. When omitted, the JSON document is read from stdin.
+        #[usage(long, value_name = "PATH")]
+        file: Option<PathBuf>,
+    },
+
+    /// Validate and inspect an annotated script contract.
+    Script {
+        /// Workspace-relative script path.
+        path: String,
+    },
+
+    /// Validate target schemas, dependency edges, providers, sources, and cycles across the workspace.
+    ValidateWorkspace,
+
+    /// Run scripted actions in a private validation sandbox and report filesystem contract repairs.
+    ValidateActions {
+        /// Target id whose scripted capability should be probed.
+        target: String,
+        /// Capability to validate.
+        #[usage(long, default = "build")]
+        capability: String,
+        /// Validate only one zero-based action index.
+        #[usage(long)]
+        action: Option<usize>,
+    },
+
+    /// Validate one project-local Starlark module without registering it.
+    ValidateModule {
+        /// Workspace-relative module path.
+        path: String,
+    },
+}
+
+impl QueryCmd {
+    pub fn surface_path(&self) -> Vec<&'static str> {
+        match self {
+            Self::Workspace => vec!["workspace"],
+            Self::Triggers => vec!["triggers"],
+            Self::ValidateTrigger { .. } => vec!["validate-trigger"],
+            Self::TriggerPlan { .. } => vec!["trigger-plan"],
+            Self::Targets { .. } => vec!["targets"],
+            Self::Capabilities { .. } => vec!["capabilities"],
+            Self::Schema { .. } => vec!["schema"],
+            Self::Example { .. } => vec!["example"],
+            Self::TargetKinds { .. } => vec!["target-kinds"],
+            Self::ModuleContract => vec!["module-contract"],
+            Self::ExternalSource { .. } => vec!["external-source"],
+            Self::Target { .. } => vec!["target"],
+            Self::GraphFingerprint { .. } => vec!["graph-fingerprint"],
+            Self::Artifacts { .. } => vec!["artifacts"],
+            Self::GraphRepro { .. } => vec!["graph-repro"],
+            Self::Tests => vec!["tests"],
+            Self::AffectedTests { .. } => vec!["affected-tests"],
+            Self::TestPlan { .. } => vec!["test-plan"],
+            Self::TestResults { .. } => vec!["test-results"],
+            Self::TestManifest { .. } => vec!["test-manifest"],
+            Self::TestAttempts { .. } => vec!["test-attempts"],
+            Self::Evidence { .. } => vec!["evidence"],
+            Self::Verification { .. } => vec!["verification"],
+            Self::ValidateTarget { .. } => vec!["validate-target"],
+            Self::Script { .. } => vec!["script"],
+            Self::ValidateWorkspace => vec!["validate-workspace"],
+            Self::ValidateActions { .. } => vec!["validate-actions"],
+            Self::ValidateModule { .. } => vec!["validate-module"],
+        }
+    }
+}

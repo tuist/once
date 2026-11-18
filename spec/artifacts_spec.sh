@@ -13,12 +13,12 @@ Describe 'artifact export and publication'
   }
 
   inspect_android_export() {
-    python3 - "$ONCE_BIN" "$WORKSPACE" "$REPO_ROOT" <<'PY'
+    python3 - "$STRUO_BIN" "$WORKSPACE" "$REPO_ROOT" <<'PY'
 import hashlib, json, os, pathlib, shutil, struct, subprocess, sys, zlib
 binary, workspace, repo = sys.argv[1:]
 root = pathlib.Path(workspace)
-shutil.copytree(pathlib.Path(repo) / 'crates/once-frontend/prelude/examples/android-binary-minimal', root, dirs_exist_ok=True)
-(root / 'once.toml').write_text('')
+shutil.copytree(pathlib.Path(repo) / 'crates/struo-frontend/prelude/examples/android-binary-minimal', root, dirs_exist_ok=True)
+(root / 'struo.toml').write_text('')
 keystore = pathlib.Path.home() / '.android/debug.keystore'
 keystore.parent.mkdir(parents=True, exist_ok=True)
 subprocess.run(['keytool', '-genkeypair', '-keystore', str(keystore), '-storepass', 'android', '-keypass', 'android', '-alias', 'androiddebugkey', '-dname', 'CN=Artifact Test', '-keyalg', 'RSA', '-validity', '365', '-storetype', 'JKS'], check=True, capture_output=True)
@@ -42,7 +42,7 @@ def exported(result, icon = None):
         return path
     index = json.loads(read(result['root']).read_bytes())
     manifest = json.loads(read(index['members']['product']['artifact']).read_bytes())
-    spec = manifest['interfaces']['dev.once.android-install.v1']['spec']
+    spec = manifest['interfaces']['dev.struo.android-install.v1']['spec']
     if icon is None:
         assert 'icon' not in manifest['payloads']
         assert spec == {'metadata_payload': 'metadata'}
@@ -58,12 +58,12 @@ first = run('artifact', 'export', target)
 apk, metadata = exported(first)
 tools = pathlib.Path(os.environ['ANDROID_HOME']) / 'build-tools/35.0.0'
 subprocess.run([str(tools / 'apksigner'), 'verify', str(apk)], check=True, capture_output=True)
-assert metadata['application_id'] == 'dev.once.hello' and metadata['display_name'] == 'Once Hello'
+assert metadata['application_id'] == 'dev.struo.hello' and metadata['display_name'] == 'Struo Hello'
 assert metadata['version_code'] == '1' and metadata['version_name'] == '1.0'
 assert metadata['minimum_sdk'] == ['23']
 assert metadata['signature_verified'] is True and metadata['certificate_sha256']
 assert first['automatic_publication'] is True
-shutil.rmtree(root / '.once/out')
+shutil.rmtree(root / '.struo/out')
 assert run('artifact', 'export', target)['root'] == first['root']
 launcher = root / 'apps/hello/res/mipmap-xhdpi/ic_launcher.png'
 launcher.parent.mkdir(parents=True)
@@ -72,30 +72,30 @@ android_manifest = root / 'apps/hello/AndroidManifest.xml'
 android_manifest.write_text(android_manifest.read_text().replace('android:label=', 'android:icon="@mipmap/ic_launcher"\n        android:label=', 1))
 with_icon = run('artifact', 'export', target)
 exported(with_icon, icon = 96)
-shutil.rmtree(root / '.once/out')
+shutil.rmtree(root / '.struo/out')
 assert run('artifact', 'export', target)['root'] == with_icon['root']
-manifest = root / 'apps/hello/once.toml'
+manifest = root / 'apps/hello/struo.toml'
 manifest.write_text(manifest.read_text() + '\nsigning = "none"\n')
 unsigned = run('artifact', 'export', target)
 _, metadata = exported(unsigned, icon = 96)
 assert metadata['signature_verified'] is False and metadata['certificate_sha256'] == []
 assert unsigned['automatic_publication'] is False
 assert unsigned['root'] != first['root']
-assert not (root / '.once/publications').exists()
+assert not (root / '.struo/publications').exists()
 print('native signed APK, metadata, icon, cache replay and unsigned exclusion verified')
 PY
   }
 
   inspect_apple_export() {
-    python3 - "$ONCE_BIN" "$WORKSPACE" "$REPO_ROOT" <<'PY'
+    python3 - "$STRUO_BIN" "$WORKSPACE" "$REPO_ROOT" <<'PY'
 import hashlib, json, pathlib, platform, plistlib, shutil, subprocess, sys
 binary, workspace, repo = sys.argv[1:]
 root = pathlib.Path(workspace)
-shutil.copytree(pathlib.Path(repo) / 'crates/once-frontend/prelude/examples/apple-application-macos', root, dirs_exist_ok=True)
+shutil.copytree(pathlib.Path(repo) / 'crates/struo-frontend/prelude/examples/apple-application-macos', root, dirs_exist_ok=True)
 def run(*args):
     return json.loads(subprocess.check_output([binary, '-C', workspace, '--format', 'json', *args]))
 run('build', 'Hello')
-assert not list((root / '.once/out').rglob('*.zip'))
+assert not list((root / '.struo/out').rglob('*.zip'))
 first = run('artifact', 'export', 'Hello')
 directory = pathlib.Path(first['directory'])
 def content(descriptor):
@@ -117,10 +117,10 @@ subprocess.run(['/usr/bin/ditto', '-x', '-k', str(archive), str(destination)], c
 app = destination / 'Hello.app'
 subprocess.run(['/usr/bin/codesign', '--verify', '--deep', '--strict', str(app)], check=True)
 plist = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
-assert metadata['bundle_identifier'] == plist['CFBundleIdentifier'] == 'dev.once.Hello'
+assert metadata['bundle_identifier'] == plist['CFBundleIdentifier'] == 'dev.struo.Hello'
 assert metadata['platform'] == 'macos' and metadata['sdk_variant'] == 'device'
 assert metadata['signature_verified'] is True
-assert manifest['interfaces']['dev.once.apple-install.v2']['spec'] == {'metadata_payload': 'metadata'}
+assert manifest['interfaces']['dev.struo.apple-install.v2']['spec'] == {'metadata_payload': 'metadata'}
 assert 'icon' not in manifest['payloads']
 executable = app / 'Contents/MacOS' / plist['CFBundleExecutable']
 uuid = subprocess.check_output(['xcrun', 'dwarfdump', '--uuid', str(executable)], text=True).split()[1]
@@ -128,30 +128,30 @@ assert metadata['mach_o_uuids'] == [uuid]
 assert first['automatic_publication'] is True
 assert executable.stat().st_mode & 0o111
 assert run('artifact', 'export', 'Hello')['root'] == first['root']
-assert not (root / '.once/publications').exists()
+assert not (root / '.struo/publications').exists()
 print('signed Apple bundle, native metadata, cache replay and explicit publication verified')
 PY
   }
 
   inspect_local_publication() {
-    python3 - "$ONCE_BIN" "$WORKSPACE" "$REPO_ROOT" "$XDG_CACHE_HOME" <<'PY'
+    python3 - "$STRUO_BIN" "$WORKSPACE" "$REPO_ROOT" "$XDG_CACHE_HOME" <<'PY'
 import hashlib, json, pathlib, shutil, subprocess, sys, zipfile
 binary, workspace, repo, cache = sys.argv[1:]
 root = pathlib.Path(workspace)
-shutil.copytree(pathlib.Path(repo) / 'crates/once-frontend/prelude/examples/artifact-static-site', root, dirs_exist_ok=True)
+shutil.copytree(pathlib.Path(repo) / 'crates/struo-frontend/prelude/examples/artifact-static-site', root, dirs_exist_ok=True)
 def run(*args):
     return json.loads(subprocess.check_output([binary, '-C', workspace, '--format', 'json', *args]))
 contract = run('query', 'artifacts', 'site')
 assert contract['supported'] is True
 first = run('artifact', 'export', 'site')
-shutil.rmtree(root / '.once/out')
+shutil.rmtree(root / '.struo/out')
 second = run('artifact', 'export', 'site')
 assert first['root'] == second['root']
 one = run('artifact', 'publish', 'site', '--provider', 'local', '--track', 'one')
 two = run('artifact', 'publish', 'site', '--provider', 'local', '--track', 'two')
 assert one['artifact'] == two['artifact'] == first['root']
 assert one['track'] == 'one' and two['track'] == 'two'
-assert len(list((root / '.once/publications').glob('*.json'))) == 2
+assert len(list((root / '.struo/publications').glob('*.json'))) == 2
 directory = pathlib.Path(first['directory'])
 def content(descriptor):
     data = (directory / 'blobs/sha256' / descriptor['digest'].split(':')[1]).read_bytes()
@@ -160,30 +160,30 @@ def content(descriptor):
     return data
 index = json.loads(content(first['root']))
 manifest = json.loads(content(index['members']['product']['artifact']))
-assert manifest['interfaces']['dev.once.static-http.v1']['spec']['root'] == 'public'
+assert manifest['interfaces']['dev.struo.static-http.v1']['spec']['root'] == 'public'
 content(manifest['payloads']['content'])
 archive = directory / 'blobs/sha256' / manifest['payloads']['content']['digest'].split(':')[1]
 with zipfile.ZipFile(archive) as zipped:
     assert zipped.namelist() == ['public/index.html']
     assert b'A shareable build' in zipped.read('public/index.html')
 shutil.rmtree(cache)
-shutil.rmtree(root / '.once/out')
+shutil.rmtree(root / '.struo/out')
 assert archive.is_file()
 requests = [
     {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list', 'params': {}},
-    {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {'name': 'once_publish_artifacts', 'arguments': {'target': 'site', 'provider': 'local'}}},
+    {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {'name': 'struo_publish_artifacts', 'arguments': {'target': 'site', 'provider': 'local'}}},
 ]
 process = subprocess.run([binary, '-C', workspace, 'mcp'], input=''.join(json.dumps(r) + '\n' for r in requests), text=True, capture_output=True, check=True)
 responses = [json.loads(line) for line in process.stdout.splitlines()]
 names = [tool['name'] for tool in responses[0]['result']['tools']]
-assert 'once_query_artifacts' in names and 'once_publish_artifacts' not in names
+assert 'struo_query_artifacts' in names and 'struo_publish_artifacts' not in names
 assert responses[1]['result']['isError'] is True
 print('portable content, cache replay, independent retention and explicit publication verified')
 PY
   }
 
   inspect_native_names_and_links() {
-    python3 - "$ONCE_BIN" "$WORKSPACE" <<'PY'
+    python3 - "$STRUO_BIN" "$WORKSPACE" <<'PY'
 import json, pathlib, stat, subprocess, sys, zipfile
 binary, workspace = sys.argv[1:]
 root = pathlib.Path(workspace)
@@ -193,7 +193,7 @@ root = pathlib.Path(workspace)
 (root / 'alias').symlink_to('data/a')
 (root / 'linked').symlink_to('data', target_is_directory=True)
 def export(name):
-    (root / 'once.toml').write_text('[[target]]\nname = ' + json.dumps(name, ensure_ascii=False) + '\nkind = "artifact"\nsrcs = ["data/**/*", "alias", "linked"]\n')
+    (root / 'struo.toml').write_text('[[target]]\nname = ' + json.dumps(name, ensure_ascii=False) + '\nkind = "artifact"\nsrcs = ["data/**/*", "alias", "linked"]\n')
     result = json.loads(subprocess.check_output([binary, '-C', workspace, '--format', 'json', 'artifact', 'export', name]))
     directory = pathlib.Path(result['directory']) / 'blobs/sha256'
     def content(descriptor):
@@ -224,7 +224,7 @@ PY
   }
 
   inspect_publication_service() {
-    python3 - "$ONCE_BIN" "$WORKSPACE" <<'PY'
+    python3 - "$STRUO_BIN" "$WORKSPACE" <<'PY'
 import hashlib, http.server, json, os, pathlib, subprocess, sys, threading, traceback, urllib.parse
 binary, workspace = sys.argv[1:]
 root = pathlib.Path(workspace)
@@ -236,7 +236,7 @@ def _impl(ctx):
     metadata = declare_output("metadata.json")
     write_path(metadata, '{"example":"opaque metadata"}')
     return {"artifact_info": _artifact_info([{"name": name, "payloads": {"content": {"path": out, "media_type": "application/octet-stream"}, "metadata": {"path": metadata, "media_type": "application/json"}}, "interfaces": {"example.future.v7": {"payload": "content", "spec": {"metadata_payload": "metadata"}}}} for name in ["one", "two"]], automatic_publication = True)}
-product = target_kind(impl = _impl, providers = ["once_artifact_info"], capabilities = [capability("build", ["default"]), capability("artifact", ["default"])])
+product = target_kind(impl = _impl, providers = ["struo_artifact_info"], capabilities = [capability("build", ["default"]), capability("artifact", ["default"])])
 ''')
 payload = b'a' * (8 * 1024 * 1024) + b'final-part-123'
 (root / 'upload.bin').write_bytes(payload)
@@ -321,7 +321,7 @@ name = "product"
 kind = "product"
 srcs = ["upload.bin"]
 '''
-(root / 'once.toml').write_text(manifest)
+(root / 'struo.toml').write_text(manifest)
 def run(*args, success=True, cwd=None, input=None):
     process = subprocess.run([binary, '-C', workspace, '--format', 'json', *args], cwd=cwd, input=input, env={**os.environ, 'TUIST_TOKEN': 'fixture-token'}, text=True, capture_output=True)
     assert not state['errors'], state['errors']
@@ -331,14 +331,14 @@ try:
     run('build', 'product')
     assert state['calls'] == []
     enabled = manifest.replace('[infrastructure.artifacts]', '[infrastructure]\npublish_on_build = ["product"]\n[infrastructure.artifacts]')
-    (root / 'once.toml').write_text(enabled)
+    (root / 'struo.toml').write_text(enabled)
     run('build', 'product')
     assert state['calls'] == []
     state['calls'].clear()
     run('artifact', 'publish', 'product', '--allow-on-build')
     assert len(state['publications']) == 1 and len(state['contents']) == 4
     state['calls'].clear()
-    requests = [{'jsonrpc': '2.0', 'id': index, 'method': 'tools/call', 'params': {'name': 'once_build_target', 'arguments': {'target': 'product'}}} for index in (1, 2)]
+    requests = [{'jsonrpc': '2.0', 'id': index, 'method': 'tools/call', 'params': {'name': 'struo_build_target', 'arguments': {'target': 'product'}}} for index in (1, 2)]
     mcp = run('mcp', '--allow-run', input=''.join(json.dumps(request) + '\n' for request in requests))
     responses = [json.loads(line)['result']['structuredContent']['result'] for line in mcp.stdout.splitlines()]
     assert len(responses) == 2
@@ -351,28 +351,28 @@ try:
     assert json.loads(run('build', 'product').stdout)['target'] == 'product'
     assert all(method == 'GET' for method, _ in state['calls']) and len(state['calls']) == 2
     (root / 'nested').mkdir()
-    (root / 'once.toml').write_text(enabled.replace('["product"]', '["./product"]'))
+    (root / 'struo.toml').write_text(enabled.replace('["product"]', '["./product"]'))
     state['calls'].clear()
     run('build', 'product', cwd=root / 'nested')
     assert len(state['calls']) == 2 and all(method == 'GET' for method, _ in state['calls'])
-    (root / 'once.toml').write_text(enabled.replace(f':{server.server_port}"', f':{server.server_port}/changed"'))
+    (root / 'struo.toml').write_text(enabled.replace(f':{server.server_port}"', f':{server.server_port}/changed"'))
     state['calls'].clear()
     run('build', 'product')
     assert state['calls'] == []
-    (root / 'once.toml').write_text(enabled)
+    (root / 'struo.toml').write_text(enabled)
     state.update(mode='changed-destination', calls=[])
     run('build', 'product', success=False)
     assert len(state['calls']) == 1 and state['calls'][0][0] == 'GET'
     state.update(mode='ok', calls=[])
     import shutil
-    shutil.rmtree(root / '.once/out')
+    shutil.rmtree(root / '.struo/out')
     run('build', 'product')
     assert len(state['publications']) == 1
-    (root / 'once.toml').write_text(manifest)
+    (root / 'struo.toml').write_text(manifest)
     state['calls'].clear()
     run('build', 'product')
     assert state['calls'] == []
-    (root / 'once.toml').write_text(enabled)
+    (root / 'struo.toml').write_text(enabled)
     module = root / 'modules/product.star'
     source = module.read_text()
     module.write_text(source.replace('automatic_publication = True', 'automatic_publication = False'))
@@ -383,9 +383,9 @@ try:
         state.update(mode=mode, calls=[])
         args = ['artifact', 'publish', 'product']
         if mode != 'wrong-destination': args += ['--track', mode]
-        receipts = list((root / '.once/publications').glob('*.json'))
+        receipts = list((root / '.struo/publications').glob('*.json'))
         run(*args, success=False)
-        assert list((root / '.once/publications').glob('*.json')) == receipts
+        assert list((root / '.struo/publications').glob('*.json')) == receipts
         if mode == 'unconfirmed':
             count = len(state['publications'])
             state.update(mode='ok', calls=[])
@@ -394,21 +394,21 @@ try:
             assert all(method == 'GET' for method, _ in state['calls'])
     for url in ('', '/relative', 'javascript:alert(1)', 'http://elsewhere.invalid/app', 'https://user:secret@example.invalid/app'):
         state.update(mode='bad-url', **{'receipt-url': url})
-        receipts = list((root / '.once/publications').glob('*.json'))
+        receipts = list((root / '.struo/publications').glob('*.json'))
         run('artifact', 'publish', 'product', success=False)
-        assert list((root / '.once/publications').glob('*.json')) == receipts
+        assert list((root / '.struo/publications').glob('*.json')) == receipts
     state.update(mode='upload-failed', calls=[])
     (root / 'upload.bin').write_bytes(payload + b'changed')
-    receipts = list((root / '.once/publications').glob('*.json'))
+    receipts = list((root / '.struo/publications').glob('*.json'))
     run('build', 'product', success=False)
-    assert list((root / '.once/publications').glob('*.json')) == receipts
+    assert list((root / '.struo/publications').glob('*.json')) == receipts
     state.update(mode='ok', calls=[])
     module.write_text(source + '''
 def _broken(ctx):
     fail("deliberate build failure")
 broken = target_kind(impl = _broken, capabilities = [capability("build", ["default"])])
 ''')
-    (root / 'once.toml').write_text(enabled + '\n[[target]]\nname = "zzbroken"\nkind = "broken"\n')
+    (root / 'struo.toml').write_text(enabled + '\n[[target]]\nname = "zzbroken"\nkind = "broken"\n')
     failed = run('build', '--all', success=False)
     assert 'deliberate build failure' in failed.stderr
     assert state['calls'] == []

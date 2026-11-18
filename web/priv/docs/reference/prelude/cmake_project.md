@@ -11,7 +11,7 @@ product files into the stable target output directory.
 
 Configure and build always bypass the cache and start from a clean generated
 build directory. CMake can select compilers, external toolchain files, SDKs,
-and configuration that Once cannot safely fingerprint from declared inputs.
+and configuration that Struo cannot safely fingerprint from declared inputs.
 This conservative policy prevents changes to those selections from reusing
 stale executables. Native incremental state and build-result cache restoration
 are unavailable. Staging already-built products remains content-addressed;

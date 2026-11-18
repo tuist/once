@@ -6,7 +6,7 @@ Swift package build-tool plugin execution and generated files.
 
 Native Swift package and Xcode workspace resolvers create this dependency for
 targets that declare build-tool plugins. Swift Package Manager builds the host
-tools, evaluates plugins, and executes prebuild commands. Once schedules regular
+tools, evaluates plugins, and executes prebuild commands. Struo schedules regular
 build commands in dependency order, then compiles generated sources and packages
 generated resources with the consuming Apple target. Declared generated headers
 are available on that target's private header search paths.

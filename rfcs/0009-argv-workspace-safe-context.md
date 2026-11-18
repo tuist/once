@@ -7,10 +7,10 @@ Draft.
 ## Motivation
 
 The v1 argv normalization algorithm defined in [RFC 0008][0008] is
-defensive-first. Everything outside a small frozen allowlist of Once
+defensive-first. Everything outside a small frozen allowlist of Struo
 command words hashes to `OpaqueValue`, so a normal invocation
-like `once build my-app --features telemetry` reaches a shared
-dashboard as `once build ⟨opaque⟩ --features ⟨opaque⟩`. The dashboard
+like `struo build my-app --features telemetry` reaches a shared
+dashboard as `struo build ⟨opaque⟩ --features ⟨opaque⟩`. The dashboard
 renders the opaque positions as `[redacted]` because it has no
 plaintext to show.
 
@@ -46,7 +46,7 @@ or the value half of a `NamedValue`. All other tokens follow the
 existing rules unchanged.
 
 The workspace safe context is opt-in. A workspace that declares
-`[reporting] argv_privacy = "workspace"` in its root `once.toml` permits
+`[reporting] argv_privacy = "workspace"` in its root `struo.toml` permits
 recognized graph target names to be emitted as readable literals. Strict
 redaction remains the default. Nothing else about the wire changes.
 
@@ -57,7 +57,7 @@ the run's lifetime. It contains:
 
 - **Target labels** exposed by the loaded workspace graph (both the
   fully-qualified `<package>/<name>` label id and the bare `<name>`
-  form so `once build my-app` classifies `my-app` verbatim).
+  form so `struo build my-app` classifies `my-app` verbatim).
 Additional feature names, profile names, and configuration keys require
 their own disclosure analysis before being included.
 
@@ -84,7 +84,7 @@ have hashed them.
 
 ## Config Surface
 
-Root `once.toml` gains one optional section:
+Root `struo.toml` gains one optional section:
 
 ```toml
 [reporting]
@@ -120,7 +120,7 @@ policies are a follow-up if `strict` and `workspace` prove insufficient.
 - Redaction of tokens that were previously safe (e.g. `--release`)
   is out of scope. The RFC only widens what counts as safe.
 - Server-side augmentation of the allowlist per account or project
-  is out of scope; the allowlist stays a single Once-owned file.
+  is out of scope; the allowlist stays a single Struo-owned file.
 
 ## Rollout
 

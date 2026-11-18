@@ -5,7 +5,7 @@ Python tests run with pytest.
 ## Start Here
 
 The selected `python` interpreter must be able to import pytest. When the
-attribute is omitted, Once first uses the workspace virtual environment. It
+attribute is omitted, Struo first uses the workspace virtual environment. It
 then finds the installed pytest command and uses the interpreter named by that
 command or a neighboring Python interpreter. You can also set an absolute or
 workspace-relative interpreter path explicitly. A common direct installation
@@ -19,16 +19,16 @@ Retrieve the runnable starter when you want a complete declaration and sample
 tests:
 
 ```sh
-once query example pytest_test pytest-test-minimal --format json
+struo query example pytest_test pytest-test-minimal --format json
 ```
 
-Copy the declaration below into `once.toml`, adjust `srcs` for the project,
+Copy the declaration below into `struo.toml`, adjust `srcs` for the project,
 then establish discovery and run the file batches:
 
 ```sh
-once test tests --format json
-once query test-manifest tests --format json
-once test tests --jobs 4 --format json
+struo test tests --format json
+struo query test-manifest tests --format json
+struo test tests --jobs 4 --format json
 ```
 
 The first command runs the complete target. Later runs can use the resulting
@@ -39,7 +39,7 @@ batching, and exact unit commands.
 ## Description
 
 `pytest_test` invokes pytest through the selected Python interpreter, records
-stable node identifiers, and writes normalized Once results. A complete run
+stable node identifiers, and writes normalized Struo results. A complete run
 discovers cases for exact interactive execution and automatic scheduling.
 
 Pytest collects from the declared source directories using its native ignore
@@ -49,7 +49,7 @@ ignored module. Include nested `conftest.py` files and other collection inputs
 in `config` or `data` so changes invalidate discovery and cached results.
 
 Configuration discovery uses the declared source paths, so package-local
-pytest settings are preserved. Native ignore hooks run before Once enforces
+pytest settings are preserved. Native ignore hooks run before Struo enforces
 the source boundary; returning `False` from a project hook cannot admit an
 undeclared test file.
 
@@ -59,7 +59,7 @@ requirement even when pytest is installed outside the workspace.
 
 Automatic batching uses one batch per test file by default. Set `batching` to
 `case` for one batch per discovered case, or `target` to keep one batch for the
-target. A missing or stale manifest runs the whole target once before Once
+target. A missing or stale manifest runs the whole target once before Struo
 uses smaller batches.
 
 ## Attributes
@@ -82,7 +82,7 @@ uses smaller batches.
 
 ## Providers and Capabilities
 
-The target emits `once_test_info` and exposes `test` with the `default`,
+The target emits `struo_test_info` and exposes `test` with the `default`,
 `test_results`, and `logs` output groups.
 
 ## Example

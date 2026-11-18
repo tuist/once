@@ -14,10 +14,10 @@ SH
     chmod +x "$WORKSPACE/tools/xcodebuild"
   }
 
-  It 'passes unsupported invocations through without a Once trailer'
+  It 'passes unsupported invocations through without a Struo trailer'
     install_system_xcodebuild
 
-    When call env PATH="$WORKSPACE/tools:$PATH" "$ONCE_BIN" -C "$WORKSPACE" xcodebuild -- -showBuildSettings
+    When call env PATH="$WORKSPACE/tools:$PATH" "$STRUO_BIN" -C "$WORKSPACE" xcodebuild -- -showBuildSettings
     The status should be success
     The stdout should equal '-showBuildSettings'
     The stderr should not include 'cache '
@@ -26,7 +26,7 @@ SH
   It 'preserves the system xcodebuild exit status for unsupported invocations'
     install_system_xcodebuild
 
-    When call env XCODEBUILD_EXIT_CODE=17 PATH="$WORKSPACE/tools:$PATH" "$ONCE_BIN" -C "$WORKSPACE" xcodebuild -- -showBuildSettings
+    When call env XCODEBUILD_EXIT_CODE=17 PATH="$WORKSPACE/tools:$PATH" "$STRUO_BIN" -C "$WORKSPACE" xcodebuild -- -showBuildSettings
     The status should be failure
     The status should equal 17
     The stdout should equal '-showBuildSettings'

@@ -4,7 +4,7 @@ date: 2026-07-30
 ---
 
 Evidence records now explain why a build's inputs changed, not only that they
-changed. Alongside the input digest it already tracked, Once records a
+changed. Alongside the input digest it already tracked, Struo records a
 versioned input fingerprint that breaks the digest down into labeled
 components for sources, generated inputs, dependencies, module code,
 toolchains, command shape, and environment configuration.

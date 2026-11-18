@@ -1,7 +1,7 @@
 # `oci_import`
 
 Brings an existing Open Container Initiative image archive into the graph.
-Use it when another tool already owns image production and Once should own
+Use it when another tool already owns image production and Struo should own
 subsequent composition, loading, or publication.
 
 ## Input
@@ -19,8 +19,8 @@ base, to [`oci_load`](/reference/prelude/oci_load) for local use, or to
 [`oci_push`](/reference/prelude/oci_push) for publication.
 
 ```sh
-once query schema oci_import
-once query example oci_import oci-import
+struo query schema oci_import
+struo query example oci_import oci-import
 ```
 
 See [Container Images](/guide/graph/containers) for the import workflow.

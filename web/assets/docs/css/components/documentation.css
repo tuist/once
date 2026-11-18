@@ -42,7 +42,7 @@
   align-items: center;
   box-shadow: var(--noora-light-border-default);
   border-radius: var(--noora-radius-6);
-  background: var(--once-card-gradient);
+  background: var(--struo-card-gradient);
   height: 120px;
 }
 

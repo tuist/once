@@ -4,7 +4,7 @@ Cargo dependency graph consumed by Rust targets.
 
 ## Description
 
-During graph loading, Once reads a checked-in Cargo metadata snapshot or runs
+During graph loading, Struo reads a checked-in Cargo metadata snapshot or runs
 `cargo metadata --locked --offline` against the configured Cargo manifest.
 Every resolved registry or Git package becomes a synthetic
 `rust_crate` or `rust_proc_macro` target. Normal dependencies remain `deps`,
@@ -18,11 +18,11 @@ visible to queries, validation, caching, and scheduling.
 `Cargo.toml` and `Cargo.lock` stay the source of truth. Live resolution is
 locked and fails when the lockfile does not match the manifest. Every external
 package in checked-in metadata is cross-checked against an exact lock entry.
-The snapshot must also carry `once_snapshot` provenance that binds every other
+The snapshot must also carry `struo_snapshot` provenance that binds every other
 resolver input, the selected features and target, and the compiler host triple.
 Graph loading rejects any provenance mismatch. First-party Rust targets
 depend on this aggregate target and identify their Cargo package via
-`CARGO_PKG_NAME` or the `cargo_package` attribute. Once then exposes only the
+`CARGO_PKG_NAME` or the `cargo_package` attribute. Struo then exposes only the
 direct external dependencies Cargo reported for that workspace package.
 A `rust_test` for that package also links the package's direct external
 dev-dependencies, and a first-party target that declares a `build_script`
@@ -31,9 +31,9 @@ authored test and build-script targets resolve the same crates Cargo would.
 The configured manifest and lockfile must both be covered by `resolver_inputs`,
 together with any workspace member manifests Cargo needs to inspect. When
 `resolver_inputs` is empty or omitted, `srcs` supplies those files instead.
-When the declared inputs include `.cargo/config.toml` or `.cargo/config`, Once
+When the declared inputs include `.cargo/config.toml` or `.cargo/config`, Struo
 passes that file to Cargo explicitly. Vendored source replacement therefore
-works even when Once loads the graph from a different process directory.
+works even when Struo loads the graph from a different process directory.
 
 Generated target names include the destination target triple when `target` is
 set. Native and cross-compiled dependency graphs can therefore coexist in one
@@ -46,7 +46,7 @@ package without synthetic target collisions.
 | `manifest` | string | no | `Cargo.toml` | Package-relative Cargo manifest path passed to `cargo metadata --manifest-path` |
 | `lockfile` | string | no | `Cargo.lock` | Package-relative Cargo lockfile path read as a declared resolver input |
 | `resolver_inputs` | list&lt;string&gt; | no | `srcs` | Package-relative text globs supplied to the resolver |
-| `metadata_file` | string | no |  | Checked-in [JavaScript Object Notation](https://www.json.org/json-en.html) output from Cargo metadata with `once_snapshot` input and selection provenance |
+| `metadata_file` | string | no |  | Checked-in [JavaScript Object Notation](https://www.json.org/json-en.html) output from Cargo metadata with `struo_snapshot` input and selection provenance |
 | `host_metadata_file` | string | no |  | Cargo metadata snapshot with host selection provenance for the execution host. Required when `metadata_file` is combined with an explicit `target` |
 | `vendor_dir` | string | no | `third_party/rust/vendor` | Package-relative directory containing vendored crate sources |
 | `build_script_sources` | map&lt;string, map&lt;string, string&gt;&gt; | no | `{}` | External consumer selector to sibling destination to locked package source file; see [sibling sources](/guide/graph/rust/#build-scripts-that-read-sibling-packages) |
@@ -67,7 +67,7 @@ package without synthetic target collisions.
 | `_cargo_workspace_package_env` | map&lt;string, map&lt;string, string&gt;&gt; | resolver-owned | `{}` | Records each workspace package's Cargo compile environment, such as `CARGO_PKG_NAME`, `CARGO_PKG_VERSION`, and a workspace-relative `CARGO_MANIFEST_DIR`. Targets that set `cargo_package` inherit it below their own `rustc_env` |
 
 The underscore-prefixed attributes are part of the typed resolver contract.
-They are produced by Once and should not be set in `once.toml`.
+They are produced by Struo and should not be set in `struo.toml`.
 
 ## Dependency Edges
 
@@ -137,16 +137,16 @@ does not alter Cargo's version or feature resolution. Transitive dependencies
 remain ordinary generated graph edges of the selected package.
 
 Regenerate the snapshot with the same features and target selection used by
-the Once target whenever `Cargo.toml` or `Cargo.lock` changes. Without
+the Struo target whenever `Cargo.toml` or `Cargo.lock` changes. Without
 `metadata_file`, graph loading runs Cargo in locked, offline mode. When a
 snapshot target sets `target`, also provide `host_metadata_file` so procedural
 macros and build dependencies use the execution-host graph.
 
-Augment each checked-in Cargo metadata object with an `once_snapshot` object:
+Augment each checked-in Cargo metadata object with an `struo_snapshot` object:
 
 ```json
 {
-  "once_snapshot": {
+  "struo_snapshot": {
     "inputs": {
       "Cargo.toml": "exact manifest text",
       "Cargo.lock": "exact lockfile text",
@@ -184,7 +184,7 @@ sources, manifests, build scripts, licenses, and package data.
 - [Cargo metadata](https://doc.rust-lang.org/stable/cargo/commands/cargo-metadata.html)
   defines the package graph and the failure behavior of `--locked`.
 - [The Cargo lockfile](https://doc.rust-lang.org/cargo/reference/lockfile.html)
-  defines the resolved package versions and checksums Once preserves.
+  defines the resolved package versions and checksums Struo preserves.
 - [Bazel rules for Rust, Crate Universe](https://bazelbuild.github.io/rules_rust/crate_universe_bzlmod.html)
   documents the upstream pattern of translating a Cargo manifest and lockfile
   into generated build targets with distinct normal, procedural macro, and

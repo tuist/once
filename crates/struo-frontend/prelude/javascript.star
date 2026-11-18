@@ -1,0 +1,442 @@
+_JAVASCRIPT_TOOL = tool("node", executables = ["node"])
+_VITEST_TOOL = tool("vitest", executables = ["vitest"])
+_JEST_TOOL = tool("jest", executables = ["jest"])
+
+def _javascript_attr(ctx, name, default):
+    return _configured_attr(ctx, name, default)
+
+def _javascript_node(ctx):
+    requested = _javascript_attr(ctx, "node", "node")
+    resolved = _resolve_host_executable(requested)
+    if not resolved:
+        fail(ctx["label"]["id"] + ": Node.js executable `" + requested + "` was not found")
+    return resolved
+
+def _javascript_stage_project(ctx, dependency, files):
+    stage = ctx["build_dir"] + "/project"
+    copy_path(
+        dependency["javascript_root"],
+        stage,
+        kind = "tree",
+        inputs = [dependency["javascript_root"]],
+        identifier = ctx["label"]["id"] + ":stage-dependencies",
+        source_files = _action_source_files([dependency["javascript_root"]]),
+    )
+    package = dependency["javascript_source_root"]
+    prefix = package + "/" if package else ""
+    for source in files:
+        relative = source[len(prefix):] if prefix and source.startswith(prefix) else source
+        copy_path(
+            source,
+            stage + "/" + relative,
+            inputs = [source],
+            identifier = ctx["label"]["id"] + ":stage:" + relative,
+            source_files = _action_source_files([source]),
+        )
+    return stage
+
+def _javascript_build_impl(ctx):
+    dependencies = [dep for dep in ctx["deps"] if dep.get("javascript_dependency_set")]
+    if len(dependencies) != 1:
+        fail(ctx["label"]["id"] + ": expected exactly one javascript_dependency_set dependency")
+    dependency = dependencies[0]
+    package_dir = _javascript_attr(ctx, "package_dir", ".")
+    outputs = _javascript_attr(ctx, "outputs", [])
+    for path in [package_dir] + outputs:
+        if not path or path.startswith("/") or "\\" in path or ":" in path or ".." in path.split("/"):
+            fail(ctx["label"]["id"] + ": package_dir and outputs must be relative paths inside the staged workspace")
+    if not outputs or [path for path in outputs if "." in path.split("/") or "" in path.split("/")]:
+        fail(ctx["label"]["id"] + ": outputs must name build products, not the workspace root")
+    files = glob(ctx["srcs"])
+    stage = _javascript_stage_project(ctx, dependency, files)
+    tools = dependency["javascript_tools"]
+    node = _javascript_node(ctx)
+    node_version = host_command([node, "--version"], cwd = workspace_root() + "/" + ctx["label"]["package"]).strip()
+    home = ctx["scratch_dir"] + "/home"
+    products = [stage + "/" + path for path in outputs]
+    env = {
+        "CI": "1",
+        "HOME": execution_path(home),
+        "PATH": _parent_dir(node) + ":" + _parent_dir(tools["executable"]) + ":/usr/bin:/bin",
+    }
+    env.update(_javascript_attr(ctx, "env", {}))
+    args = _javascript_attr(ctx, "args", [])
+    argv = [tools["executable"], "run", _javascript_attr(ctx, "script", "")]
+    if args and tools["name"] == "npm":
+        argv.append("--")
+    argv.extend(args)
+    run_action(
+        display_name = "Build JavaScript package · " + ctx["label"]["name"],
+        source_files = _action_source_files(files),
+        argv = argv,
+        inputs = [stage],
+        outputs = products,
+        clean_paths = products,
+        create_dirs = [home],
+        cwd = stage + "/" + package_dir,
+        env = env,
+        toolchain_identity = tools["identity"] + "\x00build-node\x00" + node + "\x00" + node_version,
+        identifier = ctx["label"]["id"] + ":javascript-build",
+    )
+    return {"label_id": ctx["label"]["id"], "target_kind": "javascript_build", "products": products}
+
+javascript_build = target_kind(
+    docs = "Runs a package manager script in a private copy of a locked JavaScript workspace and caches its declared build products.",
+    attrs = [
+        attr("script", "string", required = True, docs = "Package script passed to the locked dependency set's package manager with `run`.", configurable = False),
+        attr("package_dir", "string", default = "\".\"", docs = "Workspace-relative package directory used as the working directory.", configurable = False),
+        attr("outputs", "list<string>", required = True, docs = "Build product paths relative to the staged workspace root, not package_dir.", configurable = False),
+        attr("args", "list<string>", default = "[]", docs = "Additional script arguments.", configurable = True),
+        attr("env", "map<string,string>", default = "{}", docs = "Explicit non-secret build environment.", configurable = True),
+        attr("node", "string", default = "\"node\"", docs = "Node.js executable.", configurable = False),
+    ],
+    deps = [dep("deps", ["javascript_dependency_set"], "Locked workspace installation.", min_count = 1, max_count = 1)],
+    capabilities = [capability("build", ["default", "products"])],
+    tools = [_JAVASCRIPT_TOOL],
+    examples = [example("react-native-application-minimal", name = "JavaScript library declarations", use_when = "Build a TypeScript library alongside a React Native application.", platforms = ["macos"])],
+    impl = _javascript_build_impl,
+)
+
+def _javascript_env(ctx, test_dir, node):
+    env = {"HOME": execution_path(test_dir + "/home"), "CI": "1"}
+    node_dir = _parent_dir(node)
+    if node_dir:
+        env["PATH"] = node_dir
+    for name in _javascript_attr(ctx, "env_inherit", []):
+        value = host_env(name)
+        if value:
+            env[name] = value
+    for name, value in _javascript_attr(ctx, "env", {}).items():
+        env[name] = value
+    return env
+
+def _javascript_installed_package_entry(resolved, default):
+    normalized = resolved.replace("\\", "/")
+    bin_dir = _parent_dir(normalized)
+    node_modules_dir = _parent_dir(bin_dir)
+    prefix = "node_modules/"
+    if not bin_dir.endswith("/.bin") or not default.startswith(prefix):
+        return ""
+    return _resolve_host_executable(node_modules_dir + "/" + default[len(prefix):])
+
+def _javascript_runner(ctx, runner_type, default):
+    requested = ctx["attr"].get("runner")
+    if requested:
+        if "/" not in requested and "\\" not in requested:
+            resolved = _resolve_host_executable(requested)
+            if resolved:
+                return (resolved, False, False)
+        absolute = requested.startswith("/") or (len(requested) > 2 and requested[1] == ":" and (requested[2] == "/" or requested[2] == "\\"))
+        package_path = requested if absolute else _package_relative(ctx, requested)
+        resolved = _resolve_host_executable(package_path)
+        if not resolved:
+            fail(ctx["label"]["id"] + ": " + runner_type + " runner `" + requested + "` was not found")
+        installed_entry = _javascript_installed_package_entry(resolved, default)
+        if installed_entry:
+            return (installed_entry, installed_entry.endswith(".js") or installed_entry.endswith(".mjs"), False)
+        return (resolved if absolute else package_path, requested.endswith(".js") or requested.endswith(".mjs"), not absolute)
+
+    package_path = _package_relative(ctx, default)
+    if _resolve_host_executable(package_path):
+        return (package_path, True, True)
+    resolved = _resolve_host_executable(runner_type)
+    if resolved:
+        installed_entry = _javascript_installed_package_entry(resolved, default)
+        if installed_entry:
+            return (installed_entry, installed_entry.endswith(".js") or installed_entry.endswith(".mjs"), False)
+        return (resolved, False, False)
+    fail(ctx["label"]["id"] + ": " + runner_type + " runner was not found; install it in the workspace or make `" + runner_type + "` available on PATH")
+
+def _javascript_discovery_inputs(ctx):
+    return _unique(glob(ctx["srcs"]) + _file_globs(_javascript_attr(ctx, "config", [])) + _file_globs(_javascript_attr(ctx, "data", [])))
+
+def _javascript_test_inputs(ctx, runner, runner_is_workspace_input, discovery_inputs):
+    runner_inputs = glob([runner]) if runner_is_workspace_input else []
+    return _unique(discovery_inputs + _file_globs(_javascript_attr(ctx, "dependencies", [])) + runner_inputs)
+
+def _javascript_test_adapter():
+    return '''import { spawnSync } from "node:child_process"
+import fs from "node:fs"
+import path from "node:path"
+
+function parseArgs(argv) {
+  const options = { sources: [], units: [], runnerArgs: [] }
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index]
+    if (argument === "--") {
+      options.runnerArgs = argv.slice(index + 1)
+      break
+    }
+    const key = argument.replace(/^--struo-/, "").replaceAll("-", "_")
+    const value = argv[index + 1]
+    index += 1
+    if (key === "source") options.sources.push(value)
+    else if (key === "test_unit") options.units.push(value)
+    else options[key] = value
+  }
+  return options
+}
+
+function escapePattern(value) {
+  const special = "^$.*+?()[]{}|"
+  return [...value].map(character =>
+    special.includes(character) || character.charCodeAt(0) === 92
+      ? String.fromCharCode(92) + character
+      : character
+  ).join("")
+}
+
+function decodeUnits(options) {
+  const prefix = options.target + "::"
+  return options.units.map(unit => {
+    if (!unit.startsWith(prefix)) throw new Error("test unit does not belong to target: " + unit)
+    const decoded = JSON.parse(decodeURIComponent(unit.slice(prefix.length)))
+    if (!Array.isArray(decoded) || decoded.length !== 2) throw new Error("invalid test unit: " + unit)
+    return { file: decoded[0], name: decoded[1] }
+  })
+}
+
+function normalizedStatus(status) {
+  if (status === "passed") return "passed"
+  if (["pending", "todo", "disabled", "skipped"].includes(status)) return "skipped"
+  return "failed"
+}
+
+const ANSI_ESCAPE = new RegExp(String.fromCharCode(27) + "[[][0-9;]*m", "g")
+
+function attemptFor(status, assertion) {
+  const attempt = { status }
+  if (status !== "skipped" && Number.isFinite(assertion.duration) && assertion.duration >= 0) {
+    attempt.duration_ms = Math.round(assertion.duration)
+  }
+  const messages = (assertion.failureMessages || []).filter(message => typeof message === "string" && message.length)
+  if (status === "failed" && messages.length) {
+    const message = messages.join(String.fromCharCode(10)).replace(ANSI_ESCAPE, "")
+    attempt.failure = { message: Array.from(message).slice(0, 4000).join("") }
+  }
+  return attempt
+}
+
+function relativeFile(value) {
+  const relative = path.isAbsolute(value) ? path.relative(process.cwd(), value) : value
+  return relative.split(path.sep).join("/")
+}
+
+function main() {
+  const options = parseArgs(process.argv.slice(2))
+  if (options.unit === "suite" && options.units.length) throw new Error("suite units do not support test-unit filtering")
+  const units = decodeUnits(options)
+  const files = units.length ? [...new Set(units.map(unit => unit.file))] : options.sources
+  const names = units.map(unit => unit.name)
+  const namePattern = names.length ? "^(?:" + names.map(escapePattern).join("|") + ")$" : null
+  let runnerArgs
+  if (options.runner_type === "vitest") {
+    runnerArgs = ["run", ...options.runnerArgs, "--no-cache", "--reporter=json", "--outputFile=" + options.native_results, ...files]
+    if (namePattern) runnerArgs.push("--testNamePattern", namePattern)
+  } else {
+    runnerArgs = [...options.runnerArgs, "--no-cache", "--runInBand", "--json", "--outputFile=" + options.native_results, "--runTestsByPath", ...files]
+    if (namePattern) runnerArgs.push("--testNamePattern", namePattern)
+  }
+  const command = options.runner_via_node === "true" ? process.execPath : options.runner
+  const args = options.runner_via_node === "true" ? [options.runner, ...runnerArgs] : runnerArgs
+  const started = performance.now()
+  const execution = spawnSync(command, args, { stdio: "inherit", env: process.env })
+  if (execution.error) throw execution.error
+  const exitCode = execution.status ?? 1
+  let native = { testResults: [] }
+  if (fs.existsSync(options.native_results)) {
+    native = JSON.parse(fs.readFileSync(options.native_results, "utf8"))
+  } else {
+    fs.writeFileSync(options.native_results, JSON.stringify(native, null, 2))
+  }
+  const cases = []
+  const identifiers = new Set()
+  let duplicates = false
+  for (const suite of (options.unit === "suite" ? [] : native.testResults || [])) {
+    const file = relativeFile(suite.name || "unknown")
+    for (const assertion of suite.assertionResults || []) {
+      const fullName = assertion.fullName || [...(assertion.ancestorTitles || []), assertion.title].join(" ")
+      const identifier = options.target + "::" + encodeURIComponent(JSON.stringify([file, fullName]))
+      if (identifiers.has(identifier)) {
+        duplicates = true
+        continue
+      }
+      identifiers.add(identifier)
+      const status = normalizedStatus(assertion.status)
+      cases.push({
+        id: identifier,
+        name: assertion.title || fullName,
+        suite: (assertion.ancestorTitles || []).join(" > ") || file,
+        file,
+        status,
+        attempts: [attemptFor(status, assertion)],
+        runner_metadata: { full_name: fullName, duration_ms: assertion.duration ?? null },
+      })
+    }
+  }
+  if (duplicates && units.length) {
+    throw new Error("selected full test names are ambiguous; run the whole target without test-unit filters")
+  }
+  const suiteUnit = options.unit === "suite" || duplicates
+  const metadata = {}
+  if (suiteUnit) {
+    cases.length = 0
+    const nativeSummary = { total: 0, passed: 0, failed: 0, skipped: 0 }
+    for (const suite of native.testResults || []) {
+      for (const assertion of suite.assertionResults || []) {
+        nativeSummary.total += 1
+        nativeSummary[normalizedStatus(assertion.status)] += 1
+      }
+    }
+    const status = exitCode === 0 && native.success !== false && nativeSummary.failed === 0 && !(native.testResults || []).some(suite => suite.status === "failed") ? "passed" : "failed"
+    const attempt = { status, duration_ms: Math.round(performance.now() - started) }
+    if (status === "failed") attempt.failure = { message: "Native test suite failed; see the native results and runner log" }
+    metadata.unit = "suite"
+    if (duplicates) metadata.selection_reason = "duplicate full test names cannot be filtered exactly"
+    metadata.native_summary = nativeSummary
+    cases.push({
+      id: options.target + "::suite",
+      name: options.target,
+      suite: options.target,
+      status,
+      attempts: [attempt],
+      runner_metadata: { unit: "suite" },
+    })
+  }
+  const passed = cases.filter(item => item.status === "passed").length
+  const failed = cases.filter(item => item.status === "failed").length
+  const skipped = cases.filter(item => item.status === "skipped").length
+  const status = suiteUnit ? cases[0].status : exitCode === 0 ? "passed" : "failed"
+  const normalized = {
+    schema: "struo.test_results.v1",
+    target: options.target,
+    runner: { type: options.runner_type, metadata },
+    selection_supported: !suiteUnit,
+    status,
+    summary: { total: cases.length, passed, failed, skipped, flaky: 0 },
+    cases,
+    artifacts: {
+      logs: [path.posix.join(path.posix.dirname(options.results), options.runner_type + ".log")],
+      native_results: [options.native_results],
+    },
+  }
+  fs.writeFileSync(options.results, JSON.stringify(normalized, null, 2))
+  return status === "passed" ? 0 : exitCode || 1
+}
+
+try {
+  process.exitCode = main()
+} catch (error) {
+  console.error(error instanceof Error ? error.stack : String(error))
+  process.exitCode = 2
+}
+'''
+
+def _javascript_test_info(ctx, runner_type, display_name, node, runner, adapter, results, log, native_results, test_dir):
+    suite_unit = _javascript_attr(ctx, "unit", "case") == "suite"
+    return {
+        "schema": "struo.test_info.v1",
+        "target": ctx["label"]["id"],
+        "runner": {"type": runner_type, "display_name": display_name, "metadata": {}},
+        "command": {"argv": [node, adapter], "env": _javascript_env(ctx, test_dir, node), "cwd": "."},
+        "outputs": {"results": results, "logs": [log], "native_results": [native_results], "coverage": []},
+        "listing": {"supported": not suite_unit, "strategy": "unsupported" if suite_unit else "normalized_results"},
+        "filtering": {"case_filtering": "unsupported" if suite_unit else "runner_args"},
+        "sharding": {"supported": not suite_unit, "granularity": "target" if suite_unit else _javascript_attr(ctx, "batching", "file")},
+        "retries": {"supported": False, "default_attempts": 1},
+        "execution": {"cacheable": True, "timeout_ms": _javascript_attr(ctx, "timeout_ms", None), "run_from_workspace_root": True},
+        "labels": _javascript_attr(ctx, "labels", []),
+        "metadata": {},
+    }
+
+def _javascript_test_impl(ctx, runner_type, display_name, default_runner):
+    node = _javascript_node(ctx)
+    runner, runner_via_node, runner_is_workspace_input = _javascript_runner(ctx, runner_type, default_runner)
+    discovery_inputs = _javascript_discovery_inputs(ctx)
+    inputs = _javascript_test_inputs(ctx, runner, runner_is_workspace_input, discovery_inputs)
+    test_dir = _test_output_dir(ctx)
+    results = test_dir + "/test_results.json"
+    log = test_dir + "/" + runner_type + ".log"
+    native_results = test_dir + "/" + runner_type + "-results.json"
+    adapter = test_dir + "/struo_javascript_test_adapter.mjs"
+    info = _javascript_test_info(ctx, runner_type, display_name, node, runner, adapter, results, log, native_results, test_dir)
+    provider = {"label_id": ctx["label"]["id"], "target_kind": runner_type + "_test", "affected_inputs": inputs, "test_discovery_inputs": discovery_inputs, "test_info": info}
+    portable_env = _javascript_env(ctx, test_dir, "")
+    runner_version_argv = ([node, runner] if runner_via_node else [runner]) + ["--version"]
+    provider["portable_test_configuration"] = _portable_test_configuration(ctx, ["node", "runner"], [
+        host_command([node, "--version"]).strip(),
+        host_command(runner_version_argv, cwd = workspace_root()).strip() if runner_is_workspace_input else host_command(runner_version_argv).strip(),
+    ], portable_env)
+    if ctx["capability"] != "test":
+        return provider
+    write_path(adapter, _javascript_test_adapter())
+    argv = [node, adapter, "--struo-runner-type", runner_type, "--struo-runner", runner, "--struo-runner-via-node", "true" if runner_via_node else "false", "--struo-unit", _javascript_attr(ctx, "unit", "case"), "--struo-results", results, "--struo-native-results", native_results, "--struo-target", ctx["label"]["id"]]
+    for source in glob(ctx["srcs"]):
+        argv.extend(["--struo-source", source])
+    for unit in (ctx.get("test") or {}).get("filters") or []:
+        argv.extend(["--struo-test-unit", unit])
+    argv.append("--")
+    argv.extend(_javascript_attr(ctx, "args", []))
+    version = host_command([node, "--version"]).strip()
+    runner_version_argv = ([node, runner] if runner_via_node else [runner]) + ["--version"]
+    runner_version = host_command(runner_version_argv, cwd = workspace_root()).strip() if runner_is_workspace_input else host_command(runner_version_argv).strip()
+    run_action(
+        display_name = "Run " + runner_type + " tests · " + ctx["label"]["name"],
+        presentation = _action_metadata(context = [_action_context("javascript.runner", runner_type)]),
+        source_files = _action_source_files(_unique(inputs + [adapter])),
+        argv = argv,
+        inputs = _unique(inputs + [adapter]),
+        outputs = [test_dir, results, log, native_results],
+        clean_paths = [results, log, native_results],
+        create_dirs = [test_dir, test_dir + "/home"],
+        env = _javascript_env(ctx, test_dir, node),
+        stdout = log,
+        stderr = log,
+        toolchain_identity = "struo." + runner_type + ".v2\x00" + node + "\x00" + version + "\x00" + runner + "\x00" + runner_version,
+        identifier = ctx["label"]["id"] + ":" + runner_type,
+    )
+    return provider
+
+def _vitest_impl(ctx):
+    return _javascript_test_impl(ctx, "vitest", "Vitest", "node_modules/vitest/vitest.mjs")
+
+def _jest_impl(ctx):
+    return _javascript_test_impl(ctx, "jest", "Jest", "node_modules/jest/bin/jest.js")
+
+def _javascript_test_attrs(runner, display_name):
+    return [
+        attr("node", "string", default = "\"node\"", docs = "Node.js executable name, absolute path, or workspace-relative path.", configurable = False),
+        attr("runner", "string", default = "\"" + runner + "\"", docs = "Package-relative " + display_name + " entry point or executable. When omitted, Struo uses the package entry point when present, then searches PATH for the runner.", configurable = False),
+        attr("config", "list<string>", default = "[\"package.json\", \"package-lock.json\", \"pnpm-lock.yaml\", \"yarn.lock\"]", docs = "Configuration and dependency inputs.", configurable = False),
+        attr("dependencies", "list<string>", default = "[\"node_modules/**/*\"]", docs = "Installed runner and package files required during execution.", configurable = False),
+        attr("data", "list<string>", default = "[]", docs = "Runtime data, setup, transform, snapshot, and runner package inputs.", configurable = False),
+        attr("args", "list<string>", default = "[]", docs = "Additional runner arguments.", configurable = False),
+        attr("env", "map<string,string>", default = "{}", docs = "Environment variables for test execution.", configurable = True),
+        attr("env_inherit", "list<string>", default = "[]", docs = "Host environment variables inherited by name.", configurable = False),
+        attr("unit", "string", default = "\"case\"", docs = "Result unit: `case` uses unique file/full-name identities, falling back to a whole-target suite when an unfiltered run contains duplicates; `suite` always retains the complete native report as one target-level unit without case listing, filtering, or sharding.", configurable = False, allowed_values = ["case", "suite"]),
+        attr("batching", "string", default = "\"file\"", docs = "Automatic batch granularity: `file`, `case`, or `target`.", configurable = False),
+        attr("labels", "list<string>", default = "[]", docs = "Labels exposed through test discovery."),
+        attr("timeout_ms", "int", docs = "Optional test timeout in milliseconds.", configurable = False),
+    ]
+
+vitest_test = target_kind(
+    docs = "Runs Vitest suites through Struo with exact file and case filtering, normalized results, and automatic batching.",
+    attrs = _javascript_test_attrs("node_modules/vitest/vitest.mjs", "Vitest"),
+    deps = [dep("deps", [], "Targets whose inputs should affect this test suite.")],
+    providers = ["struo_test_info"],
+    capabilities = [capability("test", ["default", "test_results", "logs"])],
+    tools = [_JAVASCRIPT_TOOL, _VITEST_TOOL],
+    examples = [example("vitest-test-minimal", name = "Minimal Vitest suite", use_when = "You want JavaScript or TypeScript tests scheduled by file through Struo.")],
+    impl = _vitest_impl,
+)
+
+jest_test = target_kind(
+    docs = "Runs Jest suites through Struo with exact file and case filtering, normalized results, and automatic batching.",
+    attrs = _javascript_test_attrs("node_modules/jest/bin/jest.js", "Jest"),
+    deps = [dep("deps", [], "Targets whose inputs should affect this test suite.")],
+    providers = ["struo_test_info"],
+    capabilities = [capability("test", ["default", "test_results", "logs"])],
+    tools = [_JAVASCRIPT_TOOL, _JEST_TOOL],
+    examples = [example("jest-test-minimal", name = "Minimal Jest suite", use_when = "You want JavaScript or TypeScript Jest tests scheduled by file through Struo.")],
+    impl = _jest_impl,
+)

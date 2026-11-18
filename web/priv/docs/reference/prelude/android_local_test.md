@@ -6,7 +6,7 @@ Android local test target.
 
 Compiles Android Java and Kotlin test sources, then runs them on the host
 [Java virtual machine](https://docs.oracle.com/javase/specs/jvms/se21/html/index.html)
-through Once's generic test capability. This target is for local unit tests,
+through Struo's generic test capability. This target is for local unit tests,
 not device or emulator instrumentation tests.
 
 The runner scans compiled test classes and invokes zero-argument methods whose
@@ -28,7 +28,7 @@ Set `test_framework = "junit4"` to delegate execution to native JUnit 4,
 including `@Before`/`@After`, rules, expected exceptions, assumptions, and
 `@RunWith` runners such as Robolectric. Supply JUnit, the custom runner and all
 its runtime dependencies through declared classpaths or dependency providers.
-Framework configuration and SDK jars must be declared inputs too; Once does
+Framework configuration and SDK jars must be declared inputs too; Struo does
 not infer Gradle configuration or fingerprint files downloaded during a test.
 For Robolectric, prepare its SDK jars before testing, declare them through
 `runtime_classpath`, and use offline resolution through `jvm_flags` rather than
@@ -58,7 +58,7 @@ library's unassigned resource IDs are not a substitute for linked runtime IDs.
 | `env` | map&lt;string,string&gt; | no | `{}` | Bazel-compatible environment variables passed to the local test runner before `test_env` overrides |
 | `env_inherit` | list&lt;string&gt; | no | `[]` | Host environment variable names inherited by the local test runner before explicit test environment values |
 | `test_env` | map&lt;string,string&gt; | no | `{}` | Environment variables passed to the local test runner |
-| `labels` | list&lt;string&gt; | no | `[]` | Labels exposed through `once_test_info` for test discovery |
+| `labels` | list&lt;string&gt; | no | `[]` | Labels exposed through `struo_test_info` for test discovery |
 | `timeout_ms` | int | no |  | Optional test timeout in milliseconds |
 
 Accepted but unsupported attributes:
@@ -81,7 +81,7 @@ Tool override attrs are also available for `javac`, `java`, `java_home`,
 
 ## Providers
 
-The target emits `android_local_test` and `once_test_info`.
+The target emits `android_local_test` and `struo_test_info`.
 
 ## Capabilities
 
@@ -94,9 +94,9 @@ The target emits `android_local_test` and `once_test_info`.
 
 | Output | Location |
 | --- | --- |
-| Test results | `.once/out/<target>/test/test_results.json` |
-| Test log | `.once/out/<target>/test/android-local-test.log` |
-| Native runner output | `.once/out/<target>/test/native_results.txt` |
+| Test results | `.struo/out/<target>/test/test_results.json` |
+| Test log | `.struo/out/<target>/test/android-local-test.log` |
+| Native runner output | `.struo/out/<target>/test/native_results.txt` |
 
 ## Limitations
 
@@ -115,7 +115,7 @@ kind = "android_library"
 srcs = ["src/main/**/*.kt"]
 
 [target.attrs]
-namespace = "dev.once.greeting"
+namespace = "dev.struo.greeting"
 manifest = "AndroidManifest.xml"
 resource_files = []
 

@@ -39,7 +39,7 @@ import inference and should not be authored manually.
 | `target_sdk_version` | string | no | `minimum_os` | Software development kit version used in the target triple |
 | `sdk_variant` | string | no | `simulator` | `simulator` or `device`; ignored on macOS (not configurable) |
 | `xcode_developer_dir` | string | no | active Xcode on macOS; registered `darwin` SDK on Linux | Xcode Developer directory on macOS or xtool Darwin SDK Developer directory on Linux |
-| `bundle_id` | string | no | `dev.once.<product_name>` | Framework bundle identifier |
+| `bundle_id` | string | no | `dev.struo.<product_name>` | Framework bundle identifier |
 | `product_name` | string | no | target name | Framework product name (not configurable) |
 | `module_name` | string | no | `product_name` | Swift module name |
 | `headers` | list&lt;string&gt; | no | `[]` | Headers packaged with the framework |
@@ -116,7 +116,7 @@ provider marks them as always linked, then stop at the dynamic link boundary
 and are not linked into the final binary again.
 
 Each dynamic framework, application, and test bundle resolves its own static
-dependency closure. Once de-duplicates archive paths inside one link action,
+dependency closure. Struo de-duplicates archive paths inside one link action,
 but does not prune an archive merely because another dynamic framework also
 contains it. That other framework does not necessarily re-export the archive's
 Swift symbols.
@@ -152,16 +152,16 @@ Swift symbols.
 
 | Output | Location |
 | --- | --- |
-| Framework bundle | `.once/out/<target>/<product_name>.framework` |
-| Dynamic library | `.once/out/<target>/<product_name>.framework/<product_name>` |
-| Swift module | `.once/out/<target>/<product_name>.framework/Modules/<module_name>.swiftmodule/<target-triple>.swiftmodule` |
-| Swift documentation | `.once/out/<target>/<product_name>.framework/Modules/<module_name>.swiftmodule/<target-triple>.swiftdoc` |
-| Module map | `.once/out/<target>/<product_name>.framework/Modules/module.modulemap` |
-| Property list | `.once/out/<target>/<product_name>.framework/Info.plist` |
-| Code signature | `.once/out/<target>/<product_name>.framework/_CodeSignature/CodeResources` |
+| Framework bundle | `.struo/out/<target>/<product_name>.framework` |
+| Dynamic library | `.struo/out/<target>/<product_name>.framework/<product_name>` |
+| Swift module | `.struo/out/<target>/<product_name>.framework/Modules/<module_name>.swiftmodule/<target-triple>.swiftmodule` |
+| Swift documentation | `.struo/out/<target>/<product_name>.framework/Modules/<module_name>.swiftmodule/<target-triple>.swiftdoc` |
+| Module map | `.struo/out/<target>/<product_name>.framework/Modules/module.modulemap` |
+| Property list | `.struo/out/<target>/<product_name>.framework/Info.plist` |
+| Code signature | `.struo/out/<target>/<product_name>.framework/_CodeSignature/CodeResources` |
 
 An application or test only needs to depend on the framework it uses directly.
-Once carries nested dynamic framework dependencies to the final bundle,
+Struo carries nested dynamic framework dependencies to the final bundle,
 de-duplicates them by framework path, embeds each bundle once, and signs the
 result.
 
@@ -177,5 +177,5 @@ srcs = ["UI/Sources/*.swift"]
 platform = "ios"
 minimum_os = "17.0"
 sdk_variant = "simulator"
-bundle_id = "dev.once.UI"
+bundle_id = "dev.struo.UI"
 ```

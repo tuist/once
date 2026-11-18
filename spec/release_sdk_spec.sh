@@ -20,26 +20,26 @@ Describe 'release SDK packaging scripts'
 
   setup_release_graph_workspace() {
     mkdir -p \
-      "$WORKSPACE/crates/once-cas" \
-      "$WORKSPACE/crates/once-core" \
-      "$WORKSPACE/crates/once-frontend" \
-      "$WORKSPACE/crates/once-host-tree" \
-      "$WORKSPACE/crates/once-presentation" \
-      "$WORKSPACE/crates/once" \
-      "$WORKSPACE/crates/once-cli" \
-      "$WORKSPACE/crates/once-events-client"
+      "$WORKSPACE/crates/struo-cas" \
+      "$WORKSPACE/crates/struo-core" \
+      "$WORKSPACE/crates/struo-frontend" \
+      "$WORKSPACE/crates/struo-host-tree" \
+      "$WORKSPACE/crates/struo-presentation" \
+      "$WORKSPACE/crates/struo" \
+      "$WORKSPACE/crates/struo-cli" \
+      "$WORKSPACE/crates/struo-events-client"
     touch \
       "$WORKSPACE/Cargo.toml" \
-      "$WORKSPACE/crates/once/Cargo.toml" \
-      "$WORKSPACE/once.toml" \
-      "$WORKSPACE/crates/once-cas/once.toml" \
-      "$WORKSPACE/crates/once-core/once.toml" \
-      "$WORKSPACE/crates/once-frontend/once.toml" \
-      "$WORKSPACE/crates/once-host-tree/once.toml" \
-      "$WORKSPACE/crates/once-presentation/once.toml" \
-      "$WORKSPACE/crates/once/once.toml" \
-      "$WORKSPACE/crates/once-cli/once.toml" \
-      "$WORKSPACE/crates/once-events-client/once.toml"
+      "$WORKSPACE/crates/struo/Cargo.toml" \
+      "$WORKSPACE/struo.toml" \
+      "$WORKSPACE/crates/struo-cas/struo.toml" \
+      "$WORKSPACE/crates/struo-core/struo.toml" \
+      "$WORKSPACE/crates/struo-frontend/struo.toml" \
+      "$WORKSPACE/crates/struo-host-tree/struo.toml" \
+      "$WORKSPACE/crates/struo-presentation/struo.toml" \
+      "$WORKSPACE/crates/struo/struo.toml" \
+      "$WORKSPACE/crates/struo-cli/struo.toml" \
+      "$WORKSPACE/crates/struo-events-client/struo.toml"
 
     # The release manifest generator reads the locked versions of the
     # protobuf build dependencies so a dependency bump cannot silently
@@ -132,7 +132,7 @@ LOCK
       next_target=x86_64-unknown-linux-gnu
       case "$1" in
         lockfile) printf '\n# changed\n' >> Cargo.lock ;;
-        manifest) printf '\n# changed\n' >> crates/once/Cargo.toml ;;
+        manifest) printf '\n# changed\n' >> crates/struo/Cargo.toml ;;
         target) next_target=aarch64-unknown-linux-gnu ;;
         missing-vendor) rm -rf third_party/rust/vendor ;;
       esac
@@ -184,18 +184,18 @@ LOCK
       'exit 2'
     write_stub jq \
       '#!/usr/bin/env bash'
-    write_stub once \
+    write_stub struo \
       '#!/usr/bin/env bash' \
       'target_id="$2"' \
-      'mkdir -p ".once/out/${target_id}"' \
-      'printf library > ".once/out/${target_id}/libonce.so"'
+      'mkdir -p ".struo/out/${target_id}"' \
+      'printf library > ".struo/out/${target_id}/libstruo.so"'
     mkdir -p "$WORKSPACE/packages/js" "$WORKSPACE/packages/ruby"
     cd "$WORKSPACE"
 
-    When call env ONCE_BIN="$WORKSPACE/bin/once" "$REPO_ROOT/mise/tasks/release/package-sdk-libs.sh" --target x86_64-unknown-linux-gnu
+    When call env STRUO_BIN="$WORKSPACE/bin/struo" "$REPO_ROOT/mise/tasks/release/package-sdk-libs.sh" --target x86_64-unknown-linux-gnu
     The status should be success
-    The contents of file "$WORKSPACE/packages/js/prebuilds/linux-x64/libonce.so" should equal 'library'
-    The contents of file "$WORKSPACE/packages/ruby/prebuilds/linux-x64/libonce.so" should equal 'library'
+    The contents of file "$WORKSPACE/packages/js/prebuilds/linux-x64/libstruo.so" should equal 'library'
+    The contents of file "$WORKSPACE/packages/ruby/prebuilds/linux-x64/libstruo.so" should equal 'library'
   End
 
   It 'rejects unsupported SDK package targets'
@@ -203,7 +203,7 @@ LOCK
     write_stub cargo \
       '#!/usr/bin/env bash' \
       'mkdir -p target/unknown-target/release' \
-      'printf library > target/unknown-target/release/libonce.so'
+      'printf library > target/unknown-target/release/libstruo.so'
     cd "$WORKSPACE"
 
     When call "$REPO_ROOT/mise/tasks/release/package-sdk-libs.sh" --target unknown-target
@@ -283,8 +283,8 @@ LOCK
     mkdir -p \
       "$WORKSPACE/packages/js/prebuilds" \
       "$WORKSPACE/packages/ruby/prebuilds"
-    printf '{"name":"buildonce","version":"0.0.0"}\n' > "$WORKSPACE/packages/js/package.json"
-    printf 'Gem::Specification.new\n' > "$WORKSPACE/packages/ruby/once.gemspec"
+    printf '{"name":"buildstruo","version":"0.0.0"}\n' > "$WORKSPACE/packages/js/package.json"
+    printf 'Gem::Specification.new\n' > "$WORKSPACE/packages/ruby/struo.gemspec"
   }
 
   It 'skips registries that already carry the version'
@@ -299,7 +299,7 @@ LOCK
       'exit 1'
     write_stub gem \
       '#!/usr/bin/env bash' \
-      'if [ "$1" = list ]; then echo "buildonce (0.9.0, 0.1.0)"; exit 0; fi' \
+      'if [ "$1" = list ]; then echo "buildstruo (0.9.0, 0.1.0)"; exit 0; fi' \
       'echo "gem $* should not have run" >&2' \
       'exit 1'
     cd "$WORKSPACE"
@@ -321,7 +321,7 @@ LOCK
     # 0.54.0 must not be read as published just because 0.5.4 is.
     write_stub gem \
       '#!/usr/bin/env bash' \
-      'if [ "$1" = list ]; then echo "buildonce (0.5.4, 0.1.0)"; exit 0; fi' \
+      'if [ "$1" = list ]; then echo "buildstruo (0.5.4, 0.1.0)"; exit 0; fi' \
       'if [ "$1" = push ]; then echo "pushed $2"; exit 0; fi' \
       'exit 0'
     cd "$WORKSPACE"
@@ -329,7 +329,7 @@ LOCK
     When call "$REPO_ROOT/mise/tasks/release/publish-sdks.sh" --version 0.54.0
     The status should be success
     The stdout should not include 'already on RubyGems'
-    The stdout should include 'pushed buildonce-0.54.0.gem'
+    The stdout should include 'pushed buildstruo-0.54.0.gem'
   End
 
   It 'publishes to RubyGems even when npm publishing fails'
@@ -343,15 +343,15 @@ LOCK
       'exit 0'
     write_stub gem \
       '#!/usr/bin/env bash' \
-      'if [ "$1" = list ]; then echo "buildonce (0.1.0)"; exit 0; fi' \
+      'if [ "$1" = list ]; then echo "buildstruo (0.1.0)"; exit 0; fi' \
       'if [ "$1" = push ]; then echo "pushed $2"; exit 0; fi' \
       'exit 0'
     cd "$WORKSPACE"
 
     When call "$REPO_ROOT/mise/tasks/release/publish-sdks.sh" --version 0.9.0
     The status should be failure
-    The stdout should include 'pushed buildonce-0.9.0.gem'
-    The stderr should include 'failed to publish buildonce 0.9.0 to: npm'
+    The stdout should include 'pushed buildstruo-0.9.0.gem'
+    The stderr should include 'failed to publish buildstruo 0.9.0 to: npm'
   End
 
   It 'rejects npm clients too old for trusted publishing'
@@ -364,7 +364,7 @@ LOCK
       'exit 0'
     write_stub gem \
       '#!/usr/bin/env bash' \
-      'if [ "$1" = list ]; then echo "buildonce (0.9.0)"; exit 0; fi' \
+      'if [ "$1" = list ]; then echo "buildstruo (0.9.0)"; exit 0; fi' \
       'exit 0'
     cd "$WORKSPACE"
 

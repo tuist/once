@@ -12,7 +12,7 @@ attributes as [`kotlin_jvm_library`](/reference/prelude/kotlin_jvm_library).
 
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `main_class` | string | yes |  | Fully qualified Kotlin main class, such as `dev.once.hello.MainKt` |
+| `main_class` | string | yes |  | Fully qualified Kotlin main class, such as `dev.struo.hello.MainKt` |
 | `args` | list&lt;string&gt; | no | `[]` | Arguments passed to the main class |
 | `jvm_flags` | list&lt;string&gt; | no | `[]` | Flags passed to the Java virtual machine before the classpath |
 | `run_env` | map&lt;string,string&gt; | no | `{}` | Environment variables passed to the Java runtime |
@@ -48,9 +48,9 @@ The target emits `kotlin_jvm_binary`.
 
 | Output | Location |
 | --- | --- |
-| Java archive | `.once/out/<target>/<output>` |
-| Run log | `.once/out/<target>/run/stdout.log` |
-| Run result | `.once/out/<target>/run/run.json` |
+| Java archive | `.struo/out/<target>/<output>` |
+| Run log | `.struo/out/<target>/run/stdout.log` |
+| Run result | `.struo/out/<target>/run/run.json` |
 
 ## Example
 
@@ -65,8 +65,8 @@ deps = ["./Greeting"]
 runtime_deps = ["./RuntimeSupport"]
 
 [target.attrs]
-main_class = "dev.once.hello.MainKt"
-args = ["Once"]
+main_class = "dev.struo.hello.MainKt"
+args = ["Struo"]
 ```
 
 ## Limitations

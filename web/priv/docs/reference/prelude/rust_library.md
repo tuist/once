@@ -14,7 +14,7 @@ native-library provider fields. Use
 [`rust_mobile_library`](/reference/prelude/rust_mobile_library) when one
 Rust target should emit both the Apple and Android native outputs.
 Use [`rust_test`](/reference/prelude/rust_test) when a Rust crate should run
-tests through Once.
+tests through Struo.
 
 ## Attributes
 
@@ -29,7 +29,7 @@ tests through Once.
 | `env` | map&lt;string, string&gt; | no | `{}` | Environment variables for rustc, matching Buck2's `env` attribute |
 | `rustc_env` | map&lt;string, string&gt; | no | `{}` | Bazel-compatible rustc environment variables |
 | `rustc_env_files` | list&lt;string&gt; | no | `[]` | Files with `NAME=value` entries merged into the rustc environment before `env` and `rustc_env` |
-| `rustc_flags` | list&lt;string&gt; | no | `[]` | Additional `rustc` flags appended after Once-managed flags |
+| `rustc_flags` | list&lt;string&gt; | no | `[]` | Additional `rustc` flags appended after Struo-managed flags |
 | `cap_lints` | string | no | empty | Optional rustc lint cap passed as `--cap-lints`; generated Cargo dependencies use `allow` |
 | `linker` | string | no | empty | Optional linker path passed as `-C linker=...`; defaults to `cc` for host Unix binary-like targets and to the Android Native Development Kit clang wrapper for Android targets when available |
 | `linker_flags` | list&lt;string&gt; | no | `[]` | Additional linker flags lowered to `-C link-arg=...` |
@@ -99,9 +99,9 @@ use.
 
 | Output | Location |
 | --- | --- |
-| Rust library | `.once/out/<target>/lib<crate_name>-<metadata>.rlib` |
-| Static library | `.once/out/<target>/lib<crate_name>.a` or `.lib` |
-| Dynamic library | `.once/out/<target>/lib<crate_name>.dylib` or `.so`, `<crate_name>.dll` on Windows, and `<crate_name>.wasm` on WebAssembly targets |
+| Rust library | `.struo/out/<target>/lib<crate_name>-<metadata>.rlib` |
+| Static library | `.struo/out/<target>/lib<crate_name>.a` or `.lib` |
+| Dynamic library | `.struo/out/<target>/lib<crate_name>.dylib` or `.so`, `<crate_name>.dll` on Windows, and `<crate_name>.wasm` on WebAssembly targets |
 
 ## Example
 

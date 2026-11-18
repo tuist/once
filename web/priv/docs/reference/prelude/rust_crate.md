@@ -5,7 +5,7 @@ Resolved third-party Cargo package lowered into a Rust library target.
 ## Description
 
 Represents a sourced package from a resolved Cargo lockfile as a normal
-Once graph target. `rust_crate` compiles to an rlib and emits the same
+Struo graph target. `rust_crate` compiles to an rlib and emits the same
 `rust_crate` provider shape consumed by `rust_library` and
 `rust_binary` deps.
 
@@ -24,7 +24,7 @@ Once graph target. `rust_crate` compiles to an rlib and emits the same
 | `env` | map&lt;string, string&gt; | no | `{}` | Environment variables for rustc, matching Buck2's `env` attribute |
 | `rustc_env` | map&lt;string, string&gt; | no | `{}` | Bazel-compatible rustc environment variables |
 | `rustc_env_files` | list&lt;string&gt; | no | `[]` | Files with `NAME=value` entries merged into the rustc environment before `env` and `rustc_env` |
-| `rustc_flags` | list&lt;string&gt; | no | `[]` | Additional `rustc` flags appended after Once-managed flags |
+| `rustc_flags` | list&lt;string&gt; | no | `[]` | Additional `rustc` flags appended after Struo-managed flags |
 | `cap_lints` | string | no | empty | Optional rustc lint cap passed as `--cap-lints`; generated Cargo dependencies use `allow` |
 | `linker` | string | no | empty | Optional linker path passed as `-C linker=...`; defaults to `cc` for host Unix binary-like targets and to the Android NDK clang wrapper for Android targets when available |
 | `linker_flags` | list&lt;string&gt; | no | `[]` | Additional linker flags lowered to `-C link-arg=...` |
@@ -91,7 +91,7 @@ The target emits `rust_crate`.
 
 | Output | Location |
 | --- | --- |
-| Rust library | `.once/out/<target>/lib<crate_name>-<metadata>.rlib` |
+| Rust library | `.struo/out/<target>/lib<crate_name>-<metadata>.rlib` |
 
 ## Example
 

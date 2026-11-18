@@ -12,7 +12,7 @@ For a leaf project, the seed's build capability follows `mix_env`, then
 `MIX_ENV`, defaulting to the development application. For an umbrella root, it selects the detected child
 `mix_workspace` seeds. Nested projects and path dependencies preserve their
 workspace-relative layout. From an unconfigured project directory,
-`once build` and `once test` automatically select the current Mix project.
+`struo build` and `struo test` automatically select the current Mix project.
 The nearest Git repository root contains sibling path dependencies without
 requiring an extra manifest. Unrelated native integrations are not resolved by default. The same boundary
 and family scope apply to run, lint, and `--all`; an explicitly selected native
@@ -29,7 +29,7 @@ directory-sensitive resources is not reused across different checkout paths.
 Native test targets use Mix's configured test paths and aliases. They run on
 every invocation and inherit the host runtime environment so database setup
 and host tools behave like an ordinary `mix test`. Application and dependency
-compilers run through Once's build actions, not again inside the test alias.
+compilers run through Struo's build actions, not again inside the test alias.
 The resolver reports these targets through `_default_test_roots`, so targetless
 test selection includes them even when development and test applications have
 no shared dependency targets.
@@ -80,11 +80,11 @@ The target emits `mix_workspace`.
 Inspect the automatically derived graph:
 
 ```sh
-once query workspace
-once query targets
+struo query workspace
+struo query targets
 ```
 
-No `once.toml` is required. To configure the resolver explicitly, author a
+No `struo.toml` is required. To configure the resolver explicitly, author a
 target equivalent to:
 
 ```toml

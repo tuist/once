@@ -6,7 +6,7 @@ next: false
 
 Evidence is a durable record of an action outcome. It complements the cache:
 the cache stores reusable results, while evidence describes what happened when
-Once requested a result.
+Struo requested a result.
 
 ## Run And Query An Action
 
@@ -16,15 +16,15 @@ first run computes a result:
 
 ```sh
 printf 'evidence %s\n' "$(date +%s)" > message.txt
-ONCE_CACHE_PROVIDER=local ./scripts/greet.sh
+STRUO_CACHE_PROVIDER=local ./scripts/greet.sh
 ```
 
 Now inspect the newest record. The example uses
-[`jq`](https://jqlang.org/) to select the final item from Once's
+[`jq`](https://jqlang.org/) to select the final item from Struo's
 [JavaScript Object Notation](https://www.json.org/json-en.html) output:
 
 ```sh
-once --format json query evidence \
+struo --format json query evidence \
   | jq '.[-1] | {subject, status, cache, action_digest, input_digest}'
 ```
 
@@ -32,20 +32,20 @@ The record reports `passed` and `miss`. Run the unchanged script again and
 repeat the query:
 
 ```sh
-ONCE_CACHE_PROVIDER=local ./scripts/greet.sh
-once --format json query evidence \
+STRUO_CACHE_PROVIDER=local ./scripts/greet.sh
+struo --format json query evidence \
   | jq '.[-1] | {subject, status, cache, action_digest, input_digest}'
 ```
 
 The new record reports `hit` and keeps the same action and input digests. This
-shows that Once restored the previously computed result.
+shows that Struo restored the previously computed result.
 
 Change the declared input, run again, and compare the two newest records:
 
 ```sh
 printf 'evidence changed %s\n' "$(date +%s)" > message.txt
-ONCE_CACHE_PROVIDER=local ./scripts/greet.sh
-once --format json query evidence \
+STRUO_CACHE_PROVIDER=local ./scripts/greet.sh
+struo --format json query evidence \
   | jq '.[-2:] | map({status, cache, action_digest, input_digest})'
 ```
 
@@ -55,26 +55,26 @@ earlier input state.
 
 ## Filter Evidence By Subject
 
-Use [`once query evidence`](/reference/cli/query/evidence) to list all records
+Use [`struo query evidence`](/reference/cli/query/evidence) to list all records
 with human-readable output:
 
 ```sh
-once query evidence
+struo query evidence
 ```
 
 Graph actions have stable target subjects, so you can filter them by target or
 by target and capability:
 
 ```sh
-once query evidence cli
-once query evidence cli:test
+struo query evidence cli
+struo query evidence cli:test
 ```
 
-A literal `once exec` command uses its action digest as its subject. Use the
+A literal `struo exec` command uses its action digest as its subject. Use the
 structured output when you need to select or compare those command records.
 
 Tools can request the same record shape through
-[`once_query_evidence`](/reference/mcp/tools#once_query_evidence) in the
+[`struo_query_evidence`](/reference/mcp/tools#struo_query_evidence) in the
 [Model Context Protocol](https://modelcontextprotocol.io/) catalog.
 
 ## Read A Record
@@ -93,7 +93,7 @@ An action evidence record contains:
 - **Stream digests**: References to captured standard output and standard error
   when available.
 - **Output digests**: References to declared outputs when available.
-- **Creation time**: When Once wrote the record.
+- **Creation time**: When Struo wrote the record.
 
 Compare digests before applying an older result to current work. Matching input
 and action digests show that two records describe the same action state;

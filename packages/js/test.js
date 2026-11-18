@@ -4,10 +4,10 @@ const assert = require("node:assert/strict");
 const os = require("node:os");
 const fs = require("node:fs");
 const childProcess = require("node:child_process");
-const { ActionKey, Cache, OnceError, digest } = require("./lib");
+const { ActionKey, Cache, StruoError, digest } = require("./lib");
 
 async function assertRejectsOnceError(work) {
-  await assert.rejects(work, OnceError);
+  await assert.rejects(work, StruoError);
 }
 
 async function assertRejectsTypeError(work, pattern) {
@@ -19,7 +19,7 @@ async function assertRejectsTypeError(work, pattern) {
 }
 
 async function main() {
-  const tmp = fs.mkdtempSync(`${os.tmpdir()}/once-js-`);
+  const tmp = fs.mkdtempSync(`${os.tmpdir()}/struo-js-`);
   process.env.XDG_CACHE_HOME = tmp;
 
   const cache = new Cache();
@@ -97,7 +97,7 @@ async function main() {
       cwd: __dirname,
       env: {
         ...process.env,
-        ONCE_LIBRARY_PATH: "/missing/libonce.dylib",
+        STRUO_LIBRARY_PATH: "/missing/libstruo.dylib",
       },
       encoding: "utf8",
     },

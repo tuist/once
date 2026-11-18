@@ -1,12 +1,12 @@
 # Model Context Protocol Tools
 
-Every tool the [`once mcp`](/reference/cli/mcp) [Model Context Protocol](https://modelcontextprotocol.io/) server advertises in `tools/list`, with its input schema and a worked return example.
+Every tool the [`struo mcp`](/reference/cli/mcp) [Model Context Protocol](https://modelcontextprotocol.io/) server advertises in `tools/list`, with its input schema and a worked return example.
 
-## `once_query_artifacts`
+## `struo_query_artifacts`
 
 Inspect a target's portable artifact export contract without building.
 
-Matches `once query artifacts <target>`. Returns capability support, provider declaration shape, metadata bounds, and publication commands. Unknown versioned interfaces are preserved as data, never executed automatically.
+Matches `struo query artifacts <target>`. Returns capability support, provider declaration shape, metadata bounds, and publication commands. Unknown versioned interfaces are preserved as data, never executed automatically.
 
 **Input schema**
 
@@ -27,14 +27,14 @@ Matches `once query artifacts <target>`. Returns capability support, provider de
 **Example return**
 
 ```json
-{"schema":"once.artifact_contract.v1","target":"site","supported":true}
+{"schema":"struo.artifact_contract.v1","target":"site","supported":true}
 ```
 
-## `once_export_artifacts`
+## `struo_export_artifacts`
 
 Build and export a self-contained content-addressed artifact set.
 
-Requires `once mcp --allow-run`. Matches `once artifact export <target>`. Packages declared outputs using bounded streaming copies. Does not publish remotely or start compute. The output option selects the parent directory; the package directory is named by immutable root digest. config accepts KEY=VALUE configuration overrides.
+Requires `struo mcp --allow-run`. Matches `struo artifact export <target>`. Packages declared outputs using bounded streaming copies. Does not publish remotely or start compute. The output option selects the parent directory; the package directory is named by immutable root digest. config accepts KEY=VALUE configuration overrides.
 
 **Input schema**
 
@@ -64,14 +64,14 @@ Requires `once mcp --allow-run`. Matches `once artifact export <target>`. Packag
 **Example return**
 
 ```json
-{"schema":"once.artifact_export.v1","directory":"/work/project/.once/artifacts/<digest>"}
+{"schema":"struo.artifact_export.v1","directory":"/work/project/.struo/artifacts/<digest>"}
 ```
 
-## `once_publish_artifacts`
+## `struo_publish_artifacts`
 
 Explicitly publish exported artifacts through named infrastructure.
 
-Requires `once mcp --allow-run` and authorization to publish to the selected infrastructure. Matches `once artifact publish <target>`. Defaults to [infrastructure.artifacts]; provider overrides its name. local retains arbitrary artifact types. Check the selected provider's supported formats and retry guarantees before publishing or retrying. A cache hit never skips publication. Publishing does not run the published content. config accepts KEY=VALUE overrides; track is publication context, not content identity.
+Requires `struo mcp --allow-run` and authorization to publish to the selected infrastructure. Matches `struo artifact publish <target>`. Defaults to [infrastructure.artifacts]; provider overrides its name. local retains arbitrary artifact types. Check the selected provider's supported formats and retry guarantees before publishing or retrying. A cache hit never skips publication. Publishing does not run the published content. config accepts KEY=VALUE overrides; track is publication context, not content identity.
 
 **Input schema**
 
@@ -104,14 +104,14 @@ Requires `once mcp --allow-run` and authorization to publish to the selected inf
 **Example return**
 
 ```json
-{"schema":"once.artifact_publication.v1","provider":"local","target":"site","url":"file:///work/project/.once/artifacts/<digest>/"}
+{"schema":"struo.artifact_publication.v1","provider":"local","target":"site","url":"file:///work/project/.struo/artifacts/<digest>/"}
 ```
 
-## `once_query_workspace`
+## `struo_query_workspace`
 
 Return the configured workspace root, root manifest state, graph loading state, and next calls.
 
-Call this first when filesystem tools and the Once server may have different working directories. The result identifies the exact workspace every other Once tool uses, reports the target operating system, architecture, and ordered selection tokens, reports whether the root manifest exists, lists loaded packages and target count, preserves graph loading errors as data, and recommends the next discovery or validation call. The matching command-line operation is `once query workspace --format json`.
+Call this first when filesystem tools and the Struo server may have different working directories. The result identifies the exact workspace every other Struo tool uses, reports the target operating system, architecture, and ordered selection tokens, reports whether the root manifest exists, lists loaded packages and target count, preserves graph loading errors as data, and recommends the next discovery or validation call. The matching command-line operation is `struo query workspace --format json`.
 
 **Input schema**
 
@@ -132,21 +132,21 @@ Call this first when filesystem tools and the Once server may have different wor
     "arch": "aarch64",
     "tokens": ["linux-arm64", "linux-aarch64", "linux", "arm64", "aarch64", "default"]
   },
-  "root_manifest": { "path": "/work/project/once.toml", "exists": false },
+  "root_manifest": { "path": "/work/project/struo.toml", "exists": false },
   "target_count": 0,
   "packages": [],
   "empty": true,
   "suggested_calls": [
-    { "tool": "once_list_target_kinds", "arguments": {}, "reason": "Discover a target kind and starter for this empty workspace." }
+    { "tool": "struo_list_target_kinds", "arguments": {}, "reason": "Discover a target kind and starter for this empty workspace." }
   ]
 }
 ```
 
-## `once_list_triggers`
+## `struo_list_triggers`
 
 List root trigger declarations and their separately activated snapshot.
 
-Reads data-only root manifest metadata and activation state without loading the graph or evaluating project modules. Candidate declaration edits do not replace the activated contract. Matches `once query triggers`.
+Reads data-only root manifest metadata and activation state without loading the graph or evaluating project modules. Candidate declaration edits do not replace the activated contract. Matches `struo query triggers`.
 
 **Input schema**
 
@@ -160,14 +160,14 @@ Reads data-only root manifest metadata and activation state without loading the 
 **Example return**
 
 ```json
-{"schema":"once.triggers.v1","triggers":[],"diagnostics":[],"activation":null}
+{"schema":"struo.triggers.v1","triggers":[],"diagnostics":[],"activation":null}
 ```
 
-## `once_validate_trigger`
+## `struo_validate_trigger`
 
 Validate one data-only trigger declaration with exact refs and configured invocations.
 
-Validates `{ trigger: { id, on: { event, refs }, invoke: [{ target, capability, configuration: { os, arch, tokens } }] } }` without graph loading or project-module evaluation. Platform configuration is explicit, including an empty tokens list when no additional tokens are needed. This does not prove that a configured target exists or executes successfully. Matches `once query validate-trigger --file <path>`; the CLI also accepts stdin.
+Validates `{ trigger: { id, on: { event, refs }, invoke: [{ target, capability, configuration: { os, arch, tokens } }] } }` without graph loading or project-module evaluation. Platform configuration is explicit, including an empty tokens list when no additional tokens are needed. This does not prove that a configured target exists or executes successfully. Matches `struo query validate-trigger --file <path>`; the CLI also accepts stdin.
 
 **Input schema**
 
@@ -282,11 +282,11 @@ Validates `{ trigger: { id, on: { event, refs }, invoke: [{ target, capability, 
 {"valid":true,"diagnostics":[]}
 ```
 
-## `once_edit_triggers`
+## `struo_edit_triggers`
 
 Atomically create, replace, or delete root trigger declarations without activating them.
 
-Requires `once mcp --allow-run`. Applies an ordered operation batch to the root once.toml only. An update replaces the complete declaration identified by id. A rejected batch leaves the manifest unchanged; no edit changes the activated snapshot. Matches `once edit triggers --file <path>`; the CLI also accepts stdin.
+Requires `struo mcp --allow-run`. Applies an ordered operation batch to the root struo.toml only. An update replaces the complete declaration identified by id. A rejected batch leaves the manifest unchanged; no edit changes the activated snapshot. Matches `struo edit triggers --file <path>`; the CLI also accepts stdin.
 
 **Input schema**
 
@@ -548,14 +548,14 @@ Requires `once mcp --allow-run`. Applies an ordered operation batch to the root 
 **Example return**
 
 ```json
-{"applied":true,"changed":true,"path":"/work/project/once.toml"}
+{"applied":true,"changed":true,"path":"/work/project/struo.toml"}
 ```
 
-## `once_activate_triggers`
+## `struo_activate_triggers`
 
 Activate root trigger declarations from an exact committed definition revision.
 
-Requires `once mcp --allow-run`. Replaces the activated snapshot separately from candidate edits, using declarations from the full source revision supplied by the caller. Activation is local state, not authenticated event provenance or external required-check authorization. Matches `once edit activate-triggers --revision <full-sha>`.
+Requires `struo mcp --allow-run`. Replaces the activated snapshot separately from candidate edits, using declarations from the full source revision supplied by the caller. Activation is local state, not authenticated event provenance or external required-check authorization. Matches `struo edit activate-triggers --revision <full-sha>`.
 
 **Input schema**
 
@@ -580,11 +580,11 @@ Requires `once mcp --allow-run`. Replaces the activated snapshot separately from
 {"activated":true}
 ```
 
-## `once_plan_trigger`
+## `struo_plan_trigger`
 
 Simulate an event against one activated trigger without executing work.
 
-Matches the exact ref against the activated declaration and returns its exact target, capability, and explicit configuration selections. This is data-only simulation, not authenticated source-host provenance, graph analysis, or status publication. Does not evaluate project modules. Matches `once query trigger-plan <id> --file <event-path>`.
+Matches the exact ref against the activated declaration and returns its exact target, capability, and explicit configuration selections. This is data-only simulation, not authenticated source-host provenance, graph analysis, or status publication. Does not evaluate project modules. Matches `struo query trigger-plan <id> --file <event-path>`.
 
 **Input schema**
 
@@ -630,14 +630,14 @@ Matches the exact ref against the activated declaration and returns its exact ta
 **Example return**
 
 ```json
-{"schema":"once.trigger_selection.v1","mode":"simulation","contract_generation":"019b0000-0000-7000-8000-000000000000","definition_revision":"0123456789012345678901234567890123456789","observation":{"event":"vcs.ref_changed","ref":"refs/heads/main","revision":"0123456789012345678901234567890123456789"},"trigger":{"id":"verify-main","on":{"event":"vcs.ref_changed","refs":["refs/heads/main"]},"invoke":[{"target":"checks/core","capability":"test","configuration":{"os":"linux","arch":"x86_64","tokens":[]}}]}}
+{"schema":"struo.trigger_selection.v1","mode":"simulation","contract_generation":"019b0000-0000-7000-8000-000000000000","definition_revision":"0123456789012345678901234567890123456789","observation":{"event":"vcs.ref_changed","ref":"refs/heads/main","revision":"0123456789012345678901234567890123456789"},"trigger":{"id":"verify-main","on":{"event":"vcs.ref_changed","refs":["refs/heads/main"]},"invoke":[{"target":"checks/core","capability":"test","configuration":{"os":"linux","arch":"x86_64","tokens":[]}}]}}
 ```
 
-## `once_run_trigger`
+## `struo_run_trigger`
 
 Execute an activated trigger on the existing CI worker within one resource budget.
 
-Requires `once mcp --allow-run`. Executes the activated exact configured invocations using the supplied local event document and the server's memory budget. The event does not authenticate origin or authorize privileges. The CI worker remains responsible for isolation, lifecycle, credentials, and external checks. No native webhook, controller, or status publication is created. A failed aggregate returns isError while retaining the structured result. Matches `once run --trigger <id> --event <event-path>`.
+Requires `struo mcp --allow-run`. Executes the activated exact configured invocations using the supplied local event document and the server's memory budget. The event does not authenticate origin or authorize privileges. The CI worker remains responsible for isolation, lifecycle, credentials, and external checks. No native webhook, controller, or status publication is created. A failed aggregate returns isError while retaining the structured result. Matches `struo run --trigger <id> --event <event-path>`.
 
 **Input schema**
 
@@ -683,14 +683,14 @@ Requires `once mcp --allow-run`. Executes the activated exact configured invocat
 **Example return**
 
 ```json
-{"schema":"once.trigger_run.v1","mode":"simulation","status":"failed","error":"configured trigger target is missing"}
+{"schema":"struo.trigger_run.v1","mode":"simulation","status":"failed","error":"configured trigger target is missing"}
 ```
 
-## `once_query_targets`
+## `struo_query_targets`
 
 List every declared target in the workspace, optionally filtered by target kind.
 
-Returns the same record shape as `once query targets --format json`: one entry per declared target with its canonical id, package, name, target kind, visibility rules, default dependencies, named dependency roles, and exposed capabilities. The optional `kind` argument narrows results to one target kind.
+Returns the same record shape as `struo query targets --format json`: one entry per declared target with its canonical id, package, name, target kind, visibility rules, default dependencies, named dependency roles, and exposed capabilities. The optional `kind` argument narrows results to one target kind.
 
 **Input schema**
 
@@ -700,7 +700,7 @@ Returns the same record shape as `once query targets --format json`: one entry p
   "properties": {
     "kind": {
       "type": "string",
-      "description": "Restrict results to a target kind discovered through `once_list_target_kinds`."
+      "description": "Restrict results to a target kind discovered through `struo_list_target_kinds`."
     }
   }
 }
@@ -720,11 +720,11 @@ Returns the same record shape as `once query targets --format json`: one entry p
 ]
 ```
 
-## `once_query_capabilities`
+## `struo_query_capabilities`
 
 Return the capabilities (`build`, `lint`, `run`, `test`) a target exposes, with their output groups and required inputs.
 
-Returns the same record `once query capabilities <target> --format json` emits: the target's id and kind plus one entry per capability with its output groups (what running the capability produces) and required outputs (what it depends on having built).
+Returns the same record `struo query capabilities <target> --format json` emits: the target's id and kind plus one entry per capability with its output groups (what running the capability produces) and required outputs (what it depends on having built).
 
 **Input schema**
 
@@ -758,11 +758,11 @@ Returns the same record `once query capabilities <target> --format json` emits: 
 }
 ```
 
-## `once_query_schema`
+## `struo_query_schema`
 
 Return the typed contract for a target kind: attributes, dep edges, providers, capabilities, source references, and runnable starters.
 
-Returns the target kind schema (the typed contract a target of that kind must match) as `once query schema <kind> --format json` would. The record carries the target kind's documentation, attribute list with types and required, configurable, implemented, and allowed-value fields, expected dep providers, emitted providers, exposed capabilities, required tools, external source concepts that can guide partial adoption, and a lightweight list of runnable starter examples. Attributes marked `implemented: false` are discoverable compatibility fields that validation rejects until their target kind gives them behavior. Use `once_materialize_example` to create an unchanged starter without loading its contents into model context, or `once_query_example` when the caller needs to inspect and adapt the files.
+Returns the target kind schema (the typed contract a target of that kind must match) as `struo query schema <kind> --format json` would. The record carries the target kind's documentation, attribute list with types and required, configurable, implemented, and allowed-value fields, expected dep providers, emitted providers, exposed capabilities, required tools, external source concepts that can guide partial adoption, and a lightweight list of runnable starter examples. Attributes marked `implemented: false` are discoverable compatibility fields that validation rejects until their target kind gives them behavior. Use `struo_materialize_example` to create an unchanged starter without loading its contents into model context, or `struo_query_example` when the caller needs to inspect and adapt the files.
 
 **Input schema**
 
@@ -772,7 +772,7 @@ Returns the target kind schema (the typed contract a target of that kind must ma
   "properties": {
     "kind": {
       "type": "string",
-      "description": "Target kind to introspect. Discover names with `once_list_target_kinds`."
+      "description": "Target kind to introspect. Discover names with `struo_list_target_kinds`."
     }
   },
   "required": [
@@ -808,11 +808,11 @@ Returns the target kind schema (the typed contract a target of that kind must ma
 }
 ```
 
-## `once_query_example`
+## `struo_query_example`
 
 Return the complete file bundle for one target kind starter example.
 
-Returns the same record as `once query example <kind> <slug> --format json`: the selected example's slug, name, selection hint, and every file a caller can inspect or adapt. Text files use `contents`; binary files use `contents_base64`. Example descriptors are discovered through `once_list_target_kinds` or `once_query_schema`. For direct setup, prefer `once_materialize_example`, which writes the bundle without sending large dependency payloads through model context.
+Returns the same record as `struo query example <kind> <slug> --format json`: the selected example's slug, name, selection hint, and every file a caller can inspect or adapt. Text files use `contents`; binary files use `contents_base64`. Example descriptors are discovered through `struo_list_target_kinds` or `struo_query_schema`. For direct setup, prefer `struo_materialize_example`, which writes the bundle without sending large dependency payloads through model context.
 
 **Input schema**
 
@@ -844,16 +844,16 @@ Returns the same record as `once query example <kind> <slug> --format json`: the
   "name": "Minimal library",
   "use_when": "...",
   "files": [
-    { "path": "packages/core/once.toml", "contents": "[[target]]\nname = \"Core\"\nkind = \"library\"\n..." }
+    { "path": "packages/core/struo.toml", "contents": "[[target]]\nname = \"Core\"\nkind = \"library\"\n..." }
   ]
 }
 ```
 
-## `once_materialize_example`
+## `struo_materialize_example`
 
 Materialize a complete target kind starter directly inside the configured workspace.
 
-This collision-safe setup tool is available only when the server starts with `once mcp --allow-run`. It copies the selected example without returning its file contents through model context. Existing files with identical contents are kept, making retries idempotent. If any path conflicts, Once reports every conflict and writes nothing. A successful result includes created and unchanged paths, canonical targets, complete-workspace validation, and exact suggested tool calls for targets of the requested kind. The matching command-line operation is `once edit materialize-example <kind> <slug> --destination <dir>`.
+This collision-safe setup tool is available only when the server starts with `struo mcp --allow-run`. It copies the selected example without returning its file contents through model context. Existing files with identical contents are kept, making retries idempotent. If any path conflicts, Struo reports every conflict and writes nothing. A successful result includes created and unchanged paths, canonical targets, complete-workspace validation, and exact suggested tool calls for targets of the requested kind. The matching command-line operation is `struo edit materialize-example <kind> <slug> --destination <dir>`.
 
 **Input schema**
 
@@ -867,7 +867,7 @@ This collision-safe setup tool is available only when the server starts with `on
     },
     "slug": {
       "type": "string",
-      "description": "Example slug from `once_list_target_kinds` or `once_query_schema`."
+      "description": "Example slug from `struo_list_target_kinds` or `struo_query_schema`."
     },
     "destination": {
       "type": "string",
@@ -890,7 +890,7 @@ This collision-safe setup tool is available only when the server starts with `on
   "kind": "library",
   "slug": "library-minimal",
   "destination": "",
-  "created_files": ["packages/core/once.toml", "packages/core/src/core.txt"],
+  "created_files": ["packages/core/struo.toml", "packages/core/src/core.txt"],
   "unchanged_files": [],
   "conflicts": [],
   "targets": [
@@ -898,17 +898,17 @@ This collision-safe setup tool is available only when the server starts with `on
   ],
   "workspace_validation": { "valid": true, "target_count": 1, "diagnostics": [] },
   "suggested_calls": [
-    { "tool": "once_validate_workspace", "arguments": {}, "reason": "Confirm the complete workspace after any customization." },
-    { "tool": "once_build_target", "arguments": { "target": "packages/core/Core" }, "reason": "Build the materialized `library` target." }
+    { "tool": "struo_validate_workspace", "arguments": {}, "reason": "Confirm the complete workspace after any customization." },
+    { "tool": "struo_build_target", "arguments": { "target": "packages/core/Core" }, "reason": "Build the materialized `library` target." }
   ]
 }
 ```
 
-## `once_list_target_kinds`
+## `struo_list_target_kinds`
 
 List target kinds with their docs, external source references, and example slugs, optionally filtered by ecosystem or intent.
 
-Lightweight discovery entry point. Returns matching target kinds with documentation, external build-system concepts they can partially replace, and bundled starter examples. When the request names one or more ecosystems or runner families, include all of their names in the short `query` copied from the request. Once combines those specific matches while ignoring generic intent words, which lets a harness discover every native test integration in a mixed repository with one call. Omit the query when the intent is unknown. Call `once_query_schema` for the full contract of each chosen target kind. The matching command-line operation is `once query target-kinds --query <text> --format json`.
+Lightweight discovery entry point. Returns matching target kinds with documentation, external build-system concepts they can partially replace, and bundled starter examples. When the request names one or more ecosystems or runner families, include all of their names in the short `query` copied from the request. Struo combines those specific matches while ignoring generic intent words, which lets a harness discover every native test integration in a mixed repository with one call. Omit the query when the intent is unknown. Call `struo_query_schema` for the full contract of each chosen target kind. The matching command-line operation is `struo query target-kinds --query <text> --format json`.
 
 **Input schema**
 
@@ -943,11 +943,11 @@ Lightweight discovery entry point. Returns matching target kinds with documentat
 ]
 ```
 
-## `once_query_module_contract`
+## `struo_query_module_contract`
 
 Return the complete project-module authoring contract, primitives, invariants, capability starters, and normalized result examples.
 
-Use this when no discovered target kind covers an external rule or plugin. The result contains the exact Starlark declaration helpers, schema invariants, implementation context fields, generic host-analysis and action primitives, module registration snippet, maintenance loop, and runnable generic, lint, and test starters with normalized result examples. A coding harness can use it to author and maintain a project-local target kind without waiting for a built-in integration. The matching command-line operation is `once query module-contract --format json`.
+Use this when no discovered target kind covers an external rule or plugin. The result contains the exact Starlark declaration helpers, schema invariants, implementation context fields, generic host-analysis and action primitives, module registration snippet, maintenance loop, and runnable generic, lint, and test starters with normalized result examples. A coding harness can use it to author and maintain a project-local target kind without waiting for a built-in integration. The matching command-line operation is `struo query module-contract --format json`.
 
 **Input schema**
 
@@ -978,18 +978,18 @@ Use this when no discovered target kind covers an external rule or plugin. The r
   "lint_target_starter": "[[target]]\nname = \"lint\"\nkind = \"scripted_lint\"\n...",
   "lint_adapter_starter": "import argparse\nimport json\n...",
   "normalized_lint_result_example": {
-    "schema": "once.lint_results.v1",
+    "schema": "struo.lint_results.v1",
     "status": "completed"
   },
   "test_starter": "def _scripted_test_impl(ctx): ..."
 }
 ```
 
-## `once_fetch_external_source`
+## `struo_fetch_external_source`
 
 Fetch bounded UTF-8 source code, metadata, or documentation from a public HTTPS address.
 
-Fetches an authoritative external rule, plugin, registry record, or build-system reference for a coding harness to inspect before generating a local Once target kind. Only public HTTPS addresses are accepted, redirects are not followed, and response content is bounded to one mebibyte. The result includes the content, media type, digest, byte count, and truncation state. The matching command-line operation is `once query external-source <url> --format json`.
+Fetches an authoritative external rule, plugin, registry record, or build-system reference for a coding harness to inspect before generating a local Struo target kind. Only public HTTPS addresses are accepted, redirects are not followed, and response content is bounded to one mebibyte. The result includes the content, media type, digest, byte count, and truncation state. The matching command-line operation is `struo query external-source <url> --format json`.
 
 **Input schema**
 
@@ -1028,11 +1028,11 @@ Fetches an authoritative external rule, plugin, registry record, or build-system
 }
 ```
 
-## `once_validate_module`
+## `struo_validate_module`
 
 Validate a project-local Starlark module and return its target kind contracts before registration or execution.
 
-Reads one workspace-relative module file, evaluates it with the public Once declarations and generic primitives, and returns either its discovered target kind schemas or a structured repair diagnostic. Use it after a harness writes or updates an external-rule adaptation and before registering targets that depend on it. The matching command-line operation is `once query validate-module <path> --format json`.
+Reads one workspace-relative module file, evaluates it with the public Struo declarations and generic primitives, and returns either its discovered target kind schemas or a structured repair diagnostic. Use it after a harness writes or updates an external-rule adaptation and before registering targets that depend on it. The matching command-line operation is `struo query validate-module <path> --format json`.
 
 **Input schema**
 
@@ -1064,11 +1064,11 @@ Reads one workspace-relative module file, evaluates it with the public Once decl
 }
 ```
 
-## `once_get_target`
+## `struo_get_target`
 
 Return one resolved target with its sources, dependency roles, typed attributes, capabilities, and providers.
 
-Returns the same `GraphTarget` record `once_query_targets` emits, scoped to one target id. Includes default dependencies in `deps`, named roles in `dependency_edges`, typed attribute values, exposed capabilities, emitted providers, and manifest diagnostics. Use this before editing a target to learn its current shape.
+Returns the same `GraphTarget` record `struo_query_targets` emits, scoped to one target id. Includes default dependencies in `deps`, named roles in `dependency_edges`, typed attribute values, exposed capabilities, emitted providers, and manifest diagnostics. Use this before editing a target to learn its current shape.
 
 **Input schema**
 
@@ -1103,11 +1103,11 @@ Returns the same `GraphTarget` record `once_query_targets` emits, scoped to one 
 }
 ```
 
-## `once_query_tests`
+## `struo_query_tests`
 
-List targets that expose Once's generic test capability.
+List targets that expose Struo's generic test capability.
 
-Returns every target with a `test` capability, including its target kind, dependencies, runner type when the target kind exposes `once_test_info`, labels, and normalized result path. Use this as the agent test discovery entry point before running or filtering tests.
+Returns every target with a `test` capability, including its target kind, dependencies, runner type when the target kind exposes `struo_test_info`, labels, and normalized result path. Use this as the agent test discovery entry point before running or filtering tests.
 
 **Input schema**
 
@@ -1128,12 +1128,12 @@ Returns every target with a `test` capability, including its target kind, depend
     "deps": [],
     "runner": "unit",
     "labels": ["fast"],
-    "results_path": ".once/out/tests/unit/test/test_results.json"
+    "results_path": ".struo/out/tests/unit/test/test_results.json"
   }
 ]
 ```
 
-## `once_query_affected_tests`
+## `struo_query_affected_tests`
 
 Return test targets likely affected by a set of changed workspace paths.
 
@@ -1168,11 +1168,11 @@ Maps changed paths to test targets using graph relationships, declared inputs, a
 ]
 ```
 
-## `once_query_test_plan`
+## `struo_query_test_plan`
 
 Export a replayable test plan with complete discovery and input bindings.
 
-Returns a `once.portable_test_plan.v1` document with selection reasons, stable batches, complete discovery inventories, and input/configuration bindings. Every exported plan can be replayed on a fresh worker using `once test --plan <file> --batch <id>` without copying private state or reconstructing runner filters. Select targets with either target or changed_paths, never both. Plans always cover complete selected targets; choose batches at execution, not during export. Missing or stale discovery produces a whole-target fallback. Run targets completely with once_run_tests, then query again for automatic file or case batches. Worker counts and placement are not part of batch identity. The matching command is `once query test-plan --format json`.
+Returns a `struo.portable_test_plan.v1` document with selection reasons, stable batches, complete discovery inventories, and input/configuration bindings. Every exported plan can be replayed on a fresh worker using `struo test --plan <file> --batch <id>` without copying private state or reconstructing runner filters. Select targets with either target or changed_paths, never both. Plans always cover complete selected targets; choose batches at execution, not during export. Missing or stale discovery produces a whole-target fallback. Run targets completely with struo_run_tests, then query again for automatic file or case batches. Worker counts and placement are not part of batch identity. The matching command is `struo query test-plan --format json`.
 
 **Input schema**
 
@@ -1200,13 +1200,13 @@ Returns a `once.portable_test_plan.v1` document with selection reasons, stable b
 
 ```json
 {
-  "schema": "once.portable_test_plan.v1",
+  "schema": "struo.portable_test_plan.v1",
   "id": "<bound plan digest>",
   "plan": {
-    "schema": "once.test_plan.v1",
+    "schema": "struo.test_plan.v1",
     "id": "<scope digest>",
     "selection": {
-      "schema": "once.test_selection.v1",
+      "schema": "struo.test_selection.v1",
       "policy": { "mode": "affected", "safety": "conservative", "evidence": "declared_graph_and_package_ownership" },
       "changed_paths": ["src/lib.src"],
       "unmatched_paths": [],
@@ -1218,11 +1218,11 @@ Returns a `once.portable_test_plan.v1` document with selection reasons, stable b
 }
 ```
 
-## `once_run_tests`
+## `struo_run_tests`
 
 Run test targets by id, or run tests affected by changed workspace paths.
 
-Schedules selected test scopes through a shared local queue. Batches with longer historical uncached durations are queued first, and idle workers dynamically take the next batch. Explicit `target` or `targets` produce an exact plan; otherwise `changed_paths` drive conservative graph selection. With exactly one target, `test_unit` runs a stable unit returned by `once_query_test_manifest` when the target kind declares filtering support. With exactly one target, `test_batch` reruns one batch ID from the target's current plan without splitting its fixture scope. It conflicts with `test_unit` and changed paths. Unknown or obsolete IDs fail before execution and suggest current batches. The matching command is `once test <target> --test-batch <id> --format json`. `jobs` caps workers without changing plan or batch identity. Set `summary_only` for compact normalized totals without case-level records. The result's `plan` is the work that just executed. Its `next_plan` is recomputed after complete runs refresh discovery, so use that field to assess file or case batching for the next run. The result also includes actual schedule attempts and normalized test results. Failed tests are returned as normal tool content with `success: false` rather than a tool protocol error, so agents can inspect failures and iterate. The matching command-line operations are `once test --changed-path <path> --jobs <count> --format json` and `once test <target> --test-unit <unit> --format json`.
+Schedules selected test scopes through a shared local queue. Batches with longer historical uncached durations are queued first, and idle workers dynamically take the next batch. Explicit `target` or `targets` produce an exact plan; otherwise `changed_paths` drive conservative graph selection. With exactly one target, `test_unit` runs a stable unit returned by `struo_query_test_manifest` when the target kind declares filtering support. With exactly one target, `test_batch` reruns one batch ID from the target's current plan without splitting its fixture scope. It conflicts with `test_unit` and changed paths. Unknown or obsolete IDs fail before execution and suggest current batches. The matching command is `struo test <target> --test-batch <id> --format json`. `jobs` caps workers without changing plan or batch identity. Set `summary_only` for compact normalized totals without case-level records. The result's `plan` is the work that just executed. Its `next_plan` is recomputed after complete runs refresh discovery, so use that field to assess file or case batching for the next run. The result also includes actual schedule attempts and normalized test results. Failed tests are returned as normal tool content with `success: false` rather than a tool protocol error, so agents can inspect failures and iterate. The matching command-line operations are `struo test --changed-path <path> --jobs <count> --format json` and `struo test <target> --test-unit <unit> --format json`.
 
 **Input schema**
 
@@ -1256,15 +1256,15 @@ Schedules selected test scopes through a shared local queue. Batches with longer
     },
     "test_unit": {
       "type": "string",
-      "description": "Run one stable unit identifier returned by once_query_test_manifest. Requires exactly one explicit target."
+      "description": "Run one stable unit identifier returned by struo_query_test_manifest. Requires exactly one explicit target."
     },
     "test_batch": {
       "type": "string",
-      "description": "Run one batch ID from the target's current once_query_test_plan. Requires exactly one explicit target; conflicts with test_unit and changed_paths."
+      "description": "Run one batch ID from the target's current struo_query_test_plan. Requires exactly one explicit target; conflicts with test_unit and changed_paths."
     },
     "summary_only": {
       "type": "boolean",
-      "description": "Replace case-level normalized results with compact once.test_results_summary.v1 totals."
+      "description": "Replace case-level normalized results with compact struo.test_results_summary.v1 totals."
     }
   }
 }
@@ -1274,10 +1274,10 @@ Schedules selected test scopes through a shared local queue. Batches with longer
 
 ```json
 {
-  "plan": { "schema": "once.test_plan.v1", "id": "<executed plan digest>", "selection": {}, "batches": [] },
-  "next_plan": { "schema": "once.test_plan.v1", "id": "<next plan digest>", "selection": {}, "batches": [] },
+  "plan": { "schema": "struo.test_plan.v1", "id": "<executed plan digest>", "selection": {}, "batches": [] },
+  "next_plan": { "schema": "struo.test_plan.v1", "id": "<next plan digest>", "selection": {}, "batches": [] },
   "schedule": {
-    "schema": "once.test_schedule.v1",
+    "schema": "struo.test_schedule.v1",
     "id": "<attempt-specific digest>",
     "plan_id": "<executed plan digest>",
     "strategy": "longest_estimated_duration_first_dynamic",
@@ -1291,18 +1291,18 @@ Schedules selected test scopes through a shared local queue. Batches with longer
       "exit_code": 0,
       "success": true,
       "record": { "target": "tests/unit", "capability": "test" },
-      "results": { "schema": "once.test_results.v1", "status": "passed" },
+      "results": { "schema": "struo.test_results.v1", "status": "passed" },
       "stderr": ""
     }
   ]
 }
 ```
 
-## `once_query_test_results`
+## `struo_query_test_results`
 
-Read normalized once.test_results.v1 results for a target.
+Read normalized struo.test_results.v1 results for a target.
 
-Reads retained normalized results without graph evaluation, discovery updates, or execution, even if the current manifest is missing or broken. Set `summary_only` for totals without cases. Set `case` to an exact retained case id for once.test_case_result.v1 evidence, and optionally `attempt` to a one-based producer attempt array position (defaults to the last element, not timestamp order). Positions are not schedule retries or durable cross-run ids; results_digest is the BLAKE3 digest of the same bytes read. Raw target status, case status, and the complete selected attempt object remain distinct, including unknown producer fields and statuses. target_artifacts stays separate with artifact_availability=not_checked; paths are inert and no attachments are read, fetched, or published. Rerun argv is only a whole-target suggestion using current configuration, not an exact-case or historical replay promise. Focused reads accept at most 16777216 raw file bytes and 1048576 compact logical projection JSON bytes, checked by counting serialization before materialization. These are not peak-memory or wire-envelope limits: CLI pretty printing and MCP's duplicated structured/text envelope can be larger. Focused failures return structured diagnostics with code, target, attribute, and repairs. `case` conflicts with `summary_only`; `attempt` requires `case` and must be positive. Matches `once query test-results <target> --case <id> --attempt <position> --format json`. Without selectors the legacy full/summary views and their limits are unchanged.
+Reads retained normalized results without graph evaluation, discovery updates, or execution, even if the current manifest is missing or broken. Set `summary_only` for totals without cases. Set `case` to an exact retained case id for struo.test_case_result.v1 evidence, and optionally `attempt` to a one-based producer attempt array position (defaults to the last element, not timestamp order). Positions are not schedule retries or durable cross-run ids; results_digest is the BLAKE3 digest of the same bytes read. Raw target status, case status, and the complete selected attempt object remain distinct, including unknown producer fields and statuses. target_artifacts stays separate with artifact_availability=not_checked; paths are inert and no attachments are read, fetched, or published. Rerun argv is only a whole-target suggestion using current configuration, not an exact-case or historical replay promise. Focused reads accept at most 16777216 raw file bytes and 1048576 compact logical projection JSON bytes, checked by counting serialization before materialization. These are not peak-memory or wire-envelope limits: CLI pretty printing and MCP's duplicated structured/text envelope can be larger. Focused failures return structured diagnostics with code, target, attribute, and repairs. `case` conflicts with `summary_only`; `attempt` requires `case` and must be positive. Matches `struo query test-results <target> --case <id> --attempt <position> --format json`. Without selectors the legacy full/summary views and their limits are unchanged.
 
 **Input schema**
 
@@ -1316,7 +1316,7 @@ Reads retained normalized results without graph evaluation, discovery updates, o
     },
     "summary_only": {
       "type": "boolean",
-      "description": "Return once.test_results_summary.v1 status, totals, runner, and artifacts without case-level records."
+      "description": "Return struo.test_results_summary.v1 status, totals, runner, and artifacts without case-level records."
     },
     "case": {
       "type": "string",
@@ -1339,7 +1339,7 @@ Reads retained normalized results without graph evaluation, discovery updates, o
 
 ```json
 {
-  "schema": "once.test_results.v1",
+  "schema": "struo.test_results.v1",
   "target": "tests/unit",
   "runner": { "type": "native", "metadata": {} },
   "status": "passed",
@@ -1349,11 +1349,11 @@ Reads retained normalized results without graph evaluation, discovery updates, o
 }
 ```
 
-## `once_query_test_manifest`
+## `struo_query_test_manifest`
 
 List stable test units discovered in a target's normalized results.
 
-Returns an immutable `once.test_manifest.v1` projection of the target's current normalized test results and its target-kind-declared listing and filtering support. When no results exist, the manifest reports `whole_target_fallback` with no units; run the whole target once to refresh discovery. Unit identifiers can be passed to `once_run_tests` only when `case_filtering` is `runner_args`. The matching command-line operation is `once query test-manifest <target> --format json`.
+Returns an immutable `struo.test_manifest.v1` projection of the target's current normalized test results and its target-kind-declared listing and filtering support. When no results exist, the manifest reports `whole_target_fallback` with no units; run the whole target once to refresh discovery. Unit identifiers can be passed to `struo_run_tests` only when `case_filtering` is `runner_args`. The matching command-line operation is `struo query test-manifest <target> --format json`.
 
 **Input schema**
 
@@ -1376,7 +1376,7 @@ Returns an immutable `once.test_manifest.v1` projection of the target's current 
 
 ```json
 {
-  "schema": "once.test_manifest.v1",
+  "schema": "struo.test_manifest.v1",
   "id": "<stable digest>",
   "target": "tests/unit",
   "runner": "native",
@@ -1387,11 +1387,11 @@ Returns an immutable `once.test_manifest.v1` projection of the target's current 
 }
 ```
 
-## `once_query_test_attempts`
+## `struo_query_test_attempts`
 
 List persisted test batch attempts and measured durations.
 
-Returns actual schedule attempts recorded by `once_run_tests` or `once test --changed-path`. Each record connects a stable plan and batch to its local worker, status, cache state, timestamps, measured duration, and the estimate used for ordering. Use `target` to inspect one test target and `limit` to bound history. The matching command-line operation is `once query test-attempts --target <target> --limit <count> --format json`.
+Returns actual schedule attempts recorded by `struo_run_tests` or `struo test --changed-path`. Each record connects a stable plan and batch to its local worker, status, cache state, timestamps, measured duration, and the estimate used for ordering. Use `target` to inspect one test target and `limit` to bound history. The matching command-line operation is `struo query test-attempts --target <target> --limit <count> --format json`.
 
 **Input schema**
 
@@ -1419,7 +1419,7 @@ Returns actual schedule attempts recorded by `once_run_tests` or `once test --ch
 ```json
 [
   {
-    "schema": "once.test_batch_attempt.v1",
+    "schema": "struo.test_batch_attempt.v1",
     "plan_id": "<stable plan digest>",
     "batch_id": "<stable batch digest>",
     "target": "tests/unit",
@@ -1432,11 +1432,11 @@ Returns actual schedule attempts recorded by `once_run_tests` or `once test --ch
 ]
 ```
 
-## `once_query_verification`
+## `struo_query_verification`
 
 Inspect a retained reproducibility check without executing commands.
 
-Returns the same once.verification.v1 record as `once query verification <id> --format json`. Start a check with verify_reproducible on once_build_target or once_exec_script. The record separates execution status, artifact equality, and log equality, retains trial results and decoded artifact paths, and includes bounded file-level differences and explicit scope limitations. No divergence observed is not proof of reproducibility. Reports and artifacts are local workspace runtime state and are never published automatically.
+Returns the same struo.verification.v1 record as `struo query verification <id> --format json`. Start a check with verify_reproducible on struo_build_target or struo_exec_script. The record separates execution status, artifact equality, and log equality, retains trial results and decoded artifact paths, and includes bounded file-level differences and explicit scope limitations. No divergence observed is not proof of reproducibility. Reports and artifacts are local workspace runtime state and are never published automatically.
 
 **Input schema**
 
@@ -1459,7 +1459,7 @@ Returns the same once.verification.v1 record as `once query verification <id> --
 
 ```json
 {
-  "schema": "once.verification.v1",
+  "schema": "struo.verification.v1",
   "id": "019a0000-0000-7000-8000-000000000001",
   "success": true,
   "execution_succeeded": true,
@@ -1468,11 +1468,11 @@ Returns the same once.verification.v1 record as `once query verification <id> --
 }
 ```
 
-## `once_query_evidence`
+## `struo_query_evidence`
 
 List durable evidence records, optionally filtered by subject.
 
-Returns the same record shape as `once query evidence --format json`: durable action evidence captured after `once exec`, `once run`, `once build`, `once lint`, or `once test`. Declared graph actions include an input fingerprint manifest whose categorized components explain which hashed source, dependency, toolchain, command, environment, or module input changed without exposing raw command or environment values. Other action types omit the optional manifest. Pass `subject` to filter to one command action, target, or target capability, such as `cli` or `cli:test`. The tool returns the newest five matching records by default; set `limit` from 1 through 100 when more or fewer are useful. The matching command-line option is `once query evidence --limit <count>`. Evidence is historical provenance, not proof that inputs remain unchanged; run the relevant capability when a current result is required.
+Returns the same record shape as `struo query evidence --format json`: durable action evidence captured after `struo exec`, `struo run`, `struo build`, `struo lint`, or `struo test`. Declared graph actions include an input fingerprint manifest whose categorized components explain which hashed source, dependency, toolchain, command, environment, or module input changed without exposing raw command or environment values. Other action types omit the optional manifest. Pass `subject` to filter to one command action, target, or target capability, such as `cli` or `cli:test`. The tool returns the newest five matching records by default; set `limit` from 1 through 100 when more or fewer are useful. The matching command-line option is `struo query evidence --limit <count>`. Evidence is historical provenance, not proof that inputs remain unchanged; run the relevant capability when a current result is required.
 
 **Input schema**
 
@@ -1500,7 +1500,7 @@ Returns the same record shape as `once query evidence --format json`: durable ac
 ```json
 [
   {
-    "schema": "once.evidence.v1",
+    "schema": "struo.evidence.v1",
     "id": "8d65122cd9dcddc8d5d9a8458ff42a40fe3dd7acbd4e0563fd7f9e8fb19b0c44",
     "kind": "action_result",
     "subject": { "kind": "target", "id": "cli", "capability": "test" },
@@ -1508,7 +1508,7 @@ Returns the same record shape as `once query evidence --format json`: durable ac
     "action_digest": "0476bde2e7d8d1a64d9bd6f589ef5b443d0f60b71e2ad6f1c5bd7a2c4c41223f",
     "input_digest": "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccd5f5814ccfb820e6a41",
     "input_fingerprint": {
-      "schema": "once.input_fingerprint.v1",
+      "schema": "struo.input_fingerprint.v1",
       "input_digest": "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccd5f5814ccfb820e6a41",
       "components": [
         {
@@ -1531,11 +1531,11 @@ Returns the same record shape as `once query evidence --format json`: durable ac
 ]
 ```
 
-## `once_query_graph_fingerprint`
+## `struo_query_graph_fingerprint`
 
 Compute a deterministic, content-addressed digest of the whole graph.
 
-Returns the same record as `once query graph-fingerprint --format json`: a single stable digest that folds in every target declaration, the resolved contents of every declared source file, the pinned Mise toolchain (`mise.toml` and `mise.lock` when present), and the root workspace manifest. The digest changes whenever any of those inputs change, so two identical checkouts on different machines produce the same digest. `components` lists the categorized `(category, label, digest)` triples behind the digest, mirroring per-action input fingerprints, so a caller can see which target, source, toolchain, or manifest input contributed. Categories default to all on; set `include_sources`, `include_toolchain`, or `include_manifest` to false to scope the digest, for example to compare only graph structure across checkouts. The matching command-line operation is `once query graph-fingerprint [--no-sources --no-toolchain --no-manifest]`.
+Returns the same record as `struo query graph-fingerprint --format json`: a single stable digest that folds in every target declaration, the resolved contents of every declared source file, the pinned Mise toolchain (`mise.toml` and `mise.lock` when present), and the root workspace manifest. The digest changes whenever any of those inputs change, so two identical checkouts on different machines produce the same digest. `components` lists the categorized `(category, label, digest)` triples behind the digest, mirroring per-action input fingerprints, so a caller can see which target, source, toolchain, or manifest input contributed. Categories default to all on; set `include_sources`, `include_toolchain`, or `include_manifest` to false to scope the digest, for example to compare only graph structure across checkouts. The matching command-line operation is `struo query graph-fingerprint [--no-sources --no-toolchain --no-manifest]`.
 
 **Input schema**
 
@@ -1556,7 +1556,7 @@ Returns the same record as `once query graph-fingerprint --format json`: a singl
     "include_manifest": {
       "type": "boolean",
       "default": true,
-      "description": "Fold the root `once.toml` manifest into the digest."
+      "description": "Fold the root `struo.toml` manifest into the digest."
     }
   }
 }
@@ -1566,7 +1566,7 @@ Returns the same record as `once query graph-fingerprint --format json`: a singl
 
 ```json
 {
-  "schema": "once.graph_fingerprint.v1",
+  "schema": "struo.graph_fingerprint.v1",
   "digest": "a046fc32a4c232b7320b4249d630ec5a4fef9ae8c3313a65754f33cc31375676",
   "target_count": 2,
   "source_count": 1,
@@ -1578,11 +1578,11 @@ Returns the same record as `once query graph-fingerprint --format json`: a singl
 }
 ```
 
-## `once_export_graph_repro`
+## `struo_export_graph_repro`
 
 Export a redacted reproduction of the workspace's native projects and draft an issue to report a graph problem.
 
-Requires `once mcp --allow-run`. Matches `once query graph-repro --format json`. Use it when a native project's graph fails to load or disagrees with what the native build system builds, instead of changing the project to work around Once. Writes `.once/graph-repro`, replacing only the files of an earlier export there, and shares nothing. `workspace/` mirrors every native project: files matching the native project's declared manifests keep their contents, and every other file becomes an empty placeholder at the same path, so globs and resolvers see the same tree without source code. `repro.json` records the Once version, host platform, the loaded graph with absolute workspace and home paths replaced by `$WORKSPACE` and `$HOME`, diagnostics, and the loading error when there is one. Credentials in copied URLs and values of environment attributes are replaced with `<redacted>`. `ISSUE.md` drafts an issue from those facts alone, and `graph-repro.tar.gz` packs the export to attach to it. The result's `issue` gives the repository, title, body file, and a prefilled link. Ask the user to review the copied files and `repro.json` before opening the issue, and to attach the archive in the browser.
+Requires `struo mcp --allow-run`. Matches `struo query graph-repro --format json`. Use it when a native project's graph fails to load or disagrees with what the native build system builds, instead of changing the project to work around Struo. Writes `.struo/graph-repro`, replacing only the files of an earlier export there, and shares nothing. `workspace/` mirrors every native project: files matching the native project's declared manifests keep their contents, and every other file becomes an empty placeholder at the same path, so globs and resolvers see the same tree without source code. `repro.json` records the Struo version, host platform, the loaded graph with absolute workspace and home paths replaced by `$WORKSPACE` and `$HOME`, diagnostics, and the loading error when there is one. Credentials in copied URLs and values of environment attributes are replaced with `<redacted>`. `ISSUE.md` drafts an issue from those facts alone, and `graph-repro.tar.gz` packs the export to attach to it. The result's `issue` gives the repository, title, body file, and a prefilled link. Ask the user to review the copied files and `repro.json` before opening the issue, and to attach the archive in the browser.
 
 **Input schema**
 
@@ -1597,27 +1597,27 @@ Requires `once mcp --allow-run`. Matches `once query graph-repro --format json`.
 
 ```json
 {
-  "schema": "once.graph_repro_export.v1",
-  "directory": "/work/project/.once/graph-repro",
-  "archive": "/work/project/.once/graph-repro/graph-repro.tar.gz",
+  "schema": "struo.graph_repro_export.v1",
+  "directory": "/work/project/.struo/graph-repro",
+  "archive": "/work/project/.struo/graph-repro/graph-repro.tar.gz",
   "copied": ["project.lock", "project.native"],
   "redacted_count": 42,
   "target_count": null,
   "load_error": "loading graph: target kind resolver failed for `native`",
   "issue": {
-    "repository": "tuist/once",
+    "repository": "tuist/struo",
     "title": "Native graph fails to load: native",
-    "body_path": "/work/project/.once/graph-repro/ISSUE.md",
-    "url": "https://github.com/tuist/once/issues/new?title=..."
+    "body_path": "/work/project/.struo/graph-repro/ISSUE.md",
+    "url": "https://github.com/tuist/struo/issues/new?title=..."
   }
 }
 ```
 
-## `once_validate_script`
+## `struo_validate_script`
 
 Parse and validate an annotated script's cache contract.
 
-Reads a workspace-relative script, validates its shebang and `once` directives, and returns the parsed runtime, inputs, outputs, dependency scripts, fingerprints, environment names, working directory, remote policy, and output symlink policy. Put singular directives with quoted values directly after the shebang, for example `# once input "input.txt"` and `# once output "output.txt"`. Plural names, colon syntax, and unquoted paths are invalid. Invalid contracts return `{ valid: false, diagnostics: [...] }`, so callers can repair directive typos before execution. The matching command-line operation is `once query script <path>`.
+Reads a workspace-relative script, validates its shebang and `struo` directives, and returns the parsed runtime, inputs, outputs, dependency scripts, fingerprints, environment names, working directory, remote policy, and output symlink policy. Put singular directives with quoted values directly after the shebang, for example `# struo input "input.txt"` and `# struo output "output.txt"`. Plural names, colon syntax, and unquoted paths are invalid. Invalid contracts return `{ valid: false, diagnostics: [...] }`, so callers can repair directive typos before execution. The matching command-line operation is `struo query script <path>`.
 
 **Input schema**
 
@@ -1655,11 +1655,11 @@ Reads a workspace-relative script, validates its shebang and `once` directives, 
 }
 ```
 
-## `once_exec_script`
+## `struo_exec_script`
 
-Execute a validated annotated script through Once's action cache.
+Execute a validated annotated script through Struo's action cache.
 
-Opt-in tool exposed only when the Model Context Protocol server starts with `once mcp --allow-run`. Validates the script contract before running the same path as `once exec --script`, materializes declared outputs, and returns captured streams, exit status, action digest, cache hit or miss state, and matching evidence. Invoke it twice with unchanged declared inputs to verify cache reuse. Set verify_reproducible to run `once exec --verify-reproducible --script` instead: two private workspace trials rerun script dependencies and fingerprints with initially empty local Once caches and return once.verification.v1 directly. The check retains both trials, compares artifacts separately from logs, and does not replace workspace outputs. Host tool caches, absolute paths, network services, and external side effects are not isolated; authorize repeated execution before using it.
+Opt-in tool exposed only when the Model Context Protocol server starts with `struo mcp --allow-run`. Validates the script contract before running the same path as `struo exec --script`, materializes declared outputs, and returns captured streams, exit status, action digest, cache hit or miss state, and matching evidence. Invoke it twice with unchanged declared inputs to verify cache reuse. Set verify_reproducible to run `struo exec --verify-reproducible --script` instead: two private workspace trials rerun script dependencies and fingerprints with initially empty local Struo caches and return struo.verification.v1 directly. The check retains both trials, compares artifacts separately from logs, and does not replace workspace outputs. Host tool caches, absolute paths, network services, and external side effects are not isolated; authorize repeated execution before using it.
 
 **Input schema**
 
@@ -1681,7 +1681,7 @@ Opt-in tool exposed only when the Model Context Protocol server starts with `onc
     "verify_reproducible": {
       "type": "boolean",
       "default": false,
-      "description": "Run and retain two private trials instead of normal cached execution. Returns once.verification.v1."
+      "description": "Run and retain two private trials instead of normal cached execution. Returns struo.verification.v1."
     }
   },
   "required": [
@@ -1709,11 +1709,11 @@ Opt-in tool exposed only when the Model Context Protocol server starts with `onc
 }
 ```
 
-## `once_build_target`
+## `struo_build_target`
 
 Build a target by running its generic `build` capability.
 
-This tool is available only when the server starts with `once mcp --allow-run`. It behaves like `once build <target> --format json`, including dependency traversal, target actions, cache policy, and output groups. Because cache identity follows declared content rather than workspace history, a first build in a new workspace can reuse an equivalent action produced elsewhere. The result includes the exit status, command diagnostics under `stderr`, and bounded declared action logs under `captured_stdout` and `captured_stderr`. A captured field is null when the target did not declare that log. A failed build is returned as normal tool content with `success: false` so agents can inspect diagnostics. Set verify_reproducible to run `once build --verify-reproducible <target>` instead and return once.verification.v1 directly. It runs the dependency closure in each of two private workspace trials with initially empty local Once caches, retains both results, compares artifacts separately from logs, and leaves workspace outputs untouched. Host tool caches, absolute paths, network services, and external side effects are not isolated.
+This tool is available only when the server starts with `struo mcp --allow-run`. It behaves like `struo build <target> --format json`, including dependency traversal, target actions, cache policy, and output groups. Because cache identity follows declared content rather than workspace history, a first build in a new workspace can reuse an equivalent action produced elsewhere. The result includes the exit status, command diagnostics under `stderr`, and bounded declared action logs under `captured_stdout` and `captured_stderr`. A captured field is null when the target did not declare that log. A failed build is returned as normal tool content with `success: false` so agents can inspect diagnostics. Set verify_reproducible to run `struo build --verify-reproducible <target>` instead and return struo.verification.v1 directly. It runs the dependency closure in each of two private workspace trials with initially empty local Struo caches, retains both results, compares artifacts separately from logs, and leaves workspace outputs untouched. Host tool caches, absolute paths, network services, and external side effects are not isolated.
 
 **Input schema**
 
@@ -1728,7 +1728,7 @@ This tool is available only when the server starts with `once mcp --allow-run`. 
     "verify_reproducible": {
       "type": "boolean",
       "default": false,
-      "description": "Run and retain two private trials instead of normal cached execution. Returns once.verification.v1."
+      "description": "Run and retain two private trials instead of normal cached execution. Returns struo.verification.v1."
     }
   },
   "required": [
@@ -1750,17 +1750,17 @@ This tool is available only when the server starts with `once mcp --allow-run`. 
     "kind": "application",
     "capability": "build",
     "cache": "miss",
-    "outputs": [".once/out/apps/service/Service/package"]
+    "outputs": [".struo/out/apps/service/Service/package"]
   },
   "stderr": ""
 }
 ```
 
-## `once_lint_target`
+## `struo_lint_target`
 
 Run a target's lint capability and return normalized findings.
 
-This tool is available only when the server starts with `once mcp --allow-run`. It behaves like `once lint <target> --format json`: analyzer output is cached in Static Analysis Results Interchange Format, then projected into the tool-neutral `once.lint_results.v1` record. The command reports failure when warning or error findings exist, while still returning the complete finding list for repair. Native analyzer configuration remains authoritative.
+This tool is available only when the server starts with `struo mcp --allow-run`. It behaves like `struo lint <target> --format json`: analyzer output is cached in Static Analysis Results Interchange Format, then projected into the tool-neutral `struo.lint_results.v1` record. The command reports failure when warning or error findings exist, while still returning the complete finding list for repair. Native analyzer configuration remains authoritative.
 
 **Input schema**
 
@@ -1788,7 +1788,7 @@ This tool is available only when the server starts with `once mcp --allow-run`. 
   "exit_code": 1,
   "success": false,
   "record": {
-    "schema": "once.lint_results.v1",
+    "schema": "struo.lint_results.v1",
     "target": "quality/python/lint",
     "status": "completed",
     "complete": true,
@@ -1799,11 +1799,11 @@ This tool is available only when the server starts with `once mcp --allow-run`. 
 }
 ```
 
-## `once_validate_actions`
+## `struo_validate_actions`
 
 Run scripted graph actions in a private validation sandbox.
 
-Runs the same declared action analysis used by the graph, bypasses the action cache, inventories private and real-workspace filesystem changes, and returns structured input and output repairs. The matching command-line operation is `once query validate-actions <target> --capability <name>`. This tool requires `once mcp --allow-run` because it executes commands. Successful reads that leave no filesystem evidence remain a documented limitation of symlink-only validation.
+Runs the same declared action analysis used by the graph, bypasses the action cache, inventories private and real-workspace filesystem changes, and returns structured input and output repairs. The matching command-line operation is `struo query validate-actions <target> --capability <name>`. This tool requires `struo mcp --allow-run` because it executes commands. Successful reads that leave no filesystem evidence remain a documented limitation of symlink-only validation.
 
 **Input schema**
 
@@ -1838,11 +1838,11 @@ Runs the same declared action analysis used by the graph, bypasses the action ca
 {"valid":false,"target":"pkg/tool","capability":"build","actions_run":1,"diagnostics":[{"code":"undeclared_write","target":"pkg/tool","attribute":"outputs","repairs":["Declare this path as an output or stop writing it"]}]}
 ```
 
-## `once_run_target`
+## `struo_run_target`
 
 Run a target by executing its generic `run` capability.
 
-This tool is available only when the server starts with `once mcp --allow-run`. It behaves like `once run <target> --format json`, including prerequisite build outputs declared by the target's `run` capability. Argument interpretation is target-kind-specific, so inspect the target-kind schema before supplying `arguments`. Set `visible` to request a visible interface when the target kind supports one. Uncacheable actions run again instead of replaying an action-cache hit. The result includes command diagnostics under `stderr` and up to 64 kibibytes of each declared `stdout.log` or `stderr.log` output under `captured_stdout` and `captured_stderr`, so an agent can verify ordinary command output without a separate filesystem read. A captured field is null when the target did not declare that log.
+This tool is available only when the server starts with `struo mcp --allow-run`. It behaves like `struo run <target> --format json`, including prerequisite build outputs declared by the target's `run` capability. Argument interpretation is target-kind-specific, so inspect the target-kind schema before supplying `arguments`. Set `visible` to request a visible interface when the target kind supports one. Uncacheable actions run again instead of replaying an action-cache hit. The result includes command diagnostics under `stderr` and up to 64 kibibytes of each declared `stdout.log` or `stderr.log` output under `captured_stdout` and `captured_stderr`, so an agent can verify ordinary command output without a separate filesystem read. A captured field is null when the target did not declare that log.
 
 **Input schema**
 
@@ -1891,11 +1891,11 @@ This tool is available only when the server starts with `once mcp --allow-run`. 
 }
 ```
 
-## `once_start_target`
+## `struo_start_target`
 
 Start a target in a persisted runtime session and return its session id.
 
-This tool is available only when the server starts with `once mcp --allow-run`. It starts the target, saves its standard output and standard error under `.once/runtime/<session_id>/`, and returns immediately with the session record. Use the status, logs, and stop tools to follow the process.
+This tool is available only when the server starts with `struo mcp --allow-run`. It starts the target, saves its standard output and standard error under `.struo/runtime/<session_id>/`, and returns immediately with the session record. Use the status, logs, and stop tools to follow the process.
 
 **Input schema**
 
@@ -1921,17 +1921,17 @@ This tool is available only when the server starts with `once mcp --allow-run`. 
   "session_id": "tools-demo-LaunchService-123-1812345678901",
   "target": "tools/demo/LaunchService",
   "status": "starting",
-  "session_dir": ".once/runtime/tools-demo-LaunchService-123-1812345678901",
-  "stdout": ".once/runtime/tools-demo-LaunchService-123-1812345678901/stdout.log",
-  "stderr": ".once/runtime/tools-demo-LaunchService-123-1812345678901/stderr.log"
+  "session_dir": ".struo/runtime/tools-demo-LaunchService-123-1812345678901",
+  "stdout": ".struo/runtime/tools-demo-LaunchService-123-1812345678901/stdout.log",
+  "stderr": ".struo/runtime/tools-demo-LaunchService-123-1812345678901/stderr.log"
 }
 ```
 
-## `once_runtime_status`
+## `struo_runtime_status`
 
 Return the latest persisted status for a runtime session.
 
-Reads `.once/runtime/<session_id>/session.json` and returns the latest status. Status values include `starting`, `running`, `stopping`, `stopped`, `exited`, and `failed`.
+Reads `.struo/runtime/<session_id>/session.json` and returns the latest status. Status values include `starting`, `running`, `stopping`, `stopped`, `exited`, and `failed`.
 
 **Input schema**
 
@@ -1941,7 +1941,7 @@ Reads `.once/runtime/<session_id>/session.json` and returns the latest status. S
   "properties": {
     "session_id": {
       "type": "string",
-      "description": "Session id returned by `once_start_target`."
+      "description": "Session id returned by `struo_start_target`."
     }
   },
   "required": [
@@ -1961,7 +1961,7 @@ Reads `.once/runtime/<session_id>/session.json` and returns the latest status. S
 }
 ```
 
-## `once_runtime_logs`
+## `struo_runtime_logs`
 
 Read standard output or standard error records for a runtime session.
 
@@ -1975,7 +1975,7 @@ Reads persisted line-oriented standard output and standard error records from a 
   "properties": {
     "session_id": {
       "type": "string",
-      "description": "Session id returned by `once_start_target`."
+      "description": "Session id returned by `struo_start_target`."
     },
     "source": {
       "type": "string",
@@ -2011,7 +2011,7 @@ Reads persisted line-oriented standard output and standard error records from a 
 }
 ```
 
-## `once_stop_runtime`
+## `struo_stop_runtime`
 
 Request that a runtime session stop.
 
@@ -2025,7 +2025,7 @@ Requests that the process stop and updates the session status as the request is 
   "properties": {
     "session_id": {
       "type": "string",
-      "description": "Session id returned by `once_start_target`."
+      "description": "Session id returned by `struo_start_target`."
     }
   },
   "required": [
@@ -2044,11 +2044,11 @@ Requests that the process stop and updates the session status as the request is 
 }
 ```
 
-## `once_validate_workspace`
+## `struo_validate_workspace`
 
 Validate the complete workspace graph before execution.
 
-Loads every manifest and target kind schema, then checks target attributes, target-valued attribute references, duplicate target identifiers, missing dependencies, dependency visibility, dependency provider compatibility, source patterns, and dependency cycles. Returns stable diagnostics with target and attribute scope plus suggested repairs. Call this after materializing a starter or applying edits and before build, run, or test. The matching command-line operation is `once query validate-workspace`.
+Loads every manifest and target kind schema, then checks target attributes, target-valued attribute references, duplicate target identifiers, missing dependencies, dependency visibility, dependency provider compatibility, source patterns, and dependency cycles. Returns stable diagnostics with target and attribute scope plus suggested repairs. Call this after materializing a starter or applying edits and before build, run, or test. The matching command-line operation is `struo query validate-workspace`.
 
 **Input schema**
 
@@ -2077,7 +2077,7 @@ Loads every manifest and target kind schema, then checks target attributes, targ
 }
 ```
 
-## `once_validate_target`
+## `struo_validate_target`
 
 Validate a proposed `[[target]]` table against its target kind schema. Returns structured diagnostics instead of prose.
 
@@ -2116,11 +2116,11 @@ Schema-only validation: checks that the target declares a known target kind, eve
 }
 ```
 
-## `once_apply_edit`
+## `struo_apply_edit`
 
-Apply a batch of `create` / `update` / `delete` operations to one `once.toml` atomically.
+Apply a batch of `create` / `update` / `delete` operations to one `struo.toml` atomically.
 
-Reads the manifest at `<workspace>/<package>/once.toml` and applies the operations only if every operation succeeds. Returns `{ applied: true, changed: <bool>, path: <manifest path> }` on success. `changed` is false when the requested state already exists, in which case no manifest is written. Returns `{ applied: false, diagnostics: [...] }` with the structured diagnostic shape used by `once_validate_target` when the edit is invalid. A failed batch leaves the original file unchanged.
+Reads the manifest at `<workspace>/<package>/struo.toml` and applies the operations only if every operation succeeds. Returns `{ applied: true, changed: <bool>, path: <manifest path> }` on success. `changed` is false when the requested state already exists, in which case no manifest is written. Returns `{ applied: false, diagnostics: [...] }` with the structured diagnostic shape used by `struo_validate_target` when the edit is invalid. A failed batch leaves the original file unchanged.
 
 **Input schema**
 
@@ -2153,6 +2153,6 @@ Reads the manifest at `<workspace>/<package>/once.toml` and applies the operatio
 {
   "applied": true,
   "changed": true,
-  "path": "packages/core/once.toml"
+  "path": "packages/core/struo.toml"
 }
 ```

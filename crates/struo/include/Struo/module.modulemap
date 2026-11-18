@@ -1,0 +1,4 @@
+module Struo {
+  header "struo.h"
+  export *
+}

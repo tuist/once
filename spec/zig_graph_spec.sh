@@ -125,7 +125,7 @@ BIN
     test)
       cat > "$emit_bin" <<'BIN'
 #!/bin/sh
-printf 'zig test mock:%s env:%s test_env:%s\n' "$*" "${ONCE_ZIG_E2E_ENV:-}" "${ONCE_ZIG_TEST_ENV:-}"
+printf 'zig test mock:%s env:%s test_env:%s\n' "$*" "${STRUO_ZIG_E2E_ENV:-}" "${STRUO_ZIG_TEST_ENV:-}"
 if [ "${1:-}" = "fail-test" ]; then
   exit 1
 fi
@@ -215,7 +215,7 @@ ZIG
     cat > "$WORKSPACE/src/runner.zig" <<'ZIG'
 pub fn main() void {}
 ZIG
-    cat > "$WORKSPACE/once.toml" <<TOML
+    cat > "$WORKSPACE/struo.toml" <<TOML
 [[target]]
 name = "native"
 kind = "c_library"
@@ -413,8 +413,8 @@ deps = ["./math"]
 zig = "$WORKSPACE/bin/zig"
 main = "src/test.zig"
 test_runner = "src/runner.zig"
-env_inherit = ["ONCE_ZIG_E2E_ENV"]
-test_env = { ONCE_ZIG_TEST_ENV = "configured" }
+env_inherit = ["STRUO_ZIG_E2E_ENV"]
+test_env = { STRUO_ZIG_TEST_ENV = "configured" }
 args = ["custom-test-arg"]
 labels = ["custom"]
 
@@ -472,7 +472,7 @@ TOML
 int native_answer(void);
 H
     printf '%s\n' 'dynamic library placeholder' > "$WORKSPACE/vendor/mylib.so"
-    cat > "$WORKSPACE/once.toml" <<TOML
+    cat > "$WORKSPACE/struo.toml" <<TOML
 [[target]]
 name = "native_headers"
 kind = "c_library"
@@ -487,7 +487,7 @@ TOML
   }
 
   It 'discovers C and Zig target kinds through the public query surface'
-    once --format json query target-kinds > "$WORKSPACE/target_kinds.json"
+    struo --format json query target-kinds > "$WORKSPACE/target_kinds.json"
 
     The contents of file "$WORKSPACE/target_kinds.json" should include '"kind":"c_library"'
     The contents of file "$WORKSPACE/target_kinds.json" should include '"slug":"c-library-minimal"'
@@ -512,16 +512,16 @@ TOML
   End
 
   It 'describes C and Zig provider contracts through query schema'
-    once --format json query schema c_library > "$WORKSPACE/c_library.json"
-    once --format json query schema zig_library > "$WORKSPACE/zig_library.json"
-    once --format json query schema zig_c_library > "$WORKSPACE/zig_c_library.json"
-    once --format json query schema zig_binary > "$WORKSPACE/zig_binary.json"
-    once --format json query schema zig_static_library > "$WORKSPACE/zig_static_library.json"
-    once --format json query schema zig_shared_library > "$WORKSPACE/zig_shared_library.json"
-    once --format json query schema zig_configure > "$WORKSPACE/zig_configure.json"
-    once --format json query schema zig_test > "$WORKSPACE/zig_test.json"
-    once --format json query schema zig_configure_binary > "$WORKSPACE/zig_configure_binary.json"
-    once --format json query schema zig_configure_test > "$WORKSPACE/zig_configure_test.json"
+    struo --format json query schema c_library > "$WORKSPACE/c_library.json"
+    struo --format json query schema zig_library > "$WORKSPACE/zig_library.json"
+    struo --format json query schema zig_c_library > "$WORKSPACE/zig_c_library.json"
+    struo --format json query schema zig_binary > "$WORKSPACE/zig_binary.json"
+    struo --format json query schema zig_static_library > "$WORKSPACE/zig_static_library.json"
+    struo --format json query schema zig_shared_library > "$WORKSPACE/zig_shared_library.json"
+    struo --format json query schema zig_configure > "$WORKSPACE/zig_configure.json"
+    struo --format json query schema zig_test > "$WORKSPACE/zig_test.json"
+    struo --format json query schema zig_configure_binary > "$WORKSPACE/zig_configure_binary.json"
+    struo --format json query schema zig_configure_test > "$WORKSPACE/zig_configure_test.json"
 
     The contents of file "$WORKSPACE/c_library.json" should include '"providers":["c_provider","native_linkable","apple_linkable","android_native_library"]'
     The contents of file "$WORKSPACE/c_library.json" should include '"name":"archiver_identity"'
@@ -539,23 +539,23 @@ TOML
     The contents of file "$WORKSPACE/zig_static_library.json" should include '"apple_linkable"'
     The contents of file "$WORKSPACE/zig_shared_library.json" should include '"android_native_library"'
     The contents of file "$WORKSPACE/zig_configure.json" should include '"name":"output"'
-    The contents of file "$WORKSPACE/zig_test.json" should include '"once_test_info"'
+    The contents of file "$WORKSPACE/zig_test.json" should include '"struo_test_info"'
     The contents of file "$WORKSPACE/zig_test.json" should include '"requires_outputs":["binary"]'
     The contents of file "$WORKSPACE/zig_configure_binary.json" should include '"name":"run"'
-    The contents of file "$WORKSPACE/zig_configure_test.json" should include '"once_test_info"'
+    The contents of file "$WORKSPACE/zig_configure_test.json" should include '"struo_test_info"'
   End
 
   It 'materializes C and Zig starter examples'
-    once --format json query example c_library c-library-minimal > "$WORKSPACE/c_example.json"
-    once --format json query example zig_library zig-library-minimal > "$WORKSPACE/zig_library_example.json"
-    once --format json query example zig_binary zig-binary-with-library > "$WORKSPACE/zig_example.json"
-    once --format json query example zig_c_library zig-c-library-with-c-provider > "$WORKSPACE/zig_c_example.json"
-    once --format json query example zig_static_library zig-static-library-minimal > "$WORKSPACE/zig_static_example.json"
-    once --format json query example zig_shared_library zig-shared-library-minimal > "$WORKSPACE/zig_shared_example.json"
-    once --format json query example zig_test zig-test-minimal > "$WORKSPACE/zig_test_example.json"
-    once --format json query example zig_configure zig-configure-library-minimal > "$WORKSPACE/zig_configure_library_example.json"
-    once --format json query example zig_configure_binary zig-configure-binary-minimal > "$WORKSPACE/zig_configure_example.json"
-    once --format json query example zig_configure_test zig-configure-test-minimal > "$WORKSPACE/zig_configure_test_example.json"
+    struo --format json query example c_library c-library-minimal > "$WORKSPACE/c_example.json"
+    struo --format json query example zig_library zig-library-minimal > "$WORKSPACE/zig_library_example.json"
+    struo --format json query example zig_binary zig-binary-with-library > "$WORKSPACE/zig_example.json"
+    struo --format json query example zig_c_library zig-c-library-with-c-provider > "$WORKSPACE/zig_c_example.json"
+    struo --format json query example zig_static_library zig-static-library-minimal > "$WORKSPACE/zig_static_example.json"
+    struo --format json query example zig_shared_library zig-shared-library-minimal > "$WORKSPACE/zig_shared_example.json"
+    struo --format json query example zig_test zig-test-minimal > "$WORKSPACE/zig_test_example.json"
+    struo --format json query example zig_configure zig-configure-library-minimal > "$WORKSPACE/zig_configure_library_example.json"
+    struo --format json query example zig_configure_binary zig-configure-binary-minimal > "$WORKSPACE/zig_configure_example.json"
+    struo --format json query example zig_configure_test zig-configure-test-minimal > "$WORKSPACE/zig_configure_test_example.json"
 
     The contents of file "$WORKSPACE/c_example.json" should include '"slug":"c-library-minimal"'
     The contents of file "$WORKSPACE/c_example.json" should include 'kind = \"c_library\"'
@@ -576,12 +576,12 @@ TOML
   It 'builds a C provider target'
     write_zig_workspace
 
-    When call /bin/sh -c '"$1" -C "$2" --format json build native > /dev/null' sh "$ONCE_BIN" "$WORKSPACE"
+    When call /bin/sh -c '"$1" -C "$2" --format json build native > /dev/null' sh "$STRUO_BIN" "$WORKSPACE"
     The status should be success
-    The path "$WORKSPACE/.once/out/native/libnative.a" should be file
-    The contents of file "$WORKSPACE/.once/out/native/libnative.a" should include 'archive'
-    The path "$WORKSPACE/.once/out/native/objects/src/native.c.o" should be file
-    The contents of file "$WORKSPACE/.once/out/native/objects/src/native.c.o" should include 'object'
+    The path "$WORKSPACE/.struo/out/native/libnative.a" should be file
+    The contents of file "$WORKSPACE/.struo/out/native/libnative.a" should include 'archive'
+    The path "$WORKSPACE/.struo/out/native/objects/src/native.c.o" should be file
+    The contents of file "$WORKSPACE/.struo/out/native/objects/src/native.c.o" should include 'object'
   End
 
   c_archive_tools_unavailable() {
@@ -589,7 +589,7 @@ TOML
   }
 
   rebuild_c_archive_without_removed_source() {
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [[target]]
 name = "native"
 kind = "c_library"
@@ -597,10 +597,10 @@ srcs = ["*.c"]
 TOML
     printf '%s\n' 'int kept(void) { return 7; }' > "$WORKSPACE/kept.c"
     printf '%s\n' 'int removed(void) { return 11; }' > "$WORKSPACE/removed.c"
-    once --format json build native > /dev/null || return
+    struo --format json build native > /dev/null || return
     rm "$WORKSPACE/removed.c"
-    once --format json build native > /dev/null || return
-    ar t "$WORKSPACE/.once/out/native/libnative.a"
+    struo --format json build native > /dev/null || return
+    ar t "$WORKSPACE/.struo/out/native/libnative.a"
   }
 
   It 'removes obsolete archive members when C sources are removed'
@@ -615,15 +615,15 @@ TOML
   It 'builds a provider-only C target without probing C tools'
     write_provider_only_c_workspace
 
-    When call /bin/sh -c '"$1" -C "$2" --format json build native_headers > /dev/null' sh "$ONCE_BIN" "$WORKSPACE"
+    When call /bin/sh -c '"$1" -C "$2" --format json build native_headers > /dev/null' sh "$STRUO_BIN" "$WORKSPACE"
     The status should be success
-    [ ! -e "$WORKSPACE/.once/out/native_headers/libnative_headers.a" ]
+    [ ! -e "$WORKSPACE/.struo/out/native_headers/libnative_headers.a" ]
   End
 
   build_self_hosted_zig_twice() {
     write_zig_workspace
     for flag_attribute in zigopt zigopts linkopts; do
-      cat >> "$WORKSPACE/once.toml" <<TOML
+      cat >> "$WORKSPACE/struo.toml" <<TOML
 
 [[target]]
 name = "self_hosted_$flag_attribute"
@@ -635,8 +635,8 @@ $flag_attribute = ["-fno-llvm"]
 strip = true
 zig = "$WORKSPACE/bin/zig"
 TOML
-      once --format json build "self_hosted_$flag_attribute" || return
-      once --format json build "self_hosted_$flag_attribute" || return
+      struo --format json build "self_hosted_$flag_attribute" || return
+      struo --format json build "self_hosted_$flag_attribute" || return
     done
   }
 
@@ -650,7 +650,7 @@ TOML
 
   build_zig_debug_policy_twice() {
     write_zig_workspace
-    cat >> "$WORKSPACE/once.toml" <<TOML
+    cat >> "$WORKSPACE/struo.toml" <<TOML
 
 [[target]]
 name = "policy"
@@ -661,9 +661,9 @@ main = "src/test.zig"
 strip = $1
 zig = "$WORKSPACE/bin/zig"
 TOML
-    once --format json build policy || return
-    rm "$WORKSPACE/.once/out/policy/policy"
-    once --format json build policy
+    struo --format json build policy || return
+    rm "$WORKSPACE/.struo/out/policy/policy"
+    struo --format json build policy
   }
 
   It 'bypasses unstripped Zig compilation without removing debug information'
@@ -679,12 +679,12 @@ TOML
     The status should be success
     The stdout should include '"cache":"miss"'
     The stdout should include '"cache":"hit"'
-    The path "$WORKSPACE/.once/out/policy/policy" should be file
+    The path "$WORKSPACE/.struo/out/policy/policy" should be file
   End
 
   build_zig_strip_override_twice() {
     write_zig_workspace
-    cat >> "$WORKSPACE/once.toml" <<TOML
+    cat >> "$WORKSPACE/struo.toml" <<TOML
 
 [[target]]
 name = "policy"
@@ -696,8 +696,8 @@ strip = true
 zigopts = ["-fno-strip"]
 zig = "$WORKSPACE/bin/zig"
 TOML
-    once --format json build policy || return
-    once --format json build policy
+    struo --format json build policy || return
+    struo --format json build policy
   }
 
   It 'bypasses caching when explicit no-strip overrides strip=true'
@@ -710,7 +710,7 @@ TOML
 
   build_zig_dependency_strip_twice() {
     write_zig_workspace
-    cat >> "$WORKSPACE/once.toml" <<TOML
+    cat >> "$WORKSPACE/struo.toml" <<TOML
 
 [[target]]
 name = "stripped_dependency"
@@ -730,8 +730,8 @@ deps = ["stripped_dependency"]
 main = "src/test.zig"
 zig = "$WORKSPACE/bin/zig"
 TOML
-    once --format json build policy || return
-    once --format json build policy
+    struo --format json build policy || return
+    struo --format json build policy
   }
 
   It 'does not treat a dependency module strip flag as stripping the root module'
@@ -754,50 +754,50 @@ printf '%s\n' 'LLVM backend unavailable in selected compiler' >&2
 exit 1
 SH
 
-    When call once --format json build tests
+    When call struo --format json build tests
     The status should be failure
     The stderr should include 'LLVM backend unavailable in selected compiler'
-    The stderr should include '"schema":"once.error.v1"'
+    The stderr should include '"schema":"struo.error.v1"'
   End
 
   It 'builds a C++ provider target with the C++ compiler only when needed'
     write_zig_workspace
 
-    When call /bin/sh -c '"$1" -C "$2" --format json build native_cxx > /dev/null' sh "$ONCE_BIN" "$WORKSPACE"
+    When call /bin/sh -c '"$1" -C "$2" --format json build native_cxx > /dev/null' sh "$STRUO_BIN" "$WORKSPACE"
     The status should be success
-    The path "$WORKSPACE/.once/out/native_cxx/libnative_cxx.a" should be file
-    The path "$WORKSPACE/.once/out/native_cxx/objects/src/native.cc.o" should be file
+    The path "$WORKSPACE/.struo/out/native_cxx/libnative_cxx.a" should be file
+    The path "$WORKSPACE/.struo/out/native_cxx/objects/src/native.cc.o" should be file
     The contents of file "$WORKSPACE/cc-argv.log" should include 'cxx -c src/native.cc'
   End
 
   It 'builds Zig binary, configured binary, static library, configured library, and shared library targets with C provider deps'
     write_zig_workspace
 
-    When call /bin/sh -c '"$1" -C "$2" --format json build app > /dev/null && "$1" -C "$2" --format json build app_release > /dev/null && "$1" -C "$2" --format json build archive > /dev/null && "$1" -C "$2" --format json build archive_release > /dev/null && "$1" -C "$2" --format json build shared > /dev/null && "$1" -C "$2" --format json build shared_release > /dev/null && "$1" -C "$2" --format json build shared_named > /dev/null && "$1" -C "$2" --format json build native_zig > /dev/null' sh "$ONCE_BIN" "$WORKSPACE"
+    When call /bin/sh -c '"$1" -C "$2" --format json build app > /dev/null && "$1" -C "$2" --format json build app_release > /dev/null && "$1" -C "$2" --format json build archive > /dev/null && "$1" -C "$2" --format json build archive_release > /dev/null && "$1" -C "$2" --format json build shared > /dev/null && "$1" -C "$2" --format json build shared_release > /dev/null && "$1" -C "$2" --format json build shared_named > /dev/null && "$1" -C "$2" --format json build native_zig > /dev/null' sh "$STRUO_BIN" "$WORKSPACE"
     The status should be success
-    The path "$WORKSPACE/.once/out/app/app" should be file
+    The path "$WORKSPACE/.struo/out/app/app" should be file
     The contents of file "$WORKSPACE/zig-argv.log" should include 'build-exe -fllvm'
-    The contents of file "$WORKSPACE/.once/out/app/app" should include 'zig executable mock'
-    The path "$WORKSPACE/.once/out/app_release/app_release" should be file
-    The contents of file "$WORKSPACE/.once/out/app_release/app_release" should include 'zig executable mock'
-    The path "$WORKSPACE/.once/out/app/c_c.zig" should be file
-    The contents of file "$WORKSPACE/.once/out/app/c_c.zig" should include 'translated_c_header'
-    The path "$WORKSPACE/.once/out/app/app.docs/index.html" should be file
-    The contents of file "$WORKSPACE/.once/out/app/app.docs/index.html" should include 'docs for build-exe'
-    The path "$WORKSPACE/.once/out/archive/libarchive.a" should be file
-    The contents of file "$WORKSPACE/.once/out/archive/libarchive.a" should include 'zig library mock'
-    The path "$WORKSPACE/.once/out/archive_release/libarchive_release.a" should be file
-    The contents of file "$WORKSPACE/.once/out/archive_release/libarchive_release.a" should include 'zig library mock'
-    shared_library="$WORKSPACE/.once/out/shared/libshared.so"
-    [ -f "$shared_library" ] || shared_library="$WORKSPACE/.once/out/shared/libshared.dylib"
+    The contents of file "$WORKSPACE/.struo/out/app/app" should include 'zig executable mock'
+    The path "$WORKSPACE/.struo/out/app_release/app_release" should be file
+    The contents of file "$WORKSPACE/.struo/out/app_release/app_release" should include 'zig executable mock'
+    The path "$WORKSPACE/.struo/out/app/c_c.zig" should be file
+    The contents of file "$WORKSPACE/.struo/out/app/c_c.zig" should include 'translated_c_header'
+    The path "$WORKSPACE/.struo/out/app/app.docs/index.html" should be file
+    The contents of file "$WORKSPACE/.struo/out/app/app.docs/index.html" should include 'docs for build-exe'
+    The path "$WORKSPACE/.struo/out/archive/libarchive.a" should be file
+    The contents of file "$WORKSPACE/.struo/out/archive/libarchive.a" should include 'zig library mock'
+    The path "$WORKSPACE/.struo/out/archive_release/libarchive_release.a" should be file
+    The contents of file "$WORKSPACE/.struo/out/archive_release/libarchive_release.a" should include 'zig library mock'
+    shared_library="$WORKSPACE/.struo/out/shared/libshared.so"
+    [ -f "$shared_library" ] || shared_library="$WORKSPACE/.struo/out/shared/libshared.dylib"
     The path "$shared_library" should be file
     The contents of file "$shared_library" should include 'zig library mock'
-    The path "$WORKSPACE/.once/out/shared_release/libcustom_configured.so" should be file
-    The contents of file "$WORKSPACE/.once/out/shared_release/libcustom_configured.so" should include 'zig library mock'
-    The path "$WORKSPACE/.once/out/shared_named/libcustom_shared.so" should be file
-    The contents of file "$WORKSPACE/.once/out/shared_named/libcustom_shared.so" should include 'zig library mock'
-    The path "$WORKSPACE/.once/out/native_zig/native_zig_c.zig" should be file
-    The contents of file "$WORKSPACE/.once/out/native_zig/native_zig_c.zig" should include 'standalone_translated_c_header'
+    The path "$WORKSPACE/.struo/out/shared_release/libcustom_configured.so" should be file
+    The contents of file "$WORKSPACE/.struo/out/shared_release/libcustom_configured.so" should include 'zig library mock'
+    The path "$WORKSPACE/.struo/out/shared_named/libcustom_shared.so" should be file
+    The contents of file "$WORKSPACE/.struo/out/shared_named/libcustom_shared.so" should include 'zig library mock'
+    The path "$WORKSPACE/.struo/out/native_zig/native_zig_c.zig" should be file
+    The contents of file "$WORKSPACE/.struo/out/native_zig/native_zig_c.zig" should include 'standalone_translated_c_header'
     The contents of file "$WORKSPACE/zig-argv.log" should include '-O ReleaseFast'
     The contents of file "$WORKSPACE/zig-argv.log" should include '-fsingle-threaded'
     The contents of file "$WORKSPACE/zig-argv.log" should include '-flto'
@@ -807,90 +807,90 @@ SH
   It 'builds Zig targets that use dependency roots, direct C sources, collision-safe modules, and auxiliary outputs'
     write_zig_workspace
 
-    When call /bin/sh -c '"$1" -C "$2" --format json build app_from_module > /dev/null && "$1" -C "$2" --format json build app_with_csrcs > /dev/null && "$1" -C "$2" --format json build app_collision > /dev/null && "$1" -C "$2" --format json build archive_aux > /dev/null' sh "$ONCE_BIN" "$WORKSPACE"
+    When call /bin/sh -c '"$1" -C "$2" --format json build app_from_module > /dev/null && "$1" -C "$2" --format json build app_with_csrcs > /dev/null && "$1" -C "$2" --format json build app_collision > /dev/null && "$1" -C "$2" --format json build archive_aux > /dev/null' sh "$STRUO_BIN" "$WORKSPACE"
     The status should be success
-    The path "$WORKSPACE/.once/out/app_from_module/app_from_module" should be file
-    The contents of file "$WORKSPACE/.once/out/app_from_module/app_from_module" should include 'zig executable mock'
-    The path "$WORKSPACE/.once/out/app_with_csrcs/app_with_csrcs" should be file
-    The contents of file "$WORKSPACE/.once/out/app_with_csrcs/app_with_csrcs" should include 'zig executable mock'
-    The path "$WORKSPACE/.once/out/app_collision/app_collision" should be file
-    The contents of file "$WORKSPACE/.once/out/app_collision/app_collision" should include 'zig executable mock'
-    The path "$WORKSPACE/.once/out/archive_aux/archive_aux.s" should be file
-    The contents of file "$WORKSPACE/.once/out/archive_aux/archive_aux.s" should include 'auxiliary output for build-lib'
-    The path "$WORKSPACE/.once/out/archive_aux/archive_aux.ll" should be file
-    The contents of file "$WORKSPACE/.once/out/archive_aux/archive_aux.ll" should include 'auxiliary output for build-lib'
-    The path "$WORKSPACE/.once/out/archive_aux/archive_aux.bc" should be file
-    The contents of file "$WORKSPACE/.once/out/archive_aux/archive_aux.bc" should include 'auxiliary output for build-lib'
+    The path "$WORKSPACE/.struo/out/app_from_module/app_from_module" should be file
+    The contents of file "$WORKSPACE/.struo/out/app_from_module/app_from_module" should include 'zig executable mock'
+    The path "$WORKSPACE/.struo/out/app_with_csrcs/app_with_csrcs" should be file
+    The contents of file "$WORKSPACE/.struo/out/app_with_csrcs/app_with_csrcs" should include 'zig executable mock'
+    The path "$WORKSPACE/.struo/out/app_collision/app_collision" should be file
+    The contents of file "$WORKSPACE/.struo/out/app_collision/app_collision" should include 'zig executable mock'
+    The path "$WORKSPACE/.struo/out/archive_aux/archive_aux.s" should be file
+    The contents of file "$WORKSPACE/.struo/out/archive_aux/archive_aux.s" should include 'auxiliary output for build-lib'
+    The path "$WORKSPACE/.struo/out/archive_aux/archive_aux.ll" should be file
+    The contents of file "$WORKSPACE/.struo/out/archive_aux/archive_aux.ll" should include 'auxiliary output for build-lib'
+    The path "$WORKSPACE/.struo/out/archive_aux/archive_aux.bc" should be file
+    The contents of file "$WORKSPACE/.struo/out/archive_aux/archive_aux.bc" should include 'auxiliary output for build-lib'
     The contents of file "$WORKSPACE/zig-argv.log" should include '-cflags -DLOCAL_C_SOURCE -- src/native.c'
-    The contents of file "$WORKSPACE/zig-argv.log" should include 'dash=once_foo_x45_bar'
-    The contents of file "$WORKSPACE/zig-argv.log" should include 'underscore=once_foo_ubar'
+    The contents of file "$WORKSPACE/zig-argv.log" should include 'dash=struo_foo_x45_bar'
+    The contents of file "$WORKSPACE/zig-argv.log" should include 'underscore=struo_foo_ubar'
   End
 
-  It 'runs a Zig binary target through once run'
+  It 'runs a Zig binary target through struo run'
     write_zig_workspace
 
-    When call /bin/sh -c '"$1" -C "$2" --format json run app > /dev/null' sh "$ONCE_BIN" "$WORKSPACE"
+    When call /bin/sh -c '"$1" -C "$2" --format json run app > /dev/null' sh "$STRUO_BIN" "$WORKSPACE"
     The status should be success
-    The path "$WORKSPACE/.once/out/app/run/run.json" should be file
-    The path "$WORKSPACE/.once/out/app/run/stdout.log" should be file
-    The contents of file "$WORKSPACE/.once/out/app/run/run.json" should include '"target":"app"'
-    The contents of file "$WORKSPACE/.once/out/app/run/run.json" should include '"exit_code":0'
-    The contents of file "$WORKSPACE/.once/out/app/run/stdout.log" should include 'zig executable mock:run-arg'
+    The path "$WORKSPACE/.struo/out/app/run/run.json" should be file
+    The path "$WORKSPACE/.struo/out/app/run/stdout.log" should be file
+    The contents of file "$WORKSPACE/.struo/out/app/run/run.json" should include '"target":"app"'
+    The contents of file "$WORKSPACE/.struo/out/app/run/run.json" should include '"exit_code":0'
+    The contents of file "$WORKSPACE/.struo/out/app/run/stdout.log" should include 'zig executable mock:run-arg'
   End
 
-  It 'runs a Zig test target through once test'
+  It 'runs a Zig test target through struo test'
     write_zig_workspace
 
-    When call /bin/sh -c '"$1" -C "$2" --format json test tests > /dev/null' sh "$ONCE_BIN" "$WORKSPACE"
+    When call /bin/sh -c '"$1" -C "$2" --format json test tests > /dev/null' sh "$STRUO_BIN" "$WORKSPACE"
     The status should be success
-    The path "$WORKSPACE/.once/out/tests/test/test_results.json" should be file
-    The path "$WORKSPACE/.once/out/tests/test/zig-test.log" should be file
-    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include '"target":"tests"'
-    The contents of file "$WORKSPACE/.once/out/tests/test/test_results.json" should include '"status":"passed"'
-    The contents of file "$WORKSPACE/.once/out/tests/test/zig-test.log" should include 'zig test mock:test-arg'
+    The path "$WORKSPACE/.struo/out/tests/test/test_results.json" should be file
+    The path "$WORKSPACE/.struo/out/tests/test/zig-test.log" should be file
+    The contents of file "$WORKSPACE/.struo/out/tests/test/test_results.json" should include '"target":"tests"'
+    The contents of file "$WORKSPACE/.struo/out/tests/test/test_results.json" should include '"status":"passed"'
+    The contents of file "$WORKSPACE/.struo/out/tests/test/zig-test.log" should include 'zig test mock:test-arg'
   End
 
-  It 'runs a configured Zig test target through once test'
+  It 'runs a configured Zig test target through struo test'
     write_zig_workspace
 
-    When call /bin/sh -c '"$1" -C "$2" --format json test tests_release > /dev/null' sh "$ONCE_BIN" "$WORKSPACE"
+    When call /bin/sh -c '"$1" -C "$2" --format json test tests_release > /dev/null' sh "$STRUO_BIN" "$WORKSPACE"
     The status should be success
-    The path "$WORKSPACE/.once/out/tests_release/test/test_results.json" should be file
-    The contents of file "$WORKSPACE/.once/out/tests_release/test/test_results.json" should include '"target":"tests_release"'
-    The contents of file "$WORKSPACE/.once/out/tests_release/test/test_results.json" should include '"status":"passed"'
-    The contents of file "$WORKSPACE/.once/out/tests_release/test/zig-test.log" should include 'zig test mock:release-test-arg'
+    The path "$WORKSPACE/.struo/out/tests_release/test/test_results.json" should be file
+    The contents of file "$WORKSPACE/.struo/out/tests_release/test/test_results.json" should include '"target":"tests_release"'
+    The contents of file "$WORKSPACE/.struo/out/tests_release/test/test_results.json" should include '"status":"passed"'
+    The contents of file "$WORKSPACE/.struo/out/tests_release/test/zig-test.log" should include 'zig test mock:release-test-arg'
     The contents of file "$WORKSPACE/zig-argv.log" should include '-fno-single-threaded'
   End
 
   It 'runs a Zig test with custom runner and inherited environment'
     write_zig_workspace
 
-    When call /bin/sh -c 'ONCE_ZIG_E2E_ENV=from-host "$1" -C "$2" --format json test tests_custom > /dev/null' sh "$ONCE_BIN" "$WORKSPACE"
+    When call /bin/sh -c 'STRUO_ZIG_E2E_ENV=from-host "$1" -C "$2" --format json test tests_custom > /dev/null' sh "$STRUO_BIN" "$WORKSPACE"
     The status should be success
-    The contents of file "$WORKSPACE/.once/out/tests_custom/test/test_results.json" should include '"target":"tests_custom"'
-    The contents of file "$WORKSPACE/.once/out/tests_custom/test/test_results.json" should include '"status":"passed"'
-    The contents of file "$WORKSPACE/.once/out/tests_custom/test/zig-test.log" should include 'zig test mock:custom-test-arg env:from-host test_env:configured'
+    The contents of file "$WORKSPACE/.struo/out/tests_custom/test/test_results.json" should include '"target":"tests_custom"'
+    The contents of file "$WORKSPACE/.struo/out/tests_custom/test/test_results.json" should include '"status":"passed"'
+    The contents of file "$WORKSPACE/.struo/out/tests_custom/test/zig-test.log" should include 'zig test mock:custom-test-arg env:from-host test_env:configured'
     The contents of file "$WORKSPACE/zig-argv.log" should include '--test-runner src/runner.zig'
   End
 
   It 'writes failed Zig test result artifacts'
     write_zig_workspace
 
-    When call /bin/sh -c '"$1" -C "$2" --format json test tests_fail > /dev/null 2> "$2/tests_fail.stderr"' sh "$ONCE_BIN" "$WORKSPACE"
+    When call /bin/sh -c '"$1" -C "$2" --format json test tests_fail > /dev/null 2> "$2/tests_fail.stderr"' sh "$STRUO_BIN" "$WORKSPACE"
     The status should be failure
-    The path "$WORKSPACE/.once/out/tests_fail/test/test_results.json" should be file
-    The path "$WORKSPACE/.once/out/tests_fail/test/zig-test.log" should be file
-    The path "$WORKSPACE/.once/out/tests_fail/test/native_results.txt" should be file
-    The contents of file "$WORKSPACE/.once/out/tests_fail/test/test_results.json" should include '"target":"tests_fail"'
-    The contents of file "$WORKSPACE/.once/out/tests_fail/test/test_results.json" should include '"status":"failed"'
-    The contents of file "$WORKSPACE/.once/out/tests_fail/test/zig-test.log" should include 'zig test mock:fail-test'
-    The contents of file "$WORKSPACE/.once/out/tests_fail/test/native_results.txt" should include 'exit: 1'
+    The path "$WORKSPACE/.struo/out/tests_fail/test/test_results.json" should be file
+    The path "$WORKSPACE/.struo/out/tests_fail/test/zig-test.log" should be file
+    The path "$WORKSPACE/.struo/out/tests_fail/test/native_results.txt" should be file
+    The contents of file "$WORKSPACE/.struo/out/tests_fail/test/test_results.json" should include '"target":"tests_fail"'
+    The contents of file "$WORKSPACE/.struo/out/tests_fail/test/test_results.json" should include '"status":"failed"'
+    The contents of file "$WORKSPACE/.struo/out/tests_fail/test/zig-test.log" should include 'zig test mock:fail-test'
+    The contents of file "$WORKSPACE/.struo/out/tests_fail/test/native_results.txt" should include 'exit: 1'
   End
 
-  It 'discovers dependency-rooted Zig tests through once query tests'
+  It 'discovers dependency-rooted Zig tests through struo query tests'
     write_zig_workspace
 
-    once --format json query tests > "$WORKSPACE/tests_query.json"
+    struo --format json query tests > "$WORKSPACE/tests_query.json"
 
     The contents of file "$WORKSPACE/tests_query.json" should include '"id":"tests_from_module"'
     The contents of file "$WORKSPACE/tests_query.json" should include '"kind":"zig_test"'
@@ -903,20 +903,20 @@ SH
   }
 
   exercise_generated_zig_module() {
-    example="$REPO_ROOT/crates/once-frontend/prelude/examples/zig-generated-library"
+    example="$REPO_ROOT/crates/struo-frontend/prelude/examples/zig-generated-library"
     cp "$example/"* "$WORKSPACE/"
-    awk -v zig="$SPEC_ZIG" '{print; if ($0 == "strip = true") print "zig = \"" zig "\""}' "$example/once.toml" > "$WORKSPACE/once.toml"
-    once --format json test check > /dev/null || return
-    once --format json build generated > "$WORKSPACE/warm.json" || return
+    awk -v zig="$SPEC_ZIG" '{print; if ($0 == "strip = true") print "zig = \"" zig "\""}' "$example/struo.toml" > "$WORKSPACE/struo.toml"
+    struo --format json test check > /dev/null || return
+    struo --format json build generated > "$WORKSPACE/warm.json" || return
     printf '%s\n' 'pub const answer: u32 = @import("base").answer + 9;' > "$WORKSPACE/module.txt"
-    if once --format json test check > "$WORKSPACE/changed.json" 2> "$WORKSPACE/changed.stderr"; then
+    if struo --format json test check > "$WORKSPACE/changed.json" 2> "$WORKSPACE/changed.stderr"; then
       return 1
     fi
-    cp "$WORKSPACE/.once/out/check/test/test_results.json" "$WORKSPACE/changed-results.json"
+    cp "$WORKSPACE/.struo/out/check/test/test_results.json" "$WORKSPACE/changed-results.json"
     printf '%s\n' 'pub const answer: u32 = 28;' > "$WORKSPACE/base.zig"
-    once --format json test check > /dev/null || return
-    rm "$WORKSPACE/.once/out/generated/generated.zig"
-    once --format json build generated > /dev/null
+    struo --format json test check > /dev/null || return
+    rm "$WORKSPACE/.struo/out/generated/generated.zig"
+    struo --format json build generated > /dev/null
   }
 
   It 'compiles generated modules, invalidates changed inputs, and restores cached sources'
@@ -926,8 +926,8 @@ SH
     The status should be success
     The contents of file "$WORKSPACE/warm.json" should include '"cache":"hit"'
     The contents of file "$WORKSPACE/changed-results.json" should include '"status":"failed"'
-    The contents of file "$WORKSPACE/.once/out/check/test/test_results.json" should include '"status":"passed"'
-    The contents of file "$WORKSPACE/.once/out/generated/generated.zig" should include '+ 9'
-    The path "$WORKSPACE/.once/out/generator/generator.docs" should not be exist
+    The contents of file "$WORKSPACE/.struo/out/check/test/test_results.json" should include '"status":"passed"'
+    The contents of file "$WORKSPACE/.struo/out/generated/generated.zig" should include '+ 9'
+    The path "$WORKSPACE/.struo/out/generator/generator.docs" should not be exist
   End
 End

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-#MISE description="Inject or clear temporary Once release graph targets"
+#MISE description="Inject or clear temporary Struo release graph targets"
 #USAGE flag "--target <target>" help="Rust target triple to compile"
 #USAGE flag "--version <version>" help="Version number to embed in final artifacts"
-#USAGE flag "--bootstrap" help="Generate bootstrap targets that optimize dependencies but not Once's own crates"
+#USAGE flag "--bootstrap" help="Generate bootstrap targets that optimize dependencies but not Struo's own crates"
 #USAGE flag "--clear" help="Remove generated release targets"
 set -euo pipefail
 
@@ -36,15 +36,15 @@ while (($# > 0)); do
 done
 
 manifest_files=(
-  once.toml
-  crates/once-cas/once.toml
-  crates/once-host-tree/once.toml
-  crates/once-core/once.toml
-  crates/once-presentation/once.toml
-  crates/once-events-client/once.toml
-  crates/once-frontend/once.toml
-  crates/once/once.toml
-  crates/once-cli/once.toml
+  struo.toml
+  crates/struo-cas/struo.toml
+  crates/struo-host-tree/struo.toml
+  crates/struo-core/struo.toml
+  crates/struo-presentation/struo.toml
+  crates/struo-events-client/struo.toml
+  crates/struo-frontend/struo.toml
+  crates/struo/struo.toml
+  crates/struo-cli/struo.toml
 )
 
 remove_generated_blocks() {
@@ -52,8 +52,8 @@ remove_generated_blocks() {
   for file in "${manifest_files[@]}"; do
     tmp="$(mktemp)"
     awk '
-      /^# once release generated targets start$/ { skip = 1; next }
-      /^# once release generated targets end$/ { skip = 0; next }
+      /^# struo release generated targets start$/ { skip = 1; next }
+      /^# struo release generated targets end$/ { skip = 0; next }
       skip != 1 { print }
     ' "${file}" >"${tmp}"
     mv "${tmp}" "${file}"
@@ -91,7 +91,7 @@ esac
 dependency_flags="${release_flags}"
 crate_flags="${release_flags}"
 
-# The bootstrap Once only drives graph builds, so its own crates skip
+# The bootstrap Struo only drives graph builds, so its own crates skip
 # optimization like the Cargo bootstrap profile, while dependencies such
 # as the Starlark interpreter and hashers stay optimized.
 if [[ "${bootstrap}" == true ]]; then
@@ -103,8 +103,8 @@ dependency_target="cargo_dependencies_${suffix}"
 
 remove_generated_blocks
 
-cat >>once.toml <<EOF
-# once release generated targets start
+cat >>struo.toml <<EOF
+# struo release generated targets start
 [[target]]
 name = "${dependency_target}"
 kind = "cargo_dependencies"
@@ -121,245 +121,245 @@ lockfile = "Cargo.lock"
 vendor_dir = "third_party/rust/vendor"
 target = "${target}"
 dep_rustc_flags = ${dependency_flags}
-# once release generated targets end
+# struo release generated targets end
 EOF
 
-cat >>crates/once-cas/once.toml <<EOF
-# once release generated targets start
+cat >>crates/struo-cas/struo.toml <<EOF
+# struo release generated targets start
 [[target]]
-name = "once_cas_${suffix}"
+name = "struo_cas_${suffix}"
 kind = "rust_library"
 deps = ["${dependency_target}"]
 srcs = ["src/**/*.rs"]
 
 [target.attrs]
-crate_name = "once_cas"
+crate_name = "struo_cas"
 crate_root = "src/lib.rs"
 edition = "2021"
 target = "${target}"
 rustc_flags = ${crate_flags}
-cargo_package = "once-cas"
+cargo_package = "struo-cas"
 
 [target.attrs.rustc_env]
-CARGO_MANIFEST_DIR = "crates/once-cas"
-CARGO_PKG_NAME = "once-cas"
+CARGO_MANIFEST_DIR = "crates/struo-cas"
+CARGO_PKG_NAME = "struo-cas"
 CARGO_PKG_VERSION = "${version}"
-# once release generated targets end
+# struo release generated targets end
 EOF
 
-cat >>crates/once-host-tree/once.toml <<EOF
-# once release generated targets start
+cat >>crates/struo-host-tree/struo.toml <<EOF
+# struo release generated targets start
 [[target]]
-name = "once_host_tree_${suffix}"
+name = "struo_host_tree_${suffix}"
 kind = "rust_library"
 deps = ["${dependency_target}"]
 srcs = ["src/**/*.rs"]
 
 [target.attrs]
-crate_name = "once_host_tree"
+crate_name = "struo_host_tree"
 crate_root = "src/lib.rs"
 edition = "2021"
 target = "${target}"
 rustc_flags = ${crate_flags}
-cargo_package = "once-host-tree"
+cargo_package = "struo-host-tree"
 
 [target.attrs.rustc_env]
-CARGO_MANIFEST_DIR = "crates/once-host-tree"
-CARGO_PKG_NAME = "once-host-tree"
+CARGO_MANIFEST_DIR = "crates/struo-host-tree"
+CARGO_PKG_NAME = "struo-host-tree"
 CARGO_PKG_VERSION = "${version}"
-# once release generated targets end
+# struo release generated targets end
 EOF
 
-cat >>crates/once-presentation/once.toml <<EOF
-# once release generated targets start
+cat >>crates/struo-presentation/struo.toml <<EOF
+# struo release generated targets start
 [[target]]
-name = "once_presentation_${suffix}"
+name = "struo_presentation_${suffix}"
 kind = "rust_library"
 deps = ["${dependency_target}"]
 srcs = ["src/**/*.rs"]
 
 [target.attrs]
-crate_name = "once_presentation"
+crate_name = "struo_presentation"
 crate_root = "src/lib.rs"
 edition = "2021"
 target = "${target}"
 rustc_flags = ${crate_flags}
-cargo_package = "once-presentation"
+cargo_package = "struo-presentation"
 
 [target.attrs.rustc_env]
-CARGO_MANIFEST_DIR = "crates/once-presentation"
-CARGO_PKG_NAME = "once-presentation"
+CARGO_MANIFEST_DIR = "crates/struo-presentation"
+CARGO_PKG_NAME = "struo-presentation"
 CARGO_PKG_VERSION = "${version}"
-# once release generated targets end
+# struo release generated targets end
 EOF
 
-cat >>crates/once-core/once.toml <<EOF
-# once release generated targets start
+cat >>crates/struo-core/struo.toml <<EOF
+# struo release generated targets start
 [[target]]
-name = "once_core_${suffix}"
+name = "struo_core_${suffix}"
 kind = "rust_library"
 deps = [
-  "crates/once-presentation/once_presentation_${suffix}",
-  "crates/once-cas/once_cas_${suffix}",
-  "crates/once-host-tree/once_host_tree_${suffix}",
+  "crates/struo-presentation/struo_presentation_${suffix}",
+  "crates/struo-cas/struo_cas_${suffix}",
+  "crates/struo-host-tree/struo_host_tree_${suffix}",
   "${dependency_target}",
 ]
 srcs = ["src/**/*.rs"]
 
 [target.attrs]
-crate_name = "once_core"
+crate_name = "struo_core"
 crate_root = "src/lib.rs"
 edition = "2021"
 features = ["default", "remote-microsandbox"]
 target = "${target}"
 rustc_flags = ${crate_flags}
-cargo_package = "once-core"
+cargo_package = "struo-core"
 
 [target.attrs.rustc_env]
-CARGO_MANIFEST_DIR = "crates/once-core"
-CARGO_PKG_NAME = "once-core"
+CARGO_MANIFEST_DIR = "crates/struo-core"
+CARGO_PKG_NAME = "struo-core"
 CARGO_PKG_VERSION = "${version}"
-# once release generated targets end
+# struo release generated targets end
 EOF
 
-cat >>crates/once-events-client/once.toml <<EOF
-# once release generated targets start
+cat >>crates/struo-events-client/struo.toml <<EOF
+# struo release generated targets start
 [[target]]
-name = "once_events_client_${suffix}"
+name = "struo_events_client_${suffix}"
 kind = "rust_library"
 deps = [
-  "crates/once-core/once_core_${suffix}",
+  "crates/struo-core/struo_core_${suffix}",
   "${dependency_target}",
 ]
 srcs = ["src/**/*.rs", "proto/**/*.proto", "build.rs"]
 
 [target.attrs]
-crate_name = "once_events_client"
+crate_name = "struo_events_client"
 crate_root = "src/lib.rs"
 edition = "2021"
 build_script = "build.rs"
 target = "${target}"
 rustc_flags = ${crate_flags}
-cargo_package = "once-events-client"
+cargo_package = "struo-events-client"
 
 [target.attrs.rustc_env]
-CARGO_MANIFEST_DIR = "crates/once-events-client"
-CARGO_PKG_NAME = "once-events-client"
+CARGO_MANIFEST_DIR = "crates/struo-events-client"
+CARGO_PKG_NAME = "struo-events-client"
 CARGO_PKG_VERSION = "${version}"
-# once release generated targets end
+# struo release generated targets end
 EOF
 
-cat >>crates/once-frontend/once.toml <<EOF
-# once release generated targets start
+cat >>crates/struo-frontend/struo.toml <<EOF
+# struo release generated targets start
 [[target]]
-name = "once_frontend_${suffix}"
+name = "struo_frontend_${suffix}"
 kind = "rust_library"
 deps = [
-  "crates/once-presentation/once_presentation_${suffix}",
-  "crates/once-host-tree/once_host_tree_${suffix}",
-  "crates/once-core/once_core_${suffix}",
+  "crates/struo-presentation/struo_presentation_${suffix}",
+  "crates/struo-host-tree/struo_host_tree_${suffix}",
+  "crates/struo-core/struo_core_${suffix}",
   "${dependency_target}",
 ]
 srcs = ["src/**/*.rs", "prelude/**/*.star", "prelude/examples/**"]
 
 [target.attrs]
-crate_name = "once_frontend"
+crate_name = "struo_frontend"
 crate_root = "src/lib.rs"
 edition = "2021"
 target = "${target}"
 rustc_flags = ${crate_flags}
-cargo_package = "once-frontend"
+cargo_package = "struo-frontend"
 
 [target.attrs.rustc_env]
-CARGO_MANIFEST_DIR = "crates/once-frontend"
-CARGO_PKG_NAME = "once-frontend"
+CARGO_MANIFEST_DIR = "crates/struo-frontend"
+CARGO_PKG_NAME = "struo-frontend"
 CARGO_PKG_VERSION = "${version}"
-# once release generated targets end
+# struo release generated targets end
 EOF
 
-cat >>crates/once/once.toml <<EOF
-# once release generated targets start
+cat >>crates/struo/struo.toml <<EOF
+# struo release generated targets start
 [[target]]
-name = "once_cdylib_${suffix}"
+name = "struo_cdylib_${suffix}"
 kind = "rust_library"
 deps = [
-  "crates/once-cas/once_cas_${suffix}",
-  "crates/once-host-tree/once_host_tree_${suffix}",
-  "crates/once-core/once_core_${suffix}",
-  "crates/once-frontend/once_frontend_${suffix}",
+  "crates/struo-cas/struo_cas_${suffix}",
+  "crates/struo-host-tree/struo_host_tree_${suffix}",
+  "crates/struo-core/struo_core_${suffix}",
+  "crates/struo-frontend/struo_frontend_${suffix}",
   "${dependency_target}",
 ]
 srcs = ["src/**/*.rs", "include/**/*", "swift/**/*.swift"]
 
 [target.attrs]
-crate_name = "once"
+crate_name = "struo"
 crate_root = "src/lib.rs"
 edition = "2021"
 crate_type = "cdylib"
 target = "${target}"
 rustc_flags = ${crate_flags}
-cargo_package = "once"
+cargo_package = "struo"
 
 [target.attrs.rustc_env]
-CARGO_MANIFEST_DIR = "crates/once"
-CARGO_PKG_NAME = "once"
+CARGO_MANIFEST_DIR = "crates/struo"
+CARGO_PKG_NAME = "struo"
 CARGO_PKG_VERSION = "${version}"
 
 [[target]]
-name = "once_staticlib_${suffix}"
+name = "struo_staticlib_${suffix}"
 kind = "rust_library"
 deps = [
-  "crates/once-cas/once_cas_${suffix}",
-  "crates/once-host-tree/once_host_tree_${suffix}",
-  "crates/once-core/once_core_${suffix}",
-  "crates/once-frontend/once_frontend_${suffix}",
+  "crates/struo-cas/struo_cas_${suffix}",
+  "crates/struo-host-tree/struo_host_tree_${suffix}",
+  "crates/struo-core/struo_core_${suffix}",
+  "crates/struo-frontend/struo_frontend_${suffix}",
   "${dependency_target}",
 ]
 srcs = ["src/**/*.rs", "include/**/*", "swift/**/*.swift"]
 
 [target.attrs]
-crate_name = "once"
+crate_name = "struo"
 crate_root = "src/lib.rs"
 edition = "2021"
 crate_type = "staticlib"
 target = "${target}"
 rustc_flags = ${crate_flags}
-cargo_package = "once"
+cargo_package = "struo"
 
 [target.attrs.rustc_env]
-CARGO_MANIFEST_DIR = "crates/once"
-CARGO_PKG_NAME = "once"
+CARGO_MANIFEST_DIR = "crates/struo"
+CARGO_PKG_NAME = "struo"
 CARGO_PKG_VERSION = "${version}"
-# once release generated targets end
+# struo release generated targets end
 EOF
 
-cat >>crates/once-cli/once.toml <<EOF
-# once release generated targets start
+cat >>crates/struo-cli/struo.toml <<EOF
+# struo release generated targets start
 [[target]]
-name = "once_cli_${suffix}"
+name = "struo_cli_${suffix}"
 kind = "rust_binary"
 deps = [
-  "crates/once-cas/once_cas_${suffix}",
-  "crates/once-host-tree/once_host_tree_${suffix}",
-  "crates/once-core/once_core_${suffix}",
-  "crates/once-events-client/once_events_client_${suffix}",
-  "crates/once-frontend/once_frontend_${suffix}",
+  "crates/struo-cas/struo_cas_${suffix}",
+  "crates/struo-host-tree/struo_host_tree_${suffix}",
+  "crates/struo-core/struo_core_${suffix}",
+  "crates/struo-events-client/struo_events_client_${suffix}",
+  "crates/struo-frontend/struo_frontend_${suffix}",
   "${dependency_target}",
 ]
 srcs = ["src/**/*.rs"]
 
 [target.attrs]
-crate_name = "once"
+crate_name = "struo"
 crate_root = "src/main.rs"
 edition = "2021"
 target = "${target}"
 rustc_flags = ${crate_flags}
-cargo_package = "once-cli"
+cargo_package = "struo-cli"
 
 [target.attrs.rustc_env]
-CARGO_MANIFEST_DIR = "crates/once-cli"
-CARGO_PKG_NAME = "once-cli"
+CARGO_MANIFEST_DIR = "crates/struo-cli"
+CARGO_PKG_NAME = "struo-cli"
 CARGO_PKG_VERSION = "0.0.0"
-ONCE_VERSION = "${version}"
-# once release generated targets end
+STRUO_VERSION = "${version}"
+# struo release generated targets end
 EOF

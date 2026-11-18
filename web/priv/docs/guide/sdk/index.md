@@ -5,7 +5,7 @@ next: false
 
 # Software Development Kit
 
-Use a Once language library when an application needs to store and retrieve
+Use a Struo language library when an application needs to store and retrieve
 cache data directly. Use the [command line](/reference/cli/) instead when the
 goal is to execute scripts, build targets, run tests, or manage runtime
 sessions.
@@ -28,11 +28,11 @@ They do not execute commands or load the repository graph.
 
 | Language | Package | Call style | Guide |
 | --- | --- | --- | --- |
-| Rust | `once` crate | Asynchronous | [Rust](/guide/sdk/rust) |
-| Swift | `Once.xcframework` and the matching Swift wrapper | Asynchronous | [Swift](/guide/sdk/swift) |
-| Ruby | `buildonce` gem | Synchronous | [Ruby](/guide/sdk/ruby) |
-| JavaScript | `buildonce` package for Node.js | Promise-based | [JavaScript](/guide/sdk/javascript) |
-| C | `libonce` and `once.h` | Synchronous | [C](/guide/sdk/c) |
+| Rust | `struo` crate | Asynchronous | [Rust](/guide/sdk/rust) |
+| Swift | `Struo.xcframework` and the matching Swift wrapper | Asynchronous | [Swift](/guide/sdk/swift) |
+| Ruby | `buildstruo` gem | Synchronous | [Ruby](/guide/sdk/ruby) |
+| JavaScript | `buildstruo` package for Node.js | Promise-based | [JavaScript](/guide/sdk/javascript) |
+| C | `libstruo` and `struo.h` | Synchronous | [C](/guide/sdk/c) |
 
 Choose the binding used by the process that owns the integration. All
 bindings use compatible digests and action-result concepts, so separate tools
@@ -133,7 +133,7 @@ and describe remote failures by category and status code. Text a server sends
 back, such as a status message or response body, is not repeated because it
 can contain credentials.
 
-## Before You Embed Once
+## Before You Embed Struo
 
 Use the action-key builder to partition each integration by namespace and add
 every input that can affect the result. Input order is significant and must be

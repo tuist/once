@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# once needs "./generate.sh"
-# once input "../main.txt"
-# once output "../dist/app.txt"
-# once cwd ".."
+# struo needs "./generate.sh"
+# struo input "../main.txt"
+# struo output "../dist/app.txt"
+# struo cwd ".."
 set -e
 mkdir -p dist
 cat build/generated.txt main.txt > dist/app.txt

@@ -16,19 +16,19 @@ configure_args = ["-DBUILD_TESTING=ON"]
 labels = ["unit"]
 ```
 
-Run `once build Tests` to configure and build, then `once test Tests` to run
+Run `struo build Tests` to configure and build, then `struo test Tests` to run
 CTest. Native test failures and empty suites fail the command. Test results
-are retained even when CTest fails. Use `once query tests`,
-`once query test-manifest Tests`, and `once query test-results Tests` to
+are retained even when CTest fails. Use `struo query tests`,
+`struo query test-manifest Tests`, and `struo query test-results Tests` to
 inspect the runner contract and normalized outcome.
 
 For projects that expose custom test targets instead of registering CTest
-entries, set `test_targets = ["check"]` to the upstream target names. Once runs
+entries, set `test_targets = ["check"]` to the upstream target names. Struo runs
 `cmake --build <build-dir> --config <build-type> --parallel <jobs> --target check`
 in the test phase, after configure and build. `build_targets` only selects the
 preparatory build; it does not replace the test runner. Use `env` for upstream
 runner options. Explicit test targets own test discovery, empty-selection
-handling, and exit status. Once reports their nonzero exits and timeouts as
+handling, and exit status. Struo reports their nonzero exits and timeouts as
 failures, but cannot infer case counts from arbitrary native output. It does
 not fall back automatically when CTest finds no tests.
 
@@ -55,7 +55,7 @@ List all configuration, source, header, fixture, and runtime inputs in `srcs`
 or `data`. No native source discovery is performed. Configure upstream tests
 using their native options and include every required native test executable
 when narrowing `build_targets`. `jobs` reserves CPU slots and 1 GiB per job
-for build and test execution within Once's budget, since native CTest suites
+for build and test execution within Struo's budget, since native CTest suites
 can themselves compile integration fixtures. It also defaults
 `CMAKE_BUILD_PARALLEL_LEVEL` for nested CMake builds. Explicit environment
 overrides remain the caller's responsibility.
@@ -64,7 +64,7 @@ overrides remain the caller's responsibility.
 
 The complete native build tree is a declared output, but configure and build
 always bypass the cache. CMake can select compilers, toolchain files, SDKs,
-and other external configuration that Once cannot safely identify from the
+and other external configuration that Struo cannot safely identify from the
 declared inputs. Reusing an older executable after those selections change
 would be incorrect. Each invocation cleans, configures, and rebuilds the
 native tree, including after output deletion; there is no native build-tree
@@ -85,12 +85,12 @@ undeclared external state cannot be silently replaced by an older passing result
 
 ## Results and inventory
 
-The target exposes `build`, `test`, and `once_test_info`. Normalized results
+The target exposes `build`, `test`, and `struo_test_info`. Normalized results
 contain exactly one suite case, not one case per native CTest entry. The log
 and native JUnit report retain native case names, counts, failures, and output.
 Custom test targets retain `cmake-test.log` instead of `ctest.log` and expose no
 native JUnit artifact; their `native_results` list is empty.
-When `timeout_ms` expires, Once retains a normalized failed suite and a timeout
+When `timeout_ms` expires, Struo retains a normalized failed suite and a timeout
 reason in the log; CTest may not finish writing its native JUnit report.
 Exact native case filtering, case listing, sharding, retries, and coverage
 are unsupported. An exact test-unit request is rejected rather than silently

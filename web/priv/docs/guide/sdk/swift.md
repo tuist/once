@@ -6,7 +6,7 @@ next: false
 # Swift Software Development Kit
 
 The Swift library is a thin asynchronous wrapper over the C application
-programming interface in the `Once.xcframework` release artifact. It exposes
+programming interface in the `Struo.xcframework` release artifact. It exposes
 cache primitives for Apple
 platforms. Script execution belongs to the command line and is not part of
 this library. See the [language-library overview](/guide/sdk/) to compare the
@@ -14,10 +14,10 @@ available bindings.
 
 ```swift
 import Foundation
-import Once
+import Struo
 
 func example() async throws {
-    let cache = OnceCache()
+    let cache = StruoCache()
     let digest = try await cache.putBlob(Data("hello".utf8))
     let bytes = try await cache.getBlob(digest)
 
@@ -43,28 +43,28 @@ let package = Package(
     targets: [
         .target(
             name: "MyPackage",
-            dependencies: ["Once"]
+            dependencies: ["Struo"]
         ),
         .binaryTarget(
-            name: "Once",
-            url: "https://github.com/tuist/once/releases/download/0.1.0/Once.xcframework.zip",
+            name: "Struo",
+            url: "https://github.com/tuist/struo/releases/download/0.1.0/Struo.xcframework.zip",
             checksum: "<checksum>"
         ),
     ]
 )
 ```
 
-Replace the version in the download address with the Once release you want to use. The
+Replace the version in the download address with the Struo release you want to use. The
 checksum is published next to the release asset and can also be computed
-locally with `swift package compute-checksum Once.xcframework.zip`.
+locally with `swift package compute-checksum Struo.xcframework.zip`.
 
-Vendor the `Once.swift` wrapper that ships with the matching release tag
-into the Swift target that depends on `Once`. The wrapper imports the C
+Vendor the `Struo.swift` wrapper that ships with the matching release tag
+into the Swift target that depends on `Struo`. The wrapper imports the C
 module from the binary target and gives callers the high-level Swift interface.
 
-## OnceCache
+## StruoCache
 
-`OnceCache` is the Swift cache client.
+`StruoCache` is the Swift cache client.
 
 Choose the initializer based on who owns provider selection. A workspace-bound
 client uses the same effective configuration as the command line.
@@ -76,12 +76,12 @@ All cache operations that touch storage are `async throws`.
 | `init()` | Opens the default local cache using the operating-system convention. |
 | `init(localCacheRoot:)` | Opens an isolated local cache at a caller-owned file location. |
 | `init(workspaceRoot:)` | Resolves the effective provider for a workspace file location. |
-| `version` | Returns the linked Once version. |
+| `version` | Returns the linked Struo version. |
 
 The default follows the
 [X Desktop Group base-directory convention](https://specifications.freedesktop.org/basedir-spec/latest/):
-its cache root is `$XDG_CACHE_HOME/once/cas` when
-`XDG_CACHE_HOME` is set, and `$HOME/.cache/once/cas` otherwise.
+its cache root is `$XDG_CACHE_HOME/struo/cas` when
+`XDG_CACHE_HOME` is set, and `$HOME/.cache/struo/cas` otherwise.
 
 ## Blobs
 
@@ -102,12 +102,12 @@ payloads whose size is not tightly bounded.
 
 ## Action Keys
 
-`OnceActionKey` builds a versioned identity from ordered, labeled inputs:
+`StruoActionKey` builds a versioned identity from ordered, labeled inputs:
 
 ```swift
-let cache = OnceCache(workspaceRoot: workspaceURL)
+let cache = StruoCache(workspaceRoot: workspaceURL)
 let source = try await cache.putBlob(contentsOf: sourceURL)
-var key = OnceActionKey(namespace: "example.compile")
+var key = StruoActionKey(namespace: "example.compile")
 key.add(bytes: Data("swiftc".utf8), label: "compiler")
 key.add(digest: source, label: "source")
 let actionDigest = try await key.digest()
@@ -136,7 +136,7 @@ interface directly.
 
 | Type | Use |
 | --- | --- |
-| `OnceActionResult` | Stores an action exit code, stdout digest, stderr digest, and output digests. |
-| `OnceActionKey` | Builds a versioned action digest from ordered, labeled inputs. |
-| `OnceCacheStats` | Reports local cache size and entry counts. |
-| `OnceError` | Reports Swift wrapper failures. |
+| `StruoActionResult` | Stores an action exit code, stdout digest, stderr digest, and output digests. |
+| `StruoActionKey` | Builds a versioned action digest from ordered, labeled inputs. |
+| `StruoCacheStats` | Reports local cache size and entry counts. |
+| `StruoError` | Reports Swift wrapper failures. |

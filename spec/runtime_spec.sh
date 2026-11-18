@@ -1,12 +1,12 @@
 #shellcheck shell=bash
 # End-to-end specs for persisted runtime sessions.
 
-Describe 'once runtime'
+Describe 'struo runtime'
   BeforeEach 'setup_workspace'
   AfterEach 'cleanup_workspace'
 
   seed_echo_target() {
-    cat > "$WORKSPACE/once.toml" <<'EOF'
+    cat > "$WORKSPACE/struo.toml" <<'EOF'
 [[target]]
 name = "Echo"
 kind = "task"
@@ -20,22 +20,22 @@ EOF
   It 'starts a target session and reads persisted logs'
     seed_echo_target
 
-    result="$(once --format json runtime start Echo)"
+    result="$(struo --format json runtime start Echo)"
     session_id="$(
       printf '%s' "$result" | python3 -c 'import json, sys; print(json.load(sys.stdin)["session_id"])'
     )"
 
     for _ in $(seq 1 50); do
-      status_json="$(once --format json runtime status "$session_id")"
+      status_json="$(struo --format json runtime status "$session_id")"
       case "$status_json" in
         *'"status":"exited"'*|*'"status":"failed"'*) break ;;
       esac
       sleep 0.1
     done
 
-    status_json="$(once --format json runtime status "$session_id")"
-    stdout_logs="$(once --format json runtime logs "$session_id" --source stdout)"
-    stderr_logs="$(once --format json runtime logs "$session_id" --source stderr)"
+    status_json="$(struo --format json runtime status "$session_id")"
+    stdout_logs="$(struo --format json runtime logs "$session_id" --source stdout)"
+    stderr_logs="$(struo --format json runtime logs "$session_id" --source stderr)"
 
     The variable status_json should include '"status":"exited"'
     The variable status_json should include '"exit_code":0'

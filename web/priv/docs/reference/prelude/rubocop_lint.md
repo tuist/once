@@ -11,11 +11,11 @@ srcs = ["lib/**/*.rb"]
 ```
 
 Optional attributes are `rubocop`, `ruby`, `config`, `data`, and `args`. The
-target emits `once_lint_info` and exposes the `lint` capability.
-Once prepares both RuboCop and Ruby because the portable report adapter runs
+target emits `struo_lint_info` and exposes the `lint` capability.
+Struo prepares both RuboCop and Ruby because the portable report adapter runs
 with Ruby after RuboCop writes its native result.
 
-Use `once query schema rubocop_lint` for the complete contract and
-`once query example rubocop_lint rubocop-lint-minimal` for the starter files.
+Use `struo query schema rubocop_lint` for the complete contract and
+`struo query example rubocop_lint rubocop-lint-minimal` for the starter files.
 The [Linting guide](/guide/graph/linting) covers materialization, execution,
 failure policy, normalized findings, and cache verification.

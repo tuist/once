@@ -9,21 +9,21 @@ Describe 'Native container images'
   }
 
   registry_unconfigured() {
-    engine_unavailable || [ -z "${ONCE_TEST_REGISTRY:-}" ]
+    engine_unavailable || [ -z "${STRUO_TEST_REGISTRY:-}" ]
   }
 
   stage_example() {
-    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/oci-pull-and-extend/." "$WORKSPACE/"
+    cp -R "$REPO_ROOT/crates/struo-frontend/prelude/examples/oci-pull-and-extend/." "$WORKSPACE/"
     export DOCKER_CONFIG="${DOCKER_CONFIG:-$SPEC_ORIGINAL_HOME/.docker}"
   }
 
   pull_extend_and_run() {
     stage_example
-    once --format json build hello_image | jq -e '.status == "completed"' >/dev/null || return
-    once run hello_load >/dev/null || return
-    output="$(docker run --rm once-hello:latest /usr/local/bin/hello)" || return
-    [ "$output" = "hello from a Once container" ] || return
-    release="$(docker run --rm once-hello:latest cat /etc/alpine-release)" || return
+    struo --format json build hello_image | jq -e '.status == "completed"' >/dev/null || return
+    struo run hello_load >/dev/null || return
+    output="$(docker run --rm struo-hello:latest /usr/local/bin/hello)" || return
+    [ "$output" = "hello from a Struo container" ] || return
+    release="$(docker run --rm struo-hello:latest cat /etc/alpine-release)" || return
     [ -n "$release" ]
   }
 
@@ -35,18 +35,18 @@ Describe 'Native container images'
 
   push_matches_the_local_digest() {
     stage_example
-    sed -i.bak "s#registry.example.com/team/hello#${ONCE_TEST_REGISTRY}/team/hello#; s#^remote_tags = .*#remote_tags = [\"v1\", \"latest\"]\ninsecure = true#" "$WORKSPACE/once.toml"
-    once --format json build hello_image | jq -e '.status == "completed"' >/dev/null || return
-    local_digest="$(jq -r '.manifests[0].digest' "$WORKSPACE/.once/out/hello_image/hello_image.oci/index.json")" || return
-    once run hello_push >/dev/null || return
+    sed -i.bak "s#registry.example.com/team/hello#${STRUO_TEST_REGISTRY}/team/hello#; s#^remote_tags = .*#remote_tags = [\"v1\", \"latest\"]\ninsecure = true#" "$WORKSPACE/struo.toml"
+    struo --format json build hello_image | jq -e '.status == "completed"' >/dev/null || return
+    local_digest="$(jq -r '.manifests[0].digest' "$WORKSPACE/.struo/out/hello_image/hello_image.oci/index.json")" || return
+    struo run hello_push >/dev/null || return
     for tag in v1 latest; do
-      remote="$(curl -fsSI -H 'Accept: application/vnd.oci.image.manifest.v1+json' "http://${ONCE_TEST_REGISTRY}/v2/team/hello/manifests/${tag}" | tr -d '\r' | awk -F': ' 'tolower($1)=="docker-content-digest"{print $2}')" || return
+      remote="$(curl -fsSI -H 'Accept: application/vnd.oci.image.manifest.v1+json' "http://${STRUO_TEST_REGISTRY}/v2/team/hello/manifests/${tag}" | tr -d '\r' | awk -F': ' 'tolower($1)=="docker-content-digest"{print $2}')" || return
       [ "$remote" = "$local_digest" ] || return
     done
   }
 
   It 'publishes an image under the digest of the local layout'
-    Skip if 'set ONCE_TEST_REGISTRY to a plain-HTTP registry such as localhost:5000' registry_unconfigured
+    Skip if 'set STRUO_TEST_REGISTRY to a plain-HTTP registry such as localhost:5000' registry_unconfigured
     When call push_matches_the_local_digest
     The status should be success
   End

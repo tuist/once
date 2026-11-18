@@ -1,0 +1,6 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.struo.greeting.test">
+  <application />
+  <instrumentation
+    android:name="dev.struo.greeting.StruoInstrumentationRunner"
+    android:targetPackage="dev.struo.greeting" />
+</manifest>

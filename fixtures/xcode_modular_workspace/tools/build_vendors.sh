@@ -35,7 +35,7 @@ build_dynamic_framework() {
 <plist version="1.0">
 <dict>
   <key>CFBundleExecutable</key><string>$name</string>
-  <key>CFBundleIdentifier</key><string>dev.once.fixture.$name</string>
+  <key>CFBundleIdentifier</key><string>dev.struo.fixture.$name</string>
   <key>CFBundlePackageType</key><string>FMWK</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
   <key>CFBundleVersion</key><string>1</string>

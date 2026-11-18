@@ -1,11 +1,11 @@
 {
-  "name": "buildonce",
+  "name": "buildstruo",
   "version": "0.0.0",
-  "description": "JavaScript software development kit for Once cache access",
+  "description": "JavaScript software development kit for Struo cache access",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tuist/once.git",
+    "url": "git+https://github.com/tuist/struo.git",
     "directory": "packages/js"
   },
   "main": "lib/index.js",

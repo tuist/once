@@ -4,16 +4,16 @@ defmodule Mix.Tasks.Docs.Gen.OgImages do
   @moduledoc """
   Generates Open Graph images for every documentation page.
 
-  Each page's OG card (`OnceSiteWeb.Docs.OgImage`) is rendered to HTML and
+  Each page's OG card (`StruoSiteWeb.Docs.OgImage`) is rendered to HTML and
   screenshotted to `priv/static/docs/og/<slug>.jpg` with headless Chrome. If
   Chrome is unavailable the task logs a warning and exits successfully, so the
   build never depends on it.
   """
   use Mix.Task
 
-  alias OnceSiteWeb.Docs.OgImage
-  alias OnceSiteWeb.Docs.OgImageRenderer
-  alias OnceSiteWeb.Docs.Sidebar
+  alias StruoSiteWeb.Docs.OgImage
+  alias StruoSiteWeb.Docs.OgImageRenderer
+  alias StruoSiteWeb.Docs.Sidebar
 
   @source "priv/docs"
   @output "priv/static/docs/og"
@@ -71,7 +71,7 @@ defmodule Mix.Tasks.Docs.Gen.OgImages do
   defp index_page do
     %{
       slug: "/docs",
-      title: "Once Documentation",
+      title: "Struo Documentation",
       description: "Reusable, cacheable, remotely executable repository automation.",
       filename: "index.jpg"
     }
@@ -103,7 +103,7 @@ defmodule Mix.Tasks.Docs.Gen.OgImages do
   defp title(markdown) do
     case Regex.run(~r/^#\s+(.+)$/m, markdown) do
       [_, title] -> title |> String.replace("`", "") |> String.trim()
-      _ -> "Once Documentation"
+      _ -> "Struo Documentation"
     end
   end
 

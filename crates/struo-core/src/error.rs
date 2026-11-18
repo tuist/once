@@ -1,0 +1,125 @@
+use std::time::Duration;
+
+use crate::WorkspacePathError;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("action filesystem contract violated: {violations:?}")]
+    ContractViolation {
+        violations: Vec<crate::ContractViolation>,
+    },
+    #[error("cas error: {0}")]
+    Cas(#[from] struo_cas::Error),
+    #[error("failed to spawn {program}: {source}")]
+    Spawn {
+        program: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to wait for {program}: {source}")]
+    Wait {
+        program: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("remote provider `{provider}` is not supported yet")]
+    UnsupportedRemoteProvider { provider: String },
+    #[error("executor `{executor}` does not support {requirement}; select an executor that supports this requirement")]
+    UnsupportedExecutorRequirement {
+        executor: String,
+        requirement: &'static str,
+    },
+    #[error("remote provider `{provider}` is not configured: {message}")]
+    RemoteProviderConfig { provider: String, message: String },
+    #[error("remote provider `{provider}` returned HTTP {status}")]
+    RemoteProviderStatus { provider: String, status: u16 },
+    #[error("remote provider `{provider}` request failed: {source}")]
+    RemoteProviderHttp {
+        provider: String,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("required {resource} capacity {requested} exceeds available capacity {capacity}")]
+    ResourceRequirementUnsatisfied {
+        resource: String,
+        requested: u64,
+        capacity: u64,
+    },
+    #[error("executor `{executor}` exceeded its {resource} limit of {limit}")]
+    ExecutorResourceLimit {
+        executor: String,
+        resource: &'static str,
+        limit: u64,
+    },
+    #[error("executor `{executor}` made no progress during {phase} for {timeout:?}")]
+    ExecutorStalled {
+        executor: String,
+        phase: &'static str,
+        timeout: Duration,
+    },
+    #[error("remote provider `{provider}` returned an error: {message}")]
+    RemoteProviderApi { provider: String, message: String },
+    #[error("command exited with code 0, which is excluded by success_exit_codes {accepted:?}; add 0 to success_exit_codes if this exit should count as success")]
+    RejectedZeroExitCode {
+        accepted: Vec<i32>,
+        stdout: Option<struo_cas::Digest>,
+        stderr: Option<struo_cas::Digest>,
+    },
+    #[error("action requires a non-empty argv")]
+    EmptyArgv,
+    #[error("action exceeded its timeout of {0:?}")]
+    Timeout(Duration),
+    #[error("invalid workspace path: {0}")]
+    InvalidPath(#[from] WorkspacePathError),
+    #[error("invalid copy path action: {reason}")]
+    InvalidCopyPath { reason: String },
+    #[error("invalid link path action: {reason}")]
+    InvalidLinkPath { reason: String },
+    #[error("invalid host file materialization: {reason}")]
+    InvalidHostFile { reason: String },
+    #[error("invalid action contract validation: {reason}")]
+    InvalidContractValidation { reason: String },
+    #[error("invalid download-and-extract action: {reason}")]
+    InvalidDownloadAndExtract { reason: String },
+    #[error("download authorization environment variable `{name}` is not set")]
+    DownloadAuthorizationMissing { name: String },
+    #[error("download checksum mismatch for `{url}`: expected {expected}, got {actual}")]
+    DownloadChecksumMismatch {
+        url: String,
+        expected: String,
+        actual: String,
+    },
+    #[error("host file `{path}` changed after analysis: expected digest {expected}, got {actual}")]
+    HostFileDigestMismatch {
+        path: String,
+        expected: String,
+        actual: String,
+    },
+    #[error("declared output `{path}` was not produced")]
+    MissingOutput { path: String },
+    #[error("file action `{action}` failed for `{path}`: {source}")]
+    FileAction {
+        action: &'static str,
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to read declared output `{path}`: {source}")]
+    ReadOutput {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to restore cached output `{path}`: {source}")]
+    RestoreOutput {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("invalid cached directory output `{path}`: {message}")]
+    InvalidDirectoryOutput { path: String, message: String },
+    #[error("invalid cached file output `{path}`: {message}")]
+    InvalidFileOutput { path: String, message: String },
+}
+
+pub type Result<T> = std::result::Result<T, Error>;

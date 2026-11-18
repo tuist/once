@@ -22,7 +22,7 @@ contents, preserving explicit Swift Package Manager `copy` rules.
 | `minimum_os` | string | no | `13.0` | Minimum supported operating system version |
 | `sdk_variant` | string | no | `simulator` | `simulator` or `device`; ignored on macOS |
 | `bundle_name` | string | no | target name | Bundle name. The `.bundle` suffix is added when omitted |
-| `bundle_id` | string | no | `dev.once.<bundle_name>.resources` | Bundle identifier written to generated metadata |
+| `bundle_id` | string | no | `dev.struo.<bundle_name>.resources` | Bundle identifier written to generated metadata |
 | `resources` | list&lt;string&gt; | no | `[]` | Files and directory roots processed into the bundle |
 | `prebuild_actions` | list&lt;string&gt; | no | `[]` | Ordered serialized scripts run before resource processing |
 | `prepackage_actions` | list&lt;string&gt; | no | `[]` | Ordered serialized resource generators run before packaging |
@@ -51,8 +51,8 @@ of bundle paths and files that downstream applications embed and sign.
 
 | Output | Location |
 | --- | --- |
-| Resource bundle | `.once/out/<target>/<bundle_name>.bundle` |
-| Property list | `.once/out/<target>/<bundle_name>.bundle/Info.plist` |
+| Resource bundle | `.struo/out/<target>/<bundle_name>.bundle` |
+| Property list | `.struo/out/<target>/<bundle_name>.bundle/Info.plist` |
 
 ## Example
 

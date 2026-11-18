@@ -5,13 +5,13 @@ next: false
 
 # JavaScript Software Development Kit
 
-The JavaScript library is the `buildonce` npm package. It exposes cache
+The JavaScript library is the `buildstruo` npm package. It exposes cache
 primitives for Node.js applications and tools. Script execution belongs to
 the command line and is not part of this library. See the
 [language-library overview](/guide/sdk/) to compare the available bindings.
 
 ```js
-const { Cache } = require("buildonce");
+const { Cache } = require("buildstruo");
 
 async function main() {
   const cache = new Cache();
@@ -27,20 +27,20 @@ async function main() {
 Install the package from npm:
 
 ```sh
-npm install buildonce
+npm install buildstruo
 ```
 
-The package includes prebuilt native Once libraries for supported
-platforms. Set `ONCE_LIBRARY_PATH` when you need to load a custom
-`libonce` build.
+The package includes prebuilt native Struo libraries for supported
+platforms. Set `STRUO_LIBRARY_PATH` when you need to load a custom
+`libstruo` build.
 
 ## Cache
 
 `Cache` can open the default local cache, an explicit local root, or the
 effective provider for a workspace. The default follows the
 [X Desktop Group base-directory convention](https://specifications.freedesktop.org/basedir-spec/latest/):
-its cache root is `$XDG_CACHE_HOME/once/cas` when `XDG_CACHE_HOME` is set, and
-`$HOME/.cache/once/cas` otherwise.
+its cache root is `$XDG_CACHE_HOME/struo/cas` when `XDG_CACHE_HOME` is set, and
+`$HOME/.cache/struo/cas` otherwise.
 
 `version()` and `digest(bytes)` are synchronous. Cache storage operations
 return promises and must be awaited. When `bytes` is a string, the library
@@ -52,7 +52,7 @@ before hashing or storing it.
 | `new Cache()` | Opens the default local cache using the operating-system convention. |
 | `new Cache({ localCacheRoot })` | Opens an isolated local cache at a caller-owned root. |
 | `new Cache({ workspaceRoot })` | Resolves the effective provider for a workspace. |
-| `version()` | Synchronously returns the linked Once version. |
+| `version()` | Synchronously returns the linked Struo version. |
 | `digest(bytes)` | Synchronously returns the content digest for bytes without writing them to the cache. |
 | `putBlob(bytes)` | Stores bytes and returns a promise for their content digest. |
 | `putFile(path)` | Stores a file without loading its complete contents into JavaScript memory. |
@@ -73,7 +73,7 @@ other payloads whose size is not tightly bounded.
 inputs:
 
 ```js
-const { ActionKey } = require("buildonce");
+const { ActionKey } = require("buildstruo");
 
 const source = await cache.putFile("inputs/source");
 const actionDigest = new ActionKey("example.compile")

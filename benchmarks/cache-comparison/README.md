@@ -1,7 +1,7 @@
 # Cache comparison
 
 This benchmark reconstructs the repository as the same deterministic 15-action
-graph in Bazel, Buck2, and Once. It isolates cache lookup, transfer,
+graph in Bazel, Buck2, and Struo. It isolates cache lookup, transfer,
 materialization, and invalidation behavior from compiler-specific work.
 
 The graph represents the repository surfaces and their operational dependency
@@ -27,10 +27,10 @@ The timing harness is [hyperfine](https://github.com/sharkdp/hyperfine).
 
 ## Run
 
-Build the release Once binary first, then run:
+Build the release Struo binary first, then run:
 
 ```sh
-mise exec -- cargo build --release --package once-cli
+mise exec -- cargo build --release --package struo-cli
 benchmarks/cache-comparison/benchmark.sh
 ```
 
@@ -50,5 +50,5 @@ Dependency fetching and tool installation happen before measurement. Its
 purpose is to answer how much work and bandwidth each client spends when the
 same graph is already available remotely.
 
-See [REPORT.md](REPORT.md) for the measured comparison, the Once cache changes
+See [REPORT.md](REPORT.md) for the measured comparison, the Struo cache changes
 that followed from it, and the remaining opportunities.

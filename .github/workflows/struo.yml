@@ -1,0 +1,554 @@
+name: struo
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: struo-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_NET_RETRY: "10"
+  RUSTUP_MAX_RETRIES: "10"
+
+jobs:
+  changes:
+    name: changes
+    runs-on: tuist-linux
+    outputs:
+      rust_ci: ${{ steps.filter.outputs.rust_ci }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: filter
+        name: classify changed files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+            if [[ "$base" =~ ^0+$ ]]; then
+              base="${head}^"
+            fi
+          fi
+
+          git diff --name-only "$base" "$head" > changed-files.txt
+
+          rust_ci=false
+          while IFS= read -r path; do
+            case "$path" in
+              .github/workflows/struo.yml|Cargo.toml|Cargo.lock|mise.toml|struo.toml|crates/*|spec/*|fixtures/*|mise/tasks/*|.cargo/*)
+                rust_ci=true
+                ;;
+            esac
+          done < changed-files.txt
+
+          echo "rust_ci=$rust_ci" >> "$GITHUB_OUTPUT"
+          echo "Rust CI required: $rust_ci"
+          sed 's/^/- /' changed-files.txt
+
+  fmt:
+    name: fmt
+    needs: changes
+    if: needs.changes.outputs.rust_ci == 'true'
+    runs-on: tuist-linux
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
+        with:
+          # Pinned so the workflow does not follow `mise-action`'s
+          # "latest" pointer into a release whose assets have not been
+          # published yet (v2026.9.3's linux-x64 tarball 404s at the
+          # time of writing and takes down every downstream job).
+          version: "2026.11.9"
+          experimental: true
+          cache: true
+          # GitHub-hosted runners share the default key, and their cached
+          # pipx tools link to interpreters that Tuist runners lack.
+          cache_key_prefix: mise-v1-tuist
+      - run: rustup component add rustfmt
+      - run: mise exec -- cargo fmt --all -- --check
+
+  clippy:
+    name: clippy
+    needs: changes
+    if: needs.changes.outputs.rust_ci == 'true'
+    runs-on: tuist-linux-large
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
+        with:
+          # Pinned so the workflow does not follow `mise-action`'s
+          # "latest" pointer into a release whose assets have not been
+          # published yet (v2026.9.3's linux-x64 tarball 404s at the
+          # time of writing and takes down every downstream job).
+          version: "2026.11.9"
+          experimental: true
+          cache: true
+          # GitHub-hosted runners share the default key, and their cached
+          # pipx tools link to interpreters that Tuist runners lack.
+          cache_key_prefix: mise-v1-tuist
+      - run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
+      - run: rustup component add clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: clippy
+          cache-on-failure: true
+          cache-bin: false
+      - run: mise exec -- cargo clippy --workspace --all-targets -- -D warnings
+
+  tests:
+    name: tests (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.rust_ci == 'true'
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [tuist-linux-large, tuist-macos]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
+        with:
+          # Pinned so the workflow does not follow `mise-action`'s
+          # "latest" pointer into a release whose assets have not been
+          # published yet (v2026.9.3's linux-x64 tarball 404s at the
+          # time of writing and takes down every downstream job).
+          version: "2026.11.9"
+          experimental: true
+          cache: true
+          # GitHub-hosted runners share the default key, and their cached
+          # pipx tools link to interpreters that Tuist runners lack.
+          cache_key_prefix: mise-v1-tuist
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: tests-${{ matrix.os }}
+          cache-on-failure: true
+          cache-bin: false
+      # The tests exercise this change's target kinds, so they run through a
+      # Struo built from the checked-out source rather than the latest release.
+      - name: Resolve bootstrap Struo
+        id: bootstrap
+        run: echo "bin=$(./mise/tasks/release/bootstrap-struo.sh)" >> "$GITHUB_OUTPUT"
+        env:
+          STRUO_BOOTSTRAP_SOURCE: source
+      - name: Materialize Rust graph dependencies
+        run: ./mise/tasks/release/prepare-rust-graph-deps.sh
+      # Fork pull requests cannot mint an OpenID Connect token, so they
+      # fall back to the local cache and skip run reporting.
+      - name: Authenticate with Tuist
+        id: struo-cache-auth
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
+        run: '"${{ steps.bootstrap.outputs.bin }}" auth login --provider tuist --no-browser'
+      # Selecting by the `crates` path schedules every Rust test target in
+      # one run and leaves the website tests to the web workflow.
+      - name: Test with Struo
+        id: graph-tests
+        # Cancelling a job signals only this shell, so forward it to Struo,
+        # which then reports the run as cancelled before the runner kills it.
+        # SIGTERM because background jobs start with SIGINT ignored.
+        run: |
+          "${{ steps.bootstrap.outputs.bin }}" test --changed-path crates --format json > struo-tests.json &
+          struo_pid=$!
+          trap 'kill -s TERM "$struo_pid" 2>/dev/null || true' INT TERM
+          status=0
+          wait "$struo_pid" || status=$?
+          while kill -0 "$struo_pid" 2>/dev/null; do
+            status=0
+            wait "$struo_pid" || status=$?
+          done
+          if [ "$status" -ne 0 ]; then
+            jq '.runs[] | select(.success != true)' struo-tests.json || cat struo-tests.json
+            exit 1
+          fi
+        env:
+          STRUO_CACHE_PROVIDER: ${{ steps.struo-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
+      - name: Inspect failed graph tests
+        if: failure() && steps.graph-tests.outcome == 'failure'
+        run: |
+          "${{ steps.bootstrap.outputs.bin }}" query evidence --limit 10000 --format json > struo-test-evidence.json || true
+          find .struo/out -type f -exec wc -c {} + > struo-output-sizes.txt
+        env:
+          STRUO_CACHE_PROVIDER: ${{ steps.struo-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
+      - name: Preserve failed test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: struo-test-diagnostics-${{ matrix.os }}
+          path: |
+            struo-tests.json
+            struo-test-evidence.json
+            struo-output-sizes.txt
+            ~/.local/state/struo/logs/**
+            ~/Library/Logs/Struo/**
+            .struo/out/**/test/**/*.log
+            .struo/out/**/test/**/test_results.json
+          include-hidden-files: true
+
+  release-build:
+    name: release build (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.rust_ci == 'true'
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [tuist-linux-large, tuist-macos]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
+        with:
+          # Pinned so the workflow does not follow `mise-action`'s
+          # "latest" pointer into a release whose assets have not been
+          # published yet (v2026.9.3's linux-x64 tarball 404s at the
+          # time of writing and takes down every downstream job).
+          version: "2026.11.9"
+          experimental: true
+          cache: true
+          # GitHub-hosted runners share the default key, and their cached
+          # pipx tools link to interpreters that Tuist runners lack.
+          cache_key_prefix: mise-v1-tuist
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-build-${{ matrix.os }}
+          cache-on-failure: true
+          cache-bin: false
+      - name: Resolve bootstrap Struo
+        id: bootstrap
+        run: echo "bin=$(./mise/tasks/release/bootstrap-struo.sh)" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STRUO_BOOTSTRAP_SOURCE: source
+      # Fork pull requests cannot mint an OpenID Connect token, so they
+      # fall back to the local cache and skip run reporting.
+      - name: Authenticate with Tuist
+        id: struo-cache-auth
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
+        run: '"${{ steps.bootstrap.outputs.bin }}" auth login --provider tuist --no-browser'
+      - name: Build release binary with Struo
+        run: |
+          set -euo pipefail
+          struo_bin="${{ steps.bootstrap.outputs.bin }}"
+          host_target="$(rustc -vV | sed -n 's/^host: //p')"
+          suffix="$(printf '%s' "${host_target}" | tr '.-' '__')"
+          target_id="crates/struo-cli/struo_cli_${suffix}"
+          trap './mise/tasks/release/write-rust-release-manifests.sh --clear >/dev/null 2>&1 || true' EXIT
+          ./mise/tasks/release/prepare-rust-graph-deps.sh --target "${host_target}"
+          ./mise/tasks/release/write-rust-release-manifests.sh --target "${host_target}" --version 0.0.0
+          "${struo_bin}" build "${target_id}" --format json --quiet
+          mkdir -p target/release
+          cp ".struo/out/${target_id}/struo" target/release/struo
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STRUO_CACHE_PROVIDER: ${{ steps.struo-cache-auth.outcome == 'success' && 'tuist' || 'local' }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: struo-${{ matrix.os }}
+          path: target/release/struo
+
+  tuist-cache-smoke:
+    name: tuist cache smoke
+    needs: changes
+    if: needs.changes.outputs.rust_ci == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: tuist-linux-large
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
+        with:
+          # Pinned so the workflow does not follow `mise-action`'s
+          # "latest" pointer into a release whose assets have not been
+          # published yet (v2026.9.3's linux-x64 tarball 404s at the
+          # time of writing and takes down every downstream job).
+          version: "2026.11.9"
+          experimental: true
+          cache: true
+          # GitHub-hosted runners share the default key, and their cached
+          # pipx tools link to interpreters that Tuist runners lack.
+          cache_key_prefix: mise-v1-tuist
+      - run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: tuist-cache-smoke
+          cache-on-failure: true
+          cache-bin: false
+      - name: Verify Tuist cache provider
+        run: |
+          set -euo pipefail
+          struo_bin="$(./mise/tasks/release/bootstrap-struo.sh)"
+          smoke_root="$(mktemp -d)"
+          export XDG_STATE_HOME="${smoke_root}/state"
+          export XDG_DATA_HOME="${smoke_root}/data"
+          export XDG_CONFIG_HOME="${smoke_root}/config"
+
+          "${struo_bin}" auth login --provider tuist --no-browser
+
+          # Seeding the remote cache is a network round trip, so retry it
+          # the way the lookup below is retried. Without this a transient
+          # write failure aborted the step under `set -e`, and because the
+          # command's stderr goes to a file that only the lookup failure
+          # path prints, the job reported a bare exit code and no reason.
+          seed_json=""
+          for attempt in 1 2 3 4 5; do
+            first_json="${smoke_root}/first-${attempt}.json"
+            if XDG_CACHE_HOME="${smoke_root}/cache-first-${attempt}" \
+              "${struo_bin}" exec --format json -- /bin/sh -c 'exit 0' \
+              2>"${first_json}"; then
+              seed_json="${first_json}"
+              break
+            fi
+            echo "Seeding the Tuist remote cache failed on attempt ${attempt}:"
+            cat "${first_json}"
+            sleep "$((attempt * 2))"
+          done
+
+          if [ -z "${seed_json}" ]; then
+            echo "Expected a Tuist-backed Struo execution to populate the remote cache."
+            exit 1
+          fi
+
+          hit_json=""
+          for attempt in 1 2 3 4 5; do
+            second_json="${smoke_root}/second-${attempt}.json"
+            if XDG_CACHE_HOME="${smoke_root}/cache-second-${attempt}" \
+              "${struo_bin}" exec --format json -- /bin/sh -c 'exit 0' \
+              2>"${second_json}" \
+              && grep -Eq '"cache"[[:space:]]*:[[:space:]]*"hit"' "${second_json}"; then
+              hit_json="${second_json}"
+              break
+            fi
+            sleep "$((attempt * 2))"
+          done
+
+          if [ -z "${hit_json}" ]; then
+            echo "Expected a Tuist-backed Struo execution to hit the remote cache after retrying."
+            cat "${seed_json}"
+            cat "${smoke_root}"/second-*.json
+            exit 1
+          fi
+        env:
+          STRUO_BOOTSTRAP_SOURCE: source
+
+  dogfood:
+    name: dogfood (${{ matrix.os }})
+    needs: [changes, release-build]
+    if: needs.changes.outputs.rust_ci == 'true'
+    runs-on: ${{ matrix.os }}
+    env:
+      STRUO_CACHE_PROVIDER: local
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [tuist-linux-large, tuist-macos]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
+        with:
+          # Pinned so the workflow does not follow `mise-action`'s
+          # "latest" pointer into a release whose assets have not been
+          # published yet (v2026.9.3's linux-x64 tarball 404s at the
+          # time of writing and takes down every downstream job).
+          version: "2026.11.9"
+          experimental: true
+          cache: true
+          # GitHub-hosted runners share the default key, and their cached
+          # pipx tools link to interpreters that Tuist runners lack.
+          cache_key_prefix: mise-v1-tuist
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
+      - uses: actions/download-artifact@v8
+        with:
+          name: struo-${{ matrix.os }}
+          path: target/release
+      - run: chmod +x target/release/struo
+      - run: mise exec -- target/release/struo exec -e HOME="$HOME" -e PATH="$PATH" -e RUSTUP_TOOLCHAIN="$RUSTUP_TOOLCHAIN" -e MISE_TRUSTED_CONFIG_PATHS="$MISE_TRUSTED_CONFIG_PATHS" -- cargo check --workspace
+
+  shellspec:
+    name: shellspec (${{ matrix.os }})
+    needs: [changes, release-build]
+    if: needs.changes.outputs.rust_ci == 'true'
+    runs-on: ${{ matrix.os }}
+    # Real toolchain installs and native builds can exhaust 50 minutes even
+    # when every example passes. Include headroom for setup and cleanup.
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [tuist-linux-large, tuist-macos]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
+        with:
+          # Pinned so the workflow does not follow `mise-action`'s
+          # "latest" pointer into a release whose assets have not been
+          # published yet (v2026.9.3's linux-x64 tarball 404s at the
+          # time of writing and takes down every downstream job).
+          version: "2026.11.9"
+          experimental: true
+          cache: true
+          # GitHub-hosted runners share the default key, and their cached
+          # pipx tools link to interpreters that Tuist runners lack.
+          cache_key_prefix: mise-v1-tuist
+      # Tuist's Linux image does not ship the ALSA runtime the binary loads.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
+      # Bazel test actions need GNU timeout, which Tuist's macOS image lacks.
+      - if: runner.os == 'macOS'
+        run: brew install coreutils
+      - uses: actions/download-artifact@v8
+        with:
+          name: struo-${{ matrix.os }}
+          path: target/release
+      - run: chmod +x target/release/struo
+      - run: mise exec -- shellspec
+
+  ios-sdk-check:
+    name: iOS SDK check
+    needs: changes
+    if: needs.changes.outputs.rust_ci == 'true'
+    runs-on: tuist-macos
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
+        with:
+          version: "2026.11.9"
+          install_args: "rust"
+      - run: mise exec -- rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ios-sdk-check
+          cache-on-failure: true
+          cache-bin: false
+      - run: mise exec -- cargo check --locked -p struo --target aarch64-apple-ios --target aarch64-apple-ios-sim --target x86_64-apple-ios
+
+  # The Windows jobs stay on GitHub-hosted runners because Tuist's runner
+  # fleet has no Windows profile.
+  windows-build:
+    name: windows build
+    needs: changes
+    if: needs.changes.outputs.rust_ci == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: install pinned rust
+        shell: bash
+        run: |
+          rust_version="$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)"
+          rustup toolchain install "$rust_version" --profile minimal --no-self-update
+          rustup default "$rust_version"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-build
+          cache-on-failure: true
+          cache-bin: false
+      - run: |
+          # Build the SDK crate separately to avoid a Windows PDB name collision
+          # between the `struo` cdylib and the CLI binary.
+          cargo build --workspace --all-targets --exclude struo
+          cargo build --package struo --all-targets
+
+  windows-release-build:
+    name: release graph build (windows-latest)
+    needs: changes
+    if: needs.changes.outputs.rust_ci == 'true'
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      MISE_VERSION: "2026.4.18"
+      MISE_GITHUB_ATTESTATIONS: 0
+      MISE_AUTO_INSTALL: "false"
+      MISE_TASK_RUN_AUTO_INSTALL: "false"
+      MISE_NOT_FOUND_AUTO_INSTALL: "false"
+      MISE_EXEC_AUTO_INSTALL: "false"
+      STRUO_BOOTSTRAP_SOURCE: source
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set HOME for mise templates
+        shell: pwsh
+        run: '"HOME=$env:USERPROFILE" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append'
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: "rust jq"
+      - name: Add Rust target
+        run: rustup target add x86_64-pc-windows-msvc
+      - name: Check Rust toolchain
+        run: mise exec -- rustc -vV
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          shared-key: release-graph-build-windows
+          cache-on-failure: true
+          cache-bin: false
+      # Signing in first lets the bootstrap build through the remote cache.
+      # Fork pull requests cannot mint an OpenID Connect token, so they fall
+      # back to the local cache.
+      - name: Select Struo cache
+        run: ./mise/tasks/release/select-struo-cache.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Resolve bootstrap Struo
+        id: bootstrap
+        run: echo "bin=$(./mise/tasks/release/bootstrap-struo.sh)" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Build Windows release binary with Struo
+        run: |
+          set -euo pipefail
+
+          struo_bin="${{ steps.bootstrap.outputs.bin }}"
+          target="x86_64-pc-windows-msvc"
+          suffix="$(printf '%s' "${target}" | tr '.-' '__')"
+          target_id="crates/struo-cli/struo_cli_${suffix}"
+          trap './mise/tasks/release/write-rust-release-manifests.sh --clear >/dev/null 2>&1 || true' EXIT
+          ./mise/tasks/release/prepare-rust-graph-deps.sh --target "${target}"
+          ./mise/tasks/release/write-rust-release-manifests.sh --target "${target}" --version 0.0.0
+          "${struo_bin}" build "${target_id}" --format json --quiet
+          test -f ".struo/out/${target_id}/struo.exe"
+
+  windows-cas-test:
+    name: windows cas test
+    needs: changes
+    if: needs.changes.outputs.rust_ci == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: install pinned rust
+        shell: bash
+        run: |
+          rust_version="$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)"
+          rustup toolchain install "$rust_version" --profile minimal --no-self-update
+          rustup default "$rust_version"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-cas-test
+          cache-on-failure: true
+          cache-bin: false
+      - run: cargo test -p struo-cas -p struo-host-tree
+      - run: cargo test -p struo-core --lib action::tests

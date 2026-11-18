@@ -9,11 +9,11 @@ defmodule Mix.Tasks.Marketing.Gen.OgImages do
   """
   use Mix.Task
 
-  alias OnceSite.Blog
-  alias OnceSite.Blog.Authors
-  alias OnceSite.Changelog
-  alias OnceSiteWeb.Docs.OgImage
-  alias OnceSiteWeb.Docs.OgImageRenderer
+  alias StruoSite.Blog
+  alias StruoSite.Blog.Authors
+  alias StruoSite.Changelog
+  alias StruoSiteWeb.Docs.OgImage
+  alias StruoSiteWeb.Docs.OgImageRenderer
 
   @output "priv/static/images/og"
   @fonts_dir "priv/static/fonts"
@@ -29,12 +29,12 @@ defmodule Mix.Tasks.Marketing.Gen.OgImages do
     %{
       file: "changelog.jpg",
       title: "Changelog",
-      description: "The latest user-facing changes to Once."
+      description: "The latest user-facing changes to Struo."
     },
     %{
       file: "blog.jpg",
       title: "Ideas for building once",
-      description: "Ideas and updates from the people building Once.",
+      description: "Ideas and updates from the people building Struo.",
       subtitle: "Blog"
     }
   ]

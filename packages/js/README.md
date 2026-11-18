@@ -1,11 +1,11 @@
-# Once JavaScript Software Development Kit
+# Struo JavaScript Software Development Kit
 
-`buildonce` exposes Once primitives to Node.js. It loads the same
-native Once library used by the other language libraries and does not expose script
+`buildstruo` exposes Struo primitives to Node.js. It loads the same
+native Struo library used by the other language libraries and does not expose script
 execution.
 
 ```js
-const { Cache } = require("buildonce");
+const { Cache } = require("buildstruo");
 
 async function example() {
   const cache = new Cache();
@@ -17,7 +17,7 @@ async function example() {
 ```
 
 The package looks for a bundled native library under `prebuilds/`. Set
-`ONCE_LIBRARY_PATH` to load a custom `libonce` build.
+`STRUO_LIBRARY_PATH` to load a custom `libstruo` build.
 
 Use `new Cache({ workspaceRoot })` to share the effective provider configured
 for a repository, or `new Cache({ localCacheRoot })` for isolation. Use

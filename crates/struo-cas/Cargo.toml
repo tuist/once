@@ -1,0 +1,36 @@
+[package]
+name = "struo-cas"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+bazel-remote-apis.workspace = true
+blake3.workspace = true
+futures.workspace = true
+hex.workspace = true
+# Decodes `google.rpc` error details; the version bazel-remote-apis already uses.
+prost = "0.14"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tonic.workspace = true
+tracing.workspace = true
+reqwest.workspace = true
+schlussel.workspace = true
+tempfile.workspace = true
+uuid.workspace = true
+zstd.workspace = true
+
+[dev-dependencies]
+http-body = "1"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+
+[lints]
+workspace = true

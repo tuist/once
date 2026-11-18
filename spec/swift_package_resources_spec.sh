@@ -22,12 +22,12 @@ Describe 'Swift package resource catalogs'
 
   exercise_package_resources() {
     cp -R "$REPO_ROOT/fixtures/swift_package_resources/." "$WORKSPACE/"
-    ONCE_CHANGE_TRACKER=0 once build SwiftPackage_ResourceFixtures_ResourceProbe --format json > "$WORKSPACE/build.json" 2> "$WORKSPACE/build.err" || { cat "$WORKSPACE/build.err"; return 1; }
-    app="$WORKSPACE/.once/out/SwiftPackage_ResourceFixtures_ResourceProbe/ResourceProbe.app"
+    STRUO_CHANGE_TRACKER=0 struo build SwiftPackage_ResourceFixtures_ResourceProbe --format json > "$WORKSPACE/build.json" 2> "$WORKSPACE/build.err" || { cat "$WORKSPACE/build.err"; return 1; }
+    app="$WORKSPACE/.struo/out/SwiftPackage_ResourceFixtures_ResourceProbe/ResourceProbe.app"
     check_package_resources || return 1
     [ "$(find "$app" -name Assets.car | wc -l | tr -d ' ')" = 2 ] || return 1
-    mv "$WORKSPACE/.once/out" "$SPEC_ROOT/saved-outputs"
-    ONCE_CHANGE_TRACKER=0 once build SwiftPackage_ResourceFixtures_ResourceProbe --format json > "$WORKSPACE/restored.json" 2> "$WORKSPACE/build.err" || { cat "$WORKSPACE/build.err"; return 1; }
+    mv "$WORKSPACE/.struo/out" "$SPEC_ROOT/saved-outputs"
+    STRUO_CHANGE_TRACKER=0 struo build SwiftPackage_ResourceFixtures_ResourceProbe --format json > "$WORKSPACE/restored.json" 2> "$WORKSPACE/build.err" || { cat "$WORKSPACE/build.err"; return 1; }
     check_package_resources
   }
 

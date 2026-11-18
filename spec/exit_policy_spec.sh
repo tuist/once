@@ -6,7 +6,7 @@ Describe 'command exit policies'
 
   create_exit_policy_workspace() {
     mkdir -p "$WORKSPACE/modules"
-    printf '[modules]\npaths = ["modules/*.star"]\n' > "$WORKSPACE/once.toml"
+    printf '[modules]\npaths = ["modules/*.star"]\n' > "$WORKSPACE/struo.toml"
     cat > "$WORKSPACE/modules/policy.star" <<'EOF'
 def _impl(ctx):
     run_action(
@@ -28,16 +28,16 @@ exit_policy = target_kind(
 EOF
     mkdir -p "$WORKSPACE/task"
     printf '[[target]]\nname = "Policy"\nkind = "exit_policy"\n[target.attrs]\ncode = %s\ncacheable = %s\n' \
-      "$1" "$2" > "$WORKSPACE/task/once.toml"
+      "$1" "$2" > "$WORKSPACE/task/struo.toml"
   }
 
   build_policy_twice() {
-    if once build task/Policy > "$SPEC_ROOT/first.out" 2> "$SPEC_ROOT/first.err"; then
+    if struo build task/Policy > "$SPEC_ROOT/first.out" 2> "$SPEC_ROOT/first.err"; then
       printf 'first=success\n'
     else
       printf 'first=failure\n'
     fi
-    once "$@" build task/Policy
+    struo "$@" build task/Policy
   }
 
   It 'rejects an excluded zero on repeated cacheable builds'
@@ -52,7 +52,7 @@ EOF
   It 'rejects an excluded zero in uncached graph actions'
     create_exit_policy_workspace 0 false
 
-    When call once build task/Policy
+    When call struo build task/Policy
     The status should be failure
     The stderr should include 'code 0, which is excluded by success_exit_codes'
   End

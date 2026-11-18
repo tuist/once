@@ -1,0 +1,45 @@
+[workspace]
+include = [
+  "struo.toml",
+  "crates/*/struo.toml",
+  "web/struo.toml",
+]
+exclude = [
+  "crates/struo-frontend/prelude/examples/**",
+  "fixtures/**",
+]
+
+[infrastructure.cache]
+provider = "tuist"
+
+[infrastructures.tuist]
+kind = "tuist"
+account = "tuist"
+project = "once"
+
+[infrastructures.tuist-web]
+kind = "tuist"
+account = "tuist"
+project = "once-web"
+
+[[target]]
+name = "cargo_dependencies"
+kind = "cargo_dependencies"
+srcs = [
+  "Cargo.toml",
+  "Cargo.lock",
+  "crates/*/Cargo.toml",
+]
+
+[target.attrs]
+manifest = "Cargo.toml"
+lockfile = "Cargo.lock"
+vendor_dir = "third_party/rust/vendor"
+
+[[target]]
+name = "web_image"
+kind = "dockerfile_image"
+
+[target.attrs]
+dockerfile = "web/Dockerfile"
+tag = "struo-web:struo-dockerfile"

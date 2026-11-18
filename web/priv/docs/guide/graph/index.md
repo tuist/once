@@ -1,6 +1,6 @@
 # Graph
 
-The Once graph describes the named parts of a workspace and what Once can do
+The Struo graph describes the named parts of a workspace and what Struo can do
 with them. Start with one target, inspect it, and build it. Add dependencies or
 more specialized target kinds only when the project needs them.
 
@@ -10,25 +10,25 @@ If the repository already uses Cargo, Swift Package Manager, Xcode, or Bazel,
 start in its root without creating a file:
 
 ```sh
-once query targets
-once build
-once test
-once lint
+struo query targets
+struo build
+struo test
+struo lint
 ```
 
-The first command shows what Once recognized. The remaining three act on the
-workspace's own targets by default: `once build` builds every workspace-owned
-target that exposes `build` (failing fast on the first bad build), `once test`
-runs first-party tests, and `once lint` lints every workspace-owned target
+The first command shows what Struo recognized. The remaining three act on the
+workspace's own targets by default: `struo build` builds every workspace-owned
+target that exposes `build` (failing fast on the first bad build), `struo test`
+runs first-party tests, and `struo lint` lints every workspace-owned target
 that exposes `lint` (running each one to completion so you see every finding).
 
 Workspace-owned means the target is one of the pieces the repository's own
 manifest declares, not one pulled in through a resolved dependency. A test
 run on a Cargo project builds and tests the workspace's crates without
 running the test suites of the crates they depend on; the same rule applies
-to `once build` and `once lint`.
+to `struo build` and `struo lint`.
 
-The current definition of workspace-owned is heuristic: Once traces every
+The current definition of workspace-owned is heuristic: Struo traces every
 target whose dependency chain reaches one of the resolver's declared primary
 products. Sibling targets that live in the same manifest but do not depend
 on one of those products (a standalone macro plugin, for example) can slip
@@ -39,9 +39,9 @@ target without exception.
 
 Pass `--all` (available on all three) to reach past the workspace boundary
 and act on every capable target in the loaded graph, resolved dependencies
-included. Use it with care on `once lint --all`: it will run every
+included. Use it with care on `struo lint --all`: it will run every
 lint-capable target in the graph, including vendored third-party code, and
-the invocation fails when any finding meets `--fail-on`. `once lint --all
+the invocation fails when any finding meets `--fail-on`. `struo lint --all
 --fail-on error` is a reasonable starting point when you want to sweep the
 whole graph.
 
@@ -53,8 +53,8 @@ boundary or capability.
 
 ## Start With One Target
 
-Targets live in package-level `once.toml` files. This example declares an
-Apple library in `apps/ios/once.toml`:
+Targets live in package-level `struo.toml` files. This example declares an
+Apple library in `apps/ios/struo.toml`:
 
 ```toml
 [[target]]
@@ -71,9 +71,9 @@ The manifest location and target name form the target identifier
 `apps/ios/AppCore`. Query it before running any work:
 
 ```sh
-once query targets
-once query capabilities apps/ios/AppCore
-once query schema apple_library
+struo query targets
+struo query capabilities apps/ios/AppCore
+struo query schema apple_library
 ```
 
 The first command lists the workspace. The second shows what `AppCore` can do.
@@ -83,10 +83,10 @@ an `apple_library` accepts.
 Build the same target:
 
 ```sh
-once build apps/ios/AppCore
+struo build apps/ios/AppCore
 ```
 
-Outputs are materialized under `.once/out/<target>/`. The
+Outputs are materialized under `.struo/out/<target>/`. The
 [target kind reference](/reference/prelude/) lists the exact output groups for
 each kind.
 
@@ -96,13 +96,13 @@ Use `--verify-reproducible` when you want to compare repeated execution instead
 of checking whether a normal build can reuse its cached result:
 
 ```sh
-once build --verify-reproducible apps/service/Service
+struo build --verify-reproducible apps/service/Service
 ```
 
-Once snapshots the workspace and builds the target, including its dependency
+Struo snapshots the workspace and builds the target, including its dependency
 closure, in each of two private trials. Each trial starts from that same
-snapshot at the same private path with a separate, initially empty local Once
-cache. Once retains both results and their declared artifacts rather than
+snapshot at the same private path with a separate, initially empty local Struo
+cache. Struo retains both results and their declared artifacts rather than
 replacing outputs in your original workspace.
 
 Both trials must succeed. Declared artifact differences fail the check;
@@ -111,19 +111,19 @@ artifacts are declared, captured logs determine the comparison instead. The
 result prints a verification UUID and a command to inspect the retained trials:
 
 ```sh
-once query verification <ID>
-once query verification <ID> --format json
+struo query verification <ID>
+struo query verification <ID> --format json
 ```
 
 A passing check means agreement under that artifact/log policy, not proof of
 reproducibility. These are not hermetic builds: host toolchains and tool caches,
 absolute paths, network services, and external side effects remain outside the
 check's isolation. Clocks, randomness, and scheduling are not perturbed or
-controlled. Pre-existing generated files outside `.once` remain in the
+controlled. Pre-existing generated files outside `.struo` remain in the
 workspace snapshot. Only use this option when repeated execution of the whole
 build is authorized.
 
-Reports and trial artifacts remain under `.once/verifications/<ID>/` and are
+Reports and trial artifacts remain under `.struo/verifications/<ID>/` and are
 not published automatically. See
 [Inspect Retained Trials](/guide/scripted/caching#inspect-retained-trials) for
 the directory layout and inspection workflow, or the
@@ -144,7 +144,7 @@ deps = ["./AppCore"]
 
 [target.attrs]
 platform = "ios"
-bundle_id = "dev.once.App"
+bundle_id = "dev.struo.App"
 minimum_os = "17.0"
 families = ["iphone"]
 ```
@@ -153,7 +153,7 @@ families = ["iphone"]
 parent package. References without either prefix resolve from the workspace
 root.
 
-Once validates each dependency against the contract declared by the target
+Struo validates each dependency against the contract declared by the target
 kind. This catches incompatible edges before a compiler or runner starts.
 
 Restrict a target when only selected packages should consume it:
@@ -167,7 +167,7 @@ visibility = ["package:apps/ios", "subtree:tests"]
 
 An empty visibility list is public. `private` allows only the same package,
 `package:` grants one package, `subtree:` grants a package hierarchy, and an
-exact target grants one consumer. `once query validate-workspace` reports an
+exact target grants one consumer. `struo query validate-workspace` reports an
 attribute-scoped repair when a dependency crosses that boundary.
 
 ## Capabilities Become Actions
@@ -187,13 +187,13 @@ when each invocation must happen again.
 The command surface stays the same across ecosystems:
 
 ```sh
-once build apps/ios/AppCore
-once run apps/ios/App
-once test apps/ios/AppTests
-once lint quality/swift
+struo build apps/ios/AppCore
+struo run apps/ios/App
+struo test apps/ios/AppTests
+struo lint quality/swift
 ```
 
-Ask `once query capabilities <target>` which of these operations a target
+Ask `struo query capabilities <target>` which of these operations a target
 supports instead of guessing from its kind.
 
 When a workspace has more than one test target, continue with
@@ -227,7 +227,7 @@ helps you decide when a typed target is a better fit than a script.
 
 ## Start From A Native Project
 
-Once can recognize supported native workspace descriptions before a package has
+Struo can recognize supported native workspace descriptions before a package has
 an explicit target. A native integration supplies an ephemeral seed target, then
 the seed's ordinary resolver derives the detailed typed graph from native
 metadata.
@@ -236,42 +236,42 @@ Before loading a project, follow its ecosystem guide to make the native
 lockfile and locked dependency sources available. Detection only reads marker
 names, but graph loading may run the native resolver and require those sources.
 
-Inspect the graph Once derived from the workspace:
+Inspect the graph Struo derived from the workspace:
 
 ```sh
-once query workspace
-once query targets
+struo query workspace
+struo query targets
 ```
 
 Normal build, run, and test commands can use the derived graph immediately.
-Discovery does not write `once.toml`; the native project description and
+Discovery does not write `struo.toml`; the native project description and
 lockfile remain authoritative for dependencies, products, tests, and releases.
-When discovery produces one buildable workspace root, `once build` selects it
-without requiring a target argument. `once test` runs the first-party test
-targets rooted in that workspace. Use `once test --all` to include test targets
+When discovery produces one buildable workspace root, `struo build` selects it
+without requiring a target argument. `struo test` runs the first-party test
+targets rooted in that workspace. Use `struo test --all` to include test targets
 from its complete resolved dependency graph.
 
-A discovered image is a direct target, so pass its name to `once build`. See
+A discovered image is a direct target, so pass its name to `struo build`. See
 [Container Images](/guide/graph/containers) for commands that build an existing
-Dockerfile without a `once.toml` file.
+Dockerfile without a `struo.toml` file.
 
 The native seed can remain the only target, or it can live beside explicit
-targets for exceptional build boundaries. Keep manifest data in `once.toml`
+targets for exceptional build boundaries. Keep manifest data in `struo.toml`
 and introduce a project Starlark module only when reusable behavior is missing
 from the built-in target kinds.
 
-An explicit Once target for the same target kind takes precedence in its
+An explicit Struo target for the same target kind takes precedence in its
 package. Unrelated targets do not hide a native integration in the same package or
 elsewhere in the workspace.
 
 An Xcode project checked in beside the repository root is recognized the same
 way. Its seed resolves every native target into Apple applications,
 frameworks, libraries, resource bundles, and test bundles, so a repository with
-no `once.toml` at all can be queried and built directly:
+no `struo.toml` at all can be queried and built directly:
 
 ```sh
-once query targets
-once build MyApp
+struo query targets
+struo build MyApp
 ```
 
 [Xcode Projects](/guide/graph/apple/xcode) walks through the full flow,
@@ -280,11 +280,11 @@ limitations.
 
 A Swift Package Manager workspace is recognized from `Package.swift`. Its
 native seed lowers first-party package targets into the existing Apple target
-kinds, without requiring an `once.toml` file:
+kinds, without requiring an `struo.toml` file:
 
 ```sh
-once query targets
-once build MyLibrary
+struo query targets
+struo build MyLibrary
 ```
 
 The [Swift Packages](/guide/graph/swift-packages) guide covers native package
@@ -294,12 +294,12 @@ Every built-in target kind also ships a complete starter with manifests and
 source files. Discover the available slugs, then materialize one directly:
 
 ```sh
-once query target-kinds
-once edit materialize-example rust_binary rust-binary-minimal
-once build crates/hello/hello
+struo query target-kinds
+struo edit materialize-example rust_binary rust-binary-minimal
+struo build crates/hello/hello
 ```
 
-Use `once query example <kind> <slug> --format json` when a caller needs to
+Use `struo query example <kind> <slug> --format json` when a caller needs to
 inspect and adapt the files before writing them. Contributors can run
 `mise run examples:verify-portable` to materialize and execute every portable
 starter against the current release build.
@@ -324,7 +324,7 @@ arch = "arm64"
 tokens = ["release"]
 ```
 
-`once query workspace` returns the normalized operating system, architecture,
+`struo query workspace` returns the normalized operating system, architecture,
 and ordered selection tokens used by dependency and attribute selection. The
 target kind schema identifies configurable attributes and any additional
 tokens meaningful for that ecosystem. Attributes marked `implemented: false`
@@ -339,8 +339,8 @@ Android application targets, for example, can build, install, and launch the
 application through the same command:
 
 ```sh
-once query capabilities apps/mobile/App
-once run apps/mobile/App
+struo query capabilities apps/mobile/App
+struo run apps/mobile/App
 ```
 
 Check the target's capabilities before running it. The ecosystem guide and
@@ -361,7 +361,7 @@ shared runtime from the selected toolchain.
 ## Extend the Graph With Local Modules
 
 Use a local module when a project needs a typed target kind that is not built
-in. Root `once.toml` files can load checked-in
+in. Root `struo.toml` files can load checked-in
 [Starlark](https://starlark-lang.org/) modules:
 
 ```toml
@@ -374,8 +374,8 @@ dependency, capability, and validation surfaces as built-in kinds. Confirm
 that a local kind loaded successfully before declaring targets that use it:
 
 ```sh
-once query target-kinds
-once query schema my_target_kind
+struo query target-kinds
+struo query schema my_target_kind
 ```
 
 Only the root manifest can declare `[modules]`. Paths resolve from the
@@ -390,22 +390,22 @@ query schemas, and inspect target kind contracts without being allowed to
 change workspace state:
 
 ```sh
-once mcp
+struo mcp
 ```
 
 Editing and running are side-effectful. They can change manifests, build code,
-write outputs, install software, or launch a process, so Once only advertises
+write outputs, install software, or launch a process, so Struo only advertises
 state-changing tools when the server is started with an explicit opt-in:
 
 ```sh
-once mcp --allow-run
+struo mcp --allow-run
 ```
 
 With that opt-in, agents can edit manifests, run tests, or call
-`once_build_target`, `once_run_target`, or `once_start_target` with the same
+`struo_build_target`, `struo_run_target`, or `struo_start_target` with the same
 target id the command-line interface accepts. The start call returns a runtime
-session id immediately, then the agent can use `once_runtime_status`,
-`once_runtime_logs`, and `once_stop_runtime` to follow or stop the run. Without
+session id immediately, then the agent can use `struo_runtime_status`,
+`struo_runtime_logs`, and `struo_stop_runtime` to follow or stop the run. Without
 it, the Model Context Protocol surface remains read-only and state-changing
 tools are not listed.
 

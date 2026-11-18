@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-#MISE description="Build one Apple target's static library for the Once XCFramework"
+#MISE description="Build one Apple target's static library for the Struo XCFramework"
 #USAGE flag "--target <target>" help="Apple Rust target triple to compile"
 #USAGE flag "--version <version>" help="Version number to embed in the library"
-#USAGE flag "--output <dir>" help="Directory that receives <target>/libonce.a"
+#USAGE flag "--output <dir>" help="Directory that receives <target>/libstruo.a"
 set -euo pipefail
 
 release_tasks_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -58,22 +58,22 @@ cleanup() {
 trap cleanup EXIT
 
 rustup target add "${target}"
-once_bin="$("${release_tasks_dir}/bootstrap-once.sh")"
+struo_bin="$("${release_tasks_dir}/bootstrap-struo.sh")"
 "${release_tasks_dir}/prepare-rust-graph-deps.sh" --target "${target}"
 "${release_tasks_dir}/write-rust-release-manifests.sh" --target "${target}" --version "${version}"
 
 suffix="$(printf '%s' "${target}" | tr '.-' '__')"
-target_id="crates/once/once_staticlib_${suffix}"
-if ! "${once_bin}" build "${target_id}" --format json --quiet; then
-  echo "once build failed for ${target}" >&2
+target_id="crates/struo/struo_staticlib_${suffix}"
+if ! "${struo_bin}" build "${target_id}" --format json --quiet; then
+  echo "struo build failed for ${target}" >&2
   exit 1
 fi
 
-source=".once/out/${target_id}/libonce.a"
+source=".struo/out/${target_id}/libstruo.a"
 if [[ ! -f "${source}" ]]; then
   echo "expected static library does not exist: ${source}" >&2
   exit 1
 fi
 
 mkdir -p "${output}/${target}"
-cp "${source}" "${output}/${target}/libonce.a"
+cp "${source}" "${output}/${target}/libstruo.a"

@@ -5,13 +5,13 @@ next: false
 
 # CMake
 
-Once can sit in front of an existing CMake project without replacing CMake.
+Struo can sit in front of an existing CMake project without replacing CMake.
 The bridge gives the repository a typed build boundary and a
 queryable view of the configured CMake graph.
 
 The two parts are intentionally separate:
 
-- `cmake_project` runs configure and build as one Once action, then stages only
+- `cmake_project` runs configure and build as one Struo action, then stages only
   declared products.
 - `cmake_workspace` imports a checked snapshot as logical `cmake_target`
   nodes for graph queries.
@@ -38,7 +38,7 @@ The repository toolchain pins CMake and Ninja. Projects can set explicit
 Materialize the complete example:
 
 ```sh
-once edit materialize-example cmake_project cmake-project-minimal
+struo edit materialize-example cmake_project cmake-project-minimal
 ```
 
 The starter contains a static C library, a `cmake_project` build target, a
@@ -48,10 +48,10 @@ checked snapshot.
 Inspect both layers before building:
 
 ```sh
-once query targets
-once query schema cmake_project
-once query schema cmake_workspace
-once query schema cmake_target
+struo query targets
+struo query schema cmake_project
+struo query schema cmake_workspace
+struo query schema cmake_target
 ```
 
 The target list includes `CMakeProject`, `CMakeGraph`, and the imported
@@ -60,17 +60,17 @@ The target list includes `CMakeProject`, `CMakeGraph`, and the imported
 Build the declared archive:
 
 ```sh
-once build CMakeProject
+struo build CMakeProject
 ```
 
 The stable product is written under
-`.once/out/CMakeProject/products/`. Running the command again cleans and
+`.struo/out/CMakeProject/products/`. Running the command again cleans and
 rebuilds the native project. Only staging already-built product bytes can
 reuse a content-addressed cache entry.
 
 ## Declare the Build Boundary
 
-A minimal target names every input and product visible to Once:
+A minimal target names every input and product visible to Struo:
 
 ```toml
 [[target]]
@@ -95,9 +95,9 @@ includes = ["include"]
 
 Configure and build execute together because the generated CMake build tree is
 stateful. The action does not cache that whole tree. Only files listed in
-`products` are outputs and are staged into the stable Once output directory.
+`products` are outputs and are staged into the stable Struo output directory.
 Configure and build bypass caching because CMake can select compilers,
-external toolchain files, SDKs, and configuration that Once cannot safely
+external toolchain files, SDKs, and configuration that Struo cannot safely
 fingerprint. The tradeoff is a clean native rebuild on every invocation,
 rather than potentially reusing an executable from an older toolchain.
 
@@ -114,7 +114,7 @@ tokens are:
 
 Declare multiple products when one native target produces more than one file.
 The first product is the default output. Static and dynamic libraries also
-populate the shared native link provider so compatible Once targets can
+populate the shared native link provider so compatible Struo targets can
 consume them.
 
 ## Import the Logical Graph
@@ -151,7 +151,7 @@ build_type = "Release"
 exports = ["greeting"]
 ```
 
-`exports` accepts native CMake names or generated Once names. The resolver
+`exports` accepts native CMake names or generated Struo names. The resolver
 imports each export plus its transitive dependencies. Every imported target
 records its native name, configured type, dependencies, sources, artifacts,
 include directories, definitions, and snapshot fingerprint.
@@ -159,9 +159,9 @@ include directories, definitions, and snapshot fingerprint.
 Query the imported structure:
 
 ```sh
-once query targets --kind cmake_target
-once query target cmake-greeting
-once query 'MATCH (root:Target {id: "cmake-greeting"})-[:DEPENDS_ON*]->(dep:Target) RETURN dep.id, dep.kind'
+struo query targets --kind cmake_target
+struo query target cmake-greeting
+struo query 'MATCH (root:Target {id: "cmake-greeting"})-[:DEPENDS_ON*]->(dep:Target) RETURN dep.id, dep.kind'
 ```
 
 The logical targets are structural metadata. Build `CMakeProject`, not an
@@ -173,15 +173,15 @@ Run the annotated script whenever CMake configuration inputs or selection
 change:
 
 ```sh
-once exec -- python3 scripts/refresh-cmake-snapshot.py
+struo exec -- python3 scripts/refresh-cmake-snapshot.py
 ```
 
 Then review and query the result:
 
 ```sh
 git diff -- cmake-snapshot.json
-once query targets --kind cmake_target
-once build CMakeProject
+struo query targets --kind cmake_target
+struo build CMakeProject
 ```
 
 The snapshot binds the exact text of every workspace configuration input
@@ -196,7 +196,7 @@ host and toolchain, then fail when it changes the checked snapshot.
 
 `cmake_project` exposes public headers, include directories, definitions,
 linker options, static libraries, dynamic libraries, and data through the same
-native provider shape used by Once's C and C++ targets.
+native provider shape used by Struo's C and C++ targets.
 
 Declare these fields explicitly:
 
@@ -214,14 +214,14 @@ reviewable and does not depend on host-specific configured paths.
 
 ## Current Limitations
 
-- Configure and build form one uncached action. Once does not schedule each
+- Configure and build form one uncached action. Struo does not schedule each
   generated compile and link command independently.
 - Imported targets are query-only and cannot be built directly.
 - Exact product paths must be declared. Multi-configuration generators may
   place products under configuration-specific directories.
 - The snapshot records configured CTest tests for inspection. Declare a
   separate [`cmake_test`](/reference/prelude/cmake_test) target to run a native
-  suite through `once test`, with suite-level normalized results.
+  suite through `struo test`, with suite-level normalized results.
 - Source and header patterns still belong on `cmake_project`; snapshot
   provenance covers workspace CMake configuration inputs, not every
   compilation input or configuration file outside the workspace.

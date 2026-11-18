@@ -13,18 +13,18 @@ Describe 'rust graph'
 
   create_generated_native_fixture() {
     mkdir -p "$WORKSPACE/crates/helper/src" "$WORKSPACE/crates/native/src" "$WORKSPACE/crates/app/src"
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [workspace]
-include = ["crates/*/once.toml"]
+include = ["crates/*/struo.toml"]
 TOML
-    cat > "$WORKSPACE/crates/helper/once.toml" <<'TOML'
+    cat > "$WORKSPACE/crates/helper/struo.toml" <<'TOML'
 [[target]]
 name = "helper"
 kind = "rust_library"
 srcs = ["src/**/*.rs"]
 TOML
     printf 'pub fn value() -> u32 { 7 }\npub fn offset() -> u32 { 1 }\n' > "$WORKSPACE/crates/helper/src/lib.rs"
-    cat > "$WORKSPACE/crates/native/once.toml" <<'TOML'
+    cat > "$WORKSPACE/crates/native/struo.toml" <<'TOML'
 [[target]]
 name = "native"
 kind = "rust_library"
@@ -57,7 +57,7 @@ include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 extern "C" { fn generated_value() -> u32; }
 pub fn value() -> u32 { (unsafe { generated_value() }) + OFFSET }
 RS
-    cat > "$WORKSPACE/crates/app/once.toml" <<'TOML'
+    cat > "$WORKSPACE/crates/app/struo.toml" <<'TOML'
 [[target]]
 name = "app"
 kind = "rust_binary"
@@ -83,10 +83,10 @@ RS
   }
 
   rebuild_with_unchanged_generated_files() {
-    once build crates/native/native --quiet >/dev/null || return
+    struo build crates/native/native --quiet >/dev/null || return
     printf 'pub fn value() -> u32 { 7 }\npub fn offset() -> u32 { 1 }\npub fn unrelated() -> u32 { 99 }\n' > "$WORKSPACE/crates/helper/src/lib.rs"
-    once build crates/native/native --quiet >/dev/null || return
-    once --format json query evidence crates/native/native:build --limit 100 |
+    struo build crates/native/native --quiet >/dev/null || return
+    struo --format json query evidence crates/native/native:build --limit 100 |
       jq -r '
         def compilation: any(.outputs | keys[]; endswith(".rlib"));
         def generation: any(.outputs | keys[]; endswith("/build-script.stdout"));
@@ -95,18 +95,18 @@ RS
   }
 
   rebuild_with_changed_native_library() {
-    once build crates/app/app --quiet >/dev/null || return
-    "$WORKSPACE/.once/out/crates/app/app/app" || return
+    struo build crates/app/app --quiet >/dev/null || return
+    "$WORKSPACE/.struo/out/crates/app/app/app" || return
     printf 'pub fn value() -> u32 { 23 }\npub fn offset() -> u32 { 1 }\n' > "$WORKSPACE/crates/helper/src/lib.rs"
-    once build crates/app/app --quiet >/dev/null || return
-    "$WORKSPACE/.once/out/crates/app/app/app" || return
+    struo build crates/app/app --quiet >/dev/null || return
+    "$WORKSPACE/.struo/out/crates/app/app/app" || return
     printf 'pub fn value() -> u32 { 23 }\npub fn offset() -> u32 { 100 }\n' > "$WORKSPACE/crates/helper/src/lib.rs"
-    once build crates/app/app --quiet >/dev/null || return
-    "$WORKSPACE/.once/out/crates/app/app/app" || return
-    rm -rf "$WORKSPACE/.once/out"
-    once --format json build crates/app/app > "$SPEC_ROOT/restored.json" || return
+    struo build crates/app/app --quiet >/dev/null || return
+    "$WORKSPACE/.struo/out/crates/app/app/app" || return
+    rm -rf "$WORKSPACE/.struo/out"
+    struo --format json build crates/app/app > "$SPEC_ROOT/restored.json" || return
     jq -r '.cache' "$SPEC_ROOT/restored.json" || return
-    "$WORKSPACE/.once/out/crates/app/app/app"
+    "$WORKSPACE/.struo/out/crates/app/app/app"
   }
 
   It 'reuses Rust compilation when a rebuilt generator produces identical files'
@@ -129,11 +129,11 @@ RS
 
   create_failing_build_script_fixture() {
     mkdir -p "$WORKSPACE/crates/failing/src"
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [workspace]
-include = ["crates/*/once.toml"]
+include = ["crates/*/struo.toml"]
 TOML
-    cat > "$WORKSPACE/crates/failing/once.toml" <<'TOML'
+    cat > "$WORKSPACE/crates/failing/struo.toml" <<'TOML'
 [[target]]
 name = "failing"
 kind = "rust_library"
@@ -158,7 +158,7 @@ RS
   It 'surfaces captured build script output when a declared action fails'
     create_failing_build_script_fixture
 
-    When call once build crates/failing/failing
+    When call struo build crates/failing/failing
     The status should be failure
     The stderr should include 'crates/failing/failing:build-script'
     The stderr should include 'stdout:'
@@ -169,9 +169,9 @@ RS
 
   It 'records evidence when a declared build action fails'
     create_failing_build_script_fixture
-    once build crates/failing/failing >/dev/null 2>&1 || true
+    struo build crates/failing/failing >/dev/null 2>&1 || true
 
-    When call once --format json query evidence crates/failing/failing:build
+    When call struo --format json query evidence crates/failing/failing:build
     The status should be success
     The stdout should include '"subject":{"kind":"target","id":"crates/failing/failing","capability":"build"}'
     The stdout should include '"status":"failed"'
@@ -183,7 +183,7 @@ RS
 
   rebuild_embedded_source() {
     mkdir -p "$WORKSPACE/src"
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [[target]]
 name = "embedded"
 kind = "rust_library"
@@ -206,11 +206,11 @@ pub fn message() -> &'static str { include_str!("message.txt") }
 RS
     printf 'fn main() { print!("{}", embedded::message()); }\n' > "$WORKSPACE/main.rs"
     printf 'original payload\n' > "$WORKSPACE/src/message.txt"
-    once build app > "$WORKSPACE/first-build.log" 2>&1 || { cat "$WORKSPACE/first-build.log" >&2; return 1; }
-    "$WORKSPACE/.once/out/app/app" || return 1
+    struo build app > "$WORKSPACE/first-build.log" 2>&1 || { cat "$WORKSPACE/first-build.log" >&2; return 1; }
+    "$WORKSPACE/.struo/out/app/app" || return 1
     printf 'updated payload\n' > "$WORKSPACE/src/message.txt"
-    once build app > "$WORKSPACE/second-build.log" 2>&1 || { cat "$WORKSPACE/second-build.log" >&2; return 1; }
-    "$WORKSPACE/.once/out/app/app"
+    struo build app > "$WORKSPACE/second-build.log" 2>&1 || { cat "$WORKSPACE/second-build.log" >&2; return 1; }
+    "$WORKSPACE/.struo/out/app/app"
   }
 
   It 'rebuilds consumers when a non-Rust source embedded by a library changes'

@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.21)
+project(StruoCTestStarter C)
+enable_testing()
+add_executable(check_sum test.c)
+add_test(NAME check_sum COMMAND check_sum)

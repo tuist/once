@@ -13,7 +13,7 @@ Describe 'activated trigger simulation'
 
   create_trigger_workspace() {
     git -C "$WORKSPACE" init -q
-    printf '.once/\n' > "$WORKSPACE/.gitignore"
+    printf '.struo/\n' > "$WORKSPACE/.gitignore"
     mkdir -p "$WORKSPACE/modules" "$WORKSPACE/checks"
     cat > "$WORKSPACE/modules/check.star" <<'EOF'
 def _impl(ctx):
@@ -27,14 +27,14 @@ check = target_kind(
     impl = _impl,
 )
 EOF
-    cat > "$WORKSPACE/checks/once.toml" <<'EOF'
+    cat > "$WORKSPACE/checks/struo.toml" <<'EOF'
 [[target]]
 name = "core"
 kind = "check"
 [target.attrs]
 message = { select = { unexpected = "wrong", default = "expected" } }
 EOF
-    cat > "$WORKSPACE/once.toml" <<'EOF'
+    cat > "$WORKSPACE/struo.toml" <<'EOF'
 [modules]
 paths = ["modules/*.star"]
 
@@ -52,11 +52,11 @@ configuration = { os = "linux", arch = "x86_64", tokens = [] }
 EOF
     commit_trigger_workspace initial
     DEFINITION_REVISION=$REVISION
-    once --format json edit activate-triggers --revision "$DEFINITION_REVISION" >/dev/null
+    struo --format json edit activate-triggers --revision "$DEFINITION_REVISION" >/dev/null
   }
 
   remove_candidate_trigger() {
-    cat > "$WORKSPACE/once.toml" <<'EOF'
+    cat > "$WORKSPACE/struo.toml" <<'EOF'
 [modules]
 paths = ["modules/*.star"]
 [workspace.configuration]
@@ -66,7 +66,7 @@ EOF
   }
 
   run_and_inspect_trigger() {
-    ONCE_CACHE_PROVIDER=unavailable once --format json --memory-limit 64MiB run --trigger verify-main --event "$SPEC_ROOT/event.json" > "$SPEC_ROOT/run.json" || {
+    STRUO_CACHE_PROVIDER=unavailable struo --format json --memory-limit 64MiB run --trigger verify-main --event "$SPEC_ROOT/event.json" > "$SPEC_ROOT/run.json" || {
       cat "$SPEC_ROOT/run.json" >&2
       return 1
     }
@@ -82,7 +82,7 @@ for outcome in run['outcomes']:
     assert outcome['result']['outputs'], outcome
     for output in outcome['result']['outputs']:
         assert (pathlib.Path(sys.argv[2]) / output).read_text() == 'expected:linux', output
-stored = json.load(open(pathlib.Path(sys.argv[2]) / '.once/triggers/runs' / (run['id'] + '.json')))
+stored = json.load(open(pathlib.Path(sys.argv[2]) / '.struo/triggers/runs' / (run['id'] + '.json')))
 assert stored == run
 print('activated obligations and explicit configuration preserved')
 PY
@@ -99,7 +99,7 @@ PY
 
   It 'does not use a candidate narrowed ref or invocation selection'
     create_trigger_workspace
-    cat > "$WORKSPACE/once.toml" <<'EOF'
+    cat > "$WORKSPACE/struo.toml" <<'EOF'
 [modules]
 paths = ["modules/*.star"]
 [[trigger]]
@@ -119,13 +119,13 @@ EOF
 
   It 'rejects a dirty checkout before evaluation'
     create_trigger_workspace
-    printf '\n# dirty\n' >> "$WORKSPACE/checks/once.toml"
+    printf '\n# dirty\n' >> "$WORKSPACE/checks/struo.toml"
 
-    When call once --format json run --trigger verify-main --event "$SPEC_ROOT/event.json"
+    When call struo --format json run --trigger verify-main --event "$SPEC_ROOT/event.json"
     The status should equal 2
     The stderr should include 'trigger_dirty_checkout'
     The stdout should be blank
-    The path "$WORKSPACE/.once/out" should not be exist
+    The path "$WORKSPACE/.struo/out" should not be exist
   End
 
   It 'rejects a different source revision before evaluation'
@@ -133,7 +133,7 @@ EOF
     remove_candidate_trigger
     printf '{"event":"vcs.ref_changed","ref":"refs/heads/main","revision":"%s"}\n' "$DEFINITION_REVISION" > "$SPEC_ROOT/event.json"
 
-    When call once --format json run --trigger verify-main --event "$SPEC_ROOT/event.json"
+    When call struo --format json run --trigger verify-main --event "$SPEC_ROOT/event.json"
     The status should equal 2
     The stderr should include 'trigger_revision_mismatch'
     The stdout should be blank
@@ -141,14 +141,14 @@ EOF
 
   It 'fails the aggregate when a candidate removes an activated target'
     create_trigger_workspace
-    rm "$WORKSPACE/checks/once.toml"
+    rm "$WORKSPACE/checks/struo.toml"
     commit_trigger_workspace removed-target
 
-    When call once --format json run --trigger verify-main --event "$SPEC_ROOT/event.json"
+    When call struo --format json run --trigger verify-main --event "$SPEC_ROOT/event.json"
     The status should equal 1
     The stdout should include '"status":"failed"'
     The stdout should include 'no target matches'
-    The path "$WORKSPACE/.once/out" should not be exist
+    The path "$WORKSPACE/.struo/out" should not be exist
   End
 
   It 'checks every selected capability before executing an earlier valid root'
@@ -157,11 +157,11 @@ EOF
     rm "$WORKSPACE/modules/check.star.bak"
     commit_trigger_workspace removed-capability
 
-    When call once --format json run --trigger verify-main --event "$SPEC_ROOT/event.json"
+    When call struo --format json run --trigger verify-main --event "$SPEC_ROOT/event.json"
     The status should equal 1
     The stdout should include '"status":"failed"'
     The stdout should include 'does not expose'
-    The path "$WORKSPACE/.once/out" should not be exist
+    The path "$WORKSPACE/.struo/out" should not be exist
   End
 
   It 'keeps a failed invocation in the aggregate instead of returning green'
@@ -183,7 +183,7 @@ check = target_kind(
 EOF
     commit_trigger_workspace failed-test
 
-    When call once --format json run --trigger verify-main --event "$SPEC_ROOT/event.json"
+    When call struo --format json run --trigger verify-main --event "$SPEC_ROOT/event.json"
     The status should equal 1
     The stdout should include '"status":"failed"'
     The stdout should include '"status":"passed"'
@@ -194,7 +194,7 @@ EOF
     create_trigger_workspace
     printf '{"event":"vcs.ref_changed","ref":"refs/heads/other","revision":"%s"}\n' "$REVISION" > "$SPEC_ROOT/event.json"
 
-    When call once --format json query trigger-plan verify-main --file "$SPEC_ROOT/event.json"
+    When call struo --format json query trigger-plan verify-main --file "$SPEC_ROOT/event.json"
     The status should equal 2
     The stderr should include 'trigger_event_mismatch'
     The stdout should be blank
@@ -205,7 +205,7 @@ EOF
     printf 'fail("project code must not run")\n' > "$WORKSPACE/modules/check.star"
     commit_trigger_workspace invalid-project-code
 
-    When call once --format json edit activate-triggers --revision "$REVISION"
+    When call struo --format json edit activate-triggers --revision "$REVISION"
     The status should be success
     The stdout should include '"activated":true'
     The stdout should include 'verify-main'
@@ -214,7 +214,7 @@ EOF
   It 'rejects activation by a mutable ref'
     create_trigger_workspace
 
-    When call once --format json edit activate-triggers --revision HEAD
+    When call struo --format json edit activate-triggers --revision HEAD
     The status should equal 2
     The stderr should include 'full lowercase commit object id'
     The stdout should be blank
@@ -229,13 +229,13 @@ EOF
     cat "$SPEC_ROOT/prefix.star" "$WORKSPACE/modules/check.star" > "$SPEC_ROOT/slow.star"
     sed 's/impl = _impl,/impl = _impl, resolver = _resolve,/' "$SPEC_ROOT/slow.star" > "$WORKSPACE/modules/check.star"
     commit_trigger_workspace slow-discovery
-    once --format json run --trigger verify-main --event "$SPEC_ROOT/event.json" > "$SPEC_ROOT/first.json" 2> "$SPEC_ROOT/first.err" &
+    struo --format json run --trigger verify-main --event "$SPEC_ROOT/event.json" > "$SPEC_ROOT/first.json" 2> "$SPEC_ROOT/first.err" &
     first_pid=$!
     for _ in $(seq 1 100); do
       [ -e "$SPEC_ROOT/discovering" ] && break
       sleep 0.05
     done
-    once --format json edit activate-triggers --revision "$DEFINITION_REVISION"
+    struo --format json edit activate-triggers --revision "$DEFINITION_REVISION"
     competing_status=$?
     wait "$first_pid" || {
       cat "$SPEC_ROOT/first.json" "$SPEC_ROOT/first.err" >&2

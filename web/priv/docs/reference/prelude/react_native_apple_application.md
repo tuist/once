@@ -22,8 +22,8 @@ module autolinking, Codegen, and Hermes.
 `allow_network`.
 
 The `sdk` value may be `iphonesimulator` or `iphoneos`. Simulator builds disable
-code signing and can be installed through `once run`. Device builds use the
-signing settings in the checked-in Xcode project and are build-only in Once.
+code signing and can be installed through `struo run`. Device builds use the
+signing settings in the checked-in Xcode project and are build-only in Struo.
 Generated CocoaPods and native build directories are excluded while staging;
 `exclude_srcs` adds project-specific exclusions.
 

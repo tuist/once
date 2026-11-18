@@ -1,7 +1,7 @@
 # Artifacts
 
 **Artifacts are immutable build products. Publishing sends them to your
-configured infrastructure.** Once builds, packages and publishes the content;
+configured infrastructure.** Struo builds, packages and publishes the content;
 the provider decides how people download, install, serve or run it.
 
 An application, command-line program, server, static site, dataset or report
@@ -15,10 +15,10 @@ name = "site"
 kind = "artifact"
 srcs = ["public/**/*"]
 
-[target.attrs.interfaces."dev.once.static-http.v1"]
+[target.attrs.interfaces."dev.struo.static-http.v1"]
 payload = "content"
 
-[target.attrs.interfaces."dev.once.static-http.v1".spec]
+[target.attrs.interfaces."dev.struo.static-http.v1".spec]
 root = "public"
 index = "index.html"
 ```
@@ -29,9 +29,9 @@ Permissions are declared, not inferred from the packaging host. Custom target
 kinds can export existing file outputs directly or declare mixed-mode archives.
 
 ```sh
-once query artifacts site
-once artifact export site --output dist
-once artifact publish site --provider local
+struo query artifacts site
+struo artifact export site --output dist
+struo artifact publish site --provider local
 ```
 
 Export returns the immutable root descriptor and a self-contained directory.
@@ -59,7 +59,7 @@ export and remain downloadable; they never grant permission to execute a
 command or dynamically load a handler. Examples of consumption contracts:
 
 - **Download:** No interface required. Retain arbitrary bytes.
-- **Static site:** `dev.once.static-http.v1` declares the archive `root` and
+- **Static site:** `dev.struo.static-http.v1` declares the archive `root` and
   `index`. Never serve private sibling files.
 - **CLI:** A producer-owned executable contract declares entrypoint, arguments,
   OS, architecture and required runtime content.
@@ -68,7 +68,7 @@ command or dynamically load a handler. Examples of consumption contracts:
 - **Application:** A producer-owned installation contract declares the package,
   platform, runtime compatibility and installation requirements.
 
-Consumption interfaces are declarations. Once does not implement static hosting,
+Consumption interfaces are declarations. Struo does not implement static hosting,
 CLI installation or server activation. An executable alone is not a complete
 runtime closure. A compatible consumer must validate its supported contract,
 unpack safely, isolate untrusted content, bind secrets with authorization,
@@ -107,8 +107,8 @@ publish_on_build = ["application"]
 Then explicitly publish and authorize the configured remote destination:
 
 ```sh
-once artifact publish application --allow-on-build
-once build application
+struo artifact publish application --allow-on-build
+struo build application
 ```
 
 Authorization is local machine state, not repository configuration. It binds
@@ -117,17 +117,17 @@ destination returned by the service. Changing any of them requires explicit
 authorization again. A copied checkout or another machine is not authorized
 by the committed policy alone.
 
-After all requested builds succeed, Once considers only requested targets
+After all requested builds succeed, Struo considers only requested targets
 listed in `publish_on_build` that expose the artifact capability. The producer
 must also approve automatic publication of its entire exported closure through
-`once.artifact_info.v2`. Older v1 declarations default to no approval.
+`struo.artifact_info.v2`. Older v1 declarations default to no approval.
 Without the policy or local authorization, builds make no artifact-publication
 network requests. A changed stable destination is rejected before content upload.
 
 Remote publication sends the full immutable closure: the artifact set, every
 member manifest and every payload, including unknown interfaces. Its intent
 contains the root descriptor, target, optional track and Git revision. Before
-uploading, Once looks up the intent's remote receipt and verifies its key, root
+uploading, Struo looks up the intent's remote receipt and verifies its key, root
 and destination. Replaying the same retained intent returns that receipt without
 uploading content again. An unconfirmed completion is an error; replay the same
 intent to recover its receipt rather than assuming success. Retention and expiry
@@ -150,7 +150,7 @@ independent of consumption interfaces and never interprets application metadata:
 ```json
 {
   "schema": "once.publication_intent.v1",
-  "root": {"digest": "sha256:<64 lowercase hex digits>", "size_bytes": 123, "media_type": "application/vnd.once.artifact-set.v1+json"},
+  "root": {"digest": "sha256:<64 lowercase hex digits>", "size_bytes": 123, "media_type": "application/vnd.struo.artifact-set.v1+json"},
   "target": "application",
   "track": null,
   "revision": null
@@ -166,7 +166,7 @@ absolute HTTPS, except same-origin HTTP for local development. It contains no
 embedded credentials. Publication schemas are versioned separately from artifact
 and consumption schemas.
 
-Once uploads each distinct locally exported digest, never server-selected local
+Struo uploads each distinct locally exported digest, never server-selected local
 files. Responses are bounded to one mebibyte, and redirects are not followed.
 Other statuses and malformed or mismatching receipts are errors. An upload
 conflict is successful only if a separate lookup confirms the same publication.
@@ -175,10 +175,10 @@ tracks or revisions produce different intents even when their content is equal.
 
 ## Use the same surface from an agent
 
-- `once_query_artifacts` inspects capability support and the provider shape.
-- `once_export_artifacts` mirrors local export.
-- `once_publish_artifacts` mirrors explicit publication.
+- `struo_query_artifacts` inspects capability support and the provider shape.
+- `struo_export_artifacts` mirrors local export.
+- `struo_publish_artifacts` mirrors explicit publication.
 
-The last two require `once mcp --allow-run`. Authorize the selected destination
+The last two require `struo mcp --allow-run`. Authorize the selected destination
 before asking an agent to publish. See the [module contract](/reference/modules/#artifact-providers)
 to add artifact support to another target kind.

@@ -1,0 +1,1700 @@
+//! Walks the graph in dependency order and executes declared actions
+//! for analysis-backed target kinds.
+//!
+//! For every target the driver calls [`struo_frontend::analysis::analyze_target`].
+//! When the target kind has an `impl` callable the analysis returns a list of
+//! `DeclaredAction`s plus a provider record; we materialise each
+//! declared command according to its cache policy and pass the resulting
+//! provider down to consumers. When the target kind has no `impl` declared in
+//! the prelude, the driver returns `None` so the caller can fall back to
+//! its generic marker action.
+//!
+//! This module stays toolchain-neutral: it consults the prelude via
+//! `target_kind_has_impl` to know which kinds run through analysis, and the
+//! analysis layer is fed everything it needs through generic Starlark
+//! globals. Dep providers and dep action digests are carried so a
+//! parent's input digest composes its deps' action digests.
+
+mod actions;
+mod analysis_memo;
+mod materialization;
+mod output_state;
+mod resolution_cache;
+mod scheduler;
+mod source_digest_cache;
+mod target_outcomes;
+
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::future::Future;
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
+use struo_cas::{ActionResult, CacheProvider, Digest};
+use struo_core::{
+    ActionOutputObserver, EvidenceCacheState, InputFingerprintManifest, ResourceLimits,
+    ResourcePool, SandboxMode,
+};
+use struo_frontend::analysis::{
+    AnalysisEngine, AnalysisOptions, CachedToolCommand, CommandPolicy, UnchangedWorkspace,
+};
+use struo_frontend::ConfigurationOverrides;
+use struo_frontend::GraphTarget;
+
+use self::actions::{
+    run_declared_actions_with, validate_declared_actions, DeclaredActionValidation, Producers,
+    Repair,
+};
+use self::analysis_memo::AnalysisMemo;
+use self::resolution_cache::ResolutionCache;
+use self::scheduler::{BuildScheduler, DependencyInputs};
+use self::source_digest_cache::SourceDigestCache;
+use self::target_outcomes::TargetOutcomes;
+use crate::commands::change_tracker::{ChangePosition, ChangeSnapshot};
+
+pub(super) use self::source_digest_cache::stored_position as recorded_digest_position;
+pub(super) use self::source_digest_cache::KnownChanges;
+pub(super) use self::source_digest_cache::SourceDigestCache as RecordedDigests;
+
+/// Turn a watcher snapshot into a statement about the recorded digests.
+///
+/// The snapshot answers "what changed since the position I asked about". That
+/// is only useful here when the position asked about is at or before the one
+/// the digests were written at, and when the watcher could actually enumerate
+/// the changes rather than reporting that it lost track.
+pub(super) fn known_changes(
+    snapshot: Option<&ChangeSnapshot>,
+    recorded_at: Option<&ChangePosition>,
+) -> KnownChanges {
+    let (Some(snapshot), Some(recorded_at)) = (snapshot, recorded_at) else {
+        return KnownChanges::Unknown;
+    };
+    if snapshot.position.instance_id != recorded_at.instance_id {
+        return KnownChanges::Unknown;
+    }
+    let (Some(sources), Some(outputs)) = (
+        snapshot.source_changes.as_ref(),
+        snapshot.output_changes.as_ref(),
+    ) else {
+        return KnownChanges::Unknown;
+    };
+    KnownChanges::Since {
+        sources: sources.iter().cloned().collect(),
+        outputs: outputs.iter().cloned().collect(),
+    }
+}
+
+use super::configuration::ResolvedConfiguration;
+
+const GRAPH_TOOL_CACHE_SCHEMA: &str = "struo.graph-tool-paths.v5";
+const GRAPH_TOOL_ENVIRONMENT_KEYS: &[&str] = &[
+    "DEVELOPER_DIR",
+    "ELIXIR_ERL_OPTIONS",
+    "ERL_AFLAGS",
+    "ERL_FLAGS",
+    "GEM_HOME",
+    "GEM_PATH",
+    "GOENV",
+    "GOFLAGS",
+    "GOROOT",
+    "HOME",
+    "JAVA_HOME",
+    "JAVA_TOOL_OPTIONS",
+    "JDK_JAVA_OPTIONS",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "MISE_CACHE_DIR",
+    "MISE_CONFIG_DIR",
+    "MISE_DATA_DIR",
+    "MISE_ENABLE_TOOLS",
+    "MISE_ENV",
+    "MISE_PROFILE",
+    "MIX_ENV",
+    "NODE_OPTIONS",
+    "PATH",
+    "PYTHONHOME",
+    "PYTHONPATH",
+    "PYTHONWARNINGS",
+    "RUBYOPT",
+    "RUSTFLAGS",
+    "RUSTUP_TOOLCHAIN",
+    "SDKROOT",
+    "USERPROFILE",
+    "ZIG_GLOBAL_CACHE_DIR",
+    "_JAVA_OPTIONS",
+];
+
+/// Per-target outcome cached during a single command invocation.
+///
+/// Deliberately not `Clone`: each outcome has exactly one owner at a
+/// time: first the producing build task, then `outcomes` in
+/// [`BuildSession::build_reachable`], and then either the
+/// `dep_providers` of the last reader (move) or the returning caller
+/// (also a move via `outcomes.remove`).
+#[derive(Debug)]
+pub(super) struct BuildOutcome {
+    pub provider: Arc<JsonValue>,
+    pub action_digest: Digest,
+    pub input_digest: Option<Digest>,
+    pub input_fingerprint: Option<InputFingerprintManifest>,
+    pub available_inputs: BTreeMap<String, AvailableInput>,
+    pub outputs: Vec<String>,
+    pub cache_tag: &'static str,
+    pub cache_state: EvidenceCacheState,
+    pub result: ActionResult,
+    pub cached_results: Vec<ActionResult>,
+    /// Outputs only later actions of the target read. They stay in the cache
+    /// rather than on disk unless one of those actions had to run.
+    pub intermediate_outputs: BTreeSet<String>,
+    /// Per-declared-action outcomes recorded during this build.
+    ///
+    /// One entry per declared action, retained with memoized target outcomes
+    /// so subsequent runs can report each reused action as a cache hit.
+    pub per_action_outcomes: Vec<PerActionOutcome>,
+}
+
+/// A single declared action's terminal state, as observed by the runner.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub(super) struct PerActionOutcome {
+    pub action_digest: Digest,
+    pub identifier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<struo_core::ActionPresentation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<struo_core::ActionHistoryKey>,
+    pub index: u32,
+    pub cache_state: EvidenceCacheState,
+    pub duration_ms: i64,
+    pub exit_code: i32,
+}
+
+fn has_uncached_actions(cache_state: EvidenceCacheState, actions: &[PerActionOutcome]) -> bool {
+    cache_state == EvidenceCacheState::Bypass
+        || actions
+            .iter()
+            .any(|action| action.cache_state == EvidenceCacheState::Bypass)
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+pub(super) struct AvailableInput {
+    pub blob_digest: Digest,
+    pub same_target: bool,
+    pub materialized: bool,
+}
+
+pub(super) struct AnalyzedCapability {
+    pub analysis: struo_frontend::analysis::AnalysisResult,
+    pub dep_action_digests: Vec<(String, Digest)>,
+    pub available_inputs: BTreeMap<String, AvailableInput>,
+}
+
+/// Command-scoped graph build session.
+///
+/// The session owns the target id map and analysis engine so one graph
+/// command does not repeatedly parse target kind metadata or linearly scan the
+/// graph for every dependency edge.
+pub(super) struct BuildSession {
+    workspace: PathBuf,
+    cache: CacheProvider,
+    /// Graph targets are wrapped in `Arc` so spawned tasks can hold a
+    /// cheap shared handle (refcount bump) instead of deep-cloning the
+    /// whole `GraphTarget` (which itself owns several `Vec`s and a
+    /// `BTreeMap`) once for the analysis task and again for action
+    /// execution.
+    targets: HashMap<String, Arc<GraphTarget>>,
+    analyzer: AnalysisEngine,
+    module_source_digest: Digest,
+    tool_paths: Arc<BTreeMap<String, String>>,
+    tool_cache_fingerprint: Option<Digest>,
+    cached_tool_commands: Arc<[CachedToolCommand]>,
+    resources: Arc<ResourcePool>,
+    source_digest_cache: SourceDigestCache,
+    analysis_memo: AnalysisMemo,
+    /// Present when this session derived (or reused) a graph that is worth
+    /// remembering. Absent for commands handed a graph they did not derive.
+    resolution: Option<Resolution>,
+    /// What a watcher says cannot have moved, so a stored analysis is not
+    /// re-checked against packages nothing touched.
+    unchanged: Arc<UnchangedWorkspace>,
+    /// The same statement in the form the outcome store reads, which needs the
+    /// paths themselves rather than a question about patterns.
+    changes: Arc<KnownChanges>,
+    target_outcomes: Arc<TargetOutcomes>,
+    uncached_work: AtomicBool,
+    sandbox: SandboxMode,
+    output_observer: Option<Arc<dyn ActionOutputObserver>>,
+    /// Optional per-run event bus so the scheduler can publish
+    /// `TargetStarted` / `TargetCompleted` per graph target while it
+    /// walks the dependency closure.
+    event_bus: Option<struo_core::RunEventBus>,
+    suppressed_target_lifecycle: Arc<HashSet<String>>,
+    /// What produced each output this session saw, so a deferred output the
+    /// cache lost can be produced again.
+    producers: Producers,
+}
+
+struct Resolution {
+    cache: ResolutionCache,
+    key: Option<String>,
+    /// What deriving the graph read, or `None` when it was reused rather than
+    /// derived and so is already recorded.
+    derivation: Option<struo_frontend::ResolutionRecord>,
+}
+
+impl BuildSession {
+    pub(super) async fn load_workspace_with_configuration(
+        workspace: &Path,
+        cache: &CacheProvider,
+        sandbox: SandboxMode,
+        resolved: &ResolvedConfiguration,
+        changes: &KnownChanges,
+    ) -> Result<Self> {
+        let workspace_targets = resolved
+            .workspace_targets(workspace)
+            .context("loading workspace")?;
+        let target_kinds = workspace_targets
+            .iter()
+            .map(|target| target.kind.clone())
+            .collect::<BTreeSet<_>>();
+        let analyzer = AnalysisEngine::for_target_kinds(
+            workspace,
+            AnalysisOptions {
+                execution: resolved.execution.clone(),
+                ..AnalysisOptions::default()
+            },
+            &target_kinds,
+        )?
+        .with_configuration(resolved.configuration.clone(), resolved.path_suffix.clone());
+        let resolution_cache = ResolutionCache::open(workspace);
+        let memo = AnalysisMemo::open(workspace);
+        let resolution_key = memo.executable_identity().and_then(|identity| {
+            resolution_cache::key(
+                analyzer.module_source(),
+                workspace,
+                resolved.digest,
+                identity,
+                &workspace_targets,
+            )
+        });
+        let reused = resolution_key
+            .as_deref()
+            .and_then(|key| resolution_cache.reuse(&analyzer, workspace, key, changes));
+        let (graph, derivation) = if let Some(graph) = reused {
+            (graph, None)
+        } else {
+            let (graph, record) = analyzer
+                .load_graph_workspace_from_targets_recorded(workspace, workspace_targets)
+                .context("loading graph")?;
+            (graph, Some(record))
+        };
+        let resolved_tools = resolve_graph_tools(workspace, &graph).await?;
+        let analyzer = analyzer.with_tool_cache(
+            resolved_tools.paths.clone(),
+            resolved_tools.commands.clone(),
+        );
+        let mut session = Self::new_with_analyzer(workspace, cache, graph, analyzer, sandbox);
+        if let Some(execution) = &resolved.execution {
+            session.producers.set_execution(execution.clone());
+        }
+        session.tool_paths = Arc::new(resolved_tools.paths);
+        session.tool_cache_fingerprint = resolved_tools.fingerprint;
+        session.cached_tool_commands = resolved_tools.commands.into();
+        session.resolution = Some(Resolution {
+            cache: resolution_cache,
+            key: resolution_key,
+            derivation,
+        });
+        Ok(session)
+    }
+
+    pub(super) async fn new(
+        workspace: &Path,
+        cache: &CacheProvider,
+        graph: Vec<GraphTarget>,
+        sandbox: SandboxMode,
+    ) -> Result<Self> {
+        Self::new_with_options(workspace, cache, graph, AnalysisOptions::default(), sandbox).await
+    }
+
+    pub(super) async fn new_with_options(
+        workspace: &Path,
+        cache: &CacheProvider,
+        graph: Vec<GraphTarget>,
+        options: AnalysisOptions,
+        sandbox: SandboxMode,
+    ) -> Result<Self> {
+        let resolved =
+            super::configuration::resolve(workspace, &ConfigurationOverrides::default())?;
+        Self::new_with_options_with_configuration(
+            workspace, cache, graph, options, sandbox, &resolved,
+        )
+        .await
+    }
+
+    pub(super) async fn new_with_options_with_configuration(
+        workspace: &Path,
+        cache: &CacheProvider,
+        graph: Vec<GraphTarget>,
+        options: AnalysisOptions,
+        sandbox: SandboxMode,
+        resolved: &ResolvedConfiguration,
+    ) -> Result<Self> {
+        let resolved_tools = resolve_graph_tools(workspace, &graph).await?;
+        let target_kinds = graph
+            .iter()
+            .map(|target| target.kind.clone())
+            .collect::<BTreeSet<_>>();
+        let options = AnalysisOptions {
+            execution: resolved.execution.clone(),
+            ..options
+        };
+        let analyzer = AnalysisEngine::for_target_kinds(workspace, options, &target_kinds)?
+            .with_configuration(resolved.configuration.clone(), resolved.path_suffix.clone())
+            .with_tool_cache(
+                resolved_tools.paths.clone(),
+                resolved_tools.commands.clone(),
+            );
+        let mut session = Self::new_with_analyzer(workspace, cache, graph, analyzer, sandbox);
+        if let Some(execution) = &resolved.execution {
+            session.producers.set_execution(execution.clone());
+        }
+        session.tool_paths = Arc::new(resolved_tools.paths);
+        session.tool_cache_fingerprint = resolved_tools.fingerprint;
+        session.cached_tool_commands = resolved_tools.commands.into();
+        Ok(session)
+    }
+
+    fn new_with_analyzer(
+        workspace: &Path,
+        cache: &CacheProvider,
+        graph: Vec<GraphTarget>,
+        analyzer: AnalysisEngine,
+        sandbox: SandboxMode,
+    ) -> Self {
+        let module_source_digest = Digest::of_bytes(analyzer.module_source().as_bytes());
+        Self {
+            workspace: workspace.to_path_buf(),
+            cache: cache.clone(),
+            targets: graph
+                .into_iter()
+                .map(|target| {
+                    let id = target.label.id.clone();
+                    (id, Arc::new(target))
+                })
+                .collect(),
+            analyzer,
+            module_source_digest,
+            tool_paths: Arc::new(BTreeMap::new()),
+            tool_cache_fingerprint: None,
+            cached_tool_commands: Arc::from([]),
+            resources: struo_frontend::analysis::analysis_resource_pool(),
+            source_digest_cache: SourceDigestCache::open(workspace),
+            analysis_memo: AnalysisMemo::open(workspace),
+            resolution: None,
+            unchanged: Arc::new(UnchangedWorkspace::Unknown),
+            changes: Arc::new(KnownChanges::Unknown),
+            target_outcomes: Arc::new(TargetOutcomes::open(
+                workspace,
+                "build",
+                sandbox,
+                "",
+                recorded_digest_position(workspace).as_ref(),
+            )),
+            uncached_work: AtomicBool::new(false),
+            sandbox,
+            output_observer: None,
+            event_bus: None,
+            suppressed_target_lifecycle: Arc::new(HashSet::new()),
+            producers: Producers::default(),
+        }
+    }
+
+    pub(super) fn executor_resources(&self) -> Result<&struo_core::ExecutorResources> {
+        self.producers.executors(&self.resources)
+    }
+
+    fn repair(&self) -> Repair<'_> {
+        Repair {
+            workspace: &self.workspace,
+            cache: &self.cache,
+            source_digest_cache: Some(&self.source_digest_cache),
+            resources: &self.resources,
+            producers: &self.producers,
+        }
+    }
+
+    pub(super) fn with_resource_limits(self, limits: ResourceLimits) -> Self {
+        let shared = struo_frontend::analysis::analysis_resource_pool();
+        let resources = if shared.limits() == limits {
+            shared
+        } else {
+            Arc::new(ResourcePool::new(limits))
+        };
+        self.with_resource_pool(resources)
+    }
+
+    pub(super) fn log_paths(&self) -> Vec<String> {
+        self.producers.log_paths()
+    }
+
+    pub(super) fn with_resource_pool(mut self, resources: Arc<ResourcePool>) -> Self {
+        self.analyzer = self.analyzer.with_resource_pool(Arc::clone(&resources));
+        self.resources = resources;
+        let execution = self.producers.execution().cloned();
+        self.producers = Producers::default();
+        if let Some(execution) = execution {
+            self.producers.set_execution(execution);
+        }
+        self
+    }
+
+    pub(super) fn trigger_resolution(&self) -> Result<JsonValue> {
+        let targets: BTreeMap<_, _> = self
+            .targets
+            .iter()
+            .map(|(id, target)| (id, target.as_ref()))
+            .collect();
+        Ok(serde_json::json!({
+            "graph_digest": Digest::of_bytes(&serde_json::to_vec(&targets)?).to_string(),
+            "module_digest": self.module_source_digest.to_string(),
+            "tool_cache_fingerprint": self.tool_cache_fingerprint,
+        }))
+    }
+
+    pub(super) fn has_implementation(&self, target: &GraphTarget) -> bool {
+        self.analyzer.target_kind_has_impl(&target.kind)
+    }
+
+    pub(super) fn with_output_observer(
+        mut self,
+        output_observer: Arc<dyn ActionOutputObserver>,
+    ) -> Self {
+        self.output_observer = Some(output_observer);
+        self
+    }
+
+    /// Wire the session to publish per-target lifecycle events onto
+    /// the given bus while it schedules dependencies. Without this the
+    /// scheduler is silent per-target and only the outer run's own
+    /// events fire.
+    pub(super) fn with_event_bus(mut self, bus: struo_core::RunEventBus) -> Self {
+        self.event_bus = Some(bus);
+        self
+    }
+
+    pub(super) fn suppress_target_lifecycle(mut self, target_id: &str) -> Self {
+        Arc::make_mut(&mut self.suppressed_target_lifecycle).insert(target_id.to_string());
+        self
+    }
+
+    /// Tell this session what a watcher says moved since the recorded digests
+    /// were written, so unchanged paths need not be looked at again.
+    pub(super) fn with_known_changes(&mut self, changes: KnownChanges) {
+        self.unchanged = Arc::new(changes.unchanged_workspace());
+        self.changes = Arc::new(changes.clone());
+        self.source_digest_cache.with_known_changes(changes);
+    }
+
+    /// Write back what building this graph produced, against the position it
+    /// describes, so the next invocation can skip the targets nothing touched.
+    pub(super) fn record_target_outcomes(&self, position: Option<&ChangePosition>) {
+        self.target_outcomes.save(position);
+    }
+
+    pub(super) fn performed_uncached_work(&self) -> bool {
+        self.uncached_work.load(Ordering::Relaxed)
+    }
+
+    /// The digests recorded for a build's outputs, so a receipt can name what
+    /// it produced and recognise those writes when the watcher reports them.
+    pub(super) fn recorded_output_digests(&self, outputs: &[String]) -> BTreeMap<String, Digest> {
+        outputs
+            .iter()
+            .filter_map(|path| {
+                self.source_digest_cache
+                    .recorded_output_digest(path)
+                    .map(|digest| (path.clone(), digest))
+            })
+            .collect()
+    }
+
+    /// Stamp the watcher position the recorded digests now describe.
+    pub(super) fn record_digest_position(&self, position: Option<ChangePosition>) {
+        self.source_digest_cache.set_position(position);
+    }
+
+    /// Remember the derived graph against the position it describes, so the
+    /// next invocation can skip deriving it.
+    pub(super) fn record_resolution(&self, position: Option<&ChangePosition>) {
+        let Some(resolution) = &self.resolution else {
+            return;
+        };
+        let (Some(key), Some(record)) = (resolution.key.as_deref(), resolution.derivation.as_ref())
+        else {
+            return;
+        };
+        let graph = self
+            .targets
+            .values()
+            .map(|target| target.as_ref().clone())
+            .collect::<Vec<_>>();
+        resolution.cache.store(key, position, &graph, record);
+    }
+
+    pub(super) fn target(&self, target_id: &str) -> Result<&GraphTarget> {
+        let Some(target) = self.targets.get(target_id).map(Arc::as_ref) else {
+            let package = target_id.rsplit_once('/').map(|(package, _)| package);
+            let mut candidates = self.targets.keys().collect::<Vec<_>>();
+            candidates.sort_by_key(|id| {
+                (
+                    package.is_some_and(|package| !id.starts_with(&format!("{package}/"))),
+                    *id,
+                )
+            });
+            let nearby = candidates
+                .into_iter()
+                .take(5)
+                .map(|id| format!("`{id}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let missing = format!("no target matches `{target_id}`; use one of these valid target selectors: {nearby}. Run `struo query targets` to list the available targets");
+            // A target a resolver would have emitted is missing because the
+            // resolver failed, and that failure is what the caller can act on.
+            // Only a resolver whose package contains the requested id could
+            // have emitted it; any other failure is unrelated to a typo.
+            let Some(diagnostic) = self
+                .targets
+                .values()
+                .filter(|target| {
+                    let package = &target.label.package;
+                    self.analyzer.target_kind_has_resolver(&target.kind)
+                        && (package.is_empty()
+                            || target_id == package
+                            || target_id.starts_with(&format!("{package}/")))
+                })
+                .flat_map(|target| &target.diagnostics)
+                .min_by(|left, right| left.target.cmp(&right.target))
+            else {
+                anyhow::bail!(missing);
+            };
+            return Err(
+                anyhow::Error::new(struo_frontend::analysis::AnalysisFailure {
+                    diagnostic: diagnostic.clone(),
+                })
+                .context(format!(
+                    "{missing}; the graph is incomplete because a target failed to load"
+                )),
+            );
+        };
+        ensure_graph_target_valid(target)?;
+        Ok(target)
+    }
+
+    /// Build a target and the impl-backed portion of its dependency
+    /// closure. Returns `Ok(None)` when the target's own kind has no
+    /// impl, allowing callers to fall back to generic marker actions.
+    pub(super) async fn build_with_analysis(
+        &self,
+        target: &GraphTarget,
+    ) -> Result<Option<BuildOutcome>> {
+        if !self.analyzer.target_kind_has_impl(&target.kind) {
+            anyhow::ensure!(
+                self.producers.execution().is_none(),
+                "provider execution requires declared actions; target `{}` has no implementation",
+                target.label.id,
+            );
+            tracing::debug!(
+                target = %target.label.id,
+                kind = %target.kind,
+                "graph target has no Starlark analysis implementation"
+            );
+            return Ok(None);
+        }
+
+        let reachable = self.reachable_analysis_targets(target);
+        tracing::debug!(
+            target = %target.label.id,
+            reachable = reachable.len(),
+            "building graph target through Starlark analysis"
+        );
+        let outcome = self.build_reachable(&target.label.id, &reachable).await?;
+        materialize_cached_outputs(&outcome, self.repair())
+            .await
+            .with_context(|| format!("materializing outputs for {}", target.label.id))?;
+        self.persist_graph_tool_cache();
+        Ok(Some(outcome))
+    }
+
+    /// Returns a boxed future intentionally because the concrete future
+    /// captures dependency outcomes, provider records, and declared action
+    /// state. Boxing here keeps graph command callers small enough for
+    /// `clippy::large_futures` without spreading `Box::pin` across callers.
+    pub(super) fn run_with_analysis<'a>(
+        &'a self,
+        target: &'a GraphTarget,
+        capability: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<BuildOutcome>>> + Send + 'a>> {
+        self.run_with_analysis_and_provider_validation(target, capability, |_, _| Ok(()))
+    }
+
+    pub(super) fn run_with_analysis_and_provider_validation<'a>(
+        &'a self,
+        target: &'a GraphTarget,
+        capability: &'a str,
+        validate_provider: fn(&GraphTarget, &JsonValue) -> Result<()>,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<BuildOutcome>>> + Send + 'a>> {
+        Box::pin(async move {
+            if !self.analyzer.target_kind_has_impl(&target.kind) {
+                tracing::debug!(
+                    target = %target.label.id,
+                    kind = %target.kind,
+                    capability,
+                    "graph target capability has no Starlark analysis implementation"
+                );
+                return Ok(None);
+            }
+
+            let AnalyzedCapability {
+                analysis,
+                dep_action_digests,
+                available_inputs,
+            } = self.analyze_capability(target, capability).await?;
+            validate_provider(target, &analysis.provider)?;
+            let workers =
+                crate::bus_events::WorkerSlots::new(self.resources.max_parallel_actions());
+            let outcome = crate::bus_events::observe_target_transfers(
+                self.event_bus.as_ref(),
+                &target.label.id,
+                async {
+                    let outcome = run_declared_actions_with(
+                        Some(&self.analyzer),
+                        &self.workspace,
+                        &self.cache,
+                        self.module_source_digest,
+                        target,
+                        capability,
+                        analysis,
+                        &dep_action_digests,
+                        &available_inputs,
+                        &self.tool_paths,
+                        Some(&self.source_digest_cache),
+                        self.sandbox,
+                        &self.resources,
+                        self.output_observer.as_deref(),
+                        self.event_bus.as_ref(),
+                        &workers,
+                        &self.producers,
+                    )
+                    .await
+                    .with_context(|| format!("executing {capability} for {}", target.label.id))?;
+                    materialize_cached_outputs(&outcome, self.repair())
+                        .await
+                        .with_context(|| {
+                            format!("materializing {capability} outputs for {}", target.label.id)
+                        })?;
+                    Ok::<_, anyhow::Error>(outcome)
+                },
+            )
+            .await?;
+            self.persist_graph_tool_cache();
+            Ok(Some(outcome))
+        })
+    }
+
+    pub(super) async fn analyze_capability(
+        &self,
+        target: &GraphTarget,
+        capability: &str,
+    ) -> Result<AnalyzedCapability> {
+        if !self.analyzer.target_kind_has_impl(&target.kind) {
+            anyhow::bail!(
+                "target kind `{}` does not declare scripted actions",
+                target.kind
+            );
+        }
+        let dep_outcomes = self.build_direct_analysis_deps(target).await?;
+        tracing::debug!(
+            target = %target.label.id,
+            capability,
+            direct_analysis_deps = dep_outcomes.len(),
+            "analysing graph target capability actions"
+        );
+        let mut providers_by_id = HashMap::with_capacity(dep_outcomes.len());
+        let mut dep_action_digests = Vec::with_capacity(dep_outcomes.len());
+        let mut available_inputs = BTreeMap::new();
+        for (dep_id, outcome) in dep_outcomes {
+            dep_action_digests.push((dep_id.clone(), outcome.action_digest));
+            available_inputs.extend(outcome.available_inputs.into_iter().map(
+                |(path, mut input)| {
+                    input.same_target = false;
+                    (path, input)
+                },
+            ));
+            providers_by_id.insert(dep_id, outcome.provider);
+        }
+        let dep_providers = target
+            .deps
+            .iter()
+            .filter_map(|dep_id| providers_by_id.get(dep_id).cloned())
+            .collect::<Vec<_>>();
+        let dependency_providers = target
+            .dependency_edges
+            .iter()
+            .map(|(role, dep_ids)| {
+                let providers = dep_ids
+                    .iter()
+                    .filter_map(|dep_id| providers_by_id.get(dep_id).cloned())
+                    .collect::<Vec<_>>();
+                (role.clone(), providers)
+            })
+            .collect::<BTreeMap<_, _>>();
+        // Starlark evaluation is synchronous and can take a while; keep it off
+        // the runtime threads that drive actions and transfers.
+        let analyzer = self.analyzer.clone();
+        let memo = self.analysis_memo.clone();
+        let unchanged = Arc::clone(&self.unchanged);
+        let analysis_target = target.clone();
+        let workspace = self.workspace.clone();
+        let analysis_capability = capability.to_string();
+        let analysis = tokio::task::spawn_blocking(move || {
+            analyze_with_memo(
+                &analyzer,
+                &memo,
+                &unchanged,
+                None,
+                &analysis_target,
+                &workspace,
+                &dep_providers,
+                &dependency_providers,
+                &analysis_capability,
+            )
+        })
+        .await
+        .context("joining graph analysis task")??;
+        Ok(AnalyzedCapability {
+            analysis,
+            dep_action_digests,
+            available_inputs,
+        })
+    }
+
+    pub(super) async fn validate_actions(
+        &self,
+        target: &GraphTarget,
+        capability: &str,
+        selected_index: Option<usize>,
+    ) -> Result<Vec<DeclaredActionValidation>> {
+        let AnalyzedCapability {
+            analysis,
+            dep_action_digests,
+            available_inputs: _,
+        } = self.analyze_capability(target, capability).await?;
+        validate_declared_actions(
+            &self.workspace,
+            &self.cache,
+            self.module_source_digest,
+            target,
+            analysis,
+            &dep_action_digests,
+            selected_index,
+        )
+        .await
+    }
+
+    fn reachable_analysis_targets(&self, target: &GraphTarget) -> HashSet<String> {
+        self.reachable_analysis_targets_from([target.label.id.clone()])
+    }
+
+    fn reachable_analysis_deps(&self, target: &GraphTarget) -> HashSet<String> {
+        let roots = target.dependency_ids().filter_map(|dep_id| {
+            let dep = self.targets.get(dep_id)?;
+            self.analyzer
+                .target_kind_has_impl(&dep.kind)
+                .then(|| dep_id.clone())
+        });
+        self.reachable_analysis_targets_from(roots)
+    }
+
+    fn reachable_analysis_targets_from(
+        &self,
+        roots: impl IntoIterator<Item = String>,
+    ) -> HashSet<String> {
+        let mut reachable = HashSet::new();
+        let mut stack = roots.into_iter().collect::<Vec<_>>();
+        while let Some(target_id) = stack.pop() {
+            // Check membership before insert so the owned `target_id`
+            // moves into the set instead of being cloned.
+            if reachable.contains(&target_id) {
+                continue;
+            }
+            let target = self.targets.get(&target_id).cloned();
+            reachable.insert(target_id);
+            let Some(target) = target else {
+                continue;
+            };
+            for dep_id in target.dependency_ids() {
+                let Some(dep) = self.targets.get(dep_id) else {
+                    continue;
+                };
+                if self.analyzer.target_kind_has_impl(&dep.kind) {
+                    stack.push(dep_id.clone());
+                }
+            }
+        }
+        reachable
+    }
+
+    async fn build_direct_analysis_deps(
+        &self,
+        target: &GraphTarget,
+    ) -> Result<Vec<(String, BuildOutcome)>> {
+        let reachable = self.reachable_analysis_deps(target);
+        if reachable.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut seen = HashSet::new();
+        let direct_deps = target
+            .dependency_ids()
+            .filter(|dep_id| reachable.contains(*dep_id) && seen.insert((*dep_id).clone()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let retained = direct_deps.iter().cloned().collect::<HashSet<_>>();
+        let mut outcomes = self
+            .build_reachable_retaining(&target.label.id, &reachable, &retained)
+            .await?;
+        direct_deps
+            .into_iter()
+            .map(|dep_id| {
+                let outcome = outcomes
+                    .remove(&dep_id)
+                    .with_context(|| format!("missing build outcome for dependency `{dep_id}`"))?;
+                Ok((dep_id, outcome))
+            })
+            .collect()
+    }
+
+    async fn build_reachable(
+        &self,
+        root_id: &str,
+        reachable: &HashSet<String>,
+    ) -> Result<BuildOutcome> {
+        let retained = HashSet::from([root_id.to_string()]);
+        let mut outcomes = self
+            .build_reachable_retaining(root_id, reachable, &retained)
+            .await?;
+        outcomes
+            .remove(root_id)
+            .with_context(|| format!("missing build outcome for `{root_id}`"))
+    }
+
+    async fn build_reachable_retaining(
+        &self,
+        root_id: &str,
+        reachable: &HashSet<String>,
+        retained: &HashSet<String>,
+    ) -> Result<HashMap<String, BuildOutcome>> {
+        BuildScheduler::new(
+            root_id,
+            self.build_context(),
+            &self.targets,
+            reachable,
+            retained,
+            &self.uncached_work,
+        )
+        .run()
+        .await
+    }
+
+    /// Snapshot the per-build values every spawned task needs.
+    fn build_context(&self) -> BuildContext {
+        // One executor slot per action the resource pool would let
+        // run concurrently. Keeping the two numbers in lockstep is
+        // what makes a slot equivalent to a real long-lived worker:
+        // if the pool ever had fewer slots than the concurrency
+        // ceiling, actions would sometimes wait on the WorkerSlots
+        // pool instead of the ResourcePool; if it had more, some
+        // slots would never be picked.
+        let workers = crate::bus_events::WorkerSlots::new(self.resources.max_parallel_actions());
+        BuildContext {
+            workspace: self.workspace.clone(),
+            cache: self.cache.clone(),
+            analyzer: self.analyzer.clone(),
+            module_source_digest: Digest::of_bytes(self.analyzer.module_source().as_bytes()),
+            tool_paths: Arc::clone(&self.tool_paths),
+            source_digest_cache: self.source_digest_cache.clone(),
+            analysis_memo: self.analysis_memo.clone(),
+            unchanged: Arc::clone(&self.unchanged),
+            changes: Arc::clone(&self.changes),
+            target_outcomes: Arc::clone(&self.target_outcomes),
+            sandbox: self.sandbox,
+            resources: Arc::clone(&self.resources),
+            output_observer: self.output_observer.clone(),
+            event_bus: self.event_bus.clone(),
+            suppressed_target_lifecycle: Arc::clone(&self.suppressed_target_lifecycle),
+            workers,
+            producers: self.producers.clone(),
+        }
+    }
+
+    fn persist_graph_tool_cache(&self) {
+        let Some(fingerprint) = self.tool_cache_fingerprint else {
+            return;
+        };
+        let commands = self.analyzer.cacheable_tool_commands();
+        if commands.as_slice() == self.cached_tool_commands.as_ref() {
+            return;
+        }
+        if let Err(error) =
+            write_graph_tool_cache(&self.workspace, fingerprint, &self.tool_paths, &commands)
+        {
+            tracing::debug!(%error, "failed to persist graph tool commands");
+        }
+    }
+
+    pub(super) fn observed_environment(&self) -> BTreeMap<String, Option<String>> {
+        let mut environment = self.analyzer.observed_host_environment();
+        for key in GRAPH_TOOL_ENVIRONMENT_KEYS {
+            environment
+                .entry((*key).to_string())
+                .or_insert_with(|| std::env::var(key).ok());
+        }
+        environment
+    }
+
+    pub(super) fn observed_host_paths(&self) -> BTreeSet<PathBuf> {
+        let mut paths = self.analyzer.observed_host_paths();
+        paths.extend(self.tool_paths.values().map(PathBuf::from));
+        paths
+    }
+
+    pub(super) fn observed_source_digests(
+        &self,
+        changes: Option<&[String]>,
+    ) -> BTreeMap<String, Digest> {
+        self.source_digest_cache.observed_digests_for(changes)
+    }
+
+    pub(super) fn source_changes_match(&self, changes: Option<&[String]>) -> bool {
+        self.source_digest_cache
+            .changes_match(&self.workspace, changes)
+    }
+}
+
+/// A reused outcome leaves its intermediate outputs in the cache rather than on
+/// disk, so it is only usable while the local cache still holds the ones that
+/// aren't on disk.
+async fn intermediate_outputs_cached(
+    outcome: &BuildOutcome,
+    workspace: &Path,
+    cache: &CacheProvider,
+) -> bool {
+    for path in &outcome.intermediate_outputs {
+        if workspace.join(path).symlink_metadata().is_ok() {
+            continue;
+        }
+        let Some(digest) = outcome.result.outputs.get(path) else {
+            return false;
+        };
+        if !cache.has_local_blob(digest).await.unwrap_or(false) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Put a finished target's deferred outputs on disk.
+///
+/// Results whose paths overlap another's restore in order, since a later one
+/// replaces part of an earlier one. The rest touch disjoint paths and restore
+/// concurrently, bounded by how many actions may run at once.
+async fn materialize_cached_outputs(outcome: &BuildOutcome, repair: Repair<'_>) -> Result<()> {
+    materialization::restore_recovering(&outcome.cached_results, repair).await
+}
+
+/// Resolve the executables declared by the graph's tools to concrete
+/// paths through the workspace's mise toolchain.
+///
+/// Resolution is scoped and best-effort so declaring a tool never makes a
+/// build worse off than the host toolchain would:
+///
+/// * Workspaces without `mise.toml` resolve every executable from the
+///   host `PATH`, so an empty map is returned and `host_which` keeps
+///   walking `PATH` (and verifying existence) as before.
+/// * A declared tool the workspace does not actually pin (for example a
+///   rust target in a node-only workspace) is not managed by mise. Its
+///   preparation and resolution failures are logged and the executable
+///   resolves from the host `PATH`, skipping mise shims, so the target
+///   falls back to the host toolchain instead of aborting the whole
+///   session.
+async fn resolve_graph_tools(
+    workspace: &Path,
+    graph: &[GraphTarget],
+) -> Result<ResolvedGraphTools> {
+    if !struo_core::workspace_has_mise_config(workspace) {
+        return Ok(ResolvedGraphTools::default());
+    }
+
+    let tool_names = graph
+        .iter()
+        .flat_map(|target| target.tools.iter().map(|tool| tool.name.clone()))
+        .collect::<BTreeSet<_>>();
+    let executable_names = graph
+        .iter()
+        .flat_map(|target| {
+            target
+                .tools
+                .iter()
+                .flat_map(|tool| tool.executables.iter().cloned())
+        })
+        .collect::<BTreeSet<_>>();
+    let tool_names = tool_names.into_iter().collect::<Vec<_>>();
+    let executable_names = executable_names.into_iter().collect::<Vec<_>>();
+    let fingerprint = graph_tool_cache_fingerprint(workspace, &tool_names, &executable_names)?;
+    if let Some(cached) = read_graph_tool_cache(workspace, fingerprint) {
+        tracing::debug!(
+            tools = cached.paths.len(),
+            commands = cached.commands.len(),
+            "reused validated graph tool paths"
+        );
+        return Ok(ResolvedGraphTools {
+            paths: cached.paths,
+            fingerprint: Some(fingerprint),
+            commands: cached.commands,
+        });
+    }
+
+    let tool_names = Arc::<[String]>::from(tool_names);
+    let (mut paths, mut failures) =
+        resolve_graph_tool_executables(workspace, &tool_names, &executable_names).await?;
+    if !failures.is_empty() {
+        let tool_name_refs = tool_names.iter().map(String::as_str).collect::<Vec<_>>();
+        if let Err(error) = struo_core::workspace_prepare_tools(workspace, &tool_name_refs).await {
+            tracing::debug!(
+                %error,
+                "preparing graph tools through mise failed; falling back to the host toolchain"
+            );
+        } else {
+            (paths, failures) =
+                resolve_graph_tool_executables(workspace, &tool_names, &executable_names).await?;
+        }
+    }
+    let all_managed = failures.is_empty();
+    for (executable, error) in failures {
+        if let Some(path) = actions::host_executable_path(&executable) {
+            paths.insert(executable.clone(), path.to_string_lossy().into_owned());
+        }
+        tracing::trace!(
+            executable,
+            %error,
+            "graph tool executable is not ready"
+        );
+    }
+    // Host fallbacks must not be cached: a later run would reuse them and
+    // skip mise resolution until the configuration changes. Leaving the
+    // session without a fingerprint also stops `persist_graph_tool_cache`
+    // from writing them after the build.
+    let cacheable = all_managed && paths.len() == executable_names.len();
+    if cacheable {
+        if let Err(error) = write_graph_tool_cache(workspace, fingerprint, &paths, &[]) {
+            tracing::debug!(%error, "failed to persist graph tool paths");
+        }
+    }
+    Ok(ResolvedGraphTools {
+        paths,
+        fingerprint: cacheable.then_some(fingerprint),
+        commands: Vec::new(),
+    })
+}
+
+/// Install the graph's tools before several processes analyse it at once.
+///
+/// `mise install` installs what it can even when another requested tool
+/// fails, so a process that resolved an executable from the host before a
+/// sibling's install finished would analyse the same actions as that sibling
+/// into different digests that write the same outputs.
+pub(crate) async fn prepare_graph_tools(workspace: &Path, graph: &[GraphTarget]) -> Result<()> {
+    resolve_graph_tools(workspace, graph).await.map(drop)
+}
+
+async fn resolve_graph_tool_executables(
+    workspace: &Path,
+    tool_names: &Arc<[String]>,
+    executable_names: &[String],
+) -> Result<(
+    BTreeMap<String, String>,
+    Vec<(String, struo_core::ToolEnvError)>,
+)> {
+    let mut tasks = tokio::task::JoinSet::new();
+    for executable in executable_names {
+        let workspace = workspace.to_path_buf();
+        let executable = executable.clone();
+        let tool_names = Arc::clone(tool_names);
+        tasks.spawn(async move {
+            let tool_name_refs = tool_names.iter().map(String::as_str).collect::<Vec<_>>();
+            let path =
+                struo_core::workspace_executable(&workspace, &executable, &tool_name_refs).await;
+            (executable, path)
+        });
+    }
+
+    let mut paths = BTreeMap::new();
+    let mut failures = Vec::new();
+    while let Some(result) = tasks.join_next().await {
+        let (executable, path) = result.context("joining graph tool resolution")?;
+        match path {
+            Ok(path) => {
+                paths.insert(executable, path);
+            }
+            Err(error) => {
+                failures.push((executable, error));
+            }
+        }
+    }
+    Ok((paths, failures))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GraphToolCache {
+    schema: String,
+    fingerprint: String,
+    paths_fingerprint: String,
+    paths: BTreeMap<String, String>,
+    commands: Vec<CachedToolCommand>,
+}
+
+#[derive(Debug, Default)]
+struct ResolvedGraphTools {
+    paths: BTreeMap<String, String>,
+    fingerprint: Option<Digest>,
+    commands: Vec<CachedToolCommand>,
+}
+
+fn graph_tool_cache_fingerprint(
+    workspace: &Path,
+    tool_names: &[String],
+    executable_names: &[String],
+) -> Result<Digest> {
+    let mut bytes = Vec::new();
+    push_fingerprint_part(&mut bytes, GRAPH_TOOL_CACHE_SCHEMA.as_bytes());
+    push_fingerprint_part(&mut bytes, struo_core::MANAGED_MISE_VERSION.as_bytes());
+    push_fingerprint_part(&mut bytes, std::env::consts::OS.as_bytes());
+    push_fingerprint_part(&mut bytes, std::env::consts::ARCH.as_bytes());
+    for path in ["mise.toml", "mise.lock"] {
+        push_fingerprint_part(&mut bytes, path.as_bytes());
+        match std::fs::read(workspace.join(path)) {
+            Ok(contents) => push_fingerprint_part(&mut bytes, &contents),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                push_fingerprint_part(&mut bytes, b"missing");
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("reading graph tool configuration `{path}`"));
+            }
+        }
+    }
+    for tool in tool_names {
+        push_fingerprint_part(&mut bytes, tool.as_bytes());
+    }
+    for executable in executable_names {
+        push_fingerprint_part(&mut bytes, executable.as_bytes());
+    }
+    for key in GRAPH_TOOL_ENVIRONMENT_KEYS {
+        push_fingerprint_part(&mut bytes, key.as_bytes());
+        match std::env::var_os(key) {
+            Some(value) => push_fingerprint_part(&mut bytes, value.to_string_lossy().as_bytes()),
+            None => push_fingerprint_part(&mut bytes, b"missing"),
+        }
+    }
+    Ok(Digest::of_bytes(&bytes))
+}
+
+fn push_fingerprint_part(bytes: &mut Vec<u8>, part: &[u8]) {
+    bytes.extend_from_slice(&(part.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(part);
+}
+
+fn read_graph_tool_cache(workspace: &Path, expected_fingerprint: Digest) -> Option<GraphToolCache> {
+    read_graph_tool_cache_at(&graph_tool_cache_path(workspace), expected_fingerprint)
+}
+
+fn read_graph_tool_cache_at(path: &Path, expected_fingerprint: Digest) -> Option<GraphToolCache> {
+    let raw = match std::fs::read(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => {
+            tracing::debug!(%error, path = %path.display(), "failed to read graph tool paths");
+            return None;
+        }
+    };
+    let cached = match serde_json::from_slice::<GraphToolCache>(&raw) {
+        Ok(cached) => cached,
+        Err(error) => {
+            tracing::debug!(%error, path = %path.display(), "failed to parse graph tool paths");
+            return None;
+        }
+    };
+    if cached.schema != GRAPH_TOOL_CACHE_SCHEMA
+        || cached.fingerprint != expected_fingerprint.to_string()
+        || graph_tool_paths_fingerprint(&cached.paths)
+            .is_none_or(|fingerprint| fingerprint.to_string() != cached.paths_fingerprint)
+    {
+        return None;
+    }
+    Some(cached)
+}
+
+fn write_graph_tool_cache(
+    workspace: &Path,
+    fingerprint: Digest,
+    paths: &BTreeMap<String, String>,
+    commands: &[CachedToolCommand],
+) -> Result<()> {
+    write_graph_tool_cache_at(
+        &graph_tool_cache_path(workspace),
+        fingerprint,
+        paths,
+        commands,
+    )
+}
+
+fn write_graph_tool_cache_at(
+    path: &Path,
+    fingerprint: Digest,
+    paths: &BTreeMap<String, String>,
+    commands: &[CachedToolCommand],
+) -> Result<()> {
+    let parent = path
+        .parent()
+        .expect("graph tool cache path always has a parent");
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("creating graph tool cache directory `{}`", parent.display()))?;
+    let temporary = path.with_extension(format!("json.tmp-{}", std::process::id()));
+    let paths_fingerprint =
+        graph_tool_paths_fingerprint(paths).context("fingerprinting graph tool paths")?;
+    let record = GraphToolCache {
+        schema: GRAPH_TOOL_CACHE_SCHEMA.to_string(),
+        fingerprint: fingerprint.to_string(),
+        paths_fingerprint: paths_fingerprint.to_string(),
+        paths: paths.clone(),
+        commands: commands.to_vec(),
+    };
+    let raw = serde_json::to_vec(&record).context("serializing graph tool paths")?;
+    std::fs::write(&temporary, raw)
+        .with_context(|| format!("writing graph tool cache `{}`", temporary.display()))?;
+    if let Err(error) = std::fs::rename(&temporary, path) {
+        if !path.is_file() {
+            return Err(error)
+                .with_context(|| format!("activating graph tool cache `{}`", path.display()));
+        }
+        std::fs::remove_file(path)
+            .with_context(|| format!("replacing graph tool cache `{}`", path.display()))?;
+        std::fs::rename(&temporary, path)
+            .with_context(|| format!("activating graph tool cache `{}`", path.display()))?;
+    }
+    Ok(())
+}
+
+fn graph_tool_cache_path(workspace: &Path) -> PathBuf {
+    graph_tool_cache_path_from(&struo_core::Xdg::from_env().struo_toolchains(), workspace)
+}
+
+fn graph_tool_cache_path_from(toolchain_root: &Path, workspace: &Path) -> PathBuf {
+    let workspace = std::fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
+    let workspace_id = Digest::of_bytes(workspace.to_string_lossy().as_bytes());
+    toolchain_root.join(format!("{workspace_id}.json"))
+}
+
+fn graph_tool_paths_fingerprint(paths: &BTreeMap<String, String>) -> Option<Digest> {
+    if !cfg!(unix) {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    for (name, path) in paths {
+        if struo_core::is_mise_shim(Path::new(path)) {
+            return None;
+        }
+        let metadata = std::fs::metadata(path).ok()?;
+        if !metadata.is_file() {
+            return None;
+        }
+        let modified = metadata
+            .modified()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?;
+        push_fingerprint_part(&mut bytes, name.as_bytes());
+        push_fingerprint_part(&mut bytes, path.as_bytes());
+        push_fingerprint_part(&mut bytes, &metadata.len().to_le_bytes());
+        push_fingerprint_part(&mut bytes, &modified.as_nanos().to_le_bytes());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            for value in [metadata.ctime(), metadata.ctime_nsec()] {
+                push_fingerprint_part(&mut bytes, &value.to_le_bytes());
+            }
+            for value in [metadata.dev(), metadata.ino(), u64::from(metadata.mode())] {
+                push_fingerprint_part(&mut bytes, &value.to_le_bytes());
+            }
+        }
+        if let Some(stamp) = struo_host_tree::unsettled_stamp(&metadata) {
+            push_fingerprint_part(&mut bytes, &stamp.to_le_bytes());
+        }
+    }
+    Some(Digest::of_bytes(&bytes))
+}
+
+/// Everything a target build needs that is the same for every target in
+/// one graph build.
+///
+/// Cloned once per spawned build task. Every field is a handle or an
+/// `Arc`, so a clone is a few refcount bumps rather than a deep copy of
+/// the analyzer or the cache.
+#[derive(Clone)]
+struct BuildContext {
+    pub workspace: PathBuf,
+    pub cache: CacheProvider,
+    pub analyzer: AnalysisEngine,
+    pub module_source_digest: Digest,
+    pub tool_paths: Arc<BTreeMap<String, String>>,
+    pub source_digest_cache: SourceDigestCache,
+    pub analysis_memo: AnalysisMemo,
+    pub unchanged: Arc<UnchangedWorkspace>,
+    pub changes: Arc<KnownChanges>,
+    pub target_outcomes: Arc<TargetOutcomes>,
+    pub sandbox: SandboxMode,
+    pub resources: Arc<ResourcePool>,
+    pub output_observer: Option<Arc<dyn ActionOutputObserver>>,
+    /// When set, `build_one` publishes per-target lifecycle events onto
+    /// this bus so the terminal reporter (and other subscribers) can
+    /// render live per-dependency progress rather than only the
+    /// top-level target's phase transitions.
+    pub event_bus: Option<struo_core::RunEventBus>,
+    pub suppressed_target_lifecycle: Arc<HashSet<String>>,
+    /// Bounded pool of executor slots. Each action acquires a slot
+    /// before running and inherits the slot's stable `worker_id` for
+    /// its `ActionCompleted` event. Sized to
+    /// `resources.max_parallel_actions()` so the pool never over- or
+    /// under-provisions relative to the concurrency the runner
+    /// actually allows.
+    pub workers: crate::bus_events::WorkerSlots,
+    pub producers: Producers,
+}
+
+impl BuildContext {
+    fn repair(&self) -> Repair<'_> {
+        Repair {
+            workspace: &self.workspace,
+            cache: &self.cache,
+            source_digest_cache: Some(&self.source_digest_cache),
+            resources: &self.resources,
+            producers: &self.producers,
+        }
+    }
+}
+
+/// Analyse one target, reusing a stored analysis when its recorded answers
+/// still hold.
+///
+/// Reuse is decided in two steps, and both have to pass. The name says the
+/// call is the same one: same target definition, same dependency providers,
+/// same capability, options, configuration, prelude, and executable. The
+/// recorded answers say the host has not moved under it. Either check failing
+/// means running the implementation, which is also what happens when there is
+/// nothing stored.
+#[allow(clippy::too_many_arguments)]
+fn analyze_with_memo(
+    analyzer: &AnalysisEngine,
+    memo: &AnalysisMemo,
+    unchanged: &UnchangedWorkspace,
+    precomputed_key: Option<&str>,
+    target: &GraphTarget,
+    workspace: &Path,
+    dep_providers: &[Arc<JsonValue>],
+    dependency_providers: &BTreeMap<String, Vec<Arc<JsonValue>>>,
+    capability: &str,
+) -> Result<struo_frontend::analysis::AnalysisResult> {
+    let key = if memo.is_enabled() {
+        precomputed_key.map(ToOwned::to_owned).or_else(|| {
+            memo.executable_identity().and_then(|identity| {
+                analyzer.analysis_key(
+                    target,
+                    workspace,
+                    dep_providers,
+                    dependency_providers,
+                    capability,
+                    identity,
+                )
+            })
+        })
+    } else {
+        None
+    };
+    if let Some((analysis, observations)) = key.as_deref().and_then(|key| memo.read(key)) {
+        if analyzer.observations_hold(workspace, &observations, CommandPolicy::Rerun, unchanged) {
+            tracing::trace!(target = %target.label.id, capability, "reused a stored analysis");
+            return Ok(analysis);
+        }
+        tracing::debug!(
+            target = %target.label.id,
+            capability,
+            stale = ?analyzer.first_stale_observation(
+                workspace,
+                &observations,
+                CommandPolicy::Rerun,
+                unchanged,
+            ),
+            "stored analysis no longer describes the host"
+        );
+    }
+    let analysis = analyzer
+        .analyze_target_capability_with_shared_dependency_roles(
+            target,
+            workspace,
+            dep_providers,
+            dependency_providers,
+            capability,
+        )
+        .with_context(|| format!("analysing {}", target.label.id))?;
+    if let Some(key) = key.as_deref() {
+        memo.write(key, &analysis);
+    }
+    Ok(analysis)
+}
+
+#[allow(clippy::too_many_lines)]
+async fn build_one(
+    context: BuildContext,
+    target: Arc<GraphTarget>,
+    inputs: DependencyInputs,
+) -> Result<(String, BuildOutcome)> {
+    let BuildContext {
+        workspace,
+        cache,
+        analyzer,
+        module_source_digest,
+        tool_paths,
+        source_digest_cache,
+        analysis_memo,
+        unchanged,
+        changes,
+        target_outcomes,
+        sandbox,
+        resources,
+        output_observer,
+        event_bus,
+        suppressed_target_lifecycle,
+        workers,
+        producers,
+    } = context;
+    let DependencyInputs {
+        providers,
+        providers_by_role,
+        action_digests,
+        available_inputs,
+    } = inputs;
+
+    ensure_graph_target_valid(&target)?;
+    let target_id = target.label.id.clone();
+    let build_started_at = std::time::Instant::now();
+    let build_started_at_epoch_ms = crate::bus_events::now_ms();
+    let publish_lifecycle = !suppressed_target_lifecycle.contains(&target.label.id);
+    if publish_lifecycle {
+        if let Some(bus) = &event_bus {
+            crate::bus_events::target_executing(bus, &target_id);
+        }
+    }
+    // Names this build: the same target definition, reached through the same
+    // dependency outcomes, analysed by the same code against the same
+    // configuration. Computed once and used both to look for a recorded
+    // outcome and, failing that, for a recorded analysis.
+    let analysis_key = analysis_memo.executable_identity().and_then(|identity| {
+        analyzer.analysis_key(
+            &target,
+            &workspace,
+            &providers,
+            &providers_by_role,
+            "build",
+            identity,
+        )
+    });
+    if let Some(key) = analysis_key
+        .as_deref()
+        .map(|key| target_outcomes::key(key, &action_digests, &available_inputs))
+    {
+        let reused = match target_outcomes.reuse_with_inputs(
+            &target,
+            &key,
+            &changes,
+            &available_inputs,
+            &producers,
+            |observations| {
+                analyzer.observations_hold(
+                    &workspace,
+                    observations,
+                    CommandPolicy::Rerun,
+                    &unchanged,
+                )
+            },
+        ) {
+            Some(outcome) if intermediate_outputs_cached(&outcome, &workspace, &cache).await => {
+                Some(outcome)
+            }
+            _ => None,
+        };
+        if let Some(outcome) = reused {
+            target_outcomes.carry_forward(&target_id);
+            if let Some(bus) = &event_bus {
+                let duration_ms =
+                    u64::try_from(build_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+                let was_cached = matches!(outcome.cache_state, struo_core::EvidenceCacheState::Hit);
+                for action in &outcome.per_action_outcomes {
+                    crate::bus_events::action_completed(
+                        bus,
+                        &target_id,
+                        "build",
+                        action.index,
+                        action.identifier.as_deref(),
+                        action.display_name.as_deref(),
+                        &action.source_files,
+                        action.presentation.as_ref(),
+                        action.history.as_ref(),
+                        0,
+                        true,
+                        action.exit_code,
+                        build_started_at_epoch_ms,
+                        "",
+                        0,
+                        0,
+                        &action.action_digest.to_string(),
+                        0,
+                    );
+                }
+                if publish_lifecycle {
+                    crate::bus_events::target_completed(
+                        bus,
+                        &target_id,
+                        duration_ms,
+                        was_cached,
+                        outcome.result.exit_code,
+                    );
+                }
+            }
+            return Ok((target_id, outcome));
+        }
+    }
+    tracing::trace!(
+        target = %target_id,
+        dep_providers = providers.len(),
+        dependency_roles = providers_by_role.len(),
+        dep_action_digests = action_digests.len(),
+        "starting graph target analysis"
+    );
+    // Cheap refcount bumps so the analyzer task and the action runner
+    // both reach the same `GraphTarget` without deep-cloning it.
+    let analysis_target = Arc::clone(&target);
+    let analysis_workspace = workspace.clone();
+    let memo_key = analysis_key.clone();
+    let planner = analyzer.clone();
+    let analysis = tokio::task::spawn_blocking(move || {
+        analyze_with_memo(
+            &analyzer,
+            &analysis_memo,
+            &unchanged,
+            memo_key.as_deref(),
+            &analysis_target,
+            &analysis_workspace,
+            &providers,
+            &providers_by_role,
+            "build",
+        )
+    })
+    .await
+    .context("joining graph analysis task")??;
+    let observations = analysis.observations.clone();
+    let requires_action_replay = analysis.actions.iter().any(|action| {
+        action.inherit_parent_env
+            || matches!(
+                action.operation,
+                Some(struo_frontend::analysis::DeclaredActionOperation::ExpandActions { .. })
+            )
+    });
+    let declared_inputs = analysis
+        .actions
+        .iter()
+        .flat_map(|action| action.inputs.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    tracing::trace!(
+        target = %target_id,
+        declared_actions = analysis.actions.len(),
+        declared_outputs = analysis.declared_outputs.len(),
+        "finished graph target analysis"
+    );
+
+    let outcome = run_declared_actions_with(
+        Some(&planner),
+        &workspace,
+        &cache,
+        module_source_digest,
+        &target,
+        "build",
+        analysis,
+        &action_digests,
+        &available_inputs,
+        &tool_paths,
+        Some(&source_digest_cache),
+        sandbox,
+        &resources,
+        output_observer.as_deref(),
+        event_bus.as_ref(),
+        &workers,
+        &producers,
+    )
+    .await?;
+    if let Some(key) = analysis_key
+        .as_deref()
+        .map(|key| target_outcomes::key(key, &action_digests, &available_inputs))
+    {
+        if !requires_action_replay {
+            target_outcomes.record(&target, key, &observations, &declared_inputs, &outcome);
+        }
+    }
+    if publish_lifecycle {
+        if let Some(bus) = &event_bus {
+            let duration_ms =
+                u64::try_from(build_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+            let was_cached = matches!(outcome.cache_state, struo_core::EvidenceCacheState::Hit);
+            crate::bus_events::target_completed(
+                bus,
+                &target_id,
+                duration_ms,
+                was_cached,
+                outcome.result.exit_code,
+            );
+        }
+    }
+    Ok((target_id, outcome))
+}
+
+fn ensure_graph_target_valid(target: &GraphTarget) -> Result<()> {
+    let Some(diagnostic) = target.diagnostics.first() else {
+        return Ok(());
+    };
+    Err(anyhow::Error::new(
+        struo_frontend::analysis::AnalysisFailure {
+            diagnostic: diagnostic.clone(),
+        },
+    ))
+}
+
+#[cfg(test)]
+mod tests;

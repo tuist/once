@@ -1,1 +1,1 @@
-module(name = "once_cache_comparison")
+module(name = "struo_cache_comparison")

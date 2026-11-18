@@ -5,7 +5,7 @@ next: false
 
 # Android
 
-Once can build Android resources, Java and Kotlin libraries, application
+Struo can build Android resources, Java and Kotlin libraries, application
 packages, and host or device tests. This guide uses one application throughout
 so each new target has a visible relationship to the previous one.
 
@@ -20,7 +20,7 @@ Android targets require:
 - `kotlinc` and `kotlin-stdlib.jar` when a target contains Kotlin sources.
 
 The repository provides a setup task that accepts Android licenses, installs
-the pinned packages and emulator system image, creates the `once_example`
+the pinned packages and emulator system image, creates the `struo_example`
 emulator, and creates a local debug keystore when one is missing:
 
 ```sh
@@ -36,11 +36,11 @@ add a requirement for the
 
 Android targets find the development kit through the `android_sdk` attribute,
 `ANDROID_HOME`, or `ANDROID_SDK_ROOT`. When a platform or build-tools version
-is omitted, Once selects the highest installed version.
+is omitted, Struo selects the highest installed version.
 
 ## Declare One Application Graph
 
-Create `apps/hello/once.toml` with resources, a reusable library, and an
+Create `apps/hello/struo.toml` with resources, a reusable library, and an
 application that connects them:
 
 ```toml
@@ -49,7 +49,7 @@ name = "HelloResources"
 kind = "android_resource"
 
 [target.attrs]
-package = "dev.once.hello"
+package = "dev.struo.hello"
 manifest = "ResourcesManifest.xml"
 resource_files = ["res/**"]
 min_sdk_version = 23
@@ -61,7 +61,7 @@ srcs = ["src/main/**/*.kt"]
 deps = ["./HelloResources"]
 
 [target.attrs]
-namespace = "dev.once.greeting"
+namespace = "dev.struo.greeting"
 manifest = "LibraryManifest.xml"
 resource_files = []
 min_sdk_version = 23
@@ -73,7 +73,7 @@ srcs = ["src/app/**/*.kt"]
 deps = ["./Greeting"]
 
 [target.attrs]
-application_id = "dev.once.hello"
+application_id = "dev.struo.hello"
 manifest = "AndroidManifest.xml"
 resource_files = []
 min_sdk_version = 23
@@ -107,11 +107,11 @@ query.
 Inspect the target chain and the final application's contract:
 
 ```sh
-once query targets --kind android_binary
-once query capabilities apps/hello/HelloResources
-once query capabilities apps/hello/Greeting
-once query capabilities apps/hello/Hello
-once query schema android_binary
+struo query targets --kind android_binary
+struo query capabilities apps/hello/HelloResources
+struo query capabilities apps/hello/Greeting
+struo query capabilities apps/hello/Hello
+struo query schema android_binary
 ```
 
 The resource and library targets expose `build`. The application exposes
@@ -122,19 +122,19 @@ The resource and library targets expose `build`. The application exposes
 Build the Android application package:
 
 ```sh
-once build apps/hello/Hello
+struo build apps/hello/Hello
 ```
 
-Once builds the resource and library dependencies first, then compiles,
+Struo builds the resource and library dependencies first, then compiles,
 packages, aligns, and signs the application. Outputs are materialized under
-`.once/out/<target>/`; the
+`.struo/out/<target>/`; the
 [`android_binary` reference](/reference/prelude/android_binary) lists the
 exact output groups.
 
 Run the package on a connected device or emulator:
 
 ```sh
-once run apps/hello/Hello
+struo run apps/hello/Hello
 ```
 
 The run waits for a device through `adb`, installs the package, resolves its
@@ -146,7 +146,7 @@ If `emulator_device` names an Android Virtual Device, request its visible
 interface while running:
 
 ```sh
-once run --visible apps/hello/Hello
+struo run --visible apps/hello/Hello
 ```
 
 Installation and launch happen on every invocation because they depend on
@@ -174,8 +174,8 @@ libraries are added to `classpath` and `runtime_classpath`.
 Query and run the new target:
 
 ```sh
-once query capabilities apps/hello/GreetingTests
-once test apps/hello/GreetingTests
+struo query capabilities apps/hello/GreetingTests
+struo test apps/hello/GreetingTests
 ```
 
 Local tests run on the host
@@ -198,7 +198,7 @@ Native Swift targets use `ANDROID_NDK_HOME`, `android_ndk`, or
 `ANDROID_NDK_HOME` or `android_ndk` to choose a default linker.
 
 Debug signing uses a package-relative `debug_keystore`,
-`ANDROID_DEBUG_KEYSTORE`, or `~/.android/debug.keystore`. Once does not ship
+`ANDROID_DEBUG_KEYSTORE`, or `~/.android/debug.keystore`. Struo does not ship
 private key material. Set `signing = "none"` when an unsigned package is
 enough.
 
@@ -238,11 +238,11 @@ graph.
 ## Coding Harnesses
 
 A connected coding harness can start from the request “build an Android app
-with Once.” It discovers `android_binary`, fetches the target kind's runnable
-starter, materializes its files, calls `once_validate_workspace`, builds the
+with Struo.” It discovers `android_binary`, fetches the target kind's runnable
+starter, materializes its files, calls `struo_validate_workspace`, builds the
 canonical target identifier, checks the Android application package output,
 and queries the resulting evidence. The harness does not need an Android-only
-Once integration because the same discovery and validation loop applies to
+Struo integration because the same discovery and validation loop applies to
 every target kind.
 
 The `android_resource`, `android_library`, and `android_binary` schemas
@@ -251,12 +251,12 @@ also return official source references for corresponding
 [Buck2 Android rules](https://buck2.build/docs/prelude/rules/android/), and
 [Android Gradle plugin](https://developer.android.com/build) concepts. A
 harness can use those references to reproduce only the application, library,
-or resource dependency slice the user asks Once to own.
+or resource dependency slice the user asks Struo to own.
 
 If the source build uses another rule or plugin, the harness can fetch that
-public source through `once_fetch_external_source`, query
-`once_query_module_contract`, write a project-local target kind, and validate
-it with `once_validate_module`. Built-in Android target kinds remain the
+public source through `struo_fetch_external_source`, query
+`struo_query_module_contract`, write a project-local target kind, and validate
+it with `struo_validate_module`. Built-in Android target kinds remain the
 common path, not a requirement for graph adoption.
 
 See [Coding harnesses](/guide/harness) for the complete protocol workflow.
@@ -281,7 +281,7 @@ unsupported attributes fail validation instead of being ignored.
 ## Next
 
 Continue with [Memory](/guide/memory/) once the application builds and tests.
-It shows how Once records durable context about graph work. If the application
+It shows how Struo records durable context about graph work. If the application
 shares code with Apple or Rust targets, return to
 [Ecosystems](/guide/graph/ecosystems) and add one cross-platform dependency at
 a time.

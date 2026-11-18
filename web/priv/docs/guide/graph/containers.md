@@ -5,16 +5,16 @@ next: false
 
 # Container images
 
-Build an existing Dockerfile with `dockerfile_image`. Once translates its
+Build an existing Dockerfile with `dockerfile_image`. Struo translates its
 instructions into individual actions, each consuming and producing an image
 snapshot. Cross-stage copies become explicit dependencies.
 [BuildKit](https://docs.docker.com/build/buildkit/) executes the individual
 instructions, including shell commands and package installation. A Dockerfile
-that uses syntax Once cannot translate, such as heredocs, `ONBUILD`, or a
+that uses syntax Struo cannot translate, such as heredocs, `ONBUILD`, or a
 `# syntax=` frontend, builds as a single whole-file BuildKit action instead.
 You do not have to choose.
 
-To package a native executable built by Once without writing a Dockerfile, use
+To package a native executable built by Struo without writing a Dockerfile, use
 the `oci_layer` and `oci_image` target kinds, described below. Use
 `dockerfile_image` when you already have a Dockerfile or need a distribution's
 package manager. The two combine: a Dockerfile can use native executables and
@@ -23,13 +23,13 @@ image.
 
 ## Build an existing Dockerfile
 
-Once discovers a target named `image` in each directory containing a
+Struo discovers a target named `image` in each directory containing a
 `Dockerfile`. The Dockerfile and its neighboring files provide the build recipe
 and context. With Docker and Buildx installed and running, build from the
 directory containing the `Dockerfile`:
 
 ```sh
-once build image
+struo build image
 ```
 
 The Dockerfile's directory is the build context, including the files referenced
@@ -37,13 +37,13 @@ by `COPY`. From a parent workspace, use the relative package path. For example,
 if the file is `server/Dockerfile`, run:
 
 ```sh
-once build server/image
+struo build server/image
 ```
 
-`once query targets` lists the discovered target names. Pass one of those names
-to `once build`; a Dockerfile image is not selected by a bare `once build`.
-Once uses the current Buildx builder when it supports image-layout exports. If
-Docker's built-in builder is the implicit default, Once provisions and reuses a
+`struo query targets` lists the discovered target names. Pass one of those names
+to `struo build`; a Dockerfile image is not selected by a bare `struo build`.
+Struo uses the current Buildx builder when it supports image-layout exports. If
+Docker's built-in builder is the implicit default, Struo provisions and reuses a
 dedicated container builder for the current Docker endpoint. This leaves your
 selected builder unchanged. Set `BUILDX_BUILDER` to choose an existing
 container or remote builder.
@@ -51,8 +51,8 @@ container or remote builder.
 ## Configure an image target
 
 The discovered target uses the conventional `Dockerfile` and its directory as
-the context. Add `once.toml` only when you need a different Dockerfile name,
-context, platform, tag, or explicit Once action caching policy. Both paths are
+the context. Add `struo.toml` only when you need a different Dockerfile name,
+context, platform, tag, or explicit Struo action caching policy. Both paths are
 relative to the package that contains the target:
 
 ```toml
@@ -68,7 +68,7 @@ tag = "service:latest"
 ```
 
 ```sh
-once build server_image
+struo build server_image
 ```
 
 The default output is a Docker archive that you can pass to `docker image load`.
@@ -84,7 +84,7 @@ image of a built stage must be pinned by digest (`name@sha256:...`); the build
 fails otherwise, because a moving tag would keep serving a stale image from
 the cache. A changed
 source copied late in the recipe does not invalidate earlier instructions.
-Once restores intermediate snapshots using its normal action cache. Literal
+Struo restores intermediate snapshots using its normal action cache. Literal
 copy sources are tracked individually; wildcard sources, variable sources,
 and context bind mounts conservatively track the full declared context.
 
@@ -113,15 +113,15 @@ in the Dockerfile with `COPY --chmod` or `RUN chmod` to force a rebuild.
 
 Copy sources that are symbolic links also track their destinations, and empty
 directories in the context are kept. A base image can store `ONBUILD` triggers
-that run in its `FROM` step and need the whole context. Once asks the local
+that run in its `FROM` step and need the whole context. Struo asks the local
 Docker engine, or the registry, whether a base declares any, and builds the
 Dockerfile as one whole-file action when it does. If neither can be reached,
-Once cannot know; use `execution_mode = "buildkit"` for such a base.
+Struo cannot know; use `execution_mode = "buildkit"` for such a base.
 
 ## Review inputs that can change
 
 ```sh
-once lint server_image
+struo lint server_image
 ```
 
 Input checks report warnings with instruction locations and suggested repairs
@@ -141,7 +141,7 @@ and switches to one whole-file BuildKit action when the Dockerfile uses
 heredocs, `ONBUILD`, a `# syntax=` frontend, a custom escape character,
 several variables in one `ARG`, or extended `${VAR:-default}` expansions. It
 also switches when `export_cache`, `cache_to`, or a `caches` dependency is
-set. `once lint image` reports a `whole_file_execution` note that names the
+set. `struo lint image` reports a `whole_file_execution` note that names the
 reason after a switch. Lint and queries work on every Dockerfile.
 
 Set `execution_mode = "buildkit"` to always hand the complete Dockerfile to
@@ -153,14 +153,14 @@ container builder resolves base images independently and cannot see images held
 only by that store. Otherwise, publish the base image to a registry and
 reference it by digest.
 
-Whole-file mode also supports portable BuildKit layer caches. BuildKit reuses matching layers even when Once must execute the build action.
+Whole-file mode also supports portable BuildKit layer caches. BuildKit reuses matching layers even when Struo must execute the build action.
 Set `export_cache = true` to retain intermediate layers as a declared output.
 Other image targets can import it with `[target.dependencies] caches = ["base_image"]`.
-Once transfers that directory using the same artifact machinery as other target
+Struo transfers that directory using the same artifact machinery as other target
 outputs.
 
 Enable `cacheable = true` with `pull = false` and an explicit `platform` only
-for builds whose remote inputs are immutable. Once can then restore the
+for builds whose remote inputs are immutable. Struo can then restore the
 complete image and exported layer cache without running BuildKit. Pinning
 base images alone is insufficient if `RUN` downloads changing packages.
 
@@ -172,14 +172,14 @@ in exported layer caches.
 
 ## Check cache restoration and image bytes
 
-A successful build does not establish that Once cached it. A result with
-`cache = "bypass"` still runs BuildKit, which can reuse its own layers. A Once
+A successful build does not establish that Struo cached it. A result with
+`cache = "bypass"` still runs BuildKit, which can reuse its own layers. A Struo
 cache hit restores declared outputs without executing the image build action.
 Delete only the target's generated outputs in your isolated workspace and
 build again to check restoration; compare the restored archive's checksum.
 Do not prune a shared Docker cache to perform this check.
 
-To compare independent builds, use separate, initially empty Once caches and
+To compare independent builds, use separate, initially empty Struo caches and
 set `no_cache = true` to disable BuildKit's instruction cache too. A stable
 action key identifies the same declared inputs and execution contract; it does
 not establish identical artifact bytes. Compare archive checksums separately.
@@ -188,7 +188,7 @@ For recipes that install changing packages, keep action caching disabled. An
 for testing a network-free configuration or application overlay. That checks
 the overlay, not reproducibility of the original recipe.
 
-`once build server_image --verify-reproducible` compares all declared outputs,
+`struo build server_image --verify-reproducible` compares all declared outputs,
 not only the image archive. Buildx metadata includes per-build references and
 can include provenance with temporary context identifiers. Those metadata
 files can differ even when the image archive and layout match. Inspect the
@@ -199,8 +199,8 @@ difference still means the complete declared result is not bitwise identical.
 
 Provision a [remote BuildKit builder](https://docs.docker.com/build/builders/drivers/remote/),
 then select its name with `builder`. Buildx sends the declared context to the
-worker and returns the image artifacts to Once. Configure authentication and
-memory limits on that worker. Once's local memory limit covers the client
+worker and returns the image artifacts to Struo. Configure authentication and
+memory limits on that worker. Struo's local memory limit covers the client
 process, not the worker's Dockerfile instructions.
 
 See the [Starlark modules reference](/docs/reference/modules) for the input
@@ -295,7 +295,7 @@ Dockerfile `ENTRYPOINT` does. An empty list clears a value, and leaving an
 attribute unset keeps the base's. A base for another platform than the image
 is an error, and a base pulled with `platform = "all"` supplies the platform
 the image asks for. Pin the base with `oci_pull`: the digest is required, so
-the image cannot change under you, and Once caches the result.
+the image cannot change under you, and Struo caches the result.
 
 ## Multi-platform images
 
@@ -315,11 +315,11 @@ Two images for the same platform are an error.
 ## Load and publish
 
 ```sh
-once run server_load    # oci_load: docker load, or podman load; list several images to load a bundle
-once run server_push    # oci_push: publish the image or index
+struo run server_load    # oci_load: docker load, or podman load; list several images to load a bundle
+struo run server_push    # oci_push: publish the image or index
 ```
 
-`oci_push` sends the exact bytes Once built, so the registry digest equals the
+`oci_push` sends the exact bytes Struo built, so the registry digest equals the
 digest of the local image or index. Set `sign = true` to sign that digest with
 [cosign](https://docs.sigstore.dev/cosign/signing/overview/) after publishing,
 with `cosign_key` naming a key file or key management URI, or empty for keyless

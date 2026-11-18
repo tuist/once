@@ -1,7 +1,7 @@
 #shellcheck shell=bash
-# End-to-end specs for `once exec` (substrate escape hatch).
+# End-to-end specs for `struo exec` (substrate escape hatch).
 
-Describe 'once exec'
+Describe 'struo exec'
   BeforeEach 'setup_workspace'
   AfterEach 'cleanup_exec_workspace'
 
@@ -18,17 +18,17 @@ Describe 'once exec'
     cp -R "$REPO_ROOT/fixtures/exec/$1/." "$WORKSPACE/"
   }
 
-  install_once_shebangs() {
+  install_struo_shebangs() {
     for path in "$@"; do
       tmp="$path.tmp"
-      sed "s|__ONCE_BIN__|$ONCE_BIN|g" "$path" > "$tmp"
+      sed "s|__STRUO_BIN__|$STRUO_BIN|g" "$path" > "$tmp"
       mv "$tmp" "$path"
       chmod +x "$path"
     done
   }
 
   It 'executes the command and reports a cache miss on first run'
-    When call once exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hello'
+    When call struo exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hello'
     The status should be success
     The stdout should equal 'hello'
     The stderr should include 'cache miss'
@@ -36,20 +36,20 @@ Describe 'once exec'
   End
 
   It 'records action evidence after execution'
-    once exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf evidence' >/dev/null 2>&1
-    When call once --format json query evidence
+    struo exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf evidence' >/dev/null 2>&1
+    When call struo --format json query evidence
     The status should be success
-    The stdout should include '"schema":"once.evidence.v1"'
+    The stdout should include '"schema":"struo.evidence.v1"'
     The stdout should include '"kind":"action_result"'
     The stdout should include '"status":"passed"'
     The stdout should include '"cache":"miss"'
     The stdout should include '"exit_code":0'
-    The path "$WORKSPACE/.once/once.sqlite" should be file
+    The path "$WORKSPACE/.struo/struo.sqlite" should be file
   End
 
   It 'returns the cached result on a second identical invocation'
-    once exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hi' >/dev/null 2>&1
-    When call once exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hi'
+    struo exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hi' >/dev/null 2>&1
+    When call struo exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hi'
     The status should be success
     The stdout should equal 'hi'
     The stderr should include 'cache hit'
@@ -58,20 +58,20 @@ Describe 'once exec'
   It 'does not re-execute the command on a cache hit'
     sentinel="$WORKSPACE/sentinel"
     cmd="touch '$sentinel'"
-    once exec -e PATH=/usr/bin:/bin -- /bin/sh -c "$cmd" >/dev/null 2>&1
+    struo exec -e PATH=/usr/bin:/bin -- /bin/sh -c "$cmd" >/dev/null 2>&1
     rm -f "$sentinel"
-    When call once exec -e PATH=/usr/bin:/bin -- /bin/sh -c "$cmd"
+    When call struo exec -e PATH=/usr/bin:/bin -- /bin/sh -c "$cmd"
     The status should be success
     The stderr should include 'cache hit'
     The path "$sentinel" should not be exist
   End
 
-  It 'executes an annotated script file directly through a Once shebang'
+  It 'executes an annotated script file directly through a Struo shebang'
     copy_exec_fixture direct_script
-    install_once_shebangs "$WORKSPACE/scripts/build.sh"
+    install_struo_shebangs "$WORKSPACE/scripts/build.sh"
     printf 'hello direct script\n' > "$WORKSPACE/input.txt"
 
-    When call env ONCE_CACHE_PROVIDER=local PATH=/usr/bin:/bin "$WORKSPACE/scripts/build.sh"
+    When call env STRUO_CACHE_PROVIDER=local PATH=/usr/bin:/bin "$WORKSPACE/scripts/build.sh"
     The status should be success
     The stdout should equal 'hello direct script'
     The stderr should include 'cache miss'
@@ -79,33 +79,33 @@ Describe 'once exec'
 
   It 'returns a cache hit when an annotated script file is re-executed directly'
     copy_exec_fixture direct_script
-    install_once_shebangs "$WORKSPACE/scripts/build.sh"
+    install_struo_shebangs "$WORKSPACE/scripts/build.sh"
     printf 'cached direct script\n' > "$WORKSPACE/input.txt"
 
-    env ONCE_CACHE_PROVIDER=local PATH=/usr/bin:/bin "$WORKSPACE/scripts/build.sh" >/dev/null 2>&1
-    When call env ONCE_CACHE_PROVIDER=local PATH=/usr/bin:/bin "$WORKSPACE/scripts/build.sh"
+    env STRUO_CACHE_PROVIDER=local PATH=/usr/bin:/bin "$WORKSPACE/scripts/build.sh" >/dev/null 2>&1
+    When call env STRUO_CACHE_PROVIDER=local PATH=/usr/bin:/bin "$WORKSPACE/scripts/build.sh"
     The status should be success
     The stdout should equal 'cached direct script'
     The stderr should include 'cache hit'
   End
 
-  It 'executes an annotated script file through once exec without --script'
+  It 'executes an annotated script file through struo exec without --script'
     copy_exec_fixture annotated_script
-    printf 'hello through once exec\n' > "$WORKSPACE/input.txt"
+    printf 'hello through struo exec\n' > "$WORKSPACE/input.txt"
 
-    When call once exec -e PATH=/usr/bin:/bin -- bash scripts/build.sh
+    When call struo exec -e PATH=/usr/bin:/bin -- bash scripts/build.sh
     The status should be success
-    The stdout should equal 'hello through once exec'
+    The stdout should equal 'hello through struo exec'
     The stderr should include 'cache miss'
   End
 
-  It 'executes an annotated script file through once exec with --script'
+  It 'executes an annotated script file through struo exec with --script'
     copy_exec_fixture annotated_script
-    printf 'hello through once exec --script\n' > "$WORKSPACE/input.txt"
+    printf 'hello through struo exec --script\n' > "$WORKSPACE/input.txt"
 
-    When call once exec --script -e PATH=/usr/bin:/bin -- bash scripts/build.sh
+    When call struo exec --script -e PATH=/usr/bin:/bin -- bash scripts/build.sh
     The status should be success
-    The stdout should equal 'hello through once exec --script'
+    The stdout should equal 'hello through struo exec --script'
     The stderr should include 'cache miss'
   End
 
@@ -115,8 +115,8 @@ Describe 'once exec'
     printf 'undeclared-input' > "$WORKSPACE/undeclared.txt"
     cat > "$WORKSPACE/scripts/build.sh" <<'SH'
 #!/usr/bin/env bash
-# once input "../declared.txt"
-# once output "../out/result.txt"
+# struo input "../declared.txt"
+# struo output "../out/result.txt"
 set -e
 test -L build.sh
 test -L ../declared.txt
@@ -126,7 +126,7 @@ cat ../declared.txt > ../out/result.txt
 printf 'sandbox-ok'
 SH
 
-    When call once exec --sandbox inputs --script -e PATH=/usr/bin:/bin -- bash scripts/build.sh
+    When call struo exec --sandbox inputs --script -e PATH=/usr/bin:/bin -- bash scripts/build.sh
     The status should be success
     The stdout should equal 'sandbox-ok'
     The stderr should include 'cache miss'
@@ -136,7 +136,7 @@ SH
   It 'runs needed scripts before an annotated script'
     copy_exec_fixture script_graph
 
-    When call once exec --script -e PATH=/usr/bin:/bin -- bash scripts/package.sh
+    When call struo exec --script -e PATH=/usr/bin:/bin -- bash scripts/package.sh
     The status should be success
     The stdout should equal 'generated:dependencyroot'
     The stderr should include 'cache miss'
@@ -147,11 +147,11 @@ SH
     copy_exec_fixture script_graph
     printf one > "$WORKSPACE/source.txt"
     printf root > "$WORKSPACE/main.txt"
-    once exec --script -e PATH=/usr/bin:/bin -- bash scripts/package.sh >/dev/null 2>&1
-    once exec --script -e PATH=/usr/bin:/bin -- bash scripts/package.sh >/dev/null 2>"$WORKSPACE/second.stderr"
+    struo exec --script -e PATH=/usr/bin:/bin -- bash scripts/package.sh >/dev/null 2>&1
+    struo exec --script -e PATH=/usr/bin:/bin -- bash scripts/package.sh >/dev/null 2>"$WORKSPACE/second.stderr"
     printf two > "$WORKSPACE/source.txt"
 
-    When call once exec --script -e PATH=/usr/bin:/bin -- bash scripts/package.sh
+    When call struo exec --script -e PATH=/usr/bin:/bin -- bash scripts/package.sh
     The status should be success
     The stdout should equal 'generated:tworoot'
     The stderr should include 'cache miss'
@@ -162,11 +162,11 @@ SH
     copy_exec_fixture fingerprint
     printf hello > "$WORKSPACE/input.txt"
     printf v1 > "$WORKSPACE/tool-version"
-    once exec --script -e PATH=/usr/bin:/bin -- bash scripts/build.sh >/dev/null 2>&1
-    once exec --script -e PATH=/usr/bin:/bin -- bash scripts/build.sh >/dev/null 2>"$WORKSPACE/second.stderr"
+    struo exec --script -e PATH=/usr/bin:/bin -- bash scripts/build.sh >/dev/null 2>&1
+    struo exec --script -e PATH=/usr/bin:/bin -- bash scripts/build.sh >/dev/null 2>"$WORKSPACE/second.stderr"
     printf v2 > "$WORKSPACE/tool-version"
 
-    When call once exec --script -e PATH=/usr/bin:/bin -- bash scripts/build.sh
+    When call struo exec --script -e PATH=/usr/bin:/bin -- bash scripts/build.sh
     The status should be success
     The stdout should equal 'hello'
     The stderr should include 'cache miss'
@@ -176,7 +176,7 @@ SH
   It 'fails before running a script when a fingerprint command fails'
     copy_exec_fixture fingerprint_failure
 
-    When call once exec --script -e PATH=/usr/bin:/bin -- bash scripts/build.sh
+    When call struo exec --script -e PATH=/usr/bin:/bin -- bash scripts/build.sh
     The status should not equal 0
     The stderr should include 'fingerprint command'
     The stderr should include 'probe-error'
@@ -186,15 +186,15 @@ SH
   It 'applies script timeouts to fingerprint commands'
     copy_exec_fixture fingerprint_timeout
 
-    When call once exec --script --timeout-ms 50 -e PATH=/usr/bin:/bin -- bash scripts/build.sh
+    When call struo exec --script --timeout-ms 50 -e PATH=/usr/bin:/bin -- bash scripts/build.sh
     The status should not equal 0
     The stderr should include 'timed out after 50ms'
     The path "$WORKSPACE/should-not-exist" should not be exist
   End
 
   It 'runs a named local executor through the infrastructure binding'
-    printf '[infrastructures.native]\nkind = "local"\n' > "$WORKSPACE/once.toml"
-    When call once exec --remote --compute native -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf native-output'
+    printf '[infrastructures.native]\nkind = "local"\n' > "$WORKSPACE/struo.toml"
+    When call struo exec --remote --compute native -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf native-output'
     The status should be success
     The stdout should equal 'native-output'
     The stderr should include 'cache miss'
@@ -202,16 +202,16 @@ SH
 
   It 'resolves native tools and inputs for a script using a local executor alias'
     copy_exec_fixture annotated_script
-    printf '[infrastructures.native]\nkind = "local"\n' > "$WORKSPACE/once.toml"
+    printf '[infrastructures.native]\nkind = "local"\n' > "$WORKSPACE/struo.toml"
     printf 'native-script-input\n' > "$WORKSPACE/input.txt"
-    When call once exec --remote --compute native -- bash scripts/build.sh
+    When call struo exec --remote --compute native -- bash scripts/build.sh
     The status should be success
     The stdout should equal 'native-script-input'
     The stderr should include 'cache miss'
   End
 
   It 'rejects network denial on an executor that cannot enforce it'
-    When call once exec --remote --compute e2b --network deny -- /bin/sh -c 'printf must-not-run'
+    When call struo exec --remote --compute e2b --network deny -- /bin/sh -c 'printf must-not-run'
     The status should be failure
     The stdout should equal ''
     The stderr should include 'does not support network denial'
@@ -219,7 +219,7 @@ SH
 
   It 'runs a command through the microsandbox compute provider'
     Skip if 'microsandbox specs are opt-in' microsandbox_specs_disabled
-    When call "$ONCE_BIN" -C "$WORKSPACE" exec --remote --compute microsandbox -- /bin/sh -c 'printf remote-output'
+    When call "$STRUO_BIN" -C "$WORKSPACE" exec --remote --compute microsandbox -- /bin/sh -c 'printf remote-output'
     The status should be success
     The stdout should equal 'remote-output'
     The stderr should include 'cache miss'
@@ -230,7 +230,7 @@ SH
     copy_exec_fixture remote_dependency
     printf hidden > "$WORKSPACE/undeclared.txt"
 
-    When call once exec --script -- /bin/sh scripts/test.sh
+    When call struo exec --script -- /bin/sh scripts/test.sh
     The status should be success
     The stdout should equal 'source:test'
     The stderr should include 'cache miss'
@@ -243,13 +243,13 @@ SH
     Skip if 'microsandbox specs are opt-in' microsandbox_specs_disabled
     copy_exec_fixture remote_dependency
     printf hidden > "$WORKSPACE/undeclared.txt"
-    if [ "${ONCE_RUN_MICROSANDBOX_SPECS:-}" = "1" ]; then
-      once exec --script -- /bin/sh scripts/test.sh >/dev/null 2>&1
+    if [ "${STRUO_RUN_MICROSANDBOX_SPECS:-}" = "1" ]; then
+      struo exec --script -- /bin/sh scripts/test.sh >/dev/null 2>&1
       rm -rf "$WORKSPACE/node_modules" "$WORKSPACE/reports"
       printf changed > "$WORKSPACE/undeclared.txt"
     fi
 
-    When call once exec --script -- /bin/sh scripts/test.sh
+    When call struo exec --script -- /bin/sh scripts/test.sh
     The status should be success
     The stdout should equal 'source:test'
     The stderr should include 'cache hit'
@@ -264,7 +264,7 @@ SH
     DAYTONA_SERVER_PID=$!
     wait_for_server_file "$WORKSPACE/daytona_port" "$DAYTONA_SERVER_PID" || return
     port="$(cat "$WORKSPACE/daytona_port")"
-    When call env ONCE_DAYTONA_CONTROL_URL="http://127.0.0.1:$port/api" ONCE_DAYTONA_TOOLBOX_URL="http://127.0.0.1:$port/toolbox" ONCE_DAYTONA_API_KEY=token-1 "$ONCE_BIN" -C "$WORKSPACE" exec --remote --compute daytona -e VALUE=output -- /bin/sh -c 'printf "daytona-$VALUE"'
+    When call env STRUO_DAYTONA_CONTROL_URL="http://127.0.0.1:$port/api" STRUO_DAYTONA_TOOLBOX_URL="http://127.0.0.1:$port/toolbox" STRUO_DAYTONA_API_KEY=token-1 "$STRUO_BIN" -C "$WORKSPACE" exec --remote --compute daytona -e VALUE=output -- /bin/sh -c 'printf "daytona-$VALUE"'
     The status should be success
     The stdout should equal 'daytona-output'
     The stderr should include 'cache miss'
@@ -272,14 +272,14 @@ SH
   End
 
   It 'propagates the underlying exit code'
-    When call once exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'exit 7'
+    When call struo exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'exit 7'
     The status should equal 7
     The stderr should include 'exit=7'
   End
 
   It 'does not cache failing exits by default'
-    once exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'exit 3' >/dev/null 2>&1 || true
-    When call once exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'exit 3'
+    struo exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'exit 3' >/dev/null 2>&1 || true
+    When call struo exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'exit 3'
     The status should equal 3
     # Second run is still a miss; failures are intentionally not
     # written to the cache without --cache-failures.
@@ -287,15 +287,15 @@ SH
   End
 
   It 'caches failing exits when --cache-failures is set'
-    once exec --cache-failures -e PATH=/usr/bin:/bin -- /bin/sh -c 'exit 3' >/dev/null 2>&1 || true
-    When call once exec --cache-failures -e PATH=/usr/bin:/bin -- /bin/sh -c 'exit 3'
+    struo exec --cache-failures -e PATH=/usr/bin:/bin -- /bin/sh -c 'exit 3' >/dev/null 2>&1 || true
+    When call struo exec --cache-failures -e PATH=/usr/bin:/bin -- /bin/sh -c 'exit 3'
     The status should equal 3
     The stderr should include 'cache hit'
   End
 
   It 'uses argv as part of the cache key'
-    once exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf one' >/dev/null 2>&1
-    When call once exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf two'
+    struo exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf one' >/dev/null 2>&1
+    When call struo exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf two'
     The status should be success
     The stdout should equal 'two'
     The stderr should include 'cache miss'
@@ -304,30 +304,30 @@ SH
   It 'uses env as part of the cache key'
     # printenv reads the env directly without going through a shell;
     # no quoting variability across bash/dash on different runners.
-    once exec -e PATH=/usr/bin:/bin -e MODE=a -- /usr/bin/printenv MODE >/dev/null 2>&1
-    When call once exec -e PATH=/usr/bin:/bin -e MODE=b -- /usr/bin/printenv MODE
+    struo exec -e PATH=/usr/bin:/bin -e MODE=a -- /usr/bin/printenv MODE >/dev/null 2>&1
+    When call struo exec -e PATH=/usr/bin:/bin -e MODE=b -- /usr/bin/printenv MODE
     The status should be success
     The stdout should match pattern 'b*'
     The stderr should include 'cache miss'
   End
 
   It 'starts subprocesses with a cleared environment'
-    export ONCE_PROBE=leaked
-    When call once exec -e PATH=/usr/bin:/bin -- /bin/sh -c '[ -z "${ONCE_PROBE:-}" ]'
+    export STRUO_PROBE=leaked
+    When call struo exec -e PATH=/usr/bin:/bin -- /bin/sh -c '[ -z "${STRUO_PROBE:-}" ]'
     The status should be success
     The stderr should include 'exit=0'
   End
 
   It 'creates the CAS directory under the XDG cache home'
-    once exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'true' >/dev/null 2>&1
-    When call test -d "$XDG_CACHE_HOME/once/cas"
+    struo exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'true' >/dev/null 2>&1
+    When call test -d "$XDG_CACHE_HOME/struo/cas"
     The status should be success
   End
 
   It 'returns a cached result without rerunning the command'
     # Warm the cache with a deliberately slow command.
-    once exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'sleep 0.3; printf warmed' >/dev/null 2>&1
-    When call once exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'sleep 0.3; printf warmed'
+    struo exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'sleep 0.3; printf warmed' >/dev/null 2>&1
+    When call struo exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'sleep 0.3; printf warmed'
     The status should be success
     The stdout should equal 'warmed'
     The stderr should include 'cache hit'
@@ -339,20 +339,20 @@ SH
       # cwd resolution itself, without depending on file-write timing
       # or external utilities discoverable through PATH.
       mkdir -p "$WORKSPACE/sub"
-      When call once exec --cwd sub -e PATH=/usr/bin:/bin -- /bin/sh -c 'pwd'
+      When call struo exec --cwd sub -e PATH=/usr/bin:/bin -- /bin/sh -c 'pwd'
       The status should be success
       The stdout should match pattern '*/sub*'
       The stderr should include 'cache miss'
     End
 
     It 'rejects an absolute cwd'
-      When call once exec --cwd /tmp -e PATH=/usr/bin:/bin -- /bin/sh -c 'true'
+      When call struo exec --cwd /tmp -e PATH=/usr/bin:/bin -- /bin/sh -c 'true'
       The status should not equal 0
       The stderr should include 'workspace path must be relative'
     End
 
     It 'rejects a parent-directory escape'
-      When call once exec --cwd ../escape -e PATH=/usr/bin:/bin -- /bin/sh -c 'true'
+      When call struo exec --cwd ../escape -e PATH=/usr/bin:/bin -- /bin/sh -c 'true'
       The status should not equal 0
       The stderr should include 'must not escape'
     End
@@ -360,7 +360,7 @@ SH
 
   Describe '--timeout-ms'
     It 'kills the child if the deadline elapses'
-      When call once exec --timeout-ms 100 -e PATH=/usr/bin:/bin -- /bin/sh -c 'sleep 5'
+      When call struo exec --timeout-ms 100 -e PATH=/usr/bin:/bin -- /bin/sh -c 'sleep 5'
       The status should not equal 0
       The stderr should include 'timeout'
     End
@@ -368,11 +368,11 @@ SH
 
   Describe '--format json'
     It 'emits a JSON trailer on stderr; stdout stays the wrapped program transparent'
-      When call "$ONCE_BIN" --format json -C "$WORKSPACE" exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hello'
+      When call "$STRUO_BIN" --format json -C "$WORKSPACE" exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hello'
       The status should be success
       # Stdout is the program's literal output, untouched.
       The stdout should equal 'hello'
-      # The Once trailer on stderr is now a JSON object.
+      # The Struo trailer on stderr is now a JSON object.
       The stderr should include '"cache":"miss"'
       The stderr should include '"exit_code":0'
       The stderr should include '"action_digest":'
@@ -381,20 +381,20 @@ SH
 
   Describe '--quiet'
     It 'suppresses the human trailer on stderr but keeps subprocess stdout'
-      When call "$ONCE_BIN" --quiet -C "$WORKSPACE" exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hello'
+      When call "$STRUO_BIN" --quiet -C "$WORKSPACE" exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hello'
       The status should be success
       # Wrapped program stdout still passes through untouched.
       The stdout should equal 'hello'
-      # The "once: cache ..." trailer must not appear under --quiet.
+      # The "struo: cache ..." trailer must not appear under --quiet.
       The stderr should not include 'cache miss'
-      The stderr should not include 'once:'
+      The stderr should not include 'struo:'
     End
 
     It 'still emits the structured trailer when --quiet is combined with --format json'
       # --quiet only gates human trailers; machine consumers asked
       # for json get json regardless. Stdout remains the wrapped
       # program's bytes so existing pipelines stay parseable.
-      When call "$ONCE_BIN" --quiet --format json -C "$WORKSPACE" exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hello'
+      When call "$STRUO_BIN" --quiet --format json -C "$WORKSPACE" exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hello'
       The status should be success
       The stdout should equal 'hello'
       The stderr should include '"cache":"miss"'
@@ -404,13 +404,13 @@ SH
     It 'still surfaces errors when --quiet is set'
       # Errors travel to stderr through a different code path than the
       # success trailer; --quiet must not swallow them.
-      When call "$ONCE_BIN" --quiet -C /nonexistent exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'true'
+      When call "$STRUO_BIN" --quiet -C /nonexistent exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'true'
       The status should not equal 0
-      The stderr should include 'once:'
+      The stderr should include 'struo:'
     End
 
     It 'accepts the short -q alias'
-      When call "$ONCE_BIN" -q -C "$WORKSPACE" exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hi'
+      When call "$STRUO_BIN" -q -C "$WORKSPACE" exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hi'
       The status should be success
       The stdout should equal 'hi'
       The stderr should not include 'cache miss'
@@ -419,7 +419,7 @@ SH
 
   Describe '--format toon'
     It 'emits a TOON trailer on stderr; stdout stays the wrapped program transparent'
-      When call "$ONCE_BIN" --format toon -C "$WORKSPACE" exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hello'
+      When call "$STRUO_BIN" --format toon -C "$WORKSPACE" exec -e PATH=/usr/bin:/bin -- /bin/sh -c 'printf hello'
       The status should be success
       The stdout should equal 'hello'
       The stderr should include 'cache: miss'
@@ -431,45 +431,45 @@ SH
   Describe '--verify-reproducible'
     It 'compares artifacts separately from logs without changing existing outputs'
       cat > "$WORKSPACE/build.sh" <<'SH'
-#!/usr/bin/env -S once exec --script /bin/sh
-# once output "out.txt"
+#!/usr/bin/env -S struo exec --script /bin/sh
+# struo output "out.txt"
 test ! -e out.txt || exit 9
 printf fresh > out.txt
 printf '%s' "$$"
 SH
       printf original > "$WORKSPACE/out.txt"
-      When call once --format json exec --verify-reproducible -- ./build.sh
+      When call struo --format json exec --verify-reproducible -- ./build.sh
       The status should be success
       The stdout should include '"artifacts_match":true'
       The stdout should include '"logs_match":false'
-      The stdout should include 'once query verification'
+      The stdout should include 'struo query verification'
       The contents of file "$WORKSPACE/out.txt" should equal 'original'
     End
 
     It 'retains differing dependency outputs for inspection and reruns dependencies'
       cat > "$WORKSPACE/generate.sh" <<'SH'
 #!/bin/sh
-# once output "generated.txt"
+# struo output "generated.txt"
 printf 'prefix:%s' "$$" > generated.txt
 SH
       cat > "$WORKSPACE/build.sh" <<'SH'
 #!/bin/sh
-# once needs "generate.sh"
-# once input "generated.txt"
-# once output "result.txt"
+# struo needs "generate.sh"
+# struo input "generated.txt"
+# struo output "result.txt"
 cp generated.txt result.txt
 SH
       verify_and_inspect() {
-        once --format json exec --verify-reproducible -- /bin/sh build.sh > "$SPEC_ROOT/report.json"
+        struo --format json exec --verify-reproducible -- /bin/sh build.sh > "$SPEC_ROOT/report.json"
         status=$?
         [ "$status" -eq 1 ] || return 90
         id=$(jq -r .id "$SPEC_ROOT/report.json")
-        once --format json query verification "$id" > "$SPEC_ROOT/retained.json" || return
+        struo --format json query verification "$id" > "$SPEC_ROOT/retained.json" || return
         cmp "$SPEC_ROOT/report.json" "$SPEC_ROOT/retained.json" || return
         for trial in 1 2; do
-          grep -q '^prefix:' "$WORKSPACE/.once/verifications/$id/trial-$trial/outputs/result.txt" || return
+          grep -q '^prefix:' "$WORKSPACE/.struo/verifications/$id/trial-$trial/outputs/result.txt" || return
         done
-        expected_offset=$(cmp -l "$WORKSPACE/.once/verifications/$id/trial-1/outputs/result.txt" "$WORKSPACE/.once/verifications/$id/trial-2/outputs/result.txt" 2>/dev/null | awk 'NR == 1 { print $1 - 1; exit }')
+        expected_offset=$(cmp -l "$WORKSPACE/.struo/verifications/$id/trial-1/outputs/result.txt" "$WORKSPACE/.struo/verifications/$id/trial-2/outputs/result.txt" 2>/dev/null | awk 'NR == 1 { print $1 - 1; exit }')
         [ "$(jq -r '.artifact_differences[0].first_differing_byte' "$SPEC_ROOT/retained.json")" = "$expected_offset" ] || return
         jq -c '[.success, .execution_succeeded, .artifacts_match, .artifact_differences[0].path, .artifact_differences[0].kind]' "$SPEC_ROOT/retained.json"
       }
@@ -483,12 +483,12 @@ SH
     It 'restores declared inputs that are updated in place for each trial'
       cat > "$WORKSPACE/update.sh" <<'SH'
 #!/bin/sh
-# once input "state.txt"
-# once output "state.txt"
+# struo input "state.txt"
+# struo output "state.txt"
 printf ':updated' >> state.txt
 SH
       printf original > "$WORKSPACE/state.txt"
-      When call once --format json exec --verify-reproducible -- /bin/sh update.sh
+      When call struo --format json exec --verify-reproducible -- /bin/sh update.sh
       The status should be success
       The stdout should include '"artifacts_match":true'
       The contents of file "$WORKSPACE/state.txt" should equal 'original'
@@ -497,7 +497,7 @@ SH
     It 'distinguishes permission changes from changed artifact bytes'
       cat > "$WORKSPACE/build.sh" <<'SH'
 #!/bin/sh
-# once output "out.txt"
+# struo output "out.txt"
 printf stable > out.txt
 if test -e "$COUNTER"; then
   chmod 600 out.txt
@@ -506,7 +506,7 @@ else
   touch "$COUNTER"
 fi
 SH
-      When call once --format json exec --verify-reproducible -e "COUNTER=$SPEC_ROOT/counter" -- /bin/sh build.sh
+      When call struo --format json exec --verify-reproducible -e "COUNTER=$SPEC_ROOT/counter" -- /bin/sh build.sh
       The status should be failure
       The stdout should include '"artifacts_match":false'
       The stdout should include '"kind":"permissions"'
@@ -514,7 +514,7 @@ SH
     End
 
     It 'does not call two identical failures a successful verification'
-      When call once --format json exec --verify-reproducible -- /bin/sh -c 'printf failure >&2; exit 7'
+      When call struo --format json exec --verify-reproducible -- /bin/sh -c 'printf failure >&2; exit 7'
       The status should be failure
       The stdout should include '"execution_succeeded":false'
       The stdout should include '"artifacts_match":null'
@@ -525,7 +525,7 @@ SH
     It 'propagates network denial to annotated dependencies or refuses execution'
       printf '#!%s\n' "$SPEC_PYTHON3" > "$WORKSPACE/dependency.py"
       cat >> "$WORKSPACE/dependency.py" <<'PY'
-# once output "dependency.txt"
+# struo output "dependency.txt"
 import errno
 import pathlib
 import socket
@@ -538,13 +538,13 @@ pathlib.Path("dependency.txt").write_text(status)
 PY
       cat > "$WORKSPACE/build.sh" <<'SH'
 #!/bin/sh
-# once needs "dependency.py"
-# once input "dependency.txt"
-# once output "out.txt"
+# struo needs "dependency.py"
+# struo input "dependency.txt"
+# struo output "out.txt"
 cp dependency.txt out.txt
 SH
       denied_or_refused() {
-        once exec --network deny -- /bin/sh build.sh > "$SPEC_ROOT/stdout" 2> "$SPEC_ROOT/stderr"
+        struo exec --network deny -- /bin/sh build.sh > "$SPEC_ROOT/stdout" 2> "$SPEC_ROOT/stderr"
         if [ "$?" -eq 0 ]; then
           [ "$(cat "$WORKSPACE/out.txt")" = denied ] || return
         else
@@ -561,11 +561,11 @@ SH
     It 'rejects offline fingerprints instead of running them without the policy'
       cat > "$WORKSPACE/build.sh" <<'SH'
 #!/bin/sh
-# once fingerprint "touch fingerprint-ran"
-# once output "out.txt"
+# struo fingerprint "touch fingerprint-ran"
+# struo output "out.txt"
 printf must-not-run > out.txt
 SH
-      When call once exec --network deny -- /bin/sh build.sh
+      When call struo exec --network deny -- /bin/sh build.sh
       The status should be failure
       The stderr should include 'fingerprint commands cannot enforce --network deny'
       The path "$WORKSPACE/fingerprint-ran" should not be exist
@@ -574,7 +574,7 @@ SH
 
   Describe 'large outputs'
     big_exec() {
-      "$ONCE_BIN" -C "$WORKSPACE" exec --timeout-ms 10000 \
+      "$STRUO_BIN" -C "$WORKSPACE" exec --timeout-ms 10000 \
         -e PATH=/usr/bin:/bin -- /bin/sh -c 'yes hello | head -c 4194304' \
         > "$WORKSPACE/big.out" 2>/dev/null
       wc -c "$WORKSPACE/big.out" | awk '{print $1}'

@@ -1,0 +1,289 @@
+_PYTHON_TOOL = tool("python", executables = ["python3", "python"])
+_PYTEST_TOOL = tool("pytest", executables = ["pytest"])
+
+def _python_attr(ctx, name, default):
+    return _configured_attr(ctx, name, default)
+
+def _python_executable(ctx):
+    requested = ctx["attr"].get("python")
+    if requested:
+        resolved = _resolve_host_executable(requested)
+        if not resolved:
+            fail(ctx["label"]["id"] + ": Python interpreter `" + requested + "` was not found")
+        return resolved
+
+    for candidate in [".venv/bin/python", ".venv/Scripts/python.exe"]:
+        resolved = _resolve_host_executable(candidate)
+        if resolved:
+            return resolved
+
+    pytest = ""
+    for candidate in [".venv/bin/pytest", ".venv/Scripts/pytest.exe", "pytest"]:
+        pytest = _resolve_host_executable(candidate)
+        if pytest:
+            break
+    if not pytest:
+        fail(ctx["label"]["id"] + ": pytest was not found; install it in the workspace or make `pytest` available on PATH")
+
+    first_line = host_file_read(pytest).split("\n")[0] if host_file_exists(pytest) and not _ends_with(pytest.lower(), ".exe") else ""
+    if first_line.startswith("#!"):
+        command = first_line[2:].strip().split(" ")
+        if command and command[0] == "/usr/bin/env" and len(command) > 1:
+            resolved = _resolve_host_executable(command[1])
+        else:
+            resolved = _resolve_host_executable(command[0]) if command else ""
+        if resolved:
+            return resolved
+
+    runner_dir = _parent_dir(pytest)
+    for candidate in [runner_dir + "/python", runner_dir + "/python.exe", "python3", "python"]:
+        resolved = _resolve_host_executable(candidate)
+        if resolved:
+            return resolved
+    fail(ctx["label"]["id"] + ": no Python interpreter capable of loading pytest was found; set the `python` attribute")
+
+def _python_env(ctx, test_dir):
+    env = {"HOME": execution_path(test_dir + "/home"), "PYTHONDONTWRITEBYTECODE": "1"}
+    for name in _python_attr(ctx, "env_inherit", []):
+        value = host_env(name)
+        if value:
+            env[name] = value
+    for name, value in _python_attr(ctx, "env", {}).items():
+        env[name] = value
+    return env
+
+def _python_test_inputs(ctx):
+    return _unique(glob(ctx["srcs"]) + _file_globs(_python_attr(ctx, "config", [])) + _file_globs(_python_attr(ctx, "data", [])))
+
+def _python_pytest_adapter():
+    return '''import argparse
+import json
+import os
+import sys
+
+try:
+    import pytest
+except Exception as error:
+    print("unable to import pytest: " + str(error), file=sys.stderr)
+    raise SystemExit(2)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--struo-results", required=True)
+    parser.add_argument("--struo-native-results", required=True)
+    parser.add_argument("--struo-target", required=True)
+    parser.add_argument("--struo-source", action="append", default=[])
+    parser.add_argument("--struo-test-unit", action="append", default=[])
+    parser.add_argument("runner_args", nargs=argparse.REMAINDER)
+    args = parser.parse_args()
+    if args.runner_args[:1] == ["--"]:
+        args.runner_args = args.runner_args[1:]
+    return args
+
+
+class StruoPlugin:
+    def __init__(self, target, sources, selected):
+        self.target = target
+        self.sources = {os.path.abspath(source) for source in sources}
+        self.selected = set(selected)
+        self.items = {}
+        self.statuses = {}
+        self.attempts = {}
+
+    def pytest_sessionstart(self, session):
+        # Configuration comes from source paths; directory traversal preserves native ignores.
+        session.config.args = ["."]
+
+    @pytest.hookimpl(hookwrapper=True, tryfirst=True)
+    def pytest_ignore_collect(self, collection_path):
+        outcome = yield
+        path = os.path.abspath(collection_path)
+        if collection_path.is_dir():
+            if not any(source.startswith(path + os.sep) for source in self.sources):
+                outcome.force_result(True)
+        elif path not in self.sources:
+            outcome.force_result(True)
+
+    def pytest_collection_modifyitems(self, config, items):
+        if not self.selected:
+            return
+        missing = self.selected - {item.nodeid for item in items}
+        deselected = [item for item in items if item.nodeid not in self.selected]
+        items[:] = [item for item in items if item.nodeid in self.selected]
+        config.hook.pytest_deselected(items=deselected)
+        if missing:
+            import pytest
+            raise pytest.UsageError("requested test units were not collected: " + ", ".join(sorted(missing)))
+
+    def pytest_collection_finish(self, session):
+        for item in session.items:
+            path = item.nodeid.split("::", 1)[0].replace(os.sep, "/")
+            self.items[item.nodeid] = {
+                "id": self.target + "::" + item.nodeid,
+                "name": item.name,
+                "suite": path,
+                "file": path,
+            }
+
+    def pytest_runtest_logreport(self, report):
+        if report.when not in ("setup", "call", "teardown"):
+            return
+        status = "passed" if report.passed else "skipped" if report.skipped else "failed"
+        attempt = self.attempts.setdefault(report.nodeid, {"duration_ms": 0})
+        attempt["duration_ms"] += int(round(report.duration * 1000))
+        if status == "failed" and "failure" not in attempt and report.longreprtext:
+            attempt["failure"] = {"message": report.longreprtext[:4000]}
+        current = self.statuses.get(report.nodeid)
+        if status == "failed" or current is None or (status == "skipped" and current == "passed"):
+            self.statuses[report.nodeid] = status
+
+    def attempt(self, nodeid, status):
+        attempt = {"status": status}
+        recorded = self.attempts.get(nodeid)
+        if recorded is None:
+            return attempt
+        if status != "skipped":
+            attempt["duration_ms"] = recorded["duration_ms"]
+        if status == "failed" and "failure" in recorded:
+            attempt["failure"] = recorded["failure"]
+        return attempt
+
+    def normalized(self, exit_code):
+        cases = []
+        for nodeid in sorted(self.items):
+            item = self.items[nodeid]
+            status = self.statuses.get(nodeid, "failed" if exit_code else "skipped")
+            cases.append({
+                **item,
+                "status": status,
+                "attempts": [self.attempt(nodeid, status)],
+                "runner_metadata": {"nodeid": nodeid},
+            })
+        counts = {"passed": 0, "failed": 0, "skipped": 0}
+        for case in cases:
+            counts[case["status"] if case["status"] in counts else "failed"] += 1
+        return {
+            "schema": "struo.test_results.v1",
+            "target": self.target,
+            "runner": {"type": "pytest", "metadata": {}},
+            "status": "passed" if exit_code == 0 else "failed",
+            "summary": {
+                "total": len(cases),
+                "passed": counts["passed"],
+                "failed": counts["failed"],
+                "skipped": counts["skipped"],
+                "flaky": 0,
+            },
+            "cases": cases,
+        }
+
+
+def main():
+    args = parse_args()
+    selected = []
+    prefix = args.struo_target + "::"
+    for unit in args.struo_test_unit:
+        if not unit.startswith(prefix):
+            print("test unit does not belong to target: " + unit, file=sys.stderr)
+            return 2
+        selected.append(unit[len(prefix):])
+    plugin = StruoPlugin(args.struo_target, args.struo_source, selected)
+    exit_code = int(pytest.main(args.runner_args + (args.struo_source or ["."]), plugins=[plugin]))
+    native = plugin.normalized(exit_code)
+    native["exit_code"] = exit_code
+    os.makedirs(os.path.dirname(args.struo_results), exist_ok=True)
+    with open(args.struo_native_results, "w", encoding="utf-8") as file:
+        json.dump(native, file, indent=2, sort_keys=True)
+    normalized = dict(native)
+    normalized.pop("exit_code", None)
+    normalized["artifacts"] = {
+        "logs": [os.path.dirname(args.struo_results) + "/pytest.log"],
+        "native_results": [args.struo_native_results],
+    }
+    with open(args.struo_results, "w", encoding="utf-8") as file:
+        json.dump(normalized, file, indent=2, sort_keys=True)
+    return exit_code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
+
+def _python_pytest_impl(ctx):
+    python = _python_executable(ctx)
+    inputs = _python_test_inputs(ctx)
+    test_dir = _test_output_dir(ctx)
+    results = test_dir + "/test_results.json"
+    log = test_dir + "/pytest.log"
+    native_results = test_dir + "/pytest-results.json"
+    adapter = test_dir + "/struo_pytest_adapter.py"
+    filters = (ctx.get("test") or {}).get("filters") or []
+    info = {
+        "schema": "struo.test_info.v1",
+        "target": ctx["label"]["id"],
+        "runner": {"type": "pytest", "display_name": "pytest", "metadata": {}},
+        "command": {"argv": [python, adapter], "env": _python_env(ctx, test_dir), "cwd": "."},
+        "outputs": {"results": results, "logs": [log], "native_results": [native_results], "coverage": []},
+        "listing": {"supported": True, "strategy": "normalized_results"},
+        "filtering": {"case_filtering": "runner_args"},
+        "sharding": {"supported": True, "granularity": _python_attr(ctx, "batching", "file")},
+        "retries": {"supported": False, "default_attempts": 1},
+        "execution": {"cacheable": True, "timeout_ms": _python_attr(ctx, "timeout_ms", None), "run_from_workspace_root": True},
+        "labels": _python_attr(ctx, "labels", []),
+        "metadata": {},
+    }
+    provider = {"label_id": ctx["label"]["id"], "target_kind": "pytest_test", "affected_inputs": inputs, "test_discovery_inputs": inputs, "test_info": info}
+    provider["portable_test_configuration"] = _portable_test_configuration(ctx, ["python"], [
+        host_command([python, "--version"], merge_stderr = True).strip(),
+        host_command([python, "-c", "import pytest; print(pytest.__version__)"]).strip(),
+    ], _python_env(ctx, test_dir))
+    if ctx["capability"] != "test":
+        return provider
+    write_path(adapter, _python_pytest_adapter())
+    argv = [python, adapter, "--struo-results", results, "--struo-native-results", native_results, "--struo-target", ctx["label"]["id"]]
+    for source in glob(ctx["srcs"]):
+        argv.extend(["--struo-source", source])
+    for unit in filters:
+        argv.extend(["--struo-test-unit", unit])
+    argv.append("--")
+    argv.extend(_python_attr(ctx, "args", []))
+    version = host_command([python, "--version"], merge_stderr = True).strip()
+    pytest_version = host_command([python, "-c", "import pytest; print(pytest.__version__)"]).strip()
+    run_action(
+        display_name = "Run Python tests · " + ctx["label"]["name"],
+        presentation = _action_metadata(context = [_action_context("python.runner", "pytest")]),
+        source_files = _action_source_files(_unique(inputs + [adapter])),
+        argv = argv,
+        inputs = _unique(inputs + [adapter]),
+        outputs = [test_dir, results, log, native_results],
+        clean_paths = [results, log, native_results],
+        create_dirs = [test_dir, test_dir + "/home"],
+        env = _python_env(ctx, test_dir),
+        stdout = log,
+        stderr = log,
+        toolchain_identity = "struo.pytest.v2\x00" + python + "\x00" + version + "\x00pytest\x00" + pytest_version,
+        identifier = ctx["label"]["id"] + ":pytest",
+    )
+    return provider
+
+pytest_test = target_kind(
+    docs = "Runs pytest suites through Struo with stable case discovery, exact filtering, normalized results, and file-oriented automatic batching.",
+    attrs = [
+        attr("python", "string", docs = "Python interpreter executable name, absolute path, or workspace-relative path. When omitted, Struo tries the workspace virtual environment before the host executable search path.", configurable = False),
+        attr("config", "list<string>", default = "[\"pyproject.toml\", \"pytest.ini\", \"conftest.py\"]", docs = "Configuration and collection inputs.", configurable = False),
+        attr("data", "list<string>", default = "[]", docs = "Runtime data inputs read by tests.", configurable = False),
+        attr("args", "list<string>", default = "[]", docs = "Additional pytest arguments.", configurable = False),
+        attr("env", "map<string,string>", default = "{}", docs = "Environment variables for test execution.", configurable = True),
+        attr("env_inherit", "list<string>", default = "[]", docs = "Host environment variables inherited by name.", configurable = False),
+        attr("batching", "string", default = "\"file\"", docs = "Automatic batch granularity: `file`, `case`, or `target`.", configurable = False),
+        attr("labels", "list<string>", default = "[]", docs = "Labels exposed through test discovery."),
+        attr("timeout_ms", "int", docs = "Optional test timeout in milliseconds.", configurable = False),
+    ],
+    deps = [dep("deps", [], "Targets whose inputs should affect this test suite.")],
+    providers = ["struo_test_info"],
+    capabilities = [capability("test", ["default", "test_results", "logs"])],
+    tools = [_PYTHON_TOOL, _PYTEST_TOOL],
+    examples = [example("pytest-test-minimal", name = "Minimal pytest suite", use_when = "You want Python tests with exact case execution and automatic file batching.")],
+    impl = _python_pytest_impl,
+)

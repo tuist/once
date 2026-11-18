@@ -1,8 +1,8 @@
-# Build context is the repository root (the web app needs the Rust `once`
+# Build context is the repository root (the web app needs the Rust `struo`
 # binary from ../crates to generate the CLI reference at compile time), so all
 # app paths below are prefixed with `web/`. Build with:
 #
-#   docker build -f web/Dockerfile -t once-web .
+#   docker build -f web/Dockerfile -t struo-web .
 
 ARG ELIXIR_VERSION=1.20.0
 ARG OTP_VERSION=29.0
@@ -12,10 +12,10 @@ ARG RUST_VERSION=1.96.0
 ARG BUILDER_IMAGE="hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION}"
 ARG RUNNER_IMAGE="debian:${DEBIAN_VERSION}"
 
-# ---- Rust stage: build the `once` binary used to generate the CLI reference ----
-FROM rust:${RUST_VERSION}-slim-bookworm AS once-builder
+# ---- Rust stage: build the `struo` binary used to generate the CLI reference ----
+FROM rust:${RUST_VERSION}-slim-bookworm AS struo-builder
 
-# libcap-ng is required to link the `once` binary (via the microsandbox deps).
+# libcap-ng is required to link the `struo` binary (via the microsandbox deps).
 # libasound2-dev is required to link the ALSA backend of cpal, which rodio
 # uses for the optional --sound flag; pkg-config resolves alsa-sys's link
 # flags and is not present in the slim Rust base image by default.
@@ -26,13 +26,13 @@ RUN apt-get update -y && apt-get install -y libcap-ng-dev libasound2-dev pkg-con
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
-RUN cargo build --locked --release -p once-cli
+RUN cargo build --locked --release -p struo-cli
 
 # ---- Elixir builder ----
 FROM ${BUILDER_IMAGE} AS builder
 
 # chromium renders Open Graph images at build time; libcap-ng0 is the runtime
-# library the `once` binary (used to generate the CLI reference) links against.
+# library the `struo` binary (used to generate the CLI reference) links against.
 # libasound2 is required at load time by the same binary because cpal
 # dynamically links against ALSA on Linux, even when --sound is not used.
 RUN apt-get update -y && apt-get install -y build-essential git chromium libcap-ng0 libasound2 ca-certificates \
@@ -60,12 +60,12 @@ RUN mix deps.compile
 COPY web/priv priv
 COPY web/lib lib
 COPY web/assets assets
-COPY crates/once-events-client/proto /crates/once-events-client/proto
+COPY crates/struo-events-client/proto /crates/struo-events-client/proto
 
-# The reference generator (Mix.Tasks.Compile.OnceReference) runs during
+# The reference generator (Mix.Tasks.Compile.StruoReference) runs during
 # `mix compile`; point it at the binary built in the Rust stage.
-COPY --from=once-builder /src/target/release/once /usr/local/bin/once
-ENV ONCE_BIN=/usr/local/bin/once
+COPY --from=struo-builder /src/target/release/struo /usr/local/bin/struo
+ENV STRUO_BIN=/usr/local/bin/struo
 
 RUN mix compile
 RUN mix assets.deploy
@@ -92,8 +92,8 @@ ENV PHX_SERVER=true
 WORKDIR "/app"
 RUN chown nobody /app
 
-COPY --from=builder --chown=nobody:root /app/_build/${MIX_ENV}/rel/once_site ./
+COPY --from=builder --chown=nobody:root /app/_build/${MIX_ENV}/rel/struo_site ./
 
 USER nobody
 
-CMD ["/app/bin/once_site", "start"]
+CMD ["/app/bin/struo_site", "start"]

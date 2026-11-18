@@ -6,7 +6,7 @@ Accepted
 
 ## Motivation
 
-Once can cache commands and expose typed build and test capabilities, but a
+Struo can cache commands and expose typed build and test capabilities, but a
 static analyzer has a different success model. Many analyzers return a nonzero
 exit code when they found valid, actionable issues. Treating that code as an
 execution failure discards the report and prevents caching.
@@ -16,17 +16,17 @@ need a separate parser and repair loop for each analyzer.
 
 ## Decision
 
-Once adds a generic `lint` capability and a `once_lint_info` provider. Target
+Struo adds a generic `lint` capability and a `struo_lint_info` provider. Target
 kinds keep native analyzer configuration authoritative and produce a
 [Static Analysis Results Interchange Format report](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html).
-The command line projects that report into `once.lint_results.v1`.
+The command line projects that report into `struo.lint_results.v1`.
 
 `run_action` accepts `success_exit_codes`, which defaults to `[0]`. A listed
-code means the process completed and its declared outputs are valid. Once
+code means the process completed and its declared outputs are valid. Struo
 captures and caches those outputs, then records the action as successful.
 Unexpected codes remain execution failures.
 
-`once lint <target>` prints the same normalized findings on fresh execution
+`struo lint <target>` prints the same normalized findings on fresh execution
 and cache hits. `--fail-on` controls the lowest severity that makes the command
 return a failing status. The default is `warning`.
 
@@ -36,11 +36,11 @@ ecosystem or analyzer by name.
 
 ## Provider contract
 
-The reserved `once_lint_info` provider contains:
+The reserved `struo_lint_info` provider contains:
 
 ```python
 {
-    "schema": "once.lint_info.v1",
+    "schema": "struo.lint_info.v1",
     "target": ctx["label"]["id"],
     "analyzer": {
         "type": "example",

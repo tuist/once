@@ -13,11 +13,11 @@ contain `sdk` configure the
 used for the build.
 
 Framework dependencies are transitive at runtime. Declare the framework the
-application imports directly. Once links the direct dynamic boundary, embeds
+application imports directly. Struo links the direct dynamic boundary, embeds
 its complete framework closure, removes duplicate paths, signs every embedded
 framework, and then signs the application.
 
-Before signing, Once removes files and directories that an earlier build left in
+Before signing, Struo removes files and directories that an earlier build left in
 the bundle and the current build no longer declares, such as a deleted resource
 or a provisioning profile from a previous development build, so the signature
 seals only declared content. Targets with `prepackage_actions` or
@@ -25,12 +25,12 @@ seals only declared content. Targets with `prepackage_actions` or
 undeclared files into the bundle.
 
 The `artifact` capability packages the completed application as a ZIP. The
-provider adds `once_artifact_info` with one `product` member and a `bundle`
-payload. `dev.once.apple-install.v1` describes the platform, SDK variant,
+provider adds `struo_artifact_info` with one `product` member and a `bundle`
+payload. `dev.struo.apple-install.v1` describes the platform, SDK variant,
 architecture, bundle identifier and minimum operating system. Packaging records
 declared executable permissions and preserves symlinks.
 
-On macOS, `dev.once.apple-install.v2` also points to `bundle` and names a
+On macOS, `dev.struo.apple-install.v2` also points to `bundle` and names a
 `metadata` payload through `spec.metadata_payload`. Its
 `once.apple_application.v1` document records `display_name`, `bundle_identifier`,
 `version`, `build_version`, `mach_o_uuids`, `platform`, `sdk_variant`, `signing`
@@ -126,7 +126,7 @@ import inference and should not be authored manually.
 | `asset_symbols` | bool | no | `true` | Generate Swift asset symbols for the application's asset catalogs |
 | `enable_testing` | bool | no | `false` | Compile Swift with testability enabled so hosted test bundles can use `@testable import` |
 
-For simulator applications, processed platform entitlements are embedded in the executable's `__TEXT,__entitlements` and `__TEXT,__ents_der` sections. When `development_team` is set, Once also derives the `application-identifier` entitlement from the team and bundle identifiers so application-group containers work in the simulator. The bundle is then signed without those platform entitlements, matching Swift Build and the Apple Bazel rules. Device applications pass the processed entitlement file to code signing instead.
+For simulator applications, processed platform entitlements are embedded in the executable's `__TEXT,__entitlements` and `__TEXT,__ents_der` sections. When `development_team` is set, Struo also derives the `application-identifier` entitlement from the team and bundle identifiers so application-group containers work in the simulator. The bundle is then signed without those platform entitlements, matching Swift Build and the Apple Bazel rules. Device applications pass the processed entitlement file to code signing instead.
 
 The `prepackage_actions` attribute accepts an ordered `list<string>` of
 serialized script records, defaulting to `[]`. These run after linking and
@@ -173,15 +173,15 @@ can use it as the linker's bundle loader.
 
 | Output | Location |
 | --- | --- |
-| Application bundle | `.once/out/<target>/<product_name>.app` |
-| Executable | `.once/out/<target>/<product_name>.app/<product_name>` |
-| Swift compatibility header | `.once/out/<target>/<module_name>-Swift.h` for mixed Swift and Objective-C targets |
-| Property list | `.once/out/<target>/<product_name>.app/Info.plist` |
-| Embedded frameworks | `.once/out/<target>/<product_name>.app/Frameworks` when the target depends on frameworks |
-| Embedded resource bundles | `.once/out/<target>/<product_name>.app/*.bundle` when dependencies propagate resources |
-| Code signature | `.once/out/<target>/<product_name>.app/_CodeSignature/CodeResources` |
-| Run record | `.once/out/<target>/run/run.json` after `once run` |
-| Run log | `.once/out/<target>/run/run.log` after `once run` |
+| Application bundle | `.struo/out/<target>/<product_name>.app` |
+| Executable | `.struo/out/<target>/<product_name>.app/<product_name>` |
+| Swift compatibility header | `.struo/out/<target>/<module_name>-Swift.h` for mixed Swift and Objective-C targets |
+| Property list | `.struo/out/<target>/<product_name>.app/Info.plist` |
+| Embedded frameworks | `.struo/out/<target>/<product_name>.app/Frameworks` when the target depends on frameworks |
+| Embedded resource bundles | `.struo/out/<target>/<product_name>.app/*.bundle` when dependencies propagate resources |
+| Code signature | `.struo/out/<target>/<product_name>.app/_CodeSignature/CodeResources` |
+| Run record | `.struo/out/<target>/run/run.json` after `struo run` |
+| Run log | `.struo/out/<target>/run/run.log` after `struo run` |
 
 The executable, property list, framework, resource bundle, and signature
 locations above describe flat bundles. On macOS their respective paths are
@@ -194,9 +194,9 @@ catalogs also live in `Contents/Resources`.
 
 ## Running
 
-`once run` launches macOS apps with the host app launcher and iOS
+`struo run` launches macOS apps with the host app launcher and iOS
 simulator apps with `simctl` boot, install, and launch. Pass
-`once run --visible` to also open Simulator for the selected simulator
+`struo run --visible` to also open Simulator for the selected simulator
 before installing and launching the app.
 
 Each run writes a run record and log under the target's output directory.
@@ -212,7 +212,7 @@ macOS) so it can be installed on a registered device:
 [target.attrs]
 platform = "ios"
 sdk_variant = "device"
-bundle_id = "dev.once.Hello"
+bundle_id = "dev.struo.Hello"
 entitlements = "Hello.entitlements"
 signing = "development"
 signing_identity = "/secure/AppleDevelopment.p12"
@@ -220,7 +220,7 @@ signing_identity_password_file = "/secure/AppleDevelopment.password"
 provisioning_profile = "/secure/Hello_Development.mobileprovision"
 ```
 
-Once reads the provisioning profile during analysis and:
+Struo reads the provisioning profile during analysis and:
 
 - checks that its team matches `development_team` when set, that its platform
   matches, and that its application identifier, wildcards included, covers
@@ -251,7 +251,7 @@ Access does, are supported; rcodesign rejects files that use newer OpenSSL 3
 defaults with an "incorrect password" error.
 
 On macOS, any other value is a keychain identity name or SHA-1 fingerprint.
-Once resolves it with `security find-identity` during analysis and signs with
+Struo resolves it with `security find-identity` during analysis and signs with
 `codesign` using the resolved fingerprint, which also keys the cache, so a
 renewed certificate with the same name re-signs. An unknown or ambiguous name
 fails with the available identities and their fingerprints.
@@ -266,13 +266,13 @@ stays on the analysis host.
 
 ## Limitations
 
-Signing modes other than `ad_hoc` and `development` are unsupported. Once does
+Signing modes other than `ad_hoc` and `development` are unsupported. Struo does
 not check that the signing certificate is listed in the profile, that the
 profile is unexpired, or that the device is provisioned; installing on a
 device is the authoritative check.
 
 For Developer ID distribution, sign and notarize a separate copy, outside
-Once's cached actions. See [macOS applications and distribution](/guide/graph/apple#macos-applications-and-distribution)
+Struo's cached actions. See [macOS applications and distribution](/guide/graph/apple#macos-applications-and-distribution)
 for a runnable starter and a credential-isolated release workflow. Never sign
 or staple the cached application in place.
 
@@ -286,7 +286,7 @@ srcs = ["Sources/**/*.swift"]
 
 [target.attrs]
 platform = "ios"
-bundle_id = "dev.once.Hello"
+bundle_id = "dev.struo.Hello"
 minimum_os = "17.0"
 families = ["iphone"]
 ```

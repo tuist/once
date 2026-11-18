@@ -7,7 +7,7 @@ Describe 'graph declared actions'
 
   create_declared_action_workspace() {
     mkdir -p "$WORKSPACE/modules" "$WORKSPACE/tools/demo"
-    cat > "$WORKSPACE/once.toml" <<'EOF'
+    cat > "$WORKSPACE/struo.toml" <<'EOF'
 [modules]
 paths = ["modules/*.star"]
 EOF
@@ -36,7 +36,7 @@ demo_action = target_kind(
     impl = _demo_impl,
 )
 EOF
-    cat > "$WORKSPACE/tools/demo/once.toml" <<'EOF'
+    cat > "$WORKSPACE/tools/demo/struo.toml" <<'EOF'
 [[target]]
 name = "Task"
 kind = "demo_action"
@@ -48,7 +48,7 @@ EOF
 
   create_split_action_workspace() {
     mkdir -p "$WORKSPACE/modules" "$WORKSPACE/tools/split"
-    cat > "$WORKSPACE/once.toml" <<'EOF'
+    cat > "$WORKSPACE/struo.toml" <<'EOF'
 [modules]
 paths = ["modules/*.star"]
 EOF
@@ -79,7 +79,7 @@ split_action = target_kind(
     impl = _split_impl,
 )
 EOF
-    cat > "$WORKSPACE/tools/split/once.toml" <<'EOF'
+    cat > "$WORKSPACE/tools/split/struo.toml" <<'EOF'
 [[target]]
 name = "Task"
 kind = "split_action"
@@ -92,55 +92,55 @@ EOF
   It 'builds custom target kind declared actions through the graph command'
     create_declared_action_workspace
 
-    When call once --format json build tools/demo/Task
+    When call struo --format json build tools/demo/Task
     The status should be success
     The stdout should include '"target":"tools/demo/Task"'
     The stdout should include '"capability":"build"'
     The stdout should include '"status":"completed"'
-    The stdout should include '.once/out/tools/demo/Task/build.txt'
-    The path "$WORKSPACE/.once/out/tools/demo/Task/build.txt" should be file
-    The contents of file "$WORKSPACE/.once/out/tools/demo/Task/build.txt" should equal 'hello:build'
+    The stdout should include '.struo/out/tools/demo/Task/build.txt'
+    The path "$WORKSPACE/.struo/out/tools/demo/Task/build.txt" should be file
+    The contents of file "$WORKSPACE/.struo/out/tools/demo/Task/build.txt" should equal 'hello:build'
   End
 
   It 'records evidence for graph build declared actions'
     create_declared_action_workspace
-    once --format json build tools/demo/Task >/dev/null
+    struo --format json build tools/demo/Task >/dev/null
 
-    When call once --format json query evidence tools/demo/Task:build
+    When call struo --format json query evidence tools/demo/Task:build
     The status should be success
-    The stdout should include '"schema":"once.evidence.v1"'
+    The stdout should include '"schema":"struo.evidence.v1"'
     The stdout should include '"subject":{"kind":"target","id":"tools/demo/Task","capability":"build"}'
     The stdout should include '"status":"passed"'
     The stdout should include '"cache":"miss"'
     The stdout should include '"exit_code":0'
-    The stdout should include '.once/out/tools/demo/Task/build.txt'
-    The path "$WORKSPACE/.once/once.sqlite" should be file
+    The stdout should include '.struo/out/tools/demo/Task/build.txt'
+    The path "$WORKSPACE/.struo/struo.sqlite" should be file
   End
 
   It 'runs custom target kind declared actions through the graph command'
     create_declared_action_workspace
 
-    When call once --format json run tools/demo/Task
+    When call struo --format json run tools/demo/Task
     The status should be success
     The stdout should include '"target":"tools/demo/Task"'
     The stdout should include '"capability":"run"'
     The stdout should include '"status":"completed"'
-    The stdout should include '.once/out/tools/demo/Task/run.txt'
-    The path "$WORKSPACE/.once/out/tools/demo/Task/run.txt" should be file
-    The contents of file "$WORKSPACE/.once/out/tools/demo/Task/run.txt" should equal 'hello:run'
+    The stdout should include '.struo/out/tools/demo/Task/run.txt'
+    The path "$WORKSPACE/.struo/out/tools/demo/Task/run.txt" should be file
+    The contents of file "$WORKSPACE/.struo/out/tools/demo/Task/run.txt" should equal 'hello:run'
   End
 
   It 'tests custom target kind declared actions through the graph command'
     create_declared_action_workspace
 
-    When call once --format json test tools/demo/Task
+    When call struo --format json test tools/demo/Task
     The status should be success
     The stdout should include '"target":"tools/demo/Task"'
     The stdout should include '"capability":"test"'
     The stdout should include '"status":"completed"'
-    The stdout should include '.once/out/tools/demo/Task/test.txt'
-    The path "$WORKSPACE/.once/out/tools/demo/Task/test.txt" should be file
-    The contents of file "$WORKSPACE/.once/out/tools/demo/Task/test.txt" should equal 'hello:test'
+    The stdout should include '.struo/out/tools/demo/Task/test.txt'
+    The path "$WORKSPACE/.struo/out/tools/demo/Task/test.txt" should be file
+    The contents of file "$WORKSPACE/.struo/out/tools/demo/Task/test.txt" should equal 'hello:test'
   End
 
   It 'verifies build artifacts independently of declared logs nested in directory outputs'
@@ -167,12 +167,12 @@ demo_action = target_kind(
     impl = _demo_impl,
 )
 EOF
-    When call once --format json build --verify-reproducible tools/demo/Task
+    When call struo --format json build --verify-reproducible tools/demo/Task
     The status should be success
     The stdout should include '"artifacts_match":true'
     The stdout should include '"logs_match":false'
     The stdout should include '"log":true'
-    The path "$WORKSPACE/.once/out/tools/demo/Task/bundle" should not be exist
+    The path "$WORKSPACE/.struo/out/tools/demo/Task/bundle" should not be exist
   End
 
   It 'uses declared logs as the verdict when a build declares no other artifacts'
@@ -189,7 +189,7 @@ demo_action = target_kind(
     impl = _demo_impl,
 )
 EOF
-    When call once --format json build --verify-reproducible tools/demo/Task
+    When call struo --format json build --verify-reproducible tools/demo/Task
     The status should be failure
     The stdout should include '"artifacts_match":null'
     The stdout should include '"logs_match":false'
@@ -202,7 +202,7 @@ EOF
 def _demo_impl(ctx):
     out = declare_output("environment.txt")
     run_action(
-        argv = [host_which("sh"), "-c", "printf '%s:%s' \"$ONCE_INHERITED_VALUE\" \"$NATIVE_SETTING\" > \"$1\"", "sh", out],
+        argv = [host_which("sh"), "-c", "printf '%s:%s' \"$STRUO_INHERITED_VALUE\" \"$NATIVE_SETTING\" > \"$1\"", "sh", out],
         outputs = [out],
         inherit_parent_env = True,
         sandbox = "off",
@@ -217,14 +217,14 @@ demo_action = target_kind(
 )
 EOF
     for value in first first second second; do
-      ONCE_CHANGE_TRACKER=0 ONCE_INHERITED_VALUE="$value" NATIVE_SETTING=caller once --format json build tools/demo/Task > "$SPEC_ROOT/environment.json" 2> "$SPEC_ROOT/environment.err" || { cat "$SPEC_ROOT/environment.err"; return 1; }
-      [ "$(cat "$WORKSPACE/.once/out/tools/demo/Task/environment.txt")" = "$value:resolved" ] || return 1
+      STRUO_CHANGE_TRACKER=0 STRUO_INHERITED_VALUE="$value" NATIVE_SETTING=caller struo --format json build tools/demo/Task > "$SPEC_ROOT/environment.json" 2> "$SPEC_ROOT/environment.err" || { cat "$SPEC_ROOT/environment.err"; return 1; }
+      [ "$(cat "$WORKSPACE/.struo/out/tools/demo/Task/environment.txt")" = "$value:resolved" ] || return 1
       jq -r '.cache' "$SPEC_ROOT/environment.json" >> "$SPEC_ROOT/cache-states"
-      rm "$WORKSPACE/.once/out/tools/demo/Task/environment.txt"
+      rm "$WORKSPACE/.struo/out/tools/demo/Task/environment.txt"
     done
     [ "$(cat "$SPEC_ROOT/cache-states")" = "$(printf 'miss\nhit\nmiss\nhit')" ] || return 1
-    [ -d "$WORKSPACE/.once/analysis" ] || return 1
-    if grep -R -E '"ONCE_INHERITED_VALUE"[[:space:]]*:[[:space:]]*"(first|second)"' "$WORKSPACE/.once/analysis"; then
+    [ -d "$WORKSPACE/.struo/analysis" ] || return 1
+    if grep -R -E '"STRUO_INHERITED_VALUE"[[:space:]]*:[[:space:]]*"(first|second)"' "$WORKSPACE/.struo/analysis"; then
       return 1
     fi
   }
@@ -237,16 +237,16 @@ EOF
 
   It 'keeps later graph actions cached when they skip prior action digests'
     create_split_action_workspace
-    once --format json build tools/split/Task >/dev/null
-    sed -i.bak 's/message = "one"/message = "two"/' "$WORKSPACE/tools/split/once.toml"
+    struo --format json build tools/split/Task >/dev/null
+    sed -i.bak 's/message = "one"/message = "two"/' "$WORKSPACE/tools/split/struo.toml"
 
-    When call once --format json build tools/split/Task
+    When call struo --format json build tools/split/Task
     The status should be success
     The stdout should include '"target":"tools/split/Task"'
     The stdout should include '"cache":"miss"'
-    The contents of file "$WORKSPACE/.once/out/tools/split/Task/first.txt" should equal 'two'
-    The contents of file "$WORKSPACE/.once/out/tools/split/Task/second.txt" should equal 'second'
-    evidence=$("$ONCE_BIN" -C "$WORKSPACE" --format json query evidence tools/split/Task:build)
+    The contents of file "$WORKSPACE/.struo/out/tools/split/Task/first.txt" should equal 'two'
+    The contents of file "$WORKSPACE/.struo/out/tools/split/Task/second.txt" should equal 'second'
+    evidence=$("$STRUO_BIN" -C "$WORKSPACE" --format json query evidence tools/split/Task:build)
     The variable evidence should include '"cache":"hit"'
   End
 End

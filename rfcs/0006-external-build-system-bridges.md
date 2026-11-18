@@ -2,18 +2,18 @@
 
 ## Summary
 
-Once should provide an incremental bridge for repositories whose existing
+Struo should provide an incremental bridge for repositories whose existing
 build system remains authoritative. The first bridge integrates CMake in two
 complementary ways:
 
 1. `cmake_project` configures and builds declared CMake products as one
-   cacheable Once action.
+   cacheable Struo action.
 2. `cmake_workspace` imports a checked CMake graph snapshot as typed,
    queryable `cmake_target` nodes.
 
 This keeps the migration path close to annotated scripts. Teams can first move
 an existing build command behind a typed action, then expose the logical graph
-without asking Once to reinterpret `CMakeLists.txt` or replace CMake.
+without asking Struo to reinterpret `CMakeLists.txt` or replace CMake.
 
 ## Decision
 
@@ -26,7 +26,7 @@ granularity:
 
 - Execution is coarse. Configure and build run in one action because the
   generated build tree contains state that cannot yet be modeled as portable
-  independent Once actions.
+  independent Struo actions.
 - Discovery is fine-grained. A normalized snapshot creates one
   `cmake_target` node per selected configured CMake target so queries can
   inspect names, dependency edges, sources, artifacts, includes, definitions,
@@ -84,7 +84,7 @@ provider contracts.
 
 ## Snapshot Contract
 
-The normalized snapshot uses schema `once.cmake.snapshot.v1`. It records:
+The normalized snapshot uses schema `struo.cmake.snapshot.v1`. It records:
 
 - exact text for every workspace configuration input reported by CMake;
 - source directory, generator, and build configuration selection;
@@ -130,12 +130,12 @@ parse CMake source or inspect a mutable generated build tree.
 
 ## Current Boundaries
 
-- A CMake build is one action, not one Once action per compile or link step.
+- A CMake build is one action, not one Struo action per compile or link step.
 - Imported `cmake_target` nodes are query metadata and do not build
   independently.
 - Product paths are declared explicitly because generated layouts vary by
   project and generator.
-- CTest records are captured in the snapshot but do not yet expose the Once
+- CTest records are captured in the snapshot but do not yet expose the Struo
   test capability.
 - The shipped starter uses Ninja. Other generators require compatible tools
   and accurate product paths.
@@ -146,12 +146,12 @@ parse CMake source or inspect a mutable generated build tree.
 
 ## Alternatives Rejected
 
-### Parse CMake source in Once
+### Parse CMake source in Struo
 
-This cannot reproduce configured behavior and would make Once a second,
+This cannot reproduce configured behavior and would make Struo a second,
 incomplete CMake interpreter.
 
-### Convert every generated command into an Once action immediately
+### Convert every generated command into an Struo action immediately
 
 Generated commands depend on configuration state, dependency discovery,
 response files, depfiles, and generator-specific rules. Importing them without

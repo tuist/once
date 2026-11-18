@@ -21,7 +21,7 @@ script = "prepack"
 outputs = ["lib"]
 ```
 
-Run `once build Library` to build the declared products. Installing dependencies
+Run `struo build Library` to build the declared products. Installing dependencies
 alone does not build the package.
 
 ## Attributes
@@ -66,7 +66,7 @@ The React Native starter includes a TypeScript library build alongside its
 platform application targets:
 
 ```sh
-once query example javascript_build react-native-application-minimal --format json
+struo query example javascript_build react-native-application-minimal --format json
 ```
 
 The library build requires Node.js and the configured package manager. Native

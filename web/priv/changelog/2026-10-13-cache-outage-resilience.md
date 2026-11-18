@@ -3,7 +3,7 @@ title: "Keep building through transient cache outages"
 date: 2026-10-13
 ---
 
-Once can now continue executing scripts and build actions when the remote cache
+Struo can now continue executing scripts and build actions when the remote cache
 remains unavailable after bounded retries. Fresh results stay in the local cache
 and can be reused by later runs while the remote service recovers.
 

@@ -1,7 +1,7 @@
 # `oci_push`
 
 Publishes a built image or multi-platform index to a registry while preserving
-its manifest digest. Invoke it with `once run`: publication is a side effect,
+its manifest digest. Invoke it with `struo run`: publication is a side effect,
 not a cached build result. The toolchain needs `crane`, not Docker.
 
 ## Destination and authentication
@@ -18,8 +18,8 @@ The target exposes `build` and `run` with no output groups. Build constructs
 the dependency closure; run uploads the layout and updates the requested tags.
 
 ```sh
-once query schema oci_push
-once query example oci_push oci-pull-and-extend
+struo query schema oci_push
+struo query example oci_push oci-pull-and-extend
 ```
 
 See [Container Images](/guide/graph/containers) for the image-to-registry workflow.

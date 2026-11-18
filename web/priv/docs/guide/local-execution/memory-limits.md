@@ -1,8 +1,8 @@
 # Memory Limits
 
-Once limits the memory pressure created by concurrent local actions. By
+Struo limits the memory pressure created by concurrent local actions. By
 default, it schedules against two thirds of the memory visible to the host or
-container. This leaves room for Once itself, the operating system, editors, and
+container. This leaves room for Struo itself, the operating system, editors, and
 other processes.
 
 On Linux, automatic detection considers the current process's readable cgroup
@@ -12,7 +12,7 @@ If cgroup information is unavailable, detection falls back to host memory.
 Override the budget for any command with `--memory-limit`:
 
 ```sh
-once --memory-limit 2147483648 build app
+struo --memory-limit 2147483648 build app
 ```
 
 The value above is two gibibytes. You can also write it as `2GiB`, where `GiB`
@@ -23,14 +23,14 @@ Raw byte counts and decimal unit suffixes are accepted too.
 The option is global, so these forms are equivalent:
 
 ```sh
-once --memory-limit 2147483648 test app
-once test app --memory-limit 2147483648
+struo --memory-limit 2147483648 test app
+struo test app --memory-limit 2147483648
 ```
 
 ## How Scheduling Uses The Budget
 
 Each local action reserves its declared memory estimate before it starts.
-Actions without an estimate reserve 250 mebibytes. Once admits more work only
+Actions without an estimate reserve 250 mebibytes. Struo admits more work only
 when the combined reservations fit within the configured budget. An action
 whose estimate exceeds the entire budget runs alone instead of waiting
 forever.
@@ -40,7 +40,7 @@ annotated scripts, and test workers. Internal subprocesses inherit an explicit
 limit, so nested test and agent-tool invocations do not reset to the machine
 default.
 
-When a remote cache is selected, Once carves a shared cache-transfer allowance
+When a remote cache is selected, Struo carves a shared cache-transfer allowance
 out of the configured memory budget. It starts at one eighth of that budget,
 with a minimum of 32 MiB + 64 KiB and a maximum of 256 MiB. The minimum fits a
 streamed response frame and its bounded pipe. Actions use exactly the remainder
@@ -74,7 +74,7 @@ execution finishes.
 Set `--cpu-limit COUNT` to override the scheduler's CPU capacity:
 
 ```sh
-once --cpu-limit 4 test app
+struo --cpu-limit 4 test app
 ```
 
 Test batches divide the parent CPU budget instead of each inheriting the full
@@ -91,17 +91,17 @@ instead of being silently reduced.
 ## What The Limit Guarantees
 
 This is an admission-control budget based on action estimates, not a hard
-operating-system memory ceiling. It bounds Once's scheduling decisions and its
+operating-system memory ceiling. It bounds Struo's scheduling decisions and its
 own artifact buffering. A command that uses more memory than its estimate can
 still exceed the budget by itself.
 
-The budget belongs to one invocation. Independent Once processes do not share
+The budget belongs to one invocation. Independent Struo processes do not share
 a host-wide reservation pool, so their combined reservations can exceed a
 single invocation's budget.
 
 Use a container or operating-system process limit when a command must be
 forcibly stopped at an exact resident-memory boundary. Pair that hard boundary
-with a lower Once budget so the scheduler leaves enough headroom for the Once
+with a lower Struo budget so the scheduler leaves enough headroom for the Struo
 process and the operating system.
 
 ## Choosing A Value

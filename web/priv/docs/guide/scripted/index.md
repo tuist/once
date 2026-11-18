@@ -1,11 +1,11 @@
 # Scripted Workflows
 
-Scripted workflows bring existing automation into Once without rewriting it.
-The script remains the source of truth. A small header tells Once which inputs
+Scripted workflows bring existing automation into Struo without rewriting it.
+The script remains the source of truth. A small header tells Struo which inputs
 affect the result, which outputs to preserve, and which host values belong in
 the cache key.
 
-This is the shortest path from an ordinary script to a cacheable Once action.
+This is the shortest path from an ordinary script to a cacheable Struo action.
 
 ## Create A Cacheable Script
 
@@ -13,10 +13,10 @@ Suppose a repository turns `message.txt` into `build/greeting.txt`. Save this
 script as `scripts/greet.sh`:
 
 ```sh
-#!/usr/bin/env -S once exec -- bash
-# once input "../message.txt"
-# once output "../build/greeting.txt"
-# once cwd ".."
+#!/usr/bin/env -S struo exec -- bash
+# struo input "../message.txt"
+# struo output "../build/greeting.txt"
+# struo cwd ".."
 
 set -eu
 mkdir -p build
@@ -24,10 +24,10 @@ cp message.txt build/greeting.txt
 cat build/greeting.txt
 ```
 
-The `once` headers form the cache contract:
+The `struo` headers form the cache contract:
 
 - `input` tracks a file, directory, or glob that can change the result.
-- `output` identifies a file or directory that Once should restore on a cache
+- `output` identifies a file or directory that Struo should restore on a cache
   hit.
 - `cwd` chooses the working directory for the script body.
 
@@ -38,7 +38,7 @@ Make the script executable, create its input, and run it:
 
 ```sh
 chmod +x scripts/greet.sh
-printf 'hello from Once\n' > message.txt
+printf 'hello from Struo\n' > message.txt
 ./scripts/greet.sh
 ```
 
@@ -58,13 +58,13 @@ script runs again.
 Inspect the parsed contract before execution:
 
 ```sh
-once query script scripts/greet.sh
+struo query script scripts/greet.sh
 ```
 
 Coding agents can use the same workflow without reading this guide. The
 [Model Context Protocol](https://modelcontextprotocol.io/) server exposes
-`once_validate_script` for contract inspection and, when started with
-`--allow-run`, `once_exec_script` for execution. The execution result
+`struo_validate_script` for contract inspection and, when started with
+`--allow-run`, `struo_exec_script` for execution. The execution result
 includes the action digest, cache state, captured streams, and matching
 evidence. Calling it twice with unchanged inputs verifies cache reuse.
 

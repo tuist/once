@@ -5,7 +5,7 @@ Zig test target.
 ## Description
 
 Compiles a Zig test binary with `zig test --test-no-exec`, then runs that
-binary through Once's generic test capability. Once writes a normalized test
+binary through Struo's generic test capability. Struo writes a normalized test
 result file with one suite-level case and stores the native Zig test output as
 a log artifact.
 
@@ -45,8 +45,8 @@ unknown keys fail validation.
 | `zigopt` | list&lt;string&gt; | no | `[]` | Global Zig flags prepended before module-specific `zigopts` |
 | `host_zigopt` | list&lt;string&gt; | no | `[]` | Alias for `zigopt` when porting configured host targets |
 | `zigopts` | list&lt;string&gt; | no | `[]` | Extra flags attached to this module specification |
-| `linkopts` | list&lt;string&gt; | no | `[]` | Extra linker flags appended after Once-managed flags |
-| `use_cc_common_link` | int | no | `-1` | Compatibility setting for C provider linking; Once consumes C providers through its provider model |
+| `linkopts` | list&lt;string&gt; | no | `[]` | Extra linker flags appended after Struo-managed flags |
+| `use_cc_common_link` | int | no | `-1` | Compatibility setting for C provider linking; Struo consumes C providers through its provider model |
 | `host_use_cc_common_link` | int | no | `-1` | Host compatibility setting for C provider linking |
 | `use_standalone_translate_c` | int | no | `-1` | Set to `1` to use a standalone `translate-c` executable |
 | `translate_c` | string | no | empty | Standalone `translate-c` executable path |
@@ -61,9 +61,9 @@ unknown keys fail validation.
 | `env` | map&lt;string, string&gt; | no | `{}` | Environment variables passed to the Zig test binary |
 | `env_inherit` | list&lt;string&gt; | no | `[]` | Host environment variable names inherited before explicit `env` and `test_env` values |
 | `args` | list&lt;string&gt; | no | `[]` | Arguments passed to the compiled Zig test binary |
-| `test_env` | map&lt;string, string&gt; | no | `{}` | Once-compatible alias for extra test execution environment variables |
+| `test_env` | map&lt;string, string&gt; | no | `{}` | Struo-compatible alias for extra test execution environment variables |
 | `test_runner` | string | no | empty | Package-relative Zig file passed as `--test-runner` |
-| `labels` | list&lt;string&gt; | no | `[]` | Labels exposed through `once_test_info` for test discovery |
+| `labels` | list&lt;string&gt; | no | `[]` | Labels exposed through `struo_test_info` for test discovery |
 | `timeout_ms` | int | no |  | Optional test timeout in milliseconds |
 
 ## Dependency Edges
@@ -74,7 +74,7 @@ unknown keys fail validation.
 
 ## Providers
 
-The target emits `zig_test` and `once_test_info`.
+The target emits `zig_test` and `struo_test_info`.
 
 ## Capabilities
 

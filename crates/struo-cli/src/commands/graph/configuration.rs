@@ -1,0 +1,210 @@
+//! Invocation-scoped build configuration.
+//!
+//! Parses `--config` overrides, merges them over the workspace-declared
+//! configuration, and derives the configuration identity that scopes
+//! configured targets. The effective configuration drives dependency
+//! selection and Starlark analysis; its digest scopes output directories
+//! and build receipts so two invocations with different overrides never
+//! share results. When the overrides reproduce the workspace-default
+//! configuration the path suffix is empty, keeping output paths
+//! byte-identical to invocations that pass no overrides.
+
+use std::path::Path;
+
+use anyhow::{bail, Context, Result};
+use struo_cas::Digest;
+use struo_frontend::{load_workspace_configuration, BuildConfiguration, ConfigurationOverrides};
+
+/// Number of configuration-digest hex characters folded into an output
+/// path segment. Long enough to make collisions between two distinct
+/// configurations negligible.
+const PATH_DIGEST_HEX_LEN: usize = 16;
+
+/// Recognized `--config` keys.
+const KEY_OS: &str = "os";
+const KEY_ARCH: &str = "arch";
+const KEY_TOKEN: &str = "token";
+
+/// The effective configuration for one invocation plus the identity
+/// derived from it.
+#[derive(Debug, Clone)]
+pub struct ResolvedConfiguration {
+    pub configuration: BuildConfiguration,
+    /// Segment appended after a target id in output and receipt paths.
+    /// Empty for the workspace-default configuration.
+    pub path_suffix: String,
+    pub digest: Digest,
+    pub native_targets: Option<Vec<struo_frontend::Target>>,
+    pub execution: Option<struo_core::RemoteExecution>,
+}
+
+impl ResolvedConfiguration {
+    pub fn with_execution(mut self, execution: struo_core::RemoteExecution) -> Result<Self> {
+        struo_core::Executor::from_binding(&execution)?;
+        let identity = serde_json::to_vec(&(self.digest, &execution))?;
+        self.digest = Digest::of_bytes(&identity);
+        self.path_suffix = format!("/cfg-{}", &self.digest.to_hex()[..PATH_DIGEST_HEX_LEN]);
+        self.execution = Some(execution);
+        Ok(self)
+    }
+
+    pub fn workspace_targets(&self, workspace: &Path) -> Result<Vec<struo_frontend::Target>> {
+        self.native_targets.as_ref().map_or_else(
+            || {
+                Ok(struo_frontend::load_workspace_with_configuration(
+                    workspace,
+                    &self.configuration,
+                )?)
+            },
+            |targets| Ok(targets.clone()),
+        )
+    }
+
+    pub fn load_graph(&self, workspace: &Path) -> Result<Vec<struo_frontend::GraphTarget>> {
+        let targets = self.workspace_targets(workspace)?;
+        let kinds = targets.iter().map(|target| target.kind.clone()).collect();
+        struo_frontend::analysis::AnalysisEngine::for_target_kinds(
+            workspace,
+            struo_frontend::analysis::AnalysisOptions {
+                execution: self.execution.clone(),
+                ..Default::default()
+            },
+            &kinds,
+        )?
+        .with_configuration(self.configuration.clone(), self.path_suffix.clone())
+        .load_graph_workspace_from_targets(workspace, targets)
+    }
+}
+
+/// Parse repeated `KEY=VALUE` override strings into typed overrides.
+///
+/// Recognized keys are `os`, `arch`, and `token` (repeatable).
+pub fn parse_overrides(raw: &[String]) -> Result<ConfigurationOverrides> {
+    let mut overrides = ConfigurationOverrides::default();
+    for entry in raw {
+        let (key, value) = entry
+            .split_once('=')
+            .with_context(|| format!("--config expects `KEY=VALUE`, got `{entry}`"))?;
+        let key = key.trim();
+        let value = value.trim();
+        if value.is_empty() {
+            bail!("--config `{key}` has an empty value");
+        }
+        match key {
+            KEY_OS => overrides.os = Some(value.to_string()),
+            KEY_ARCH => overrides.arch = Some(value.to_string()),
+            KEY_TOKEN => overrides.tokens.push(value.to_string()),
+            other => bail!(
+                "unknown --config key `{other}` (expected `{KEY_OS}`, `{KEY_ARCH}`, or `{KEY_TOKEN}`)"
+            ),
+        }
+    }
+    Ok(overrides)
+}
+
+/// Merge invocation overrides over the workspace-declared configuration
+/// and derive the identity that scopes configured targets.
+pub fn resolve(
+    workspace: &Path,
+    overrides: &ConfigurationOverrides,
+) -> Result<ResolvedConfiguration> {
+    let baseline = load_workspace_configuration(workspace)?;
+    let effective = baseline.merged_with(overrides);
+    let effective_digest = Digest::of_bytes(&effective.canonical_bytes());
+    let baseline_digest = Digest::of_bytes(&baseline.canonical_bytes());
+    let path_suffix = if effective_digest == baseline_digest {
+        String::new()
+    } else {
+        format!("/cfg-{}", &effective_digest.to_hex()[..PATH_DIGEST_HEX_LEN])
+    };
+    tracing::debug!(
+        baseline_configuration = %baseline_digest,
+        effective_configuration = %effective_digest,
+        path_suffix = %path_suffix,
+        "resolved invocation configuration"
+    );
+    Ok(ResolvedConfiguration {
+        configuration: effective,
+        path_suffix,
+        digest: effective_digest,
+        native_targets: None,
+        execution: None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_os_arch_and_token_overrides() {
+        let overrides = parse_overrides(&[
+            "os=ios".to_string(),
+            "arch=arm64".to_string(),
+            "token=release".to_string(),
+            "token=simulator".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(overrides.os.as_deref(), Some("ios"));
+        assert_eq!(overrides.arch.as_deref(), Some("arm64"));
+        assert_eq!(overrides.tokens, vec!["release", "simulator"]);
+    }
+
+    #[test]
+    fn rejects_unknown_config_key() {
+        let error = parse_overrides(&["mode=release".to_string()]).unwrap_err();
+        assert!(error.to_string().contains("unknown --config key"));
+    }
+
+    #[test]
+    fn rejects_config_without_equals() {
+        let error = parse_overrides(&["release".to_string()]).unwrap_err();
+        assert!(error.to_string().contains("KEY=VALUE"));
+    }
+
+    #[test]
+    fn rejects_empty_config_value() {
+        let error = parse_overrides(&["os=".to_string()]).unwrap_err();
+        assert!(error.to_string().contains("empty value"));
+    }
+
+    #[test]
+    fn execution_environments_isolate_outputs_and_reuse_their_own_configuration() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("struo.toml"), "").unwrap();
+        let local = resolve(root.path(), &ConfigurationOverrides::default()).unwrap();
+        assert!(local.path_suffix.is_empty());
+        let mut first = struo_core::RemoteExecution::provider("workers");
+        first.executor = Some("docker".into());
+        first.environment = Some(format!("sha256:{}", "a".repeat(64)));
+        let mut second = first.clone();
+        second.environment = Some(format!("sha256:{}", "b".repeat(64)));
+        let remote = local.clone().with_execution(first.clone()).unwrap();
+        assert_ne!(remote.digest, local.digest);
+        assert_ne!(remote.path_suffix, local.path_suffix);
+        assert_eq!(
+            remote.path_suffix,
+            local.clone().with_execution(first).unwrap().path_suffix
+        );
+        assert_ne!(
+            remote.path_suffix,
+            local.with_execution(second).unwrap().path_suffix
+        );
+    }
+
+    #[test]
+    fn execution_properties_partition_configuration_identity() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("struo.toml"), "").unwrap();
+        let local = resolve(root.path(), &ConfigurationOverrides::default()).unwrap();
+        let first = struo_core::RemoteExecution::provider("local");
+        let mut second = first.clone();
+        second
+            .properties
+            .insert("version".into(), serde_json::json!(2));
+        let first = local.clone().with_execution(first).unwrap();
+        let second = local.with_execution(second).unwrap();
+        assert_ne!(first.digest, second.digest);
+        assert_ne!(first.path_suffix, second.path_suffix);
+    }
+}

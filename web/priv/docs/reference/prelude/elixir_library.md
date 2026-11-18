@@ -13,10 +13,10 @@ compile the same project again.
 Compiling the complete target together lets Elixir resolve relationships among
 macros, structs, protocols, and their implementations.
 
-Once records Elixir compile metadata alongside bytecode. That metadata tracks
+Struo records Elixir compile metadata alongside bytecode. That metadata tracks
 external resources, compile environment reads, modules that export
 `__mix_recompile__?/0`, protocols, implementations, and compiler warnings. On
-later builds, Once checks that metadata before reusing the result. Changes to a
+later builds, Struo checks that metadata before reusing the result. Changes to a
 dynamic input invalidate the cached compilation even when the source files did
 not change.
 
@@ -25,13 +25,13 @@ or structs used by another target, should be modeled as separate
 `elixir_library` dependencies. Config and data globs are available to the
 action and are included in cache keys. Config files are loaded before
 compilation using Elixir's config reader so `Application.compile_env` sees the
-same values the target records in compile metadata. Once does not run Mix's
+same values the target records in compile metadata. Struo does not run Mix's
 compile task or require a Mix project during library compilation.
 
 Library compilation does not require a Mix project file by default. Set
 `mix_config` only when a project file should participate in cache keys.
 Dependencies should come from `deps`, not from precompiled build directories
-passed through `compile_args`; otherwise Once cannot cache or rebuild them at
+passed through `compile_args`; otherwise Struo cannot cache or rebuild them at
 target granularity.
 
 Use [`mix_dependencies`](/reference/prelude/mix_dependencies) for third-party
@@ -41,8 +41,8 @@ complete transitive bytecode path without knowing about Hex registry metadata.
 
 ## Development Model
 
-Use `once build <target>` for compile feedback and `once test <target>` for
-tests. When one source file changes, Once recompiles the target. When sources
+Use `struo build <target>` for compile feedback and `struo test <target>` for
+tests. When one source file changes, Struo recompiles the target. When sources
 and recorded dynamic inputs are unchanged, the compiled application can be
 reused from the cache.
 
@@ -54,9 +54,9 @@ After metadata exists, `@external_resource`, `Application.compile_env`, and
 
 Phoenix projects should be represented as a graph instead of one broad target.
 Macros or modules used across target boundaries should be separate
-`elixir_library` targets. Third-party packages should also become Once-owned
+`elixir_library` targets. Third-party packages should also become Struo-owned
 dependency targets; pointing at precompiled build directories is only useful for
-experiments because it puts compilation outside Once.
+experiments because it puts compilation outside Struo.
 
 ## Attributes
 

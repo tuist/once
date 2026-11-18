@@ -9,7 +9,7 @@ time. Illustrative shapes in this design document are not a separate schema.
 
 ## Motivation
 
-Once has no server-facing event stream. A local axum endpoint publishes a
+Struo has no server-facing event stream. A local axum endpoint publishes a
 full run snapshot over Server-Sent Events for whichever local UI is attached,
 but nothing reaches a remote event service, and per-test-case completion is not a
 discrete fire-point. Test results land as a normalized JSON blob written
@@ -34,9 +34,9 @@ state model for LiveView.
 
 ## Decision
 
-Once will emit a stream of typed events over gRPC to the same endpoint
+Struo will emit a stream of typed events over gRPC to the same endpoint
 that serves Bazel Build Event Protocol traffic and, when it lands, remote
-execution. Events are defined in a Once-owned proto package,
+execution. Events are defined in a Struo-owned proto package,
 `once.events.v1`, exposed as a `RunEventService` with a bidirectional
 streaming ingest method, a capabilities call, a project-scoped
 keyed-hash key retrieval call for argument normalization, and a
@@ -48,7 +48,7 @@ service writes into. The projected state is what the dashboard reads;
 individual wire vocabularies stay owned by their emitter.
 
 The Bazel Remote Execution protocol is reused as-is for cache, action
-cache, execution, and byte-stream traffic. Once contributes ingest, not
+cache, execution, and byte-stream traffic. Struo contributes ingest, not
 replacements.
 
 ## Transport
@@ -104,14 +104,14 @@ fields never override it.
 
 ## Naming and package layout
 
-Emitter-scoped: `once.events.v1`. Once owns the vocabulary and evolves
-it on Once's release cadence. A compatible server projects this vocabulary
+Emitter-scoped: `once.events.v1`. Struo owns the vocabulary and evolves
+it on Struo's release cadence. A compatible server projects this vocabulary
 into its run-state model alongside other ingest protocols. Platform query
 and administration services belong to the server and are outside this
 emitter-scoped package.
 
 Version lives in the package name. A breaking change becomes
-`once.events.v2` on the same server for a deprecation window. `v1` is
+`struo.events.v2` on the same server for a deprecation window. `v1` is
 never mutated in a wire-incompatible way. `RunStarted.protocol_version`
 records the sender's chosen version so replay is exact and mismatches
 are logged without breaking the connection.
@@ -193,7 +193,7 @@ Each `GapAdvance` in `gap_advances` must satisfy
 
 The server applies `gap_advances` left-to-right. If any entry falls
 into case 1 the entire batch is rejected and no partial advance is
-committed. Once `gap_advances` processing is complete, the batch's
+committed. Struo `gap_advances` processing is complete, the batch's
 events must be strictly contiguous starting at `seq_from` (that is,
 the batch is self-consistent).
 
@@ -258,7 +258,7 @@ durably projected as an event or durably declared lost by a prior
 `observed_high_water_seq`, optional throttle advice, and
 `finalization`.
 
-Delivery is at-least-once. The server deduplicates by `(run_id, seq)`.
+Delivery is at-least-struo. The server deduplicates by `(run_id, seq)`.
 Duplicates with identical payload are silently accepted; duplicates
 with divergent payload are logged and the later is dropped, since
 first-write-wins.
@@ -395,9 +395,9 @@ The schema exposes only the sanitized shapes:
 argument list left-to-right and emits one `ArgvToken` per position:
 
 1. If the token matches the safe literal allowlist (a small,
-   explicitly enumerated set of Once command words such as `once`,
+   explicitly enumerated set of Struo command words such as `struo`,
    `build`, and `test`), emit
-   `SafeLiteral{value}`. The allowlist is maintained by Once and can
+   `SafeLiteral{value}`. The allowlist is maintained by Struo and can
    never contain a value that could carry secrets.
 2. If the token matches a boolean flag shape (`--flag`, `-x`), emit
    `FlagKey{key}`.
@@ -417,14 +417,14 @@ safe context. Target kinds do not extend this list, and adding a target kind
 never requires a Rust or protocol change.
 
 **Worked examples against the v1 allowlist.** All four variants
-appear in normal Once and Cargo invocations:
+appear in normal Struo and Cargo invocations:
 
-1. `once build //foo:bar` →
-   `[SafeLiteral("once"), SafeLiteral("build"), OpaqueValue(hash("//foo:bar"))]`.
+1. `struo build //foo:bar` →
+   `[SafeLiteral("struo"), SafeLiteral("build"), OpaqueValue(hash("//foo:bar"))]`.
    The target name is never on the allowlist; it hashes.
 2. `toolchain-command test -p package --release` →
    `[OpaqueValue(hash("toolchain-command")), SafeLiteral("test"), FlagKey("-p"), OpaqueValue(hash("package")), FlagKey("--release")]`.
-   The client does not infer that `once-core` belongs to `-p`; it
+   The client does not infer that `struo-core` belongs to `-p`; it
    hashes as its own opaque positional. The projector renders this
    run as `⟨opaque⟩ test -p ⟨opaque⟩ --release` with the opaque token
    as a stable identifier that clusters across runs with the same
@@ -471,7 +471,7 @@ switching would break both server acceptance and cross-run
 clustering. On explicit rotation the client policy is either to
 continue the current run under the old key (accepting the eventual
 soft-degradation if grace expires), or to finalize and start a new
-run under the new key. Once picks the continue-under-old-key
+run under the new key. Struo picks the continue-under-old-key
 default; this trades a small amount of end-of-run clustering
 fidelity for zero risk of splitting a live run.
 
@@ -490,9 +490,9 @@ recorded on the run.
 
 Version, ownership, and distribution:
 
-- The list is owned by the Once maintainers and lives in the Once
+- The list is owned by the Struo maintainers and lives in the Struo
   source tree as a single authoritative file. It is baked into the
-  Once client binary at compile time and consumed by compatible
+  Struo client binary at compile time and consumed by compatible
   server from the same file, published as a small versioned data
   package. Client and server always read the same source.
 - Each release of the list carries a monotonic version string
@@ -500,13 +500,13 @@ Version, ownership, and distribution:
   mismatch through the projection quarantine path above; they do
   not attempt to synthesize allowlist content from either side.
 - The list contains only tokens that are safe to render verbatim in
-  dashboards and that cannot plausibly carry secrets. It contains Once's
+  dashboards and that cannot plausibly carry secrets. It contains Struo's
   own command vocabulary and never contains target-kind, toolchain,
   framework, path, package, target, or user names.
 
 The current client emits these fixed literals:
 
-- Once and its generic command words: `once`, `build`, `test`, `run`, `check`, `install`,
+- Struo and its generic command words: `struo`, `build`, `test`, `run`, `check`, `install`,
   `update`, `lint`, `format`, `fmt`, `bench`, `doc`, `clean`,
   `add`, `remove`, `publish`, `release`, `debug`.
 
@@ -682,7 +682,7 @@ here are the intent; the appendix is the source of truth.
 
 Run lifecycle:
 
-- `run.started` records Once version, protocol version, host class,
+- `run.started` records Struo version, protocol version, host class,
   git revision, argv_normalized, cwd_relative, env_fingerprint, root
   graph digest, project id, and the effective limits chosen at
   capability negotiation.
@@ -755,8 +755,8 @@ same projected state:
 
 - `google.devtools.build.v1.PublishBuildEvent` for Bazel and any
   other BEP producer.
-- `once.events.v1.RunEventService` for Once and future
-  Once-compatible emitters.
+- `once.events.v1.RunEventService` for Struo and future
+  Struo-compatible emitters.
 
 Each service ships with its own projector module. Both projectors
 write into the same tables (runs, run targets, run target instances,
@@ -764,7 +764,7 @@ run target executions, run test cases, run test case executions, run
 logs, run cache decisions, run cache operations, run artifacts).
 LiveView subscribes to the projected state, never to the raw event
 stream. Imported runs can render at target granularity with a result-report link;
-Once runs render with per-case tree updates, per-phase bars, and
+Struo runs render with per-case tree updates, per-phase bars, and
 per-cache-decision detail in real time.
 
 Raw events are retained as an observability and replay feature, not
@@ -777,7 +777,7 @@ disabled it offers projection only.
 
 ## Bringing this online
 
-1. Introduce a typed event bus in the Once core that wraps today's
+1. Introduce a typed event bus in the Struo core that wraps today's
    output observer and publisher without changing user-visible
    behaviour. The local UI becomes the first subscriber.
 2. Add per-test-case, per-phase, and per-cache-decision fire-points
@@ -903,7 +903,7 @@ message ContentRef {
   HashAlgorithm hash_algorithm = 1;
   bytes digest = 2;
   uint64 size_bytes = 3;
-  string namespace = 4;     // optional, e.g. "once.evidence.v1"
+  string namespace = 4;     // optional, e.g. "struo.evidence.v1"
   string media_type = 5;    // optional, e.g. "application/xml"
 }
 
@@ -966,7 +966,7 @@ message RunEvent {
 // ------------ Lifecycle ------------
 
 message RunStarted {
-  string once_version = 1;
+  string struo_version = 1;
   string protocol_version = 2;
   string host_class = 3;
   string git_rev = 4;
@@ -983,7 +983,7 @@ message RunStarted {
 
 message ArgvToken {
   oneof token {
-    string safe_literal = 1;       // matches Once's safe-literal allowlist
+    string safe_literal = 1;       // matches Struo's safe-literal allowlist
     string flag_key = 2;           // e.g. "--release" or "-x"
     NamedValue named_value = 3;    // "--key=value" combined form only
     string opaque_value_hash = 4;  // any other token; hashed opaquely
@@ -1393,7 +1393,7 @@ enum Severity {
 
 Consumers retain every path for display and search. Only `COMMITTED` authorizes a repository source link, subject to ordinary path, revision, and connected-repository validation. Unspecified, unknown, and future enum values remain plain text. A nonempty status list whose length differs from the path list disables links for the entire action. An empty list is legacy metadata, for which consumers may retain their previous linking behavior.
 
-Classifying clients send an `UNKNOWN` entry for every path when collection fails, never an empty list alongside paths. Once snapshots the exact reported revision once per run with a Git tree listing bounded by a shared three-second collection deadline, 32 MiB of output, and 200,000 entries, and reclassifies retained action paths at event ingestion. Revision capture is separately bounded by three seconds. Collection overlaps network preflight; the reporter waits for its immutable result before admitting the first event. Exceeding any collection bound makes every path UNKNOWN, rather than treating a partial tree as complete. Classification does not enter action inputs, observations, fingerprints, or persisted target outcomes. Resends use the already classified event. Presentation size trimming drops each path together with its status.
+Classifying clients send an `UNKNOWN` entry for every path when collection fails, never an empty list alongside paths. Struo snapshots the exact reported revision once per run with a Git tree listing bounded by a shared three-second collection deadline, 32 MiB of output, and 200,000 entries, and reclassifies retained action paths at event ingestion. Revision capture is separately bounded by three seconds. Collection overlaps network preflight; the reporter waits for its immutable result before admitting the first event. Exceeding any collection bound makes every path UNKNOWN, rather than treating a partial tree as complete. Classification does not enter action inputs, observations, fingerprints, or persisted target outcomes. Resends use the already classified event. Presentation size trimming drops each path together with its status.
 
 Commit membership does not prove that the commit has been pushed, nor that a dirty working-copy file matches its committed contents. This extension does not fetch dependency sources or check upstream URLs. Deploy server support before releasing the first client that reports classified source files.
 

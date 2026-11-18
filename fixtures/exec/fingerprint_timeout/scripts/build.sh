@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
-# once fingerprint "sleep 5"
-# once cwd ".."
+# struo fingerprint "sleep 5"
+# struo cwd ".."
 touch should-not-exist

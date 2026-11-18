@@ -1,5 +1,5 @@
 {
-  "name": "once-nx-hello",
+  "name": "struo-nx-hello",
   "version": "0.0.0",
   "private": true,
   "workspaces": ["apps/*", "libs/*"],

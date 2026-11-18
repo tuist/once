@@ -1,0 +1,56 @@
+[package]
+name = "struo-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+remote-microsandbox = ["dep:microsandbox"]
+
+[dependencies]
+struo-cas.workspace = true
+struo-host-tree.workspace = true
+struo-presentation.workspace = true
+
+anyhow.workspace = true
+base64.workspace = true
+blake3.workspace = true
+fd-lock.workspace = true
+futures.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+same-file.workspace = true
+sea-orm.workspace = true
+sea-orm-migration.workspace = true
+sha2.workspace = true
+sysinfo.workspace = true
+thiserror.workspace = true
+tar.workspace = true
+flate2.workspace = true
+zip.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+jsonwebtoken = { version = "10.2.0", default-features = false, features = ["rust_crypto"] }
+libc.workspace = true
+
+[target.'cfg(any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64")))'.dependencies]
+microsandbox = { git = "https://github.com/superradcompany/microsandbox.git", rev = "975b62bfd331df7111b2de9abc1416fc87d7790b", version = "0.5.1", default-features = false, features = ["prebuilt"], optional = true }
+
+[target.'cfg(any(target_os = "linux", target_vendor = "apple"))'.dependencies]
+rustix = { version = "1.1", features = ["fs"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "test-util"] }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+rustix = { version = "1.1", features = ["process"] }
+
+[lints]
+workspace = true

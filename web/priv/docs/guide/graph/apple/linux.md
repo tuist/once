@@ -1,14 +1,14 @@
 # Build iOS Applications on Linux
 
-Once can cross-compile native Apple targets on Linux using Swift and the Darwin
-Swift SDK installed by [xtool](https://xtool.sh). Once still owns compilation,
+Struo can cross-compile native Apple targets on Linux using Swift and the Darwin
+Swift SDK installed by [xtool](https://xtool.sh). Struo still owns compilation,
 linking, resource packaging, caching, and action scheduling. It does not run
 `xtool dev build` behind the scenes.
 
 The [omarchy-apple-dev](https://github.com/joshuaswarren/omarchy-apple-dev)
 project provides an installer and Linux replacements for Apple resource tools.
 Its installer supports Omarchy's Arch-based environment on ARM64 and x86_64.
-Once's integration uses the installed tools and SDK rather than depending on
+Struo's integration uses the installed tools and SDK rather than depending on
 that distribution's package manager.
 
 ## Install the Toolchain
@@ -20,11 +20,11 @@ Follow omarchy-apple-dev's installation guide. You need:
 - `rcodesign` for bundle signing.
 - The Linux `actool`, `momc`, and `ibtool` compatibility tools when your targets
   use asset catalogs, Core Data models, storyboards, or xibs. Their supported
-  resource formats are determined by omarchy-apple-dev, not by Once.
+  resource formats are determined by omarchy-apple-dev, not by Struo.
 - `llvm-lipo` on `PATH` if you build multi-architecture libraries. The xtool
   toolset supplies its linker and archiver but does not always include lipo.
 
-Apple's SDK is not downloaded or redistributed by Once. Obtain Xcode from
+Apple's SDK is not downloaded or redistributed by Struo. Obtain Xcode from
 Apple with an Apple ID and install the SDK with xtool:
 
 ```sh
@@ -40,9 +40,9 @@ XCODE_XIP=/path/to/Xcode.xip ./install-toolchain.sh
 ```
 
 Use the Swift toolchain's own Clang when installing the SDK. Host Clang headers
-from a different compiler version can make SwiftUI fail to compile. Once
+from a different compiler version can make SwiftUI fail to compile. Struo
 resolves both Swift and Clang from the active Swift toolchain for its actions.
-If your toolchain requires a compatibility `LD_LIBRARY_PATH`, Once passes it
+If your toolchain requires a compatibility `LD_LIBRARY_PATH`, Struo passes it
 through to compiler and resource actions and includes it in their cache identity.
 
 ## Build a Starter
@@ -50,8 +50,8 @@ through to compiler and resource actions and includes it in their cache identity
 Materialize the Linux starter in an empty directory:
 
 ```sh
-once edit materialize-example apple_application apple-application-linux
-once build Hello
+struo edit materialize-example apple_application apple-application-linux
+struo build Hello
 ```
 
 The starter links a Swift library into an iOS application. Both targets use:
@@ -64,11 +64,11 @@ minimum_os = "17.0"
 ```
 
 Set `sdk_variant = "device"` on dependencies as well as the application.
-The default remains `"simulator"`; Once does not silently change it on Linux.
+The default remains `"simulator"`; Struo does not silently change it on Linux.
 An iOS device target defaults to ARM64 even on an x86_64 Linux host. Library
 `archs` overrides still apply.
 
-Once discovers SDK and Swift resource paths through
+Struo discovers SDK and Swift resource paths through
 `swift sdk configure darwin <target-triple> --show-configuration`. It uses the
 SDK's Mach-O linker and archiver, rather than the host's ELF tools. SDK contents,
 tool binaries, and the compiler environment contribute to Linux action cache
@@ -87,7 +87,7 @@ omarchy-apple-dev's `install-toolchain.sh --repair`.
 
 ## Deploying and Shipping
 
-By default Once produces an **ad-hoc signed** application bundle, which a
+By default Struo produces an **ad-hoc signed** application bundle, which a
 physical iPhone does not accept. To build an installable development build, give
 the application an Apple Development identity and a development provisioning
 profile that includes the device:
@@ -97,23 +97,23 @@ profile that includes the device:
 platform = "ios"
 sdk_variant = "device"
 minimum_os = "17.0"
-bundle_id = "dev.once.hello"
+bundle_id = "dev.struo.hello"
 signing = "development"
 signing_identity = "/secure/AppleDevelopment.p12"
 signing_identity_password_file = "/secure/AppleDevelopment.password"
 provisioning_profile = "/secure/Hello_Development.mobileprovision"
 ```
 
-Once embeds the profile, derives the signing entitlements from it, and signs
+Struo embeds the profile, derives the signing entitlements from it, and signs
 embedded frameworks and then the application with rcodesign. The identity
 stays where it is on disk; see
 [development signing](/reference/prelude/apple_application#development-signing)
 for how it is validated and kept out of the cache.
 
-Once does not request identities or profiles from Apple, or install the
+Struo does not request identities or profiles from Apple, or install the
 bundle on a device. Use xtool or omarchy-apple-dev for account provisioning and
 USB deployment. Their distribution workflows separately handle App Store
-signing, validation, and App Store Connect uploads; a Once build is not
+signing, validation, and App Store Connect uploads; a Struo build is not
 automatically an App Store-ready archive.
 
 ## Boundaries
@@ -128,6 +128,6 @@ automatically an App Store-ready archive.
   through `binary_swift_plugins` must be Linux executables. SDK-provided macros
   use the SDK's OpenAppleMacros server when installed.
 - Native Xcode and Swift package workspace resolution is not enabled by this
-  integration. Declare native Apple targets in `once.toml` for Linux builds.
+  integration. Declare native Apple targets in `struo.toml` for Linux builds.
 - Mac Catalyst and platforms absent from the SDK are not supported by this
   Linux integration.

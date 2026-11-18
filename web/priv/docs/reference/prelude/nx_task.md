@@ -5,7 +5,7 @@ One task in a native [Nx](https://nx.dev) workspace.
 ## Description
 
 `nx_task` represents a single project and task pair from Nx's project
-graph. Once hashes its declared inputs, schedules it against the resolved
+graph. Struo hashes its declared inputs, schedules it against the resolved
 graph, and runs the task's underlying command directly.
 
 Resolved command executors run directly:
@@ -23,7 +23,7 @@ For `run-commands`, the resolver forwards `options.args` unless the task or
 individual command sets `forwardAllArgs` to false.
 
 Other executors run through the installed Nx `runExecutor` API with the
-resolved project graph and default configuration. Once still owns scheduling,
+resolved project graph and default configuration. Struo still owns scheduling,
 hashing, caching, and output restoration; Nx's task runner is not invoked.
 
 Most attributes on this target are filled in by the `nx_workspace`
@@ -31,7 +31,7 @@ resolver. Declaring an `nx_task` by hand is only necessary when the
 workspace is not fully covered by the `nx` native project.
 
 Commands can invoke installed tools such as `tsc` and `vitest` by name.
-Once prepends `node_modules/.bin` directories from the command's working
+Struo prepends `node_modules/.bin` directories from the command's working
 directory through the workspace root to `PATH`, with the nearest package
 taking precedence, then retains the activated host `PATH` for package
 managers and additional toolchains.
@@ -48,11 +48,11 @@ targets with the same attributes and both build and test capabilities, so test
 prerequisites also execute during builds. Each project produces one normalized,
 cacheable suite batch.
 
-Nx output declarations are cache patterns, not required products. Once stores
+Nx output declarations are cache patterns, not required products. Struo stores
 a required snapshot and a manifest of existing matches, then restores those
 matches to their original workspace paths. An absent coverage directory is
 valid when coverage was not requested. Output patterns use the installed
-Nx version's native matcher. Ordinary Once action outputs remain required.
+Nx version's native matcher. Ordinary Struo action outputs remain required.
 Generated Vite caches under `node_modules/.vite` are not source inputs.
 
 ## Attributes
@@ -90,8 +90,8 @@ The target emits `nx_task`.
 ## Sources
 
 - [Nx executors](https://nx.dev/concepts/executors-and-configurations)
-  describe the per-task contract Once translates.
+  describe the per-task contract Struo translates.
 - [Nx run-commands](https://nx.dev/nx-api/nx/executors/run-commands)
-  defines the shell command executor that Once runs natively.
+  defines the shell command executor that Struo runs natively.
 - [Nx run-script](https://nx.dev/nx-api/nx/executors/run-script) defines
-  the package.json script executor that Once runs natively.
+  the package.json script executor that Struo runs natively.

@@ -27,7 +27,7 @@ start() {
   echo "$!" >"$cache_pid"
 
   (
-    cd "$root/once"
+    cd "$root/struo"
     mise exec -- node control-server.mjs
   ) >"$state/control-server.log" 2>&1 &
   echo "$!" >"$control_pid"

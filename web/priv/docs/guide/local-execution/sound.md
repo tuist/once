@@ -1,6 +1,6 @@
 # The Sound of Your Build
 
-Watching a build for status messages is a poor use of your attention. `once`
+Watching a build for status messages is a poor use of your attention. `struo`
 can play the shape of a running command as a piece of music, so you can hear
 whether things are moving, hitting the cache, or resolving without looking at
 the terminal.
@@ -11,18 +11,18 @@ The feature is off by default. Add `--sound` to any command that runs actions
 invocation.
 
 ```sh
-once --sound build services/api/Api
-once --sound test --all
-once --sound exec -- mise install --yes
+struo --sound build services/api/Api
+struo --sound test --all
+struo --sound exec -- mise install --yes
 ```
 
 When the default audio device is unavailable (headless CI, no audio hardware)
 the flag has no effect and the command runs as if it had not been passed.
 
-On Linux, audio output goes through ALSA, and `once` links against it when it
+On Linux, audio output goes through ALSA, and `struo` links against it when it
 loads, whether or not you pass `--sound`. Minimal images such as
 `debian:*-slim` do not ship it, so install `libasound2` there before running
-`once`:
+`struo`:
 
 ```sh
 apt-get update && apt-get install -y libasound2
@@ -35,7 +35,7 @@ an end, and it evolves in response to what the run is doing.
 
 ### A musical fingerprint per command
 
-Before a run starts, `once` derives a fingerprint from the command being run
+Before a run starts, `struo` derives a fingerprint from the command being run
 (the verb, the target id, or the argv for a low-level exec) and uses it to
 seed the piece. Same command means same fingerprint, which means the same
 musical identity every time. Different commands get their own piece.
@@ -48,8 +48,8 @@ The fingerprint chooses:
 - **Arpeggio base tempo.** Between 2.4 and 4.0 seconds per note.
 - **Shimmer register.** The airy top layer sits at C5 or G5.
 
-`once build services/api/Api` will always sound like `services/api/Api`.
-`once test --all` and `once build services/api/Api` will sound different.
+`struo build services/api/Api` will always sound like `services/api/Api`.
+`struo test --all` and `struo build services/api/Api` will sound different.
 
 ### A pad that evolves through the run
 
@@ -110,7 +110,7 @@ so nothing is left ringing over silence.
   resolution. The reward moment gets to land instead of being buried.
 - **Failure.** The chord shifts to the relative minor and the pad releases.
 
-`once` waits for the release tail to finish before it lets the audio device
+`struo` waits for the release tail to finish before it lets the audio device
 go, so the last few seconds of the piece always reach the speakers.
 
 ## Notes

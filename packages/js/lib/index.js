@@ -4,10 +4,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const koffi = require("koffi");
 
-class OnceError extends Error {
+class StruoError extends Error {
   constructor(message) {
     super(message);
-    this.name = "OnceError";
+    this.name = "StruoError";
   }
 }
 
@@ -36,25 +36,25 @@ class Cache {
   }
 
   version() {
-    return native.once_version() || "";
+    return native.struo_version() || "";
   }
 
   digest(bytes) {
     const buffer = toBuffer(bytes, "Cache#digest bytes");
-    return decodeStringResponse(native.once_digest_bytes(buffer, buffer.length));
+    return decodeStringResponse(native.struo_digest_bytes(buffer, buffer.length));
   }
 
   async putBlob(bytes) {
     const buffer = toBuffer(bytes, "Cache#putBlob bytes");
     return decodeRequest(
-      native.once_cache_put_blob_json,
+      native.struo_cache_put_blob_json,
       { ...this.selection, bytes: Array.from(buffer) },
     );
   }
 
   async putFile(filePath) {
     validatePath(filePath, "filePath");
-    return decodeRequest(native.once_cache_put_file_json, {
+    return decodeRequest(native.struo_cache_put_file_json, {
       ...this.selection,
       path: filePath,
     });
@@ -62,7 +62,7 @@ class Cache {
 
   async getBlob(digest) {
     validateDigest(digest, "digest");
-    const response = decodeRequest(native.once_cache_get_blob_json, {
+    const response = decodeRequest(native.struo_cache_get_blob_json, {
       ...this.selection,
       digest,
     });
@@ -72,7 +72,7 @@ class Cache {
   async getBlobToFile(digest, filePath) {
     validateDigest(digest, "digest");
     validatePath(filePath, "filePath");
-    return decodeRequest(native.once_cache_get_blob_to_file_json, {
+    return decodeRequest(native.struo_cache_get_blob_to_file_json, {
       ...this.selection,
       digest,
       path: filePath,
@@ -81,7 +81,7 @@ class Cache {
 
   async hasBlob(digest) {
     validateDigest(digest, "digest");
-    return decodeRequest(native.once_cache_has_blob_json, {
+    return decodeRequest(native.struo_cache_has_blob_json, {
       ...this.selection,
       digest,
     });
@@ -90,7 +90,7 @@ class Cache {
   async putActionResult(result, actionDigest) {
     validateDigest(actionDigest, "actionDigest");
     return decodeRequest(
-      native.once_cache_put_action_result_json,
+      native.struo_cache_put_action_result_json,
       {
         ...this.selection,
         action_digest: actionDigest,
@@ -102,7 +102,7 @@ class Cache {
   async getActionResult(actionDigest) {
     validateDigest(actionDigest, "actionDigest");
     const result = decodeRequest(
-      native.once_cache_get_action_result_json,
+      native.struo_cache_get_action_result_json,
       { ...this.selection, action_digest: actionDigest },
     );
     return result === null ? null : actionResultFromNative(result);
@@ -111,13 +111,13 @@ class Cache {
   async forgetAction(actionDigest) {
     validateDigest(actionDigest, "actionDigest");
     return decodeRequest(
-      native.once_cache_forget_action_json,
+      native.struo_cache_forget_action_json,
       { ...this.selection, action_digest: actionDigest },
     );
   }
 
   async stats() {
-    const stats = decodeRequest(native.once_cache_stats_json, this.selection);
+    const stats = decodeRequest(native.struo_cache_stats_json, this.selection);
     return {
       blobCount: stats.blob_count,
       blobBytes: stats.blob_bytes,
@@ -151,7 +151,7 @@ class ActionKey {
   }
 
   digest() {
-    return decodeRequest(native.once_action_key_json, {
+    return decodeRequest(native.struo_action_key_json, {
       namespace: this.namespace,
       inputs: this.inputs,
     });
@@ -173,20 +173,20 @@ function decodeRequest(fn, request) {
 
 function decodeResponse(pointer) {
   if (pointer == null) {
-    throw new OnceError("native Once function returned null");
+    throw new StruoError("native Struo function returned null");
   }
   let response;
   try {
     response = JSON.parse(pointer);
   } catch (error) {
-    throw new OnceError(
-      `native Once response must be valid JavaScript Object Notation: ${error.message}`,
+    throw new StruoError(
+      `native Struo response must be valid JavaScript Object Notation: ${error.message}`,
     );
   }
   if (response.status === "ok") {
     return response.value;
   }
-  throw new OnceError(response.message || "Once native call failed");
+  throw new StruoError(response.message || "Struo native call failed");
 }
 
 function actionResultToNative(result) {
@@ -209,7 +209,7 @@ function actionResultFromNative(result) {
 
 function validateDigest(value, name) {
   if (typeof value !== "string" || !DIGEST_PATTERN.test(value)) {
-    throw new OnceError(`${name} must be a lowercase BLAKE3 hex digest`);
+    throw new StruoError(`${name} must be a lowercase BLAKE3 hex digest`);
   }
 }
 
@@ -240,67 +240,67 @@ function toBuffer(bytes, name) {
 
 function loadNative() {
   const library = koffi.load(resolveLibraryPath());
-  const onceStringFree = library.func("void once_string_free(void *value)");
-  const onceString = koffi.disposable("OnceString", "str", onceStringFree);
+  const struoStringFree = library.func("void struo_string_free(void *value)");
+  const struoString = koffi.disposable("StruoString", "str", struoStringFree);
 
   return {
-    once_version: library.func("once_version", onceString, []),
-    once_digest_bytes: library.func("once_digest_bytes", onceString, [
+    struo_version: library.func("struo_version", struoString, []),
+    struo_digest_bytes: library.func("struo_digest_bytes", struoString, [
       "const void *",
       "size_t",
     ]),
-    once_action_key_json: library.func("once_action_key_json", onceString, [
+    struo_action_key_json: library.func("struo_action_key_json", struoString, [
       "str",
     ]),
-    once_cache_put_blob_json: library.func(
-      "once_cache_put_blob_json",
-      onceString,
+    struo_cache_put_blob_json: library.func(
+      "struo_cache_put_blob_json",
+      struoString,
       ["str"],
     ),
-    once_cache_put_file_json: library.func(
-      "once_cache_put_file_json",
-      onceString,
+    struo_cache_put_file_json: library.func(
+      "struo_cache_put_file_json",
+      struoString,
       ["str"],
     ),
-    once_cache_get_blob_json: library.func(
-      "once_cache_get_blob_json",
-      onceString,
+    struo_cache_get_blob_json: library.func(
+      "struo_cache_get_blob_json",
+      struoString,
       ["str"],
     ),
-    once_cache_get_blob_to_file_json: library.func(
-      "once_cache_get_blob_to_file_json",
-      onceString,
+    struo_cache_get_blob_to_file_json: library.func(
+      "struo_cache_get_blob_to_file_json",
+      struoString,
       ["str"],
     ),
-    once_cache_has_blob_json: library.func(
-      "once_cache_has_blob_json",
-      onceString,
+    struo_cache_has_blob_json: library.func(
+      "struo_cache_has_blob_json",
+      struoString,
       ["str"],
     ),
-    once_cache_put_action_result_json: library.func(
-      "once_cache_put_action_result_json",
-      onceString,
+    struo_cache_put_action_result_json: library.func(
+      "struo_cache_put_action_result_json",
+      struoString,
       ["str"],
     ),
-    once_cache_get_action_result_json: library.func(
-      "once_cache_get_action_result_json",
-      onceString,
+    struo_cache_get_action_result_json: library.func(
+      "struo_cache_get_action_result_json",
+      struoString,
       ["str"],
     ),
-    once_cache_forget_action_json: library.func(
-      "once_cache_forget_action_json",
-      onceString,
+    struo_cache_forget_action_json: library.func(
+      "struo_cache_forget_action_json",
+      struoString,
       ["str"],
     ),
-    once_cache_stats_json: library.func("once_cache_stats_json", onceString, [
+    struo_cache_stats_json: library.func("struo_cache_stats_json", struoString, [
       "str",
     ]),
   };
 }
 
 function resolveLibraryPath() {
-  if (process.env.ONCE_LIBRARY_PATH) {
-    return process.env.ONCE_LIBRARY_PATH;
+  if (process.env.STRUO_LIBRARY_PATH) {
+    return process.env.STRUO_LIBRARY_PATH;
   }
 
   const candidate = path.join(
@@ -314,26 +314,26 @@ function resolveLibraryPath() {
     return candidate;
   }
 
-  throw new OnceError(
-    `missing native Once library for ${process.platform}-${process.arch}; ` +
-      "set ONCE_LIBRARY_PATH or install a package that includes this platform",
+  throw new StruoError(
+    `missing native Struo library for ${process.platform}-${process.arch}; ` +
+      "set STRUO_LIBRARY_PATH or install a package that includes this platform",
   );
 }
 
 function libraryName() {
   switch (process.platform) {
     case "darwin":
-      return "libonce.dylib";
+      return "libstruo.dylib";
     case "win32":
-      return "once.dll";
+      return "struo.dll";
     default:
-      return "libonce.so";
+      return "libstruo.so";
   }
 }
 
 module.exports = {
   ActionKey,
   Cache,
-  OnceError,
+  StruoError,
   digest,
 };

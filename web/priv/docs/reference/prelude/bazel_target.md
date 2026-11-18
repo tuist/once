@@ -1,34 +1,34 @@
 # `bazel_target`
 
 Resolver-generated [Bazel](https://bazel.build) library-style rule
-materialized as a Once graph target.
+materialized as a Struo graph target.
 
 ## Description
 
 `bazel_target` is created by the
 [`bazel_workspace`](/reference/prelude/bazel_workspace) resolver for every
 rule whose class does not end in `_test` or `_binary`. Direct authoring of
-`bazel_target` in `once.toml` is rejected: the resolver must materialize it
+`bazel_target` in `struo.toml` is rejected: the resolver must materialize it
 so the `bazel_label` and `bazel_rule_kind` attributes stay tied to real
 Bazel state.
 
 `bazel_target` reads the action graph for its label through
 `bazel aquery` and executes the selected default output, runfiles and validation
-closure from `<workspace>/.once/bazel-actions/`. Bazel supplies analysis and
+closure from `<workspace>/.struo/bazel-actions/`. Bazel supplies analysis and
 external repository downloads. `bazel build` is not invoked in the ownership
 path. Owned spawns have explicit environments and declared inputs and outputs;
 spawn caching additionally requires complete `toolchain_inputs`. File writes,
-aliases and manifest-mapped runfiles use cacheable Once primitives.
+aliases and manifest-mapped runfiles use cacheable Struo primitives.
 
-Before a spawn executes on a cache miss, Once removes its declared outputs,
+Before a spawn executes on a cache miss, Struo removes its declared outputs,
 matching Bazel's clean-output contract. Warm hits restore those outputs instead
 of rerunning the command.
 
 Unknown required action contracts fall back to `bazel build <label>` and
 record the unsupported mnemonics on the provider. Delegated commands remain
-uncached by Once.
+uncached by Struo.
 
-Ownership-mode outputs land under `<workspace>/.once/bazel-actions/bazel-out/`.
+Ownership-mode outputs land under `<workspace>/.struo/bazel-actions/bazel-out/`.
 Fallback-mode outputs land under Bazel's `bazel-bin` and `bazel-out` as
 usual.
 
@@ -55,13 +55,13 @@ The target emits `bazel_target` and exposes only the `build` capability. Use
 list the materialized rules and their labels:
 
 ```sh
-once query targets
+struo query targets
 ```
 
-Build one label without leaving the Once command surface:
+Build one label without leaving the Struo command surface:
 
 ```sh
-once bazel build //src:kura_lib
+struo bazel build //src:kura_lib
 ```
 
 See the [`bazel_workspace`](/reference/prelude/bazel_workspace) reference for

@@ -2,7 +2,7 @@
 
 ## Decision
 
-Existing Dockerfiles are an input language for Once actions. Users should
+Existing Dockerfiles are an input language for Struo actions. Users should
 not have to rewrite recipes as image-layer target declarations to gain
 instruction-level caching and scheduling.
 
@@ -65,9 +65,9 @@ depth order so independent stages stay adjacent and can share bounded
 scheduler batches. Their dependencies remain ordinary snapshot inputs.
 
 The explicit cacheability decision applies to each instruction. Pulling
-mutable base images and reusing Once action results are incompatible, and a
+mutable base images and reusing Struo action results are incompatible, and a
 cacheable declaration must name its platform. BuildKit workers require their
-own memory budgets. The Once client stays within generic action admission.
+own memory budgets. The Struo client stays within generic action admission.
 
 Remote BuildKit builders execute the same individual instruction contracts
 and return their declared snapshots. This does not introduce a Docker-specific

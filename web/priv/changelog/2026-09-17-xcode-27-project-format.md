@@ -3,7 +3,7 @@ title: Read the Xcode 27.2 project.xcproj JSON manifest
 date: 2026-09-17
 ---
 
-Once now recognizes the JSON-based `project.xcproj` manifest that Xcode 27.2
+Struo now recognizes the JSON-based `project.xcproj` manifest that Xcode 27.2
 writes alongside, or in place of, the classic OpenStep `project.pbxproj`. A
 converted project resolves through the same `xcode_workspace` target kind as
 before, so target names, discovery, and downstream build actions stay

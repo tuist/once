@@ -24,14 +24,14 @@ the requested application build. A tiny C archive is packaged as a binary
 framework for macOS and the iPhone simulator during fixture setup, exercising
 destination-specific imports without downloading vendor binaries.
 
-Both fixtures are offline, use real native manifests, and need no `once.toml`.
+Both fixtures are offline, use real native manifests, and need no `struo.toml`.
 Tests compile only the requested small macOS closure. They inspect the iPhone
 graph without starting a simulator or compiling that application. Implicit
 compiler modules keep this graph-focused suite independent of the more
 expensive explicit-module acceptance tests. No fixture performs network
-fetches, builds upstream applications, or recompiles the Once executable.
+fetches, builds upstream applications, or recompiles the Struo executable.
 
-A user-reported graph problem arrives as a `once query graph-repro` export:
+A user-reported graph problem arrives as a `struo query graph-repro` export:
 native manifests with their contents and empty placeholders for every other
 file. Reduce it to the smallest shape that still reproduces the problem before
 adding it here, and replace placeholder sources with tiny original programs

@@ -22,15 +22,15 @@ Describe 'Xcode asset symbol setting'
 
   exercise_asset_symbols() {
     cp -R "$REPO_ROOT/fixtures/xcode_asset_symbols/." "$WORKSPACE/"
-    app="$WORKSPACE/.once/out/Assets/Assets.app"
-    ONCE_CHANGE_TRACKER=0 once build Assets --format json > "$WORKSPACE/build.json" 2> "$WORKSPACE/build.err" || { cat "$WORKSPACE/build.err"; return 1; }
-    [ -s "$WORKSPACE/.once/out/Assets/Assets.app/Contents/Resources/Assets.car" ] || return 1
-    [ ! -e "$WORKSPACE/.once/out/Assets/GeneratedAssetSymbols.swift" ] || return 1
+    app="$WORKSPACE/.struo/out/Assets/Assets.app"
+    STRUO_CHANGE_TRACKER=0 struo build Assets --format json > "$WORKSPACE/build.json" 2> "$WORKSPACE/build.err" || { cat "$WORKSPACE/build.err"; return 1; }
+    [ -s "$WORKSPACE/.struo/out/Assets/Assets.app/Contents/Resources/Assets.car" ] || return 1
+    [ ! -e "$WORKSPACE/.struo/out/Assets/GeneratedAssetSymbols.swift" ] || return 1
     check_asset_color || return 1
     sed -i '' 's/ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS = NO/ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS = YES/' "$WORKSPACE/Assets.xcodeproj/project.pbxproj"
     sed -i '' '/extension NSColor {/,/^}/d' "$WORKSPACE/main.swift"
-    ONCE_CHANGE_TRACKER=0 once build Assets --format json > "$WORKSPACE/build.json" 2> "$WORKSPACE/build.err" || { cat "$WORKSPACE/build.err"; return 1; }
-    [ -s "$WORKSPACE/.once/out/Assets/GeneratedAssetSymbols.swift" ] || return 1
+    STRUO_CHANGE_TRACKER=0 struo build Assets --format json > "$WORKSPACE/build.json" 2> "$WORKSPACE/build.err" || { cat "$WORKSPACE/build.err"; return 1; }
+    [ -s "$WORKSPACE/.struo/out/Assets/GeneratedAssetSymbols.swift" ] || return 1
     check_asset_color || return 1
   }
 

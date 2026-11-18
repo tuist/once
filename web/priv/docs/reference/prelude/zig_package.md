@@ -17,7 +17,7 @@ through target and dependency queries.
 | `package_fingerprint` | string | no | Stable fingerprint declared by modern Zig package manifests |
 | `source_root` | string | yes | Materialized package source directory |
 | `source_url` | string | no | Source location recorded by the parent manifest |
-| `source_hash` | string | no | Zig content multihash recorded by the declaring manifest. Once preserves it but does not reimplement Zig's source verification |
+| `source_hash` | string | no | Zig content multihash recorded by the declaring manifest. Struo preserves it but does not reimplement Zig's source verification |
 | `source_path` | string | no | Local package path recorded by the parent manifest |
 | `lazy` | boolean | no | Whether the package is marked for lazy fetching |
 

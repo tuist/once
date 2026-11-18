@@ -1,7 +1,7 @@
 # Cache comparison report
 
 Measured on 26 July 2026 on an Apple silicon macOS host. The benchmark used
-Bazel 9.2.0, Buck2 2026-07-15, Once built in release mode, bazel-remote 2.6.2,
+Bazel 9.2.0, Buck2 2026-07-15, Struo built in release mode, bazel-remote 2.6.2,
 and hyperfine 1.20.0.
 
 ## Scope
@@ -38,12 +38,12 @@ runs per client.
 | --- | ---: | ---: | ---: | ---: |
 | Bazel | 2.016 s | 2.071 s | 1.761 to 2.311 s | 15 of 15 |
 | Buck2 | 0.697 s | 0.509 s | 0.452 to 1.854 s | 15 of 15 |
-| Once | 0.061 s | 0.042 s | 0.037 to 0.241 s | 15 of 15 |
+| Struo | 0.061 s | 0.042 s | 0.037 to 0.241 s | 15 of 15 |
 
 The Bazel and Buck2 results include a fresh daemon after each clean. Their
-ranges therefore include daemon startup. Once starts a fresh process on every
+ranges therefore include daemon startup. Struo starts a fresh process on every
 invocation and is 11.4 times faster than Buck2 and 33.0 times faster than Bazel
-by mean in this clean-client scenario. Once's first sample was a 241-millisecond
+by mean in this clean-client scenario. Struo's first sample was a 241-millisecond
 outlier; its other nine samples were between 37 and 45 milliseconds. A separate
 30-run stable repeat measured a 36.27-millisecond median.
 
@@ -53,11 +53,11 @@ outlier; its other nine samples were between 37 and 45 milliseconds. A separate
 | --- | ---: | ---: | ---: |
 | Bazel | 0.868 s | 0.786 s | 0.570 to 1.491 s |
 | Buck2 | 0.059 s | 0.058 s | 0.054 to 0.068 s |
-| Once | 0.021 s | 0.020 s | 0.019 to 0.026 s |
+| Struo | 0.021 s | 0.020 s | 0.019 to 0.026 s |
 
-Once is 41.4 times faster than Bazel and 2.83 times faster than Buck2 by mean
-on a local hit. Buck2 uses a long-lived process, while Once starts a fresh
-process for every build. Once's 21-millisecond mean covers process startup,
+Struo is 41.4 times faster than Bazel and 2.83 times faster than Buck2 by mean
+on a local hit. Buck2 uses a long-lived process, while Struo starts a fresh
+process for every build. Struo's 21-millisecond mean covers process startup,
 graph loading, analysis, 15 local action-cache probes, validation of the
 requested output, and no output rewrite when its digest and permissions still
 match.
@@ -88,7 +88,7 @@ across 40 runs with literal-root pruning, versus 127.61 milliseconds when an
 equivalent wildcard forced full traversal. Wildcard-first patterns keep the
 previous complete scan.
 
-### Once before and after
+### Struo before and after
 
 | Scenario | Before | After | Improvement |
 | --- | ---: | ---: | ---: |
@@ -107,26 +107,26 @@ An isolated clean-client probe against the populated server produced:
 | --- | ---: | ---: | ---: |
 | Bazel | 15 | 1 streamed read | 1 mebibyte |
 | Buck2 | 15 | 1 batched read | 1 mebibyte |
-| Once | 15 | 1 batched read | 1 mebibyte |
+| Struo | 15 | 1 batched read | 1 mebibyte |
 
 Bazel's top-level download policy and Buck2's deferred materialization fetch
-only the requested distribution artifact. Once now does the same. Its remote
+only the requested distribution artifact. Struo now does the same. Its remote
 action metadata carries the native output digests needed to construct
 downstream action keys, so a hit does not require the output body. Intermediate
 outputs are downloaded only if a downstream action misses and must execute.
 
-Once also negotiates Zstandard compression for blobs that do need to move.
+Struo also negotiates Zstandard compression for blobs that do need to move.
 Real compiler outputs will usually compress less than this deterministic
 fixture, so avoiding the transfer remains more valuable than compressing it.
 
 ## Cache effectiveness
 
-Before the transfer changes in this work, a clean Once client recovered only 5
+Before the transfer changes in this work, a clean Struo client recovered only 5
 of the 15 actions. Outputs above the unary message limit failed to upload or
 download. Remote write failures were ignored, so the build still appeared
 successful and the loss in future hit rate was silent.
 
-After the changes, the same probe returns all 15 action results. Once uses the
+After the changes, the same probe returns all 15 action results. Struo uses the
 Remote Execution protocol's byte stream for large blobs, validates every
 response and digest, reports remote write failures through structured logging,
 and can consume native action metadata without fetching intermediate blobs.
@@ -142,7 +142,7 @@ The graph's content-derived keys provide the expected invalidation boundaries:
 The action keys are strong enough to preserve these boundaries in all three
 workspaces.
 
-## Changes made to Once
+## Changes made to Struo
 
 The remote provider now:
 
@@ -170,7 +170,7 @@ The remote provider now:
 
 The graph executor now:
 
-- stores native Once action metadata in remote action results
+- stores native Struo action metadata in remote action results
 - reconstructs downstream action keys from metadata without downloading output
   bodies
 - materializes only requested top-level outputs on cache hits
@@ -211,10 +211,10 @@ dedicated logging thread.
 
 ## Next opportunities
 
-Once is now nearly three times as fast as Buck2 on this local-hit workload
+Struo is now nearly three times as fast as Buck2 on this local-hit workload
 without keeping a process alive. The benchmark shell wrapper alone measures
 about 6 milliseconds, while the full local hit measures about 18 to 20
-milliseconds on a quiet repeat. A persistent Once service could remove more
+milliseconds on a quiet repeat. A persistent Struo service could remove more
 startup work, but it now has a small payoff and would add lifecycle and
 invalidation complexity.
 
@@ -245,5 +245,5 @@ mise exec -- shellspec
 benchmarks/cache-comparison/verify-fixtures.sh
 ```
 
-The Once benchmark module and its 15-target workspace also pass the structured
+The Struo benchmark module and its 15-target workspace also pass the structured
 module and workspace validators.

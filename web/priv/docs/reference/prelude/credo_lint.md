@@ -11,9 +11,9 @@ srcs = ["lib/**/*.ex"]
 ```
 
 Optional attributes are `mix`, `config`, `data`, `args`, and `cwd`. The target
-emits `once_lint_info` and exposes the `lint` capability.
+emits `struo_lint_info` and exposes the `lint` capability.
 
-Use `once query schema credo_lint` for the complete contract and
-`once query example credo_lint credo-lint-minimal` for the starter files.
+Use `struo query schema credo_lint` for the complete contract and
+`struo query example credo_lint credo-lint-minimal` for the starter files.
 The [Linting guide](/guide/graph/linting) covers materialization, execution,
 failure policy, normalized findings, and cache verification.

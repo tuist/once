@@ -1,2 +1,2 @@
 const { greet } = require("greeter");
-console.log(greet("Once"));
+console.log(greet("Struo"));

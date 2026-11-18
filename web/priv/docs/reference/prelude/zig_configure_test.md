@@ -1,11 +1,11 @@
 # `zig_configure_test`
 
-Once-native configured Zig test target.
+Struo-native configured Zig test target.
 
 ## Description
 
 Compiles a Zig test binary with `zig test --test-no-exec`, then runs that
-binary through Once's generic test capability. Configuration is declared
+binary through Struo's generic test capability. Configuration is declared
 directly on the target with attributes such as `mode`, `threaded`,
 `zig_version`, and `zigopt`.
 
@@ -32,7 +32,7 @@ This target accepts the complete attribute set documented by
 
 ## Providers
 
-The target emits `zig_test` and `once_test_info`.
+The target emits `zig_test` and `struo_test_info`.
 
 ## Capabilities
 

@@ -3,12 +3,12 @@ title: "Immutable artifacts and explicit publication"
 date: 2026-10-29
 ---
 
-Once can now export immutable, content-addressed build artifacts and publish
+Struo can now export immutable, content-addressed build artifacts and publish
 them independently of its action cache. Artifacts can contain arbitrary data
 with optional versioned consumption contracts. Infrastructure owns distribution
 and how people use the content.
 
-Use `once query artifacts`, `once artifact export`, and `once artifact publish`,
+Use `struo query artifacts`, `struo artifact export`, and `struo artifact publish`,
 or their matching MCP tools. The built-in `artifact` target packages selected
 files; Apple application targets export bundles and native metadata.
 Local publication retains self-contained packages. The Tuist compatibility

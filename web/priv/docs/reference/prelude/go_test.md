@@ -30,7 +30,7 @@ library or binary sources into the test package.
 
 ## Providers, Capabilities, and Outputs
 
-The target emits `go_package` and `once_test_info`.
+The target emits `go_package` and `struo_test_info`.
 
 | Capability | Output groups | Requires |
 | --- | --- | --- |
@@ -38,7 +38,7 @@ The target emits `go_package` and `once_test_info`.
 | `test` | `default`, `test_results`, `logs`, `coverage` | `binary` |
 
 The test action writes `test_results.json`, `go-test.log`, and
-`native_results.jsonl` under `.once/out/<target>/test/`. With coverage enabled,
+`native_results.jsonl` under `.struo/out/<target>/test/`. With coverage enabled,
 it also writes `coverage.out` and records it in the normalized artifacts map.
 Benchmarks are discovered as skipped units during a normal test run and can be
 selected exactly later. Test execution requires the host operating system and

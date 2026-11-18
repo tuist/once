@@ -28,8 +28,8 @@ The target exposes `build` and `run` with the `default` output group. Running
 requires the built executable and its staged runtime dependencies.
 
 ```sh
-once query schema apple_executable
-once query example apple_executable apple-executable-minimal
+struo query schema apple_executable
+struo query example apple_executable apple-executable-minimal
 ```
 
 See [Xcode Projects](/guide/graph/apple/xcode) when adopting an existing project.

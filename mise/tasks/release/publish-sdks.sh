@@ -50,16 +50,16 @@ cp -R packages/ruby/. "${stage_dir}/ruby/"
 rm -rf "${stage_dir}/js/node_modules" "${stage_dir}/ruby/"*.gem
 
 npm_has_version() {
-  npm view "buildonce@${version}" version >/dev/null 2>&1
+  npm view "buildstruo@${version}" version >/dev/null 2>&1
 }
 
 gem_has_version() {
-  # `gem list --remote` prints `buildonce (0.53.1, 0.53.0, ...)`, so the
+  # `gem list --remote` prints `buildstruo (0.53.1, 0.53.0, ...)`, so the
   # version list is unwrapped and matched whole to avoid 0.5.4 matching
   # 0.54.0. grep runs without -q so that it drains the pipeline instead of
   # closing it early and tripping pipefail on a SIGPIPE from tr.
-  gem list --remote --exact --all buildonce 2>/dev/null |
-    sed -n 's/^buildonce (\(.*\))$/\1/p' |
+  gem list --remote --exact --all buildstruo 2>/dev/null |
+    sed -n 's/^buildstruo (\(.*\))$/\1/p' |
     tr ',' '\n' |
     sed 's/[[:space:]]//g' |
     grep -Fx "${version}" >/dev/null
@@ -67,7 +67,7 @@ gem_has_version() {
 
 publish_npm() {
   if npm_has_version; then
-    echo "buildonce@${version} is already on npm; skipping"
+    echo "buildstruo@${version} is already on npm; skipping"
     return 0
   fi
 
@@ -93,14 +93,14 @@ publish_npm() {
 
 publish_gem() {
   if gem_has_version; then
-    echo "buildonce ${version} is already on RubyGems; skipping"
+    echo "buildstruo ${version} is already on RubyGems; skipping"
     return 0
   fi
 
   (
     cd "${stage_dir}/ruby" &&
-      ONCE_VERSION="${version}" gem build once.gemspec &&
-      gem push "buildonce-${version}.gem"
+      STRUO_VERSION="${version}" gem build struo.gemspec &&
+      gem push "buildstruo-${version}.gem"
   )
 }
 
@@ -114,6 +114,6 @@ publish_npm || failures+=("npm")
 publish_gem || failures+=("RubyGems")
 
 if ((${#failures[@]} > 0)); then
-  echo "failed to publish buildonce ${version} to: ${failures[*]}" >&2
+  echo "failed to publish buildstruo ${version} to: ${failures[*]}" >&2
   exit 1
 fi

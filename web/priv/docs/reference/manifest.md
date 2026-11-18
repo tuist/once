@@ -1,27 +1,27 @@
-# `once.toml` Manifest
+# `struo.toml` Manifest
 
-Once uses `once.toml` files for workspace configuration and typed graph
+Struo uses `struo.toml` files for workspace configuration and typed graph
 targets. The file at the workspace root owns settings shared by the whole
 repository. Additional manifests declare targets for the package directory
 that contains them.
 
 Script execution metadata does not belong in a manifest. Annotated scripts
-keep their contract in `# once` headers described by
+keep their contract in `# struo` headers described by
 [Scripted Automation](/guide/scripted/).
 
 ## Discovery
 
-By default, Once discovers every `once.toml` below the workspace root while
+By default, Struo discovers every `struo.toml` below the workspace root while
 skipping hidden directories. The root manifest can limit that scan:
 
 ```toml
 [workspace]
-include = ["apps/*/once.toml", "packages/*/once.toml"]
-exclude = ["packages/experimental/once.toml"]
+include = ["apps/*/struo.toml", "packages/*/struo.toml"]
+exclude = ["packages/experimental/struo.toml"]
 ```
 
 `include` and `exclude` contain workspace-relative glob patterns. They match
-both `once.toml` manifests and native project markers such as `Cargo.toml` and
+both `struo.toml` manifests and native project markers such as `Cargo.toml` and
 `mix.exs`. An excluded path is always omitted. When `include` is empty, every
 discovered manifest and native project is included unless `exclude` removes
 it.
@@ -73,14 +73,14 @@ arch = "arm64"
 tokens = ["release"]
 ```
 
-Once normalizes common operating system and architecture names. For example,
+Struo normalizes common operating system and architecture names. For example,
 `darwin` becomes `macos`, `arm64` becomes `aarch64`, and `amd64` becomes
 `x86_64`. The ordered selection tokens include the most specific
 operating-system and architecture combinations, their aliases, the individual
-values, the additional `tokens`, and `default`. Use `once query workspace` to
+values, the additional `tokens`, and `default`. Use `struo query workspace` to
 inspect the exact configuration seen by target kinds.
 
-`once build`, `once lint`, `once run`, and `once test` accept `--config`
+`struo build`, `struo lint`, `struo run`, and `struo test` accept `--config`
 overrides that layer on top of these workspace defaults for a single
 invocation. See the [configurations guide](/guide/graph/configuration) for
 the override model, precedence, and how outputs stay separated.
@@ -142,14 +142,14 @@ Every target accepts these common fields:
 | --- | --- | --- |
 | `name` | yes | Name unique within the package. |
 | `kind` | yes | Target kind that defines attributes, dependencies, providers, and capabilities. |
-| `srcs` | no | Package-relative source paths or glob patterns. Paths starting with `.once/` refer to runtime state at the workspace root. |
+| `srcs` | no | Package-relative source paths or glob patterns. Paths starting with `.struo/` refer to runtime state at the workspace root. |
 | `deps` | no | Target identifiers consumed by this target. |
 | `dependencies` | no | Named dependency roles declared by the target kind. Each role contains target identifiers and validates its own provider contract. |
 | `visibility` | no | Consumers allowed to depend on this target. An empty list is public. |
 | `attrs` | no | Target-kind-specific values validated against the selected schema. |
 
 Unknown manifest fields are rejected. Use
-[`once query schema <kind>`](/reference/cli/query/schema) to inspect the
+[`struo query schema <kind>`](/reference/cli/query/schema) to inspect the
 attributes and dependency contracts accepted by a target kind.
 
 Use `deps` for the target kind's default dependency role. Use
@@ -169,7 +169,7 @@ link_deps = ["./native"]
 Validation checks each role against its matching schema entry. Analysis keeps
 `deps` in declared order and exposes the other roles separately, so a target
 kind can distinguish compiler plug-ins, runtime-only dependencies, native
-links, and other semantics without hardcoding them in Once.
+links, and other semantics without hardcoding them in Struo.
 Target kinds can also set minimum and maximum counts for each role. Validation
 reports an attribute-scoped repair before an edit can commit too few or too
 many dependencies.
@@ -177,7 +177,7 @@ many dependencies.
 ## Target Identifiers
 
 A target identifier combines its package path and target name. A target named
-`hello` in `apps/hello/once.toml` has the identifier `apps/hello/hello`. A
+`hello` in `apps/hello/struo.toml` has the identifier `apps/hello/hello`. A
 target in the root manifest uses its name directly.
 
 Dependency references resolve as follows:
@@ -186,11 +186,11 @@ Dependency references resolve as follows:
 - `./support` is relative to the package containing the current manifest.
 - `../shared/shared` moves from the current package to a sibling package.
 
-Use one of these identifiers with `once query target`, `once build`, `once
-run`, and `once test`.
+Use one of these identifiers with `struo query target`, `struo build`, `struo
+run`, and `struo test`.
 
 Target-valued entries under `[target.attrs]` use the same normalization rules.
-`once query validate-workspace` checks that these references resolve to a
+`struo query validate-workspace` checks that these references resolve to a
 declared target.
 
 ## Visibility
@@ -237,7 +237,7 @@ rejects other values with the target, attribute, and accepted replacements.
 Schemas can report `disallowed_values` when only a small reserved set should
 be rejected. Validation ignores surrounding whitespace for those comparisons
 and reports an attribute-scoped replacement before analysis.
-Generic target kinds use the tokens returned by `once query workspace`.
+Generic target kinds use the tokens returned by `struo query workspace`.
 Ecosystem target kinds can add their own tokens and restrictions.
 
 ## Inspect
@@ -245,9 +245,9 @@ Ecosystem target kinds can add their own tokens and restrictions.
 Use the graph before running work:
 
 ```sh
-once query targets
-once query target apps/hello/hello
-once query schema rust_binary
+struo query targets
+struo query target apps/hello/hello
+struo query schema rust_binary
 ```
 
 These commands show resolved target identifiers, selected target kinds,

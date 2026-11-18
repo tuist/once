@@ -13,7 +13,7 @@ Buck behavior, not Buck2 behavior.
 
 ## Implementation Status
 
-The **Once now** assessments below record the original resource-domain boundary
+The **Struo now** assessments below record the original resource-domain boundary
 reviewed for this research. The subsequent
 [hardening implementation](0014-executor-hardening.md) tracks the safeguards,
 fault tests, and remaining feature gates. Historical evidence is retained here
@@ -26,7 +26,7 @@ failures happen where individually reasonable subsystems compose: graph fan-out
 with client admission, cancellation with shared work, cache metadata with blob
 retention, or transport retries with execution ownership.
 
-Once should preserve these invariants:
+Struo should preserve these invariants:
 
 1. Placement never establishes result equivalence by itself.
 2. Every execution branch independently satisfies the action's requirements.
@@ -57,7 +57,7 @@ a maintainer explains that absolute working directories are keyed intentionally
 because tools can embed them in outputs. Removing paths from a hash is not safe
 unless execution paths or tool behavior are normalized too.
 
-**Once now.** Provider bindings and resource estimates remain conservatively
+**Struo now.** Provider bindings and resource estimates remain conservatively
 keyed. Native commands clear the inherited environment and install their declared
 environment, but this does not identify every system tool, library, or file a
 command can read. A mutable hosted image or template name does not become
@@ -92,7 +92,7 @@ local sandboxing through a localhost RE service would conflict with assumptions
 about a single CAS and add input-transfer overhead. A uniform interface need not
 mean every local operation should traverse gRPC.
 
-**Once now.** Graph execution remains local. Scripts select one executor, unknown
+**Struo now.** Graph execution remains local. Scripts select one executor, unknown
 adapters fail, and unsupported adapter requirements are rejected. There is no
 implicit host fallback or speculative race.
 
@@ -120,7 +120,7 @@ tool parallelism: admitting N commands can start N times M child processes.
 file downloads, CDN rate limiting, and file-descriptor exhaustion on large
 unvendored dependency sets, even with deferred materialization and remote consumers.
 
-**Once now.** Hosted requests reserve client memory rather than guest CPU/memory,
+**Struo now.** Hosted requests reserve client memory rather than guest CPU/memory,
 and cloned runners share a hosted quota. Cache output restoration has memory-only
 admission. However, the default hosted quota is still derived from host parallelism,
 graph batching and event worker slots still assume local work, and independently
@@ -160,7 +160,7 @@ confirmed a fix with a reproducer, and maintainers recorded its inclusion in the
 8.4.0 line. It was a lifecycle interaction between dynamic execution, workers,
 and cancellation, not simply a semaphore configured too small.
 
-**Once now.** Sandbox cleanup holds a shared execution permit after foreground
+**Struo now.** Sandbox cleanup holds a shared execution permit after foreground
 cancellation. This protects admission through the cleanup attempt, but does not
 implement subscriber-independent ownership for future shared uploads, execution
 operations, or worker requests.
@@ -190,7 +190,7 @@ that the server had not admitted. High CAS concurrency triggered it. The issue w
 closed after an h2 fix. A bounded application semaphore alone did not establish
 transport liveness.
 
-**Once now.** Domain admission uses asynchronous waits and a documented acquisition
+**Struo now.** Domain admission uses asynchronous waits and a documented acquisition
 order. There is no native REAPI transfer pipeline yet. The hosted action quota is
 not a complete transfer or file-descriptor budget.
 
@@ -220,7 +220,7 @@ inputs; rewinding could not recover while subsequent reads remained rejected.
 A maintainer records a fix in 8.8.0 RC1. Recovery components must work together,
 not just independently have retries.
 
-**Once now.** The runner treats a cached result with missing output or captured
+**Struo now.** The runner treats a cached result with missing output or captured
 stream blobs as incomplete and re-executes. Output restoration stages blobs before
 publishing them. A missing output blob is distinguished from other I/O or corruption
 errors. This is not yet remote graph provenance recovery for deferred artifacts.
@@ -238,7 +238,7 @@ starts. Separately inject `UNAVAILABLE`, a deadline, corruption, and confirmed
 absence. Only absence takes the missing-input repair path. Recover a tripped breaker
 without restarting the build, and terminate predictably under repeated eviction.
 
-## 7. RPC Completion Does Not Prove Exactly-Once Execution
+## 7. RPC Completion Does Not Prove Exactly-Struo Execution
 
 **Evidence.** The [REAPI execution contract](https://github.com/bazelbuild/remote-apis/blob/main/build/bazel/remote/execution/v2/remote_execution.proto)
 explicitly permits an action to execute multiple times, potentially concurrently,
@@ -251,7 +251,7 @@ winners cancelling remote branches before those branches populate the remote
 cache. Continuing abandoned work can improve future hits, but also spends resources.
 That is a service/workload policy, not universally a client correctness fix.
 
-**Once now.** There is no automatic resubmission or racing. Cleanup retains leases
+**Struo now.** There is no automatic resubmission or racing. Cleanup retains leases
 through bounded attempts, but a lost create response, failed deletion, shutdown,
 or unkillable VM can leave work behind. Releasing a lease after a failed cleanup
 attempt does not establish a physical fleet bound.
@@ -284,7 +284,7 @@ not being recreated while rule metadata remained. The maintainer explains the
 assumption that output metadata and files are consistent, and why undeclared side
 effects do not fit cached build rules.
 
-**Once now.** CAS/action-cache reuse is independent of a long-running daemon, and
+**Struo now.** CAS/action-cache reuse is independent of a long-running daemon, and
 ordinary runner hits restore outputs. Reusable graph target outcomes also retain
 per-action identities. Their persistent validity and deferred output availability
 must continue to be checked separately from in-memory graph reuse. Local target
@@ -318,7 +318,7 @@ not be created. Maintainer discussion explicitly distinguishes best-effort resou
 management from required enforcement. The thread does not establish that admission
 estimates themselves can prevent OOM.
 
-**Once now.** Unsupported sandbox-adapter requirements fail before startup. Host
+**Struo now.** Unsupported sandbox-adapter requirements fail before startup. Host
 reservations are estimates, not kernel limits; the pool normalizes requests to its
 capacity. Microsandbox sizes its guest from the normalized reservation, but this
 does not account for all VM overhead or enforce a whole-host process budget.
@@ -346,7 +346,7 @@ for failures behind nginx/AWS ALB and points to transport-library behavior.
 properties with a newer BuildBarn and identifies the migration from deprecated
 `Command.platform` to `Action.platform`; a commenter points to a related PR.
 
-**Once now.** Hosted adapters do not constitute REAPI interoperability coverage.
+**Struo now.** Hosted adapters do not constitute REAPI interoperability coverage.
 The executor model intentionally leaves the service's scheduling protocol outside
 host accounting.
 
@@ -375,7 +375,7 @@ nondeterministic cache keys, but maintainers traced the key differences to diffe
 Buck versions and client configuration. This was resolved as setup mismatch, not
 a confirmed ordering bug. Useful key comparisons prevented chasing the wrong cause.
 
-**Once now.** Session logs and admission traces provide some context, and local VM
+**Struo now.** Session logs and admission traces provide some context, and local VM
 cleanup has bounded stages. They are not a complete phase-level liveness report or
 persistent cleanup supervisor.
 

@@ -1,6 +1,6 @@
 #shellcheck shell=bash
 
-Describe 'once graph query'
+Describe 'struo graph query'
   Include './spec/spec_helper.sh'
   BeforeEach 'setup_nested_workspace'
   AfterEach 'cleanup_nested_workspace'
@@ -11,9 +11,9 @@ Describe 'once graph query'
       printf '%s\n' 'name = "smoke"'
       printf '%s\n' 'kind = "shellspec_test"'
       printf '%s\n' 'srcs = ["spec/**/*_spec.sh"]'
-    } > "$NESTED_WORKSPACE/once.toml"
+    } > "$NESTED_WORKSPACE/struo.toml"
 
-    When call once_under_test query targets
+    When call struo_under_test query targets
     The status should be success
     The stdout should include 'smoke (shellspec_test) [test]'
   End

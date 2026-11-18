@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#MISE description="Build shared Once SDK libraries for Ruby and JavaScript packages"
+#MISE description="Build shared Struo SDK libraries for Ruby and JavaScript packages"
 #USAGE flag "--target <target>" help="Rust target triple to compile"
 #USAGE flag "--version <version>" help="Version number to embed in the shared library"
 set -euo pipefail
@@ -28,23 +28,23 @@ done
 case "${target}" in
   aarch64-apple-darwin)
     platform="darwin-arm64"
-    library="libonce.dylib"
+    library="libstruo.dylib"
     ;;
   x86_64-apple-darwin)
     platform="darwin-x64"
-    library="libonce.dylib"
+    library="libstruo.dylib"
     ;;
   aarch64-unknown-linux-gnu)
     platform="linux-arm64"
-    library="libonce.so"
+    library="libstruo.so"
     ;;
   x86_64-unknown-linux-gnu)
     platform="linux-x64"
-    library="libonce.so"
+    library="libstruo.so"
     ;;
   x86_64-pc-windows-msvc)
     platform="win32-x64"
-    library="once.dll"
+    library="struo.dll"
     ;;
   *)
     if [[ -z "${target}" ]]; then
@@ -70,15 +70,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
-once_bin="$("${release_tasks_dir}/bootstrap-once.sh")"
+struo_bin="$("${release_tasks_dir}/bootstrap-struo.sh")"
 "${release_tasks_dir}/prepare-rust-graph-deps.sh" --target "${target}"
 "${release_tasks_dir}/write-rust-release-manifests.sh" --target "${target}" --version "${version}"
 
 suffix="$(target_suffix "${target}")"
-target_id="crates/once/once_cdylib_${suffix}"
-"${once_bin}" build "${target_id}" --format json --quiet
+target_id="crates/struo/struo_cdylib_${suffix}"
+"${struo_bin}" build "${target_id}" --format json --quiet
 
-source=".once/out/${target_id}/${library}"
+source=".struo/out/${target_id}/${library}"
 if [[ ! -f "${source}" ]]; then
   echo "expected shared library does not exist: ${source}" >&2
   exit 1

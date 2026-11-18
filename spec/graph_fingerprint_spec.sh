@@ -1,17 +1,17 @@
 #shellcheck shell=bash
 # End-to-end specs for the whole-graph content fingerprint.
 
-Describe 'once query graph-fingerprint'
+Describe 'struo query graph-fingerprint'
   BeforeEach 'setup_workspace'
   AfterEach 'cleanup_workspace'
 
   setup_graph_workspace() {
-    cat > "$WORKSPACE/once.toml" <<'EOF'
+    cat > "$WORKSPACE/struo.toml" <<'EOF'
 [workspace]
-include = ["once.toml", "pkg/once.toml"]
+include = ["struo.toml", "pkg/struo.toml"]
 EOF
     mkdir -p "$WORKSPACE/pkg"
-    cat > "$WORKSPACE/pkg/once.toml" <<'EOF'
+    cat > "$WORKSPACE/pkg/struo.toml" <<'EOF'
 [[target]]
 name = "lib"
 kind = "library"
@@ -26,9 +26,9 @@ EOF
 
   It 'returns the schema and categorized components'
     setup_graph_workspace
-    When call once query graph-fingerprint --format json
+    When call struo query graph-fingerprint --format json
     The status should be success
-    The stdout should include '"once.graph_fingerprint.v1"'
+    The stdout should include '"struo.graph_fingerprint.v1"'
     The stdout should include '"category":"target"'
     The stdout should include '"category":"source"'
     The stdout should include '"category":"toolchain"'
@@ -37,8 +37,8 @@ EOF
 
   It 'produces a stable digest across runs'
     setup_graph_workspace
-    once query graph-fingerprint --format json | jq -r '.digest' > "$WORKSPACE/one"
-    once query graph-fingerprint --format json | jq -r '.digest' > "$WORKSPACE/two"
+    struo query graph-fingerprint --format json | jq -r '.digest' > "$WORKSPACE/one"
+    struo query graph-fingerprint --format json | jq -r '.digest' > "$WORKSPACE/two"
     one="$(cat "$WORKSPACE/one")"
     two="$(cat "$WORKSPACE/two")"
     The value "$one" should equal "$two"
@@ -46,29 +46,29 @@ EOF
 
   It 'changes the digest when a tracked source changes'
     setup_graph_workspace
-    once query graph-fingerprint --format json | jq -r '.digest' > "$WORKSPACE/before"
+    struo query graph-fingerprint --format json | jq -r '.digest' > "$WORKSPACE/before"
     printf '%s\n' 'fn changed() {}' > "$WORKSPACE/pkg/lib.rs"
-    once query graph-fingerprint --format json | jq -r '.digest' > "$WORKSPACE/after"
+    struo query graph-fingerprint --format json | jq -r '.digest' > "$WORKSPACE/after"
     before="$(cat "$WORKSPACE/before")"
     after="$(cat "$WORKSPACE/after")"
     The value "$before" should not equal "$after"
   End
 
   It 'changes the digest when the Mise toolchain declaration changes'
-    cat > "$WORKSPACE/once.toml" <<'EOF'
+    cat > "$WORKSPACE/struo.toml" <<'EOF'
 [workspace]
-include = ["once.toml"]
+include = ["struo.toml"]
 EOF
     cat > "$WORKSPACE/mise.toml" <<'EOF'
 [tools]
 rust = "1.96.0"
 EOF
-    once query graph-fingerprint --format json | jq -r '.digest' > "$WORKSPACE/before"
+    struo query graph-fingerprint --format json | jq -r '.digest' > "$WORKSPACE/before"
     cat > "$WORKSPACE/mise.toml" <<'EOF'
 [tools]
 rust = "1.97.0"
 EOF
-    once query graph-fingerprint --format json | jq -r '.digest' > "$WORKSPACE/after"
+    struo query graph-fingerprint --format json | jq -r '.digest' > "$WORKSPACE/after"
     before="$(cat "$WORKSPACE/before")"
     after="$(cat "$WORKSPACE/after")"
     The value "$before" should not equal "$after"
@@ -76,9 +76,9 @@ EOF
 
   It 'excludes source contents from a structure-only digest'
     setup_graph_workspace
-    once query graph-fingerprint --no-sources --format json | jq -r '.digest' > "$WORKSPACE/before"
+    struo query graph-fingerprint --no-sources --format json | jq -r '.digest' > "$WORKSPACE/before"
     printf '%s\n' 'fn changed() {}' > "$WORKSPACE/pkg/lib.rs"
-    once query graph-fingerprint --no-sources --format json | jq -r '.digest' > "$WORKSPACE/after"
+    struo query graph-fingerprint --no-sources --format json | jq -r '.digest' > "$WORKSPACE/after"
     before="$(cat "$WORKSPACE/before")"
     after="$(cat "$WORKSPACE/after")"
     The value "$before" should equal "$after"

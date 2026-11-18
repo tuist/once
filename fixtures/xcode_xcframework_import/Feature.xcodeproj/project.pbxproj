@@ -20,7 +20,7 @@
 		COPY_XCFRAMEWORK = {isa = PBXCopyFilesBuildPhase; dstPath = _StaticXCFrameworkDependencies/Feature; dstSubfolderSpec = 16; files = (RUST_COMPONENTS_BUILD); };
 
 		FEATURE_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (FEATURE_DEBUG); defaultConfigurationName = Debug; };
-		FEATURE_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = dev.once.Feature; }; };
+		FEATURE_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = dev.struo.Feature; }; };
 		FEATURE = {isa = PBXNativeTarget; buildConfigurationList = FEATURE_CONFIGS; buildPhases = (SOURCES, COPY_XCFRAMEWORK); dependencies = (); name = Feature; productName = Feature; productType = "com.apple.product-type.framework"; };
 	};
 	rootObject = PROJECT;

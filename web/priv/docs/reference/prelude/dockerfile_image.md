@@ -7,7 +7,7 @@ when building from a base distribution or installing packages.
 ## Execution modes
 
 `execution_mode` accepts `auto` (the default), `instructions`, or `buildkit`.
-In automatic mode, Once translates supported instructions into independently
+In automatic mode, Struo translates supported instructions into independently
 declared snapshot actions and falls back to BuildKit when required. Explicit
 instruction mode rejects unsupported instructions instead of falling back.
 
@@ -20,15 +20,15 @@ BuildKit path. See the live schema for mode-specific attributes and defaults.
 ## Dependencies and outputs
 
 The `images` role accepts `container_image` providers as named contexts;
-`programs` accepts native `once_executable` providers. `caches` accepts
+`programs` accepts native `struo_executable` providers. `caches` accepts
 `dockerfile_image` targets that export declared layer caches.
 
 The `build` capability exposes `archive`, `metadata`, `layer_cache`, `layout`,
 and `plan`. The `lint` capability exposes `sarif` and normalized `results`.
 
 ```sh
-once query schema dockerfile_image
-once query example dockerfile_image dockerfile-image-instructions
+struo query schema dockerfile_image
+struo query example dockerfile_image dockerfile-image-instructions
 ```
 
 Read [Container Images](/guide/graph/containers) before choosing a mode. It

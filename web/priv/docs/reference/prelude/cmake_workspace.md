@@ -22,13 +22,13 @@ This target does not configure or build the project. Pair it with
 | `source_dir` | string | no | `.` | Source directory recorded in selection provenance |
 | `generator` | string | no | `Ninja` | CMake generator recorded in selection provenance |
 | `build_type` | string | no | `Debug` | CMake build configuration recorded in selection provenance |
-| `exports` | list&lt;string&gt; | no | snapshot exports | Native CMake names or generated Once names to expose |
+| `exports` | list&lt;string&gt; | no | snapshot exports | Native CMake names or generated Struo names to expose |
 | `_cmake_resolved` | bool | resolver-owned | `false` | Marks a workspace expanded by the resolver |
 | `_cmake_snapshot_fingerprint` | string | resolver-owned | empty | Canonical fingerprint from the checked snapshot |
 | `_cmake_exports` | list&lt;string&gt; | resolver-owned | `[]` | Generated names selected as roots |
 
 The underscore-prefixed attributes are produced by the resolver and should not
-be set in `once.toml`.
+be set in `struo.toml`.
 
 ## Dependency Edges
 

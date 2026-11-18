@@ -7,18 +7,18 @@ Native [Bazel](https://bazel.build) workspace seed.
 `bazel_workspace` reads the Bazel graph through
 [`bazel query`](https://bazel.build/query/language) and materializes every
 rule the query returns as a `bazel_target` graph node. When a graph target
-is built, Once reads Bazel's action graph for that target through
+is built, Struo reads Bazel's action graph for that target through
 [`bazel aquery`](https://bazel.build/query/aquery). A configured query selects
-the default outputs, runfiles and validation closure. Once executes that closure
-in `<workspace>/.once/bazel-actions/`, with declared source copies and
+the default outputs, runfiles and validation closure. Struo executes that closure
+in `<workspace>/.struo/bazel-actions/`, with declared source copies and
 content-verified external repository files. Bazel supplies analysis and
-external repository downloads; Once supplies execution.
+external repository downloads; Struo supplies execution.
 `bazel build` is not invoked in the ownership path.
 
 Unsupported internal actions fall back to `bazel <capability>` for the
 target. This includes opaque file writes and stamped build information when
 required by the selected outputs. The provider records unsupported mnemonics.
-Delegated commands remain uncached by Once, with Bazel owning their outputs.
+Delegated commands remain uncached by Struo, with Bazel owning their outputs.
 They are not cacheable native-action ownership.
 
 Owned spawn actions declare their actual inputs, outputs and environment.
@@ -33,27 +33,27 @@ copied by value rather than linked into mutable native outputs.
 Owned tests use the exposed test launcher and manifest mapping, rule arguments,
 environment, size, timeout and shard count. Test execution intentionally bypasses
 the cache; compilation and runfiles preparation remain cacheable. Declare
-additional native test command environment through `test_env`. Once does not
+additional native test command environment through `test_env`. Struo does not
 infer `.bazelrc` test command options or implement flaky-test retries. Unsupported
 test action shapes delegate. These contracts do not imply hermetic remote
 execution or cross-host cache portability: host tool paths, native action
 arguments and runfiles manifests can contain absolute paths.
 
-Once discovers a Bazel workspace automatically from `MODULE.bazel`,
-`WORKSPACE.bazel`, or `WORKSPACE`. A repository without `once.toml` can
-therefore query, build, and test its rules with `once` as soon as its native
+Struo discovers a Bazel workspace automatically from `MODULE.bazel`,
+`WORKSPACE.bazel`, or `WORKSPACE`. A repository without `struo.toml` can
+therefore query, build, and test its rules with `struo` as soon as its native
 workspace file is checked in. Discovery skips generated directories such as
 `bazel-bin`, `bazel-out`, and `bazel-testlogs`.
 
 The default query is `kind("rule", //...)`, which returns every buildable
 rule the workspace exposes. The `query` attribute overrides that expression
-when only a subset of the graph should reach Once. The `exclude_packages`
+when only a subset of the graph should reach Struo. The `exclude_packages`
 attribute drops named package prefixes from the default query without
 rewriting it.
 
 `test_query` independently selects default test roots from that graph. It does
-not remove build targets or change explicit `once test <target>` requests.
-Once does not infer Bazel test command filters from `.bazelrc`; declare the
+not remove build targets or change explicit `struo test <target>` requests.
+Struo does not infer Bazel test command filters from `.bazelrc`; declare the
 matching query when the native suite excludes tagged tests. For example,
 `tests(//...) except attr("tags", "benchmark", //...)` excludes benchmark-tagged
 tests from targetless testing while keeping them available to build.
@@ -66,9 +66,9 @@ and everything else becomes [`bazel_target`](/reference/prelude/bazel_target)
 (build only). Every generated target records the original Bazel label on
 `bazel_label` and its rule class on `bazel_rule_kind`. The graph node name
 folds `/` and `:` into `_` and adds a `bz_` prefix so the label survives
-Once's target-name grammar; two Bazel labels that would collide in that
+Struo's target-name grammar; two Bazel labels that would collide in that
 mapping are reported as a resolver error instead of silently deduplicated.
-`once query targets` prints the label-to-name mapping.
+`struo query targets` prints the label-to-name mapping.
 
 ## Attributes
 
@@ -94,14 +94,14 @@ carry the actual build, test, and run capabilities.
 Discover and use the workspace without writing a manifest:
 
 ```sh
-once query targets
-once build
-once test
+struo query targets
+struo build
+struo test
 ```
 
 Targetless build selects the single discovered workspace seed. Targetless
 test selects the first-party Bazel test rules reported by its resolver.
-Discovery does not create `once.toml`.
+Discovery does not create `struo.toml`.
 
 To declare a portable environment, add an explicit workspace seed. For example,
 clear an unrelated host SDK installation during repository discovery and analysis:
@@ -122,16 +122,16 @@ delegated Bazel commands. Owned actions do not inherit the caller's environment.
 Environment declaration alone does not enable caching for actions that depend
 on undeclared host state.
 
-## Coexistence with Once outputs
+## Coexistence with Struo outputs
 
-Once writes its own cache and outputs under `.once/`. When Bazel walks the
+Struo writes its own cache and outputs under `.struo/`. When Bazel walks the
 workspace for a query, it also visits that directory unless the repository
 lists it in a
 [`.bazelignore`](https://bazel.build/reference/command-line-reference#flag--noenable_bzlmod)
 file. Add a single line to `.bazelignore` alongside `MODULE.bazel`:
 
 ```
-.once
+.struo
 ```
 
 Without that entry, a checked-in `BUILD.bazel` created by another native

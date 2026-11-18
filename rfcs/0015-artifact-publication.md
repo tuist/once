@@ -6,10 +6,10 @@ Accepted for implementation
 
 ## Decision
 
-Once produces and publishes artifacts. An artifact is immutable content and
+Struo produces and publishes artifacts. An artifact is immutable content and
 typed consumption metadata; a publication adds destination, target, source
 revision, access and retention. Infrastructure decides how people download,
-install, serve or run the published content. Those experiences are not Once
+install, serve or run the published content. Those experiences are not Struo
 concepts and do not change artifact identity.
 
 The generic model accepts any payload media type and zero or more named,
@@ -21,9 +21,9 @@ in artifact identity.
 
 ## Graph contract
 
-Target kinds expose an `artifact` capability and the `once_artifact_info`
+Target kinds expose an `artifact` capability and the `struo_artifact_info`
 provider. Their implementation returns `artifact_info` with schema
-`once.artifact_info.v1` and an `artifacts` array. Each declaration has a unique
+`struo.artifact_info.v1` and an `artifacts` array. Each declaration has a unique
 `name`, named `payloads` containing declared output `path` and `media_type`,
 optional typed `interfaces`, and optional variant `selectors`.
 
@@ -44,7 +44,7 @@ builds do not publish or package additional outputs.
 
 `once.artifact.v1` manifests contain named payload descriptors and interfaces.
 Descriptors contain algorithm-qualified digest, byte size and media type.
-SHA-256 is the interchange baseline; Once's internal cache hashes do not change.
+SHA-256 is the interchange baseline; Struo's internal cache hashes do not change.
 `once.artifact_set.v1` groups independently addressed artifacts with names and
 selectors. Alternatives are not runtime dependencies. Attachments and required
 runtime dependencies must not be inferred from names or filesystem layout.
@@ -64,12 +64,12 @@ creation records declared permissions and symlinks without invoking a shell.
 
 ## Command and agent surface
 
-`once query artifacts <target>` inspects the capability and export contract
-without executing the build. `once artifact export <target>` builds and writes
-a self-contained content-addressed package locally. `once artifact publish
+`struo query artifacts <target>` inspects the capability and export contract
+without executing the build. `struo artifact export <target>` builds and writes
+a self-contained content-addressed package locally. `struo artifact publish
 <target>` exports and publishes through the explicitly configured artifact
 infrastructure. Stateful MCP tools require `--allow-run` and mirror these CLI
-operations. Configuration extends `once.toml`, not a parallel manifest.
+operations. Configuration extends `struo.toml`, not a parallel manifest.
 
 ## Tuist compatibility
 
@@ -88,7 +88,7 @@ server support for immutable artifact descriptors, explicit grouping,
 idempotent commit receipts and retention independent of cache eviction.
 
 The proposed [provider-neutral publication protocol](0016-artifact-publication-protocol.md)
-specifies that follow-up boundary, including Once-owned opt-in automation.
+specifies that follow-up boundary, including Struo-owned opt-in automation.
 It is not implemented by the compatibility adapter described here.
 
 ## Consumer responsibilities and non-goals

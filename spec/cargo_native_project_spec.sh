@@ -1,5 +1,5 @@
 #shellcheck shell=bash
-# End-to-end specs for the graph Once derives from a Cargo project without a
+# End-to-end specs for the graph Struo derives from a Cargo project without a
 # manifest of its own. Each fixture is named after the open-source project
 # whose layout it reproduces and stays small enough to compile quickly.
 
@@ -18,15 +18,15 @@ Describe 'cargo native project'
   }
 
   target_ids() {
-    once --format json query targets | jq -r '.[] | "\(.kind) \(.id)"' | sort
+    struo --format json query targets | jq -r '.[] | "\(.kind) \(.id)"' | sort
   }
 
   test_summary() {
     jq -rc '"\(.summary.passed)/\(.summary.total) passed, \(.summary.failed) failed"' \
-      "$WORKSPACE/.once/out/$1/test/test_results.json"
+      "$WORKSPACE/.struo/out/$1/test/test_results.json"
   }
 
-  It 'derives a Cargo workspace graph with no once.toml present'
+  It 'derives a Cargo workspace graph with no struo.toml present'
     cargo_toolchain_unavailable && Skip 'cargo and rustc are required'
     copy_fixture cargo_ripgrep
 
@@ -36,25 +36,25 @@ Describe 'cargo native project'
     The stdout should include 'rust_library cargo_grep'
     The stdout should include 'rust_binary cargo_ripgrep_bin_rg'
     The stdout should include 'rust_test cargo_ripgrep_test_integration'
-    The path "$WORKSPACE/once.toml" should not be exist
+    The path "$WORKSPACE/struo.toml" should not be exist
   End
 
-  It 'builds and tests a Cargo project with no Once manifest or lockfile'
+  It 'builds and tests a Cargo project with no Struo manifest or lockfile'
     cargo_toolchain_unavailable && Skip 'cargo and rustc are required'
     copy_fixture cargo_fd
     rm "$WORKSPACE/Cargo.lock"
 
-    When call /bin/sh -c '"$1" -C "$2" build --quiet && "$1" -C "$2" test --quiet' sh "$ONCE_BIN" "$WORKSPACE"
+    When call /bin/sh -c '"$1" -C "$2" build --quiet && "$1" -C "$2" test --quiet' sh "$STRUO_BIN" "$WORKSPACE"
     The status should be success
-    The stdout should include 'once: build cargo (cargo_workspace)'
+    The stdout should include 'struo: build cargo (cargo_workspace)'
     The stdout should include 'test batches'
-    The path "$WORKSPACE/once.toml" should not be exist
+    The path "$WORKSPACE/struo.toml" should not be exist
     The path "$WORKSPACE/Cargo.lock" should be file
-    The path "$WORKSPACE/.once/out/cargo_fd_find_test_tests/test/test_results.json" should be file
+    The path "$WORKSPACE/.struo/out/cargo_fd_find_test_tests/test/test_results.json" should be file
   End
 
   It 'defaults to every first-party test in a Cargo workspace'
-    # `once test --quiet` under the ripgrep-shaped workspace currently runs
+    # `struo test --quiet` under the ripgrep-shaped workspace currently runs
     # the two integration tests but returns a non-zero status because the
     # generic-test scheduler is not surfacing the workspace's per-package
     # unit-test roots. That is a pre-existing regression on `main` and its
@@ -64,12 +64,12 @@ Describe 'cargo native project'
     cargo_toolchain_unavailable && Skip 'cargo and rustc are required'
     copy_fixture cargo_ripgrep
 
-    When call once test --quiet
-    The stdout should include 'once: ran 5 test batches'
+    When call struo test --quiet
+    The stdout should include 'struo: ran 5 test batches'
     The status should be success
-    The path "$WORKSPACE/.once/out/cargo_ripgrep_test_integration/test/test_results.json" should be file
-    The path "$WORKSPACE/.once/out/cargo_ignore_test_gitignore/test/test_results.json" should be file
-    The path "$WORKSPACE/once.toml" should not be exist
+    The path "$WORKSPACE/.struo/out/cargo_ripgrep_test_integration/test/test_results.json" should be file
+    The path "$WORKSPACE/.struo/out/cargo_ignore_test_gitignore/test/test_results.json" should be file
+    The path "$WORKSPACE/struo.toml" should not be exist
   End
 
   It 'names a binary target after its Cargo target rather than its package'
@@ -106,18 +106,18 @@ Describe 'cargo native project'
   It 'builds and runs a binary whose sources sit outside src'
     cargo_toolchain_unavailable && Skip 'cargo and rustc are required'
     copy_fixture cargo_ripgrep
-    once build cargo_ripgrep_bin_rg --quiet
+    struo build cargo_ripgrep_bin_rg --quiet
 
-    When call once run cargo_ripgrep_bin_rg -- needle
+    When call struo run cargo_ripgrep_bin_rg -- needle
     The status should be success
     The stdout should be present
-    The contents of file "$WORKSPACE/.once/out/cargo_ripgrep_bin_rg/run/stdout.log" should equal 'searching for needle'
+    The contents of file "$WORKSPACE/.struo/out/cargo_ripgrep_bin_rg/run/stdout.log" should equal 'searching for needle'
   End
 
   It 'gives an integration test the package binary through CARGO_BIN_EXE'
     cargo_toolchain_unavailable && Skip 'cargo and rustc are required'
     copy_fixture cargo_ripgrep
-    once test cargo_ripgrep_test_integration --quiet
+    struo test cargo_ripgrep_test_integration --quiet
 
     When call test_summary cargo_ripgrep_test_integration
     The status should be success
@@ -127,7 +127,7 @@ Describe 'cargo native project'
   It 'runs a test from its own package root'
     cargo_toolchain_unavailable && Skip 'cargo and rustc are required'
     copy_fixture cargo_ripgrep
-    once test cargo_ignore_test_gitignore --quiet
+    struo test cargo_ignore_test_gitignore --quiet
 
     When call test_summary cargo_ignore_test_gitignore
     The status should be success
@@ -138,7 +138,7 @@ Describe 'cargo native project'
     cargo_toolchain_unavailable && Skip 'cargo and rustc are required'
     copy_fixture cargo_ripgrep
 
-    When call once build cargo_ignore_bin_walk --quiet
+    When call struo build cargo_ignore_bin_walk --quiet
     The status should be success
     The stdout should be present
   End
@@ -146,12 +146,12 @@ Describe 'cargo native project'
   It 'gives a build script the environment Cargo documents'
     cargo_toolchain_unavailable && Skip 'cargo and rustc are required'
     copy_fixture cargo_mise
-    once build cargo_mise_bin_mise --quiet
+    struo build cargo_mise_bin_mise --quiet
 
-    When call once run cargo_mise_bin_mise
+    When call struo run cargo_mise_bin_mise
     The status should be success
     The stdout should be present
-    The contents of file "$WORKSPACE/.once/out/cargo_mise_bin_mise/run/stdout.log" should equal 'aqua cache'
+    The contents of file "$WORKSPACE/.struo/out/cargo_mise_bin_mise/run/stdout.log" should equal 'aqua cache'
   End
 
   It 'compiles a workspace member used as a build dependency into one crate'
@@ -167,7 +167,7 @@ Describe 'cargo native project'
   It 'applies the Cargo configuration environment to the compiler and the test'
     cargo_toolchain_unavailable && Skip 'cargo and rustc are required'
     copy_fixture cargo_bat
-    once test cargo_bat_test_integration_tests --quiet
+    struo test cargo_bat_test_integration_tests --quiet
 
     When call test_summary cargo_bat_test_integration_tests
     The status should be success
@@ -176,16 +176,16 @@ Describe 'cargo native project'
 
   It 'restores an unchanged Cargo build from the action cache'
     # The reproducible-build refactor introduced a lurking source of
-    # digest instability between two successive `once build` invocations
+    # digest instability between two successive `struo build` invocations
     # of the same Cargo package: the second invocation reports a cache
     # miss even though nothing observable has changed. Track that as its
     # own follow-up rather than block the whole matrix on it.
     Skip 'temporarily skipped while the Cargo action-cache invalidation follow-up lands'
     cargo_toolchain_unavailable && Skip 'cargo and rustc are required'
     copy_fixture cargo_fd
-    once build cargo_fd_find_bin_fd --quiet
+    struo build cargo_fd_find_bin_fd --quiet
 
-    When call once --format json build cargo_fd_find_bin_fd
+    When call struo --format json build cargo_fd_find_bin_fd
     The status should be success
     The stdout should include '"cache":"hit"'
   End

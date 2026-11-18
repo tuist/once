@@ -1,7 +1,7 @@
 # `oci_load`
 
 Loads one or more image archives into a local container engine. This is a
-runtime operation: invoke it with `once run`, not as a cacheable image build.
+runtime operation: invoke it with `struo run`, not as a cacheable image build.
 
 ## Dependencies and engine
 
@@ -14,8 +14,8 @@ prerequisites produces the archives; running it performs the engine load.
 It does not start a container or publish an image.
 
 ```sh
-once query schema oci_load
-once query example oci_load oci-pull-and-extend
+struo query schema oci_load
+struo query example oci_load oci-pull-and-extend
 ```
 
 Use [`oci_push`](/reference/prelude/oci_push) for registry publication instead.

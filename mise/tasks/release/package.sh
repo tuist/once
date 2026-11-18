@@ -49,24 +49,24 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p dist
-once_bin="$("${release_tasks_dir}/bootstrap-once.sh")"
+struo_bin="$("${release_tasks_dir}/bootstrap-struo.sh")"
 "${release_tasks_dir}/prepare-rust-graph-deps.sh" --target "${target}"
 "${release_tasks_dir}/write-rust-release-manifests.sh" --target "${target}" --version "${version}"
 
 # Windows uses the .exe suffix; everything else ships a bare binary.
 case "${target}" in
   *-windows-*)
-    bin_name="once.exe"
+    bin_name="struo.exe"
     ;;
   *)
-    bin_name="once"
+    bin_name="struo"
     ;;
 esac
 
 suffix="$(target_suffix "${target}")"
-target_id="crates/once-cli/once_cli_${suffix}"
-"${once_bin}" build "${target_id}" --format json --quiet
-source=".once/out/${target_id}/${bin_name}"
+target_id="crates/struo-cli/struo_cli_${suffix}"
+"${struo_bin}" build "${target_id}" --format json --quiet
+source=".struo/out/${target_id}/${bin_name}"
 if [[ ! -f "${source}" ]]; then
   echo "expected binary does not exist: ${source}" >&2
   exit 1
@@ -94,7 +94,7 @@ cp "${source}" "${stage_dir}/${bin_name}"
 # ubi backend handles either format. Keeping one extension across
 # platforms makes the asset-naming pattern downstream tools key off
 # (mise/aqua/ubi) trivially predictable.
-asset="once-${version}-${target}.tar.gz"
+asset="struo-${version}-${target}.tar.gz"
 tar -C "${stage_dir}" -czf "dist/${asset}" "${bin_name}"
 
 # sha256: sha256sum on Linux and Git-Bash-on-Windows; shasum -a 256 on macOS.

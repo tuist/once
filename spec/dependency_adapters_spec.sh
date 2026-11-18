@@ -6,8 +6,8 @@ Describe 'locked dependency adapters'
   AfterEach 'cleanup_workspace'
 
   copy_dependency_example() {
-    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/$1/." "$WORKSPACE/"
-    rm -rf "$WORKSPACE/.once"
+    cp -R "$REPO_ROOT/crates/struo-frontend/prelude/examples/$1/." "$WORKSPACE/"
+    rm -rf "$WORKSPACE/.struo"
   }
 
   rust_adapter_tools_unavailable() {
@@ -21,7 +21,7 @@ Describe 'locked dependency adapters'
       "s/\"host_triple\": \"[^\"]*\"/\"host_triple\": \"$host_triple\"/" \
       "$WORKSPACE/cargo-metadata.json" || return
     sed -i.bak '/lockfile = "Cargo.lock"/a\
-metadata_file = "cargo-metadata.json"' "$WORKSPACE/once.toml"
+metadata_file = "cargo-metadata.json"' "$WORKSPACE/struo.toml"
   }
 
   elixir_adapter_tools_unavailable() {
@@ -38,9 +38,9 @@ metadata_file = "cargo-metadata.json"' "$WORKSPACE/once.toml"
 
   resolve_build_and_run_rust_consumer() {
     enable_cargo_snapshot || return
-    once --format json query targets > "$WORKSPACE/targets.json" || return
-    once --format json build apps/hello/hello > "$WORKSPACE/build.json" || return
-    "$WORKSPACE/.once/out/apps/hello/hello/hello"
+    struo --format json query targets > "$WORKSPACE/targets.json" || return
+    struo --format json build apps/hello/hello > "$WORKSPACE/build.json" || return
+    "$WORKSPACE/.struo/out/apps/hello/hello/hello"
   }
 
   prepare_counted_live_cargo() {
@@ -52,13 +52,13 @@ metadata_file = "cargo-metadata.json"' "$WORKSPACE/once.toml"
       > "$WORKSPACE/tools/cargo"
     chmod +x "$WORKSPACE/tools/cargo"
     mv "$WORKSPACE/cargo-metadata.json" "$WORKSPACE/cargo-metadata.snapshot.json"
-    sed -i.bak '/cargo-metadata.json/d' "$WORKSPACE/once.toml"
+    sed -i.bak '/cargo-metadata.json/d' "$WORKSPACE/struo.toml"
   }
 
   run_rust_consumer_with_counted_live_resolution() {
     prepare_counted_live_cargo || return
 
-    PATH="$WORKSPACE/tools:$PATH" once --format json run apps/hello/hello \
+    PATH="$WORKSPACE/tools:$PATH" struo --format json run apps/hello/hello \
       > "$WORKSPACE/run.json" || return
     [ "$(wc -l < "$WORKSPACE/cargo-invocations.log" | tr -d ' ')" -eq 2 ]
   }
@@ -66,42 +66,42 @@ metadata_file = "cargo-metadata.json"' "$WORKSPACE/once.toml"
   validate_with_counted_live_cargo_resolution() {
     prepare_counted_live_cargo || return
 
-    PATH="$WORKSPACE/tools:$PATH" once --format json query validate-workspace \
+    PATH="$WORKSPACE/tools:$PATH" struo --format json query validate-workspace \
       > "$WORKSPACE/validation.json" || return
     [ "$(wc -l < "$WORKSPACE/cargo-invocations.log" | tr -d ' ')" -eq 2 ]
   }
 
   resolve_build_and_run_elixir_consumer() {
-    once --format json query targets > "$WORKSPACE/targets.json" || return
-    once --format json build greeting > "$WORKSPACE/build.json" || return
+    struo --format json query targets > "$WORKSPACE/targets.json" || return
+    struo --format json build greeting > "$WORKSPACE/build.json" || return
     elixir \
-      -pa "$WORKSPACE/.once/out/mix-locked-greeting/mix/prod/lib/locked_greeting/ebin" \
-      -pa "$WORKSPACE/.once/out/local_helper/ebin" \
-      -pa "$WORKSPACE/.once/out/greeting/ebin" \
-      -e 'IO.write(Greeting.message("Once"))'
+      -pa "$WORKSPACE/.struo/out/mix-locked-greeting/mix/prod/lib/locked_greeting/ebin" \
+      -pa "$WORKSPACE/.struo/out/local_helper/ebin" \
+      -pa "$WORKSPACE/.struo/out/greeting/ebin" \
+      -e 'IO.write(Greeting.message("Struo"))'
   }
 
   resolve_build_and_run_zig_consumer() {
-    once --format json query targets > "$WORKSPACE/targets.json" || return
-    once --format json build hello > "$WORKSPACE/build.json" || return
-    "$WORKSPACE/.once/out/hello/hello"
+    struo --format json query targets > "$WORKSPACE/targets.json" || return
+    struo --format json build hello > "$WORKSPACE/build.json" || return
+    "$WORKSPACE/.struo/out/hello/hello"
   }
 
   resolve_build_and_run_swift_consumer() {
-    once --format json query targets > "$WORKSPACE/targets.json" || return
-    once --format json build Consumer > "$WORKSPACE/build.json" || return
-    "$WORKSPACE/.once/out/Consumer/Consumer.app/Contents/MacOS/Consumer"
+    struo --format json query targets > "$WORKSPACE/targets.json" || return
+    struo --format json build Consumer > "$WORKSPACE/build.json" || return
+    "$WORKSPACE/.struo/out/Consumer/Consumer.app/Contents/MacOS/Consumer"
   }
 
   replace_swift_vendor_scratch() {
     mkdir -p "$WORKSPACE/Vendor/Greeting/VendorScratch"
     printf 'old\n' > "$WORKSPACE/Vendor/Greeting/VendorScratch/old.swift"
     sed -i.bak '/graph_file =/a\
-vendor_path = "Vendor/Greeting/VendorScratch"' "$WORKSPACE/once.toml"
-    once --format json build Consumer > "$WORKSPACE/first-build.json" || return
+vendor_path = "Vendor/Greeting/VendorScratch"' "$WORKSPACE/struo.toml"
+    struo --format json build Consumer > "$WORKSPACE/first-build.json" || return
     rm "$WORKSPACE/Vendor/Greeting/VendorScratch/old.swift"
     printf 'new\n' > "$WORKSPACE/Vendor/Greeting/VendorScratch/new.swift"
-    once --format json build Consumer > "$WORKSPACE/second-build.json" || return
+    struo --format json build Consumer > "$WORKSPACE/second-build.json" || return
   }
 
   It 'loads Cargo packages and links them into a local Rust binary'
@@ -120,9 +120,9 @@ vendor_path = "Vendor/Greeting/VendorScratch"' "$WORKSPACE/once.toml"
     Skip if 'Rust toolchain unavailable on this host' rust_adapter_tools_unavailable
     copy_dependency_example rust-binary-with-crate
     mv "$WORKSPACE/cargo-metadata.json" "$WORKSPACE/cargo-metadata.snapshot.json"
-    sed -i.bak '/metadata_file =/d' "$WORKSPACE/once.toml"
+    sed -i.bak '/metadata_file =/d' "$WORKSPACE/struo.toml"
 
-    When call once --format json query targets
+    When call struo --format json query targets
     The status should be success
     The stdout should include '"kind":"rust_crate"'
     The stdout should include '"id":"itoa-1.0.14"'
@@ -156,7 +156,7 @@ tree"
 
     When call resolve_build_and_run_elixir_consumer
     The status should be success
-    The stdout should equal 'Hello, Once!'
+    The stdout should equal 'Hello, Struo!'
     The contents of file "$WORKSPACE/targets.json" should include '"kind":"mix_package"'
     The contents of file "$WORKSPACE/targets.json" should include '"id":"mix-locked-greeting"'
     The contents of file "$WORKSPACE/build.json" should include '"target":"greeting"'
@@ -166,9 +166,9 @@ tree"
     Skip if 'Elixir toolchain unavailable on this host' elixir_adapter_tools_unavailable
     copy_dependency_example elixir-library-with-mix-dependency
     mv "$WORKSPACE/mix-dependencies.json" "$WORKSPACE/mix-dependencies.snapshot.json"
-    sed -i.bak '/graph_file =/d' "$WORKSPACE/once.toml"
+    sed -i.bak '/graph_file =/d' "$WORKSPACE/struo.toml"
 
-    When call once --format json query targets
+    When call struo --format json query targets
     The status should be success
     The stdout should include '"kind":"mix_package"'
     The stdout should include '"id":"mix-locked-greeting"'
@@ -202,9 +202,9 @@ tree"
     Skip if 'Apple Swift toolchain unavailable on this host' swift_adapter_tools_unavailable
     copy_dependency_example swift-package-dependencies-minimal
     mv "$WORKSPACE/swiftpm-dependencies.json" "$WORKSPACE/swiftpm-dependencies.snapshot.json"
-    sed -i.bak '/graph_file =/d' "$WORKSPACE/once.toml"
+    sed -i.bak '/graph_file =/d' "$WORKSPACE/struo.toml"
 
-    When call once --format json query targets
+    When call struo --format json query targets
     The status should be success
     The stdout should include '"kind":"swift_package_pin"'
     The stdout should include '"id":"swiftpm-greeting-local"'
@@ -216,7 +216,7 @@ tree"
 
     When call replace_swift_vendor_scratch
     The status should be success
-    The path "$WORKSPACE/.once/out/Packages/swiftpm/old.swift" should not be exist
-    The path "$WORKSPACE/.once/out/Packages/swiftpm/new.swift" should be file
+    The path "$WORKSPACE/.struo/out/Packages/swiftpm/old.swift" should not be exist
+    The path "$WORKSPACE/.struo/out/Packages/swiftpm/new.swift" should be file
   End
 End

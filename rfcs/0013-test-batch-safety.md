@@ -20,7 +20,7 @@ Research was conducted against issue bodies and discussion on 2026-10-09.
 Closed reports are historical evidence, not assertions that current Bazel
 still has every reported bug.
 
-| Report | Observation | Once requirement |
+| Report | Observation | Struo requirement |
 | --- | --- | --- |
 | [Bazel #18228](https://github.com/bazelbuild/bazel/issues/18228) and [#18339](https://github.com/bazelbuild/bazel/issues/18339), closed | A Python runner ignored the shard protocol and ran every test in every shard. Checking the capability acknowledgement was added later. | Require declared filtering support and verify the observed case set equals the requested set, not merely that it contains it. |
 | [Bazel #22028](https://github.com/bazelbuild/bazel/issues/22028), closed | The shard acknowledgement error obscured a runner startup failure. The fix checked acknowledgement only for passing tests. | Preserve subprocess exit status and stderr. A failed process cannot become a success because a result file exists. Missing or invalid evidence is an additional reason to fail a successful exact batch. |
@@ -32,7 +32,7 @@ still has every reported bug.
 | [Bazel #19428](https://github.com/bazelbuild/bazel/issues/19428), open | Streamed-output messaging did not match execution placement. | Rendering and output format must not redefine the plan or its execution policy. |
 
 The normative [Bazel sharding protocol](https://bazel.build/reference/test-encyclopedia#test-sharding)
-passes shard index/count to a runner. Once instead passes explicit semantic
+passes shard index/count to a runner. Struo instead passes explicit semantic
 units, so it can verify actual membership. A capability declaration alone is
 not execution evidence, and a runner can still lie about observations; this
 contract is not a security boundary against malicious adapters.
@@ -53,7 +53,7 @@ Module products come from the current built inventory, and the catch-all
 receives all required module products. These are correctness and artifact
 locality mechanisms, not just bin packing.
 
-Once keeps its existing conservative alternative: only a current complete
+Struo keeps its existing conservative alternative: only a current complete
 manifest can produce automatic exact batches. Missing or stale discovery
 executes the whole target. Filtered runs never replace complete discovery.
 History orders work; it cannot authorize omission. File-oriented batches retain
@@ -80,9 +80,9 @@ hosted planning service or a new configuration file.
    complete-target selection, exact scopes must cover the entire manifest;
    explicit unit and batch requests deliberately cover only their scope.
    Preserve deterministic aggregation and resource-budgeted scheduling.
-4. Add `once test <target> --test-batch ID` and the matching optional MCP
+4. Add `struo test <target> --test-batch ID` and the matching optional MCP
    argument. Plan queries export complete, replayable target inventories;
-   saved plans select batches at execution with `once test --plan FILE --batch ID`.
+   saved plans select batches at execution with `struo test --plan FILE --batch ID`.
    A local batch request requires exactly one explicit target. Resolve against
    the current target plan, preserve the batch's unit set and ID, and reject
    obsolete or unknown IDs with corrected syntax and a shortlist. Batch

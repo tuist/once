@@ -1,4 +1,4 @@
-#!/usr/bin/env -S __ONCE_BIN__ exec -- bash
-# once input "../input.txt"
-# once cwd ".."
+#!/usr/bin/env -S __STRUO_BIN__ exec -- bash
+# struo input "../input.txt"
+# struo cwd ".."
 cat input.txt

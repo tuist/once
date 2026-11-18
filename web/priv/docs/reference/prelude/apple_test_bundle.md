@@ -5,19 +5,19 @@ Apple test bundle.
 ## Description
 
 Builds Apple test targets and runs XCTest or Swift Testing tests through the
-generic Once test capability. Attributes whose names contain `sdk` configure
+generic Struo test capability. Attributes whose names contain `sdk` configure
 the
 [Apple software development kit (SDK)](https://developer.apple.com/documentation/xcode)
 used for the build.
 
 On macOS, XCTest bundles run through Xcode's `test-without-building` harness
-using a generated test-run configuration and the bundle compiled by Once.
+using a generated test-run configuration and the bundle compiled by Struo.
 This applies with or without an application host. Compilation, linking, and
 configuration materialization remain cacheable; test execution still runs fresh.
 Swift Testing-only bundles continue to use their structured event-stream runner.
 
 Tests do not need to repeat framework dependencies that belong to a plugin or
-library in their dependency graph. Once links only the direct framework
+library in their dependency graph. Struo links only the direct framework
 boundary and stages the full runtime framework closure inside the test bundle
 before signing it.
 
@@ -41,11 +41,11 @@ The `test_tools` dependency role stages command-line executables beside the
 test bundle. These tools are runtime dependencies, not linked code or test
 host applications.
 
-Interface tests use the platform test-runner application. Once packages and
+Interface tests use the platform test-runner application. Struo packages and
 signs the runner, nests the interface-test bundle under its `PlugIns`
 directory, stages the required testing frameworks, and launches the declared
 application under test. Compilation, linking, packaging, and signing remain
-Once build actions.
+Struo build actions.
 
 A bundle that depends on a Swift macro links the macro and imports its module,
 so code guarded by `canImport` of the macro module compiles. A macro only ever
@@ -55,13 +55,13 @@ as well, along with everything it depends on.
 ## Reported Results
 
 A Swift Testing bundle reports every test and what became of it. The testing
-library records the run and Once turns that record into normalized results, so
+library records the run and Struo turns that record into normalized results, so
 a test that was filtered out, skipped, or never reached is reported as such
 rather than as a pass, and an issue the test marked as known is not a failure.
 
-Where results come from the XCTest host, Once translates the host's per-case
+Where results come from the XCTest host, Struo translates the host's per-case
 completion records into normalized outcomes and durations. This includes Swift
-Testing cases that the host runs alongside XCTest cases. Once also lists cases
+Testing cases that the host runs alongside XCTest cases. Struo also lists cases
 found in sources so a shard can address them; a case without a completion
 record stays unknown rather than being credited with a pass. When XCTest
 reports a completed `All tests` or `Selected tests` suite, passed or failed, and its total matches the
@@ -92,7 +92,7 @@ import inference and should not be authored manually.
 | `sdk_variant` | string | no | `simulator` | `simulator` or `device`; ignored on macOS (not configurable) |
 | `xcode_developer_dir` | string | no | active Xcode | Xcode developer directory used to resolve build tools |
 | `product_name` | string | no | target name | Test bundle product name (not configurable) |
-| `bundle_id` | string | no | `dev.once.tests.<product_name>` | Test bundle identifier (not configurable) |
+| `bundle_id` | string | no | `dev.struo.tests.<product_name>` | Test bundle identifier (not configurable) |
 | `test_host` | target | no |  | Application target hosting the test bundle |
 | `resources` | list&lt;string&gt; | no | `[]` | Resource glob patterns bundled into the test bundle |
 | `structured_resources` | list&lt;string&gt; | no | `[]` | Resource directory roots whose own basename is preserved inside the test bundle |
@@ -121,7 +121,7 @@ import inference and should not be authored manually.
 | `bridging_header` | string | no |  | Objective-C bridging header imported into Swift test sources |
 | `prefix_header` | string | no |  | Prefix header included before every C-family test source |
 | `prebuild_actions` | list&lt;string&gt; | no | `[]` | Adapter-owned serialized build preparation actions that run before compilation. Records may opt into caching when they declare complete inputs and outputs; always-run records remain uncached |
-| `swift_testing` | bool | no | `false` | Run sources that use Swift Testing (`import Testing`) through the generic Once test capability |
+| `swift_testing` | bool | no | `false` | Run sources that use Swift Testing (`import Testing`) through the generic Struo test capability |
 | `ui_testing` | bool | no | `false` | Package the bundle inside the platform test runner and launch an application under test |
 | `labels` | list&lt;string&gt; | no | `[]` | Agent-readable labels used for filtering or policy |
 
@@ -145,7 +145,7 @@ for mapped build settings and file-list variables.
 
 ## Providers
 
-The target emits `apple_test_bundle`, `apple_bundle`, and `once_test_info`.
+The target emits `apple_test_bundle`, `apple_bundle`, and `struo_test_info`.
 
 ## Capabilities
 
@@ -158,23 +158,23 @@ The target emits `apple_test_bundle`, `apple_bundle`, and `once_test_info`.
 
 | Output | Location |
 | --- | --- |
-| Test bundle | `.once/out/<target>/<product_name>.xctest` |
-| C-family objects | `.once/out/<target>/Objects/*.o` for mixed-language test targets |
-| macOS test binary | `.once/out/<target>/<product_name>.xctest/Contents/MacOS/<product_name>` |
-| Other Apple platform test binary | `.once/out/<target>/<product_name>.xctest/<product_name>` |
-| iOS interface-test runner | `.once/out/<target>/<product_name>-Runner.app` |
-| iOS interface-test bundle | `.once/out/<target>/<product_name>-Runner.app/PlugIns/<product_name>.xctest` |
-| macOS property list | `.once/out/<target>/<product_name>.xctest/Contents/Info.plist` |
-| Other Apple platform property list | `.once/out/<target>/<product_name>.xctest/Info.plist` |
-| macOS resources | `.once/out/<target>/<product_name>.xctest/Contents/Resources` |
-| Other Apple platform resources | `.once/out/<target>/<product_name>.xctest` |
+| Test bundle | `.struo/out/<target>/<product_name>.xctest` |
+| C-family objects | `.struo/out/<target>/Objects/*.o` for mixed-language test targets |
+| macOS test binary | `.struo/out/<target>/<product_name>.xctest/Contents/MacOS/<product_name>` |
+| Other Apple platform test binary | `.struo/out/<target>/<product_name>.xctest/<product_name>` |
+| iOS interface-test runner | `.struo/out/<target>/<product_name>-Runner.app` |
+| iOS interface-test bundle | `.struo/out/<target>/<product_name>-Runner.app/PlugIns/<product_name>.xctest` |
+| macOS property list | `.struo/out/<target>/<product_name>.xctest/Contents/Info.plist` |
+| Other Apple platform property list | `.struo/out/<target>/<product_name>.xctest/Info.plist` |
+| macOS resources | `.struo/out/<target>/<product_name>.xctest/Contents/Resources` |
+| Other Apple platform resources | `.struo/out/<target>/<product_name>.xctest` |
 | Compiled asset catalog | `Assets.car` in the platform-specific resource location |
 | Runtime frameworks | The test bundle's `Frameworks` directory when dependencies require them |
-| macOS code signature | `.once/out/<target>/<product_name>.xctest/Contents/_CodeSignature/CodeResources` |
-| Other Apple platform code signature | `.once/out/<target>/<product_name>.xctest/_CodeSignature/CodeResources` |
-| Test results | `.once/out/<target>/test/test_results.json` after `once test` |
-| Test log | `.once/out/<target>/test/swift-testing.log` for Swift Testing or `xctest.log` for XCTest |
-| Native runner output | `.once/out/<target>/test/native_results.txt` |
+| macOS code signature | `.struo/out/<target>/<product_name>.xctest/Contents/_CodeSignature/CodeResources` |
+| Other Apple platform code signature | `.struo/out/<target>/<product_name>.xctest/_CodeSignature/CodeResources` |
+| Test results | `.struo/out/<target>/test/test_results.json` after `struo test` |
+| Test log | `.struo/out/<target>/test/swift-testing.log` for Swift Testing or `xctest.log` for XCTest |
+| Native runner output | `.struo/out/<target>/test/native_results.txt` |
 
 ## Limitations
 

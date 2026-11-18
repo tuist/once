@@ -5,7 +5,7 @@ date: 2026-11-12
 
 Unhosted macOS XCTest bundles now use Xcode's `test-without-building` harness,
 matching the runtime used by native Xcode tests without handing compilation
-back to Xcode. Once still caches compilation, linking, and generated test-run
+back to Xcode. Struo still caches compilation, linking, and generated test-run
 configurations, while test execution runs fresh.
 
 Completed failed XCTest suites also retain their observed case inventory and

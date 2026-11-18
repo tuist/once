@@ -5,29 +5,29 @@ next: false
 
 # Swift Packages
 
-Once reads `Package.swift` and derives first-party package targets as Once
+Struo reads `Package.swift` and derives first-party package targets as Struo
 targets. Swift Package Manager remains authoritative for manifests, version
-selection, and `Package.resolved`; Once uses that information to build and
+selection, and `Package.resolved`; Struo uses that information to build and
 cache the targets it derives.
 
 ## Start From a Native Package
 
-Once recognizes `Package.swift` automatically and lowers first-party package
-targets into the existing Apple target kinds. This works without `once.toml`:
+Struo recognizes `Package.swift` automatically and lowers first-party package
+targets into the existing Apple target kinds. This works without `struo.toml`:
 
 ```sh
-once query workspace
-once query targets
-once build
-once test
+struo query workspace
+struo query targets
+struo build
+struo test
 ```
 
 The generated `swift_package_workspace` seed reads the package manifest and
 derives first-party libraries, executables, macros, binary targets, and tests.
 Discovery skips generated `.build` and `.swiftpm` directories and does not
-write `once.toml`. `once build` selects the package workspace when it is the
-only discovered build root. `once test` runs first-party test bundles and
-excludes test bundles that belong only to resolved packages. Use `once test
+write `struo.toml`. `struo build` selects the package workspace when it is the
+only discovered build root. `struo test` runs first-party test bundles and
+excludes test bundles that belong only to resolved packages. Use `struo test
 --all` when you intentionally want the complete resolved test graph.
 
 Local path dependencies within the workspace are followed transitively,
@@ -42,23 +42,23 @@ resolves that package through the root package's lockfile.
 For explicit module builds, add `explicit_modules = true` to your
 `swift_package_workspace` seed's attributes. Optional
 `dependency_check = "error"` checks source imports against declared package
-dependencies. Once propagates these settings through the resolved package
+dependencies. Struo propagates these settings through the resolved package
 graph; `Package.swift` remains the source of target and dependency declarations.
 See [explicit Apple modules](/guide/graph/apple#explicit-modules-and-dependency-checks)
 for requirements and current limits.
 
-Once can sit behind the `swift` command for one native [Swift Package
+Struo can sit behind the `swift` command for one native [Swift Package
 Manager](https://www.swift.org/documentation/package-manager/) package. Add
 this mise wrapper, then run `mise reshim` and activate mise in the shell that
 starts the build:
 
 ```toml
 [wrappers.swift]
-command = "once"
+command = "struo"
 args = ["swift", "--"]
 ```
 
-Once routes the default debug build and test forms into the native graph:
+Struo routes the default debug build and test forms into the native graph:
 
 ```sh
 swift build
@@ -66,7 +66,7 @@ swift test
 ```
 
 `swift build` builds the package seed and its resolved products. `swift test`
-runs each first-party test bundle once through Once, excluding test targets
+runs each first-party test bundle once through Struo, excluding test targets
 that belong to resolved dependencies. `-q` or `--quiet`,
 `-c debug` or `--configuration debug`, and `--package-path .` are also
 supported.
@@ -75,23 +75,23 @@ For troubleshooting without mise, call the compatibility surface directly and
 put the separator before the Swift Package Manager arguments:
 
 ```sh
-once swift -- test
+struo swift -- test
 ```
 
 Every other request, including release builds, filters, package subcommands,
 plugins, and a package path outside the current directory, invokes the system
 `swift` executable with its original arguments and exit status. This preserves
-Swift Package Manager behavior until the request has an exact Once equivalent.
+Swift Package Manager behavior until the request has an exact Struo equivalent.
 
 For locked source-control dependencies, native package lowering materializes
 the pinned sources during graph loading, then compiles them directly through
-Once's Apple target kinds. See
+Struo's Apple target kinds. See
 [`swift_package_workspace`](/reference/prelude/swift_package_workspace) for
 its complete contract.
 
 When the Xcode workspace resolver lowers package sources into Apple targets,
 compiler language and access-control flags follow the manifest tools version.
-Once adds the semantic package name only for tools version 5.9 or newer, where
+Struo adds the semantic package name only for tools version 5.9 or newer, where
 package-scoped access is part of the manifest contract. Older manifests remain
 isolated by module.
 
@@ -112,7 +112,7 @@ Manifests referenced by the graph must still load successfully.
 
 Build-tool plugins execute before native compilation. Swift Package Manager
 compiles the plugins and their host tools, evaluates the commands, and runs
-prebuild commands to discover their outputs. Once then schedules the declared
+prebuild commands to discover their outputs. Struo then schedules the declared
 build commands with their argument vectors, inputs, outputs, environment, and
 working directory. Generated sources, headers, and resources become inputs to
 the consuming target. Commands without outputs still run when the package uses
@@ -141,12 +141,12 @@ xcrun --find swift
 xcrun swift --version
 ```
 
-Once selects the Swift compiler through `xcrun`. A Swiftly `.swift-version`
+Struo selects the Swift compiler through `xcrun`. A Swiftly `.swift-version`
 file does not change that selection. If a package requires a separately
 installed Swift toolchain, select its bundle identifier for the build:
 
 ```sh
-TOOLCHAINS=your.toolchain.bundle.identifier once build
+TOOLCHAINS=your.toolchain.bundle.identifier struo build
 ```
 
 Check the selection with `TOOLCHAINS=your.toolchain.bundle.identifier xcrun
@@ -155,7 +155,7 @@ swift --version`. The selected compiler must support the package's
 
 A Swift toolchain installed beside Xcode contributes the compiler and the
 macros it loads, while Xcode still contributes the linker and the software
-development kit. Once resolves each of those separately, so builds that mix
+development kit. Struo resolves each of those separately, so builds that mix
 them link and expand macros against matching tools. Swift Testing follows the
 same rule: when the selected compiler ships its own copy, tests compile and
 link against that one rather than the version Xcode publishes.
@@ -168,7 +168,7 @@ compiler, software development kit, linker, and code-signing path work.
 
 Native package lowering uses `Package.resolved` to materialize each
 source-control dependency at its pinned revision. When a package declares
-dependencies but does not commit the lockfile, Once asks Swift Package Manager
+dependencies but does not commit the lockfile, Struo asks Swift Package Manager
 to resolve them and uses the generated lockfile. It then derives and compiles
 the dependency targets directly, so Swift Package Manager does not build a
 separate dependency graph. Registry dependencies are not supported by this
@@ -177,19 +177,19 @@ native path yet.
 The ordinary workflow stays the same:
 
 ```sh
-once query targets
-once build SwiftPackage_MyPackage_MyLibrary
+struo query targets
+struo build SwiftPackage_MyPackage_MyLibrary
 ```
 
-There is no Once initialization step. A first build can access the network when
-Swift Package Manager must create `Package.resolved` or Once must materialize a
+There is no Struo initialization step. A first build can access the network when
+Swift Package Manager must create `Package.resolved` or Struo must materialize a
 pinned source dependency.
 
-Once reuses a checkout that already contains the pinned commit. Otherwise it
+Struo reuses a checkout that already contains the pinned commit. Otherwise it
 tries a shallow fetch and retries without a depth limit when the server does
 not support shallow clients.
 
-Once preserves package traits requested by dependencies, including traits that
+Struo preserves package traits requested by dependencies, including traits that
 enable other traits and conditional requests. Code guarded by a dependency's
 opt-in trait is compiled with that trait enabled. Explicit empty trait lists
 disable defaults for that dependency declaration; requests from other packages

@@ -65,8 +65,8 @@ The target emits `apple_swift_plugin`.
 
 | Output | Location |
 | --- | --- |
-| Plugin executable | `.once/out/<target>/<module_name>-tool` |
-| Swift module | `.once/out/<target>/<module_name>.swiftmodule` |
+| Plugin executable | `.struo/out/<target>/<module_name>-tool` |
+| Swift module | `.struo/out/<target>/<module_name>.swiftmodule` |
 
 ## Example
 

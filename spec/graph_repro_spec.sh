@@ -8,7 +8,7 @@ Describe 'native graph reproductions'
   # and a vendored part sits in a directory discovery excludes but whose
   # manifest the resolver still reads.
   prepare_native_workspace() {
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [modules]
 paths = ["native.star"]
 
@@ -41,10 +41,10 @@ STAR
   It 'exports manifests and empty placeholders that load to the same graph'
     prepare_native_workspace
     export_and_compare() {
-      once query targets --format json | jq -c 'map(.id) | sort' > "$SPEC_ROOT/original.json" || return
-      once query graph-repro --format json > "$SPEC_ROOT/export.json" || return
-      repro="$WORKSPACE/.once/graph-repro"
-      (cd "$repro/workspace" && "$ONCE_BIN" query targets --format json) | jq -c 'map(.id) | sort' > "$SPEC_ROOT/replayed.json" || return
+      struo query targets --format json | jq -c 'map(.id) | sort' > "$SPEC_ROOT/original.json" || return
+      struo query graph-repro --format json > "$SPEC_ROOT/export.json" || return
+      repro="$WORKSPACE/.struo/graph-repro"
+      (cd "$repro/workspace" && "$STRUO_BIN" query targets --format json) | jq -c 'map(.id) | sort' > "$SPEC_ROOT/replayed.json" || return
       cmp "$SPEC_ROOT/original.json" "$SPEC_ROOT/replayed.json" || return
       ! grep -r proprietary "$repro" || return
       [ ! -s "$repro/workspace/proj/src/core.txt" ] || return
@@ -55,21 +55,21 @@ STAR
     When call export_and_compare
     The status should be success
     The line 1 of stdout should equal '["other","proj/app","proj/core","proj/native","proj/shim"]'
-    The line 2 of stdout should equal '[["native.star","once.toml","proj/project.native","proj/vendor/shim/project.native"],"tuist/once"]'
+    The line 2 of stdout should equal '[["native.star","proj/project.native","proj/vendor/shim/project.native","struo.toml"],"tuist/struo"]'
   End
 
   It 'drafts an issue that carries the loading failure'
     prepare_native_workspace
     printf 'broken\n' > "$WORKSPACE/proj/project.native"
     draft_issue() {
-      once query graph-repro --format json > "$SPEC_ROOT/export.json" || return
+      struo query graph-repro --format json > "$SPEC_ROOT/export.json" || return
       jq -r '.issue.title, .issue.url' "$SPEC_ROOT/export.json"
-      cat "$WORKSPACE/.once/graph-repro/ISSUE.md"
+      cat "$WORKSPACE/.struo/graph-repro/ISSUE.md"
     }
     When call draft_issue
     The status should be success
     The line 1 of stdout should equal 'Native graph fails to load: native'
-    The line 2 of stdout should start with 'https://github.com/tuist/once/issues/new?title='
+    The line 2 of stdout should start with 'https://github.com/tuist/struo/issues/new?title='
     The stdout should include 'the native resolver cannot read this project'
     The stdout should not include "$WORKSPACE"
   End
@@ -77,35 +77,35 @@ STAR
   It 'points a failed build of a target the resolver owns at the reproduction export'
     prepare_native_workspace
     printf 'broken\n' > "$WORKSPACE/proj/project.native"
-    When call once build proj/app --format json
+    When call struo build proj/app --format json
     The status should be failure
     The stderr should include 'the native resolver cannot read this project'
-    The stderr should include 'once query graph-repro'
+    The stderr should include 'struo query graph-repro'
   End
 
   It 'reports a mistyped target outside a failed resolver as not found'
     prepare_native_workspace
     printf 'unfetched\n' > "$WORKSPACE/proj/project.native"
-    When call once build othr
+    When call struo build othr
     The status should be failure
     The stderr should include 'no target matches `othr`'
     The stderr should not include 'the native sources are not fetched'
   End
 
-  It 'reports the failed resolver for a missing target it owns, without blaming Once'
+  It 'reports the failed resolver for a missing target it owns, without blaming Struo'
     prepare_native_workspace
     printf 'unfetched\n' > "$WORKSPACE/proj/project.native"
-    When call once build proj/app
+    When call struo build proj/app
     The status should be failure
     The stderr should include 'the native sources are not fetched'
     The stderr should include 'Fetch the sources, then retry'
-    The stderr should not include 'once query graph-repro'
+    The stderr should not include 'struo query graph-repro'
   End
 
   It 'reports the failed resolver when testing everything finds no tests'
     prepare_native_workspace
     printf 'unfetched\n' > "$WORKSPACE/proj/project.native"
-    When call once test
+    When call struo test
     The status should be failure
     The stderr should include 'the native sources are not fetched'
   End
@@ -116,7 +116,7 @@ STAR
     printf '{}' > "$SPEC_ROOT/out/repro.json"
     printf 'keep' > "$SPEC_ROOT/out/notes.txt"
     export_into_foreign_directory() {
-      once query graph-repro --output "$SPEC_ROOT/out" && return 1
+      struo query graph-repro --output "$SPEC_ROOT/out" && return 1
       cat "$SPEC_ROOT/out/notes.txt"
     }
     When call export_into_foreign_directory
@@ -126,11 +126,11 @@ STAR
 
   It 'records a broken module and recovers once it is fixed'
     prepare_native_workspace
-    printf '[modules]\npaths = ["missing.star"]\n' > "$WORKSPACE/once.toml"
+    printf '[modules]\npaths = ["missing.star"]\n' > "$WORKSPACE/struo.toml"
     export_twice() {
-      once query graph-repro --format json | jq -r '.load_error != null' || return
-      printf '[modules]\npaths = ["native.star"]\n' > "$WORKSPACE/once.toml"
-      once query graph-repro --format json | jq -r '.target_count'
+      struo query graph-repro --format json | jq -r '.load_error != null' || return
+      printf '[modules]\npaths = ["native.star"]\n' > "$WORKSPACE/struo.toml"
+      struo query graph-repro --format json | jq -r '.target_count'
     }
     When call export_twice
     The status should be success

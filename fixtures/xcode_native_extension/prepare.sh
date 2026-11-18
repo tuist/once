@@ -1,5 +1,5 @@
 set -eu
-[ "$ONCE_SCRIPT_CI_VALUE" = 'from caller' ]
+[ "$STRUO_SCRIPT_CI_VALUE" = 'from caller' ]
 [ "$DWARF_DSYM_FOLDER_PATH" = "$TARGET_BUILD_DIR" ]
 [ "$DWARF_DSYM_FILE_NAME" = "$FULL_PRODUCT_NAME.dSYM" ]
 [ "$SCRIPT_INPUT_FILE_COUNT" = 1 ]

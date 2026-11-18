@@ -1,14 +1,14 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/once",
-    "crates/once-cli",
-    "crates/once-core",
-    "crates/once-cas",
-    "crates/once-events-client",
-    "crates/once-frontend",
-    "crates/once-host-tree",
-    "crates/once-presentation",
+    "crates/struo",
+    "crates/struo-cli",
+    "crates/struo-core",
+    "crates/struo-cas",
+    "crates/struo-events-client",
+    "crates/struo-frontend",
+    "crates/struo-host-tree",
+    "crates/struo-presentation",
 ]
 
 [workspace.package]
@@ -16,15 +16,15 @@ version = "0.0.0"
 edition = "2021"
 rust-version = "1.96.0"
 license = "MIT"
-repository = "https://github.com/tuist/once"
+repository = "https://github.com/tuist/struo"
 
 [workspace.dependencies]
-once = { version = "0.0.0", path = "crates/once" }
-once-core = { version = "0.0.0", path = "crates/once-core", default-features = false }
-once-cas = { version = "0.0.0", path = "crates/once-cas" }
-once-frontend = { version = "0.0.0", path = "crates/once-frontend" }
-once-host-tree = { version = "0.0.0", path = "crates/once-host-tree" }
-once-presentation = { version = "0.0.0", path = "crates/once-presentation" }
+struo = { version = "0.0.0", path = "crates/struo" }
+struo-core = { version = "0.0.0", path = "crates/struo-core", default-features = false }
+struo-cas = { version = "0.0.0", path = "crates/struo-cas" }
+struo-frontend = { version = "0.0.0", path = "crates/struo-frontend" }
+struo-host-tree = { version = "0.0.0", path = "crates/struo-host-tree" }
+struo-presentation = { version = "0.0.0", path = "crates/struo-presentation" }
 
 anyhow = "1"
 bazel-remote-apis = "0.29"
@@ -70,7 +70,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 [workspace.lints.rust]
 # `deny` rather than `forbid` so the C ABI layer can carve out a single
 # `#[allow(unsafe_code)]` on the one module that needs it. `forbid`
-# cannot be relaxed locally, which previously forced the `once` crate to
+# cannot be relaxed locally, which previously forced the `struo` crate to
 # opt out of this whole table and silently lose every workspace lint.
 # The FFI boundary is the only sanctioned exemption; grep for
 # `allow(unsafe_code)` to audit it.
@@ -90,7 +90,7 @@ lto = "thin"
 codegen-units = 1
 panic = "abort"
 
-# The source-built Once that CI uses to drive graph builds and tests. It
+# The source-built Struo that CI uses to drive graph builds and tests. It
 # only orchestrates rustc and other tools, so its own crates skip
 # optimization, LTO, and single-unit codegen to compile faster, while
 # dependencies such as the Starlark interpreter and hashers stay optimized.

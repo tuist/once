@@ -1,13 +1,13 @@
-defmodule OnceSite.Config.DevInstance do
+defmodule StruoSite.Config.DevInstance do
   @moduledoc false
 
   @min_suffix 100
   @max_suffix 999
   @suffix_count @max_suffix - @min_suffix + 1
   @project_root Path.expand("..", __DIR__)
-  @root_instance_file Path.join(@project_root, ".once-site-dev-instance")
-  @git_instance_name "once-site-dev-instance"
-  @env_var "ONCE_SITE_DEV_INSTANCE"
+  @root_instance_file Path.join(@project_root, ".struo-site-dev-instance")
+  @git_instance_name "struo-site-dev-instance"
+  @env_var "STRUO_SITE_DEV_INSTANCE"
 
   def suffix do
     instance_file = resolve_instance_file()

@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict>
   <key>com.apple.security.application-groups</key>
-  <array><string>group.dev.once.harbor</string></array>
+  <array><string>group.dev.struo.harbor</string></array>
 </dict>
 </plist>

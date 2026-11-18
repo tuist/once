@@ -16,16 +16,16 @@ Retrieve the runnable starter when you want a complete declaration, package
 manifest, and sample tests:
 
 ```sh
-once query example vitest_test vitest-test-minimal --format json
+struo query example vitest_test vitest-test-minimal --format json
 ```
 
-Copy the declaration below into `once.toml`, adjust `srcs` and any setup files
+Copy the declaration below into `struo.toml`, adjust `srcs` and any setup files
 for the project, then establish discovery and run the file batches:
 
 ```sh
-once test tests --format json
-once query test-manifest tests --format json
-once test tests --jobs 4 --format json
+struo test tests --format json
+struo query test-manifest tests --format json
+struo test tests --jobs 4 --format json
 ```
 
 The first command runs the complete target. Later runs can use the resulting
@@ -37,7 +37,7 @@ batching, and exact unit commands.
 
 `vitest_test` prefers the package-local Vitest entry point, then falls back to
 the installed `vitest` command. It uses Vitest's structured reporter, records
-stable file and full-name identifiers, and writes normalized Once results.
+stable file and full-name identifiers, and writes normalized Struo results.
 Exact execution selects the discovered file and an anchored test name pattern.
 
 The target kind declares Node.js and Vitest as tool requirements. A
@@ -47,11 +47,11 @@ is identified as part of the toolchain.
 Automatic batching uses one batch per test file by default. Set `batching` to
 `case` for individual cases, or `target` for one target batch. A complete run
 must establish a current manifest before smaller batches are planned.
-Once disables Vitest's mutable local cache inside the action because the
-installed packages are declared inputs. Once's action cache reuses successful
+Struo disables Vitest's mutable local cache inside the action because the
+installed packages are declared inputs. Struo's action cache reuses successful
 test results when those inputs have not changed.
 
-When an unfiltered run contains duplicate file/full-name identities, Once
+When an unfiltered run contains duplicate file/full-name identities, Struo
 automatically reports one target-owned suite unit instead of failing the run
 or inventing case identities. Every assertion remains in the native JSON
 report, and assertion totals are available in `runner.metadata.native_summary`.
@@ -66,7 +66,7 @@ whole-target reporting mode, even when names are unique.
 | Attribute | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `node` | string | no | `node` | Node.js executable name, absolute path, or workspace-relative path |
-| `runner` | string | no | automatic | Package-relative Vitest entry point or installed command. Once prefers `node_modules/vitest/vitest.mjs`, then searches for `vitest` |
+| `runner` | string | no | automatic | Package-relative Vitest entry point or installed command. Struo prefers `node_modules/vitest/vitest.mjs`, then searches for `vitest` |
 | `config` | list&lt;string&gt; | no | package and lock files | Dependency and runner configuration inputs |
 | `dependencies` | list&lt;string&gt; | no | `node_modules/**/*` | Installed runner and package files required during execution |
 | `data` | list&lt;string&gt; | no | `[]` | Setup, transform, snapshot, and runtime inputs |
@@ -84,7 +84,7 @@ whole-target reporting mode, even when names are unique.
 
 ## Providers and Capabilities
 
-The target emits `once_test_info` and exposes `test` with the `default`,
+The target emits `struo_test_info` and exposes `test` with the `default`,
 `test_results`, and `logs` output groups.
 
 ## Example

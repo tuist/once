@@ -1,14 +1,14 @@
 #shellcheck shell=bash
 # End-to-end specs for the agent-facing graph discovery and editing
-# CLI surface: `once query target-kinds`, `once query example`,
-# `once query target`, `once query validate-target`, and
-# `once edit apply`. These commands mirror the MCP tool surface; the
+# CLI surface: `struo query target-kinds`, `struo query example`,
+# `struo query target`, `struo query validate-target`, and
+# `struo edit apply`. These commands mirror the MCP tool surface; the
 # MCP tests cover the protocol layer, these specs pin the CLI contract
 # (exit codes, --format handling, stdin and --file input).
 
 seed_custom_module_workspace() {
   mkdir -p "$WORKSPACE/modules"
-  cat > "$WORKSPACE/once.toml" <<'EOF'
+  cat > "$WORKSPACE/struo.toml" <<'EOF'
 [modules]
 paths = ["modules/*.star"]
 EOF
@@ -27,9 +27,9 @@ demo_kind = target_kind(
 EOF
 }
 
-Describe 'once query target-kinds'
+Describe 'struo query target-kinds'
   It 'lists every target kind with its example slugs in human mode'
-    When call "$ONCE_BIN" query target-kinds
+    When call "$STRUO_BIN" query target-kinds
     The status should be success
     The stdout should include 'apple_library'
     The stdout should include 'apple_application'
@@ -41,7 +41,7 @@ Describe 'once query target-kinds'
   End
 
   It 'emits structured JSON under --format json'
-    When call "$ONCE_BIN" --format json query target-kinds
+    When call "$STRUO_BIN" --format json query target-kinds
     The status should be success
     The stdout should include '"kind":"apple_library"'
     The stdout should include '"slug":"apple-library-minimal"'
@@ -49,7 +49,7 @@ Describe 'once query target-kinds'
   End
 
   It 'filters discovery by ecosystem intent'
-    When call "$ONCE_BIN" --format json query target-kinds --query elixir
+    When call "$STRUO_BIN" --format json query target-kinds --query elixir
     The status should be success
     The stdout should include '"kind":"elixir_library"'
     The stdout should include '"kind":"elixir_test"'
@@ -57,7 +57,7 @@ Describe 'once query target-kinds'
   End
 
   It 'prioritizes a named family over generic intent words'
-    When call "$ONCE_BIN" --format json query target-kinds --query 'typed Rust library executable test'
+    When call "$STRUO_BIN" --format json query target-kinds --query 'typed Rust library executable test'
     The status should be success
     The stdout should include '"kind":"rust_library"'
     The stdout should include '"kind":"rust_binary"'
@@ -67,7 +67,7 @@ Describe 'once query target-kinds'
   End
 
   It 'combines multiple test-runner ecosystems in one query'
-    When call "$ONCE_BIN" --format json query target-kinds --query 'mixed repository native test runners Python JavaScript TypeScript Rust Go Ruby'
+    When call "$STRUO_BIN" --format json query target-kinds --query 'mixed repository native test runners Python JavaScript TypeScript Rust Go Ruby'
     The status should be success
     The stdout should include '"kind":"pytest_test"'
     The stdout should include '"kind":"vitest_test"'
@@ -80,45 +80,45 @@ Describe 'once query target-kinds'
   End
 End
 
-Describe 'once query example'
+Describe 'struo query example'
   It 'materializes a starter example as JSON'
-    When call "$ONCE_BIN" --format json query example apple_library apple-library-minimal
+    When call "$STRUO_BIN" --format json query example apple_library apple-library-minimal
     The status should be success
     The stdout should include '"slug":"apple-library-minimal"'
-    The stdout should include '"path":"apps/Hello/once.toml"'
+    The stdout should include '"path":"apps/Hello/struo.toml"'
     The stdout should include '"contents":"[[target]]'
   End
 
   It 'materializes a starter example through MCP'
-    mcp_request='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"once_query_example","arguments":{"kind":"apple_library","slug":"apple-library-minimal"}}}'
+    mcp_request='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"struo_query_example","arguments":{"kind":"apple_library","slug":"apple-library-minimal"}}}'
 
-    When call /bin/sh -c 'printf "%s\n" "$1" | "$2" -C "$3" mcp' sh "$mcp_request" "$ONCE_BIN" "$REPO_ROOT"
+    When call /bin/sh -c 'printf "%s\n" "$1" | "$2" -C "$3" mcp' sh "$mcp_request" "$STRUO_BIN" "$REPO_ROOT"
     The status should be success
     The stdout should include 'apple-library-minimal'
-    The stdout should include 'apps/Hello/once.toml'
+    The stdout should include 'apps/Hello/struo.toml'
     The stdout should include 'Hello.swift'
   End
 End
 
-Describe 'once edit materialize-example'
+Describe 'struo edit materialize-example'
   BeforeEach 'setup_workspace'
   AfterEach 'cleanup_workspace'
 
   It 'creates a valid starter without printing file contents'
-    When call "$ONCE_BIN" -C "$WORKSPACE" --format json edit materialize-example rust_library rust-library-minimal
+    When call "$STRUO_BIN" -C "$WORKSPACE" --format json edit materialize-example rust_library rust-library-minimal
     The status should be success
     The stdout should include '"materialized":true'
     The stdout should include '"id":"crates/hello/hello"'
     The stdout should include '"valid":true'
     The stdout should not include 'pub fn'
-    The path "$WORKSPACE/crates/hello/once.toml" should be file
+    The path "$WORKSPACE/crates/hello/struo.toml" should be file
     The path "$WORKSPACE/crates/hello/src/lib.rs" should be file
   End
 
   It 'keeps an identical retry idempotent'
-    "$ONCE_BIN" -C "$WORKSPACE" edit materialize-example rust_library rust-library-minimal >/dev/null
+    "$STRUO_BIN" -C "$WORKSPACE" edit materialize-example rust_library rust-library-minimal >/dev/null
 
-    When call "$ONCE_BIN" -C "$WORKSPACE" --format json edit materialize-example rust_library rust-library-minimal
+    When call "$STRUO_BIN" -C "$WORKSPACE" --format json edit materialize-example rust_library rust-library-minimal
     The status should be success
     The stdout should include '"materialized":true'
     The stdout should include '"created_files":[]'
@@ -132,7 +132,7 @@ Describe 'workspace custom module CLI surface'
 
   seed_failed_resolution() {
     seed_custom_module_workspace
-    cat >> "$WORKSPACE/once.toml" <<'EOF'
+    cat >> "$WORKSPACE/struo.toml" <<'EOF'
 [[target]]
 name = "Broken"
 kind = "broken_resolver"
@@ -147,7 +147,7 @@ EOF
 
   It 'fails target listing instead of presenting an unresolved seed as a complete graph'
     seed_failed_resolution
-    When call "$ONCE_BIN" -C "$WORKSPACE" --format json query targets
+    When call "$STRUO_BIN" -C "$WORKSPACE" --format json query targets
     The status should be failure
     The stdout should be blank
     The stderr should include '"code":"fixture_resolution_failed"'
@@ -156,8 +156,8 @@ EOF
 
   It 'reports the same resolution failure through MCP target listing'
     seed_failed_resolution
-    mcp_request='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"once_query_targets","arguments":{}}}'
-    When call /bin/sh -c 'printf "%s\n" "$1" | "$2" -C "$3" mcp' sh "$mcp_request" "$ONCE_BIN" "$WORKSPACE"
+    mcp_request='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"struo_query_targets","arguments":{}}}'
+    When call /bin/sh -c 'printf "%s\n" "$1" | "$2" -C "$3" mcp' sh "$mcp_request" "$STRUO_BIN" "$WORKSPACE"
     The status should be success
     The stdout should include 'fixture_resolution_failed'
     The stdout should include '"isError":true'
@@ -165,7 +165,7 @@ EOF
 
   It 'includes custom target kinds in query target-kinds'
     seed_custom_module_workspace
-    When call "$ONCE_BIN" -C "$WORKSPACE" --format json query target-kinds
+    When call "$STRUO_BIN" -C "$WORKSPACE" --format json query target-kinds
     The status should be success
     The stdout should include '"kind":"demo_kind"'
     The stdout should include '"docs":"Demo kind"'
@@ -173,7 +173,7 @@ EOF
 
   It 'returns custom target kind schemas from query schema'
     seed_custom_module_workspace
-    When call "$ONCE_BIN" -C "$WORKSPACE" --format json query schema demo_kind
+    When call "$STRUO_BIN" -C "$WORKSPACE" --format json query schema demo_kind
     The status should be success
     The stdout should include '"kind":"demo_kind"'
     The stdout should include '"name":"message"'
@@ -185,7 +185,7 @@ EOF
     cat > "$WORKSPACE/draft.json" <<'EOF'
 {"target":{"name":"Hello","kind":"demo_kind","attrs":{"message":"hello"}}}
 EOF
-    When call "$ONCE_BIN" -C "$WORKSPACE" --format json query validate-target --file "$WORKSPACE/draft.json"
+    When call "$STRUO_BIN" -C "$WORKSPACE" --format json query validate-target --file "$WORKSPACE/draft.json"
     The status should be success
     The stdout should include '"valid":true'
   End
@@ -195,21 +195,21 @@ EOF
     cat > "$WORKSPACE/edit.json" <<'EOF'
 {"package":"apps/Hello","operations":[{"op":"create","target":{"name":"Hello","kind":"demo_kind","attrs":{"message":"hello"}}}]}
 EOF
-    When call "$ONCE_BIN" -C "$WORKSPACE" --format json edit apply --file "$WORKSPACE/edit.json"
+    When call "$STRUO_BIN" -C "$WORKSPACE" --format json edit apply --file "$WORKSPACE/edit.json"
     The status should be success
     The stdout should include '"applied":true'
-    The path "$WORKSPACE/apps/Hello/once.toml" should be file
-    The contents of file "$WORKSPACE/apps/Hello/once.toml" should include 'kind = "demo_kind"'
+    The path "$WORKSPACE/apps/Hello/struo.toml" should be file
+    The contents of file "$WORKSPACE/apps/Hello/struo.toml" should include 'kind = "demo_kind"'
   End
 End
 
-Describe 'once query expression'
+Describe 'struo query expression'
   BeforeEach 'setup_workspace'
   AfterEach 'cleanup_workspace'
 
   seed_query_expression_workspace() {
     mkdir -p "$WORKSPACE/apps/Hello"
-    cat > "$WORKSPACE/apps/Hello/once.toml" <<'EOF'
+    cat > "$WORKSPACE/apps/Hello/struo.toml" <<'EOF'
 [[target]]
 name = "Core"
 kind = "apple_library"
@@ -224,7 +224,7 @@ deps = ["./Core"]
 
 [target.attrs]
 platform = "ios"
-bundle_id = "dev.once.DesignSystem"
+bundle_id = "dev.struo.DesignSystem"
 
 [[target]]
 name = "App"
@@ -233,7 +233,7 @@ deps = ["./DesignSystem"]
 
 [target.attrs]
 platform = "ios"
-bundle_id = "dev.once.App"
+bundle_id = "dev.struo.App"
 
 [[target]]
 name = "AppTests"
@@ -247,7 +247,7 @@ EOF
 
   It 'evaluates a transitive dependency query'
     seed_query_expression_workspace
-    When call once query 'MATCH (app:Target {id: "apps/Hello/App"})-[:DEPENDS_ON*]->(dep:Target) RETURN dep.id, dep.kind'
+    When call struo query 'MATCH (app:Target {id: "apps/Hello/App"})-[:DEPENDS_ON*]->(dep:Target) RETURN dep.id, dep.kind'
     The status should be success
     The stdout should include 'dep.id | dep.kind'
     The stdout should include 'apps/Hello/DesignSystem | apple_framework'
@@ -256,7 +256,7 @@ EOF
 
   It 'emits JSON rows for capability queries'
     seed_query_expression_workspace
-    When call once --format json query 'MATCH (t:Target)-[:EXPOSES]->(c:Capability {name: "test"}) RETURN t.id AS target'
+    When call struo --format json query 'MATCH (t:Target)-[:EXPOSES]->(c:Capability {name: "test"}) RETURN t.id AS target'
     The status should be success
     The stdout should include '"columns":["target"]'
     The stdout should include '"apps/Hello/AppTests"'
@@ -264,7 +264,7 @@ EOF
 
   It 'emits Toon rows for capability queries'
     seed_query_expression_workspace
-    When call once --format toon query 'MATCH (t:Target)-[:EXPOSES]->(c:Capability {name: "test"}) RETURN t.id AS target'
+    When call struo --format toon query 'MATCH (t:Target)-[:EXPOSES]->(c:Capability {name: "test"}) RETURN t.id AS target'
     The status should be success
     The stdout should include 'columns[1]: target'
     The stdout should include 'apps/Hello/AppTests'
@@ -272,7 +272,7 @@ EOF
 
   It 'treats bare supported label words as aliases'
     seed_query_expression_workspace
-    When call once query 'MATCH (Target) RETURN Target.id'
+    When call struo query 'MATCH (Target) RETURN Target.id'
     The status should be success
     The stdout should include 'Target.id'
     The stdout should include 'apps/Hello/App'
@@ -280,7 +280,7 @@ EOF
 
   It 'rejects invalid Cypher syntax'
     seed_query_expression_workspace
-    When call once query 'MATCH (t:Target RETURN t.id'
+    When call struo query 'MATCH (t:Target RETURN t.id'
     The status should equal 2
     The stdout should equal ''
     The stderr should include 'not valid Cypher syntax'
@@ -288,7 +288,7 @@ EOF
 
   It 'rejects unsupported graph labels'
     seed_query_expression_workspace
-    When call once query 'MATCH (t:Unknown) RETURN t.id'
+    When call struo query 'MATCH (t:Unknown) RETURN t.id'
     The status should equal 2
     The stdout should equal ''
     The stderr should include 'unsupported graph label'
@@ -296,7 +296,7 @@ EOF
 
   It 'rejects unsupported graph relationships'
     seed_query_expression_workspace
-    When call once query 'MATCH (t:Target)-[:OWNS]->(d:Target) RETURN d.id'
+    When call struo query 'MATCH (t:Target)-[:OWNS]->(d:Target) RETURN d.id'
     The status should equal 2
     The stdout should equal ''
     The stderr should include 'unsupported relationship'
@@ -304,7 +304,7 @@ EOF
 
   It 'rejects mutating Cypher clauses'
     seed_query_expression_workspace
-    When call once query 'MATCH (t:Target) DELETE t RETURN t.id'
+    When call struo query 'MATCH (t:Target) DELETE t RETURN t.id'
     The status should equal 2
     The stdout should equal ''
     The stderr should include 'read-only'
@@ -313,7 +313,7 @@ EOF
 
   It 'rejects optional match clauses'
     seed_query_expression_workspace
-    When call once query 'OPTIONAL MATCH (t:Target) RETURN t.id'
+    When call struo query 'OPTIONAL MATCH (t:Target) RETURN t.id'
     The status should equal 2
     The stdout should equal ''
     The stderr should include 'read-only'
@@ -322,7 +322,7 @@ EOF
 
   It 'rejects drop statements'
     seed_query_expression_workspace
-    When call once query 'DROP INDEX target_name'
+    When call struo query 'DROP INDEX target_name'
     The status should equal 2
     The stdout should equal ''
     The stderr should include 'read-only'
@@ -330,13 +330,13 @@ EOF
   End
 End
 
-Describe 'once query target'
+Describe 'struo query target'
   BeforeEach 'setup_workspace'
   AfterEach 'cleanup_workspace'
 
   seed_apple_library_target() {
     mkdir -p "$WORKSPACE/apps/Hello"
-    cat > "$WORKSPACE/apps/Hello/once.toml" <<'EOF'
+    cat > "$WORKSPACE/apps/Hello/struo.toml" <<'EOF'
 [[target]]
 name = "Hello"
 kind = "apple_library"
@@ -350,7 +350,7 @@ EOF
 
   It 'resolves a target by id and prints its kind and attrs'
     seed_apple_library_target
-    When call once query target apps/Hello/Hello
+    When call struo query target apps/Hello/Hello
     The status should be success
     The stdout should include 'apps/Hello/Hello (apple_library)'
     The stdout should include 'platform'
@@ -359,7 +359,7 @@ EOF
 
   It 'emits a structured record under --format json'
     seed_apple_library_target
-    When call once --format json query target apps/Hello/Hello
+    When call struo --format json query target apps/Hello/Hello
     The status should be success
     The stdout should include '"id":"apps/Hello/Hello"'
     The stdout should include '"kind":"apple_library"'
@@ -368,13 +368,13 @@ EOF
 
   It 'fails when the target id does not resolve'
     seed_apple_library_target
-    When call once query target apps/Hello/Missing
+    When call struo query target apps/Hello/Missing
     The status should not equal 0
     The stderr should include 'no target matches'
   End
 End
 
-Describe 'once query validate-target'
+Describe 'struo query validate-target'
   BeforeEach 'setup_workspace'
   AfterEach 'cleanup_workspace'
 
@@ -382,7 +382,7 @@ Describe 'once query validate-target'
     Data
       #|{"target":{"name":"Hello","kind":"apple_library","attrs":{"platform":"ios"}}}
     End
-    When call "$ONCE_BIN" --format json query validate-target
+    When call "$STRUO_BIN" --format json query validate-target
     The status should be success
     The stdout should include '"valid":true'
   End
@@ -391,7 +391,7 @@ Describe 'once query validate-target'
     Data
       #|{"target":{"name":"Hello","kind":"apple_library"}}
     End
-    When call "$ONCE_BIN" --format json query validate-target
+    When call "$STRUO_BIN" --format json query validate-target
     The status should be success
     The stdout should include '"valid":false'
     The stdout should include '"code":"missing_required_attr"'
@@ -403,7 +403,7 @@ Describe 'once query validate-target'
     cat > "$WORKSPACE/draft.json" <<'EOF'
 {"target":{"name":"Hello","kind":"apple_library","attrs":{"platform":"ios"}}}
 EOF
-    When call "$ONCE_BIN" --format json query validate-target --file "$WORKSPACE/draft.json"
+    When call "$STRUO_BIN" --format json query validate-target --file "$WORKSPACE/draft.json"
     The status should be success
     The stdout should include '"valid":true'
   End
@@ -412,15 +412,15 @@ EOF
     Data
       #|{"wrong":"shape"}
     End
-    When call "$ONCE_BIN" --format json query validate-target
+    When call "$STRUO_BIN" --format json query validate-target
     The status should not equal 0
-    The stderr should include '"schema":"once.error.v1"'
+    The stderr should include '"schema":"struo.error.v1"'
     The stderr should include 'validate-target input'
     The stderr should include 'session failed'
   End
 End
 
-Describe 'once edit apply'
+Describe 'struo edit apply'
   BeforeEach 'setup_workspace'
   AfterEach 'cleanup_workspace'
 
@@ -428,38 +428,38 @@ Describe 'once edit apply'
     Data
       #|{"package":"apps/Hello","operations":[{"op":"create","target":{"name":"Hello","kind":"apple_library","attrs":{"platform":"ios"}}}]}
     End
-    When call "$ONCE_BIN" -C "$WORKSPACE" --format json edit apply
+    When call "$STRUO_BIN" -C "$WORKSPACE" --format json edit apply
     The status should be success
     The stdout should include '"applied":true'
-    The path "$WORKSPACE/apps/Hello/once.toml" should be file
+    The path "$WORKSPACE/apps/Hello/struo.toml" should be file
   End
 
   It 'reads the operation batch from --file instead of stdin'
     cat > "$WORKSPACE/edit.json" <<'EOF'
 {"package":"apps/Hello","operations":[{"op":"create","target":{"name":"Hello","kind":"apple_library","attrs":{"platform":"ios"}}}]}
 EOF
-    When call "$ONCE_BIN" -C "$WORKSPACE" --format json edit apply --file "$WORKSPACE/edit.json"
+    When call "$STRUO_BIN" -C "$WORKSPACE" --format json edit apply --file "$WORKSPACE/edit.json"
     The status should be success
     The stdout should include '"applied":true'
-    The path "$WORKSPACE/apps/Hello/once.toml" should be file
+    The path "$WORKSPACE/apps/Hello/struo.toml" should be file
   End
 
   It 'returns structured diagnostics and leaves the file untouched on failure'
     mkdir -p "$WORKSPACE/apps/Hello"
-    cat > "$WORKSPACE/apps/Hello/once.toml" <<'EOF'
+    cat > "$WORKSPACE/apps/Hello/struo.toml" <<'EOF'
 [[target]]
 name = "Hello"
 kind = "apple_library"
 EOF
-    original_sha="$(shasum "$WORKSPACE/apps/Hello/once.toml" | awk '{print $1}')"
+    original_sha="$(shasum "$WORKSPACE/apps/Hello/struo.toml" | awk '{print $1}')"
     Data
       #|{"package":"apps/Hello","operations":[{"op":"delete","target_name":"Missing"}]}
     End
-    When call "$ONCE_BIN" -C "$WORKSPACE" --format json edit apply
+    When call "$STRUO_BIN" -C "$WORKSPACE" --format json edit apply
     The status should be success
     The stdout should include '"applied":false'
     The stdout should include '"code":"target_not_found"'
-    new_sha="$(shasum "$WORKSPACE/apps/Hello/once.toml" | awk '{print $1}')"
+    new_sha="$(shasum "$WORKSPACE/apps/Hello/struo.toml" | awk '{print $1}')"
     The variable new_sha should equal "$original_sha"
   End
 
@@ -467,9 +467,9 @@ EOF
     Data
       #|not a json object
     End
-    When call "$ONCE_BIN" -C "$WORKSPACE" --format json edit apply
+    When call "$STRUO_BIN" -C "$WORKSPACE" --format json edit apply
     The status should not equal 0
-    The stderr should include '"schema":"once.error.v1"'
+    The stderr should include '"schema":"struo.error.v1"'
     The stderr should include 'apply input'
     The stderr should include 'session failed'
   End

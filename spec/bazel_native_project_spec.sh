@@ -1,5 +1,5 @@
 #shellcheck shell=bash
-# End-to-end specs for the graph Once derives from a Bazel workspace.
+# End-to-end specs for the graph Struo derives from a Bazel workspace.
 
 Describe 'bazel native project'
   BeforeEach 'setup_workspace'
@@ -11,7 +11,7 @@ Describe 'bazel native project'
   }
 
   target_ids() {
-    env PATH="$WORKSPACE/tools:$PATH" "$ONCE_BIN" -C "$WORKSPACE" --format json query targets |
+    env PATH="$WORKSPACE/tools:$PATH" "$STRUO_BIN" -C "$WORKSPACE" --format json query targets |
       jq -r '.[] | "\(.kind) \(.id)"' |
       sort
   }
@@ -26,38 +26,38 @@ Describe 'bazel native project'
     The stdout should include 'bazel_test bz_support_test'
     The stdout should not include 'cargo_workspace'
     The stdout should not include 'swift_package_workspace'
-    The path "$WORKSPACE/once.toml" should not be exist
+    The path "$WORKSPACE/struo.toml" should not be exist
   End
 
-  It 'builds and tests the complete workspace without a Once manifest'
+  It 'builds and tests the complete workspace without a Struo manifest'
     setup_bazel_workspace
 
-    When call env PATH="$WORKSPACE/tools:$PATH" "$ONCE_BIN" -C "$WORKSPACE" test --quiet
+    When call env PATH="$WORKSPACE/tools:$PATH" "$STRUO_BIN" -C "$WORKSPACE" test --quiet
     The status should be success
     The stdout should include 'test batches'
-    The contents of file "$WORKSPACE/.once/out/bz_support_test/test/test_results.json" should include '"status":"passed"'
-    The path "$WORKSPACE/once.toml" should not be exist
+    The contents of file "$WORKSPACE/.struo/out/bz_support_test/test/test_results.json" should include '"status":"passed"'
+    The path "$WORKSPACE/struo.toml" should not be exist
   End
 
   It 'builds the complete workspace through the detected root'
     setup_bazel_workspace
 
-    When call env PATH="$WORKSPACE/tools:$PATH" "$ONCE_BIN" -C "$WORKSPACE" build --quiet
+    When call env PATH="$WORKSPACE/tools:$PATH" "$STRUO_BIN" -C "$WORKSPACE" build --quiet
     The status should be success
-    The stdout should include 'once: build bazel (bazel_workspace)'
-    The path "$WORKSPACE/once.toml" should not be exist
+    The stdout should include 'struo: build bazel (bazel_workspace)'
+    The path "$WORKSPACE/struo.toml" should not be exist
   End
 
   It 'recognizes a WORKSPACE.bazel-only repository'
     setup_bazel_workspace
     mv "$WORKSPACE/MODULE.bazel" "$WORKSPACE/WORKSPACE.bazel"
 
-    When call env PATH="$WORKSPACE/tools:$PATH" "$ONCE_BIN" -C "$WORKSPACE" --format json query targets
+    When call env PATH="$WORKSPACE/tools:$PATH" "$STRUO_BIN" -C "$WORKSPACE" --format json query targets
     The status should be success
     The stdout should include '"id":"bazel"'
     The stdout should include '"id":"bz_support"'
     The stdout should include '"id":"bz_support_test"'
-    The path "$WORKSPACE/once.toml" should not be exist
+    The path "$WORKSPACE/struo.toml" should not be exist
   End
 
   It 'uses the native test strategy when TestRunner argv cannot run on its own'
@@ -68,13 +68,13 @@ case "$1" in
   --version) printf 'bazel 8.4.2\n' ;;
   query) printf 'sh_test rule //:support_test\n' ;;
   aquery) printf '%s\n' '{"actions":[{"mnemonic":"TestRunner","arguments":["/bin/sh","-c","exit 42"]}]}' ;;
-  info) printf '%s\n' "${TMPDIR:-/tmp}/once-bazel-output-base" ;;
+  info) printf '%s\n' "${TMPDIR:-/tmp}/struo-bazel-output-base" ;;
   fetch|test) exit 0 ;;
   *) exit 2 ;;
 esac
 SH
 
-    When call env PATH="$WORKSPACE/tools:$PATH" "$ONCE_BIN" -C "$WORKSPACE" --format json test bz_support_test
+    When call env PATH="$WORKSPACE/tools:$PATH" "$STRUO_BIN" -C "$WORKSPACE" --format json test bz_support_test
     The status should be success
     The stderr should be blank
     The stdout should include '"status":"completed"'
@@ -89,7 +89,7 @@ printf x >> "$WORKSPACE/executions"
 /bin/cat "\$1" >> "\$2"
 SH
     chmod +x "$WORKSPACE/tools/copy"
-    cat > "$WORKSPACE/once.toml" <<TOML
+    cat > "$WORKSPACE/struo.toml" <<TOML
 [[target]]
 name = "bazel"
 kind = "bazel_workspace"
@@ -111,20 +111,20 @@ JSON
   *) exit 42 ;;
 esac
 SH
-    local output="$WORKSPACE/.once/bazel-actions/bazel-out/alias.txt"
-    mkdir -p "$WORKSPACE/.once/bazel-actions/bazel-out"
-    printf unrelated > "$WORKSPACE/.once/bazel-actions/bazel-out/private"
-    chmod 000 "$WORKSPACE/.once/bazel-actions/bazel-out/private"
-    env PATH="$WORKSPACE/tools:$PATH" "$ONCE_BIN" -C "$WORKSPACE" build bz_support --quiet > "$WORKSPACE/run.log" || return
+    local output="$WORKSPACE/.struo/bazel-actions/bazel-out/alias.txt"
+    mkdir -p "$WORKSPACE/.struo/bazel-actions/bazel-out"
+    printf unrelated > "$WORKSPACE/.struo/bazel-actions/bazel-out/private"
+    chmod 000 "$WORKSPACE/.struo/bazel-actions/bazel-out/private"
+    env PATH="$WORKSPACE/tools:$PATH" "$STRUO_BIN" -C "$WORKSPACE" build bz_support --quiet > "$WORKSPACE/run.log" || return
     [ "$(cat "$output")" = alpha ] || return 1
     [ "$(cat "$WORKSPACE/executions")" = x ] || return 1
-    [ ! -e "$WORKSPACE/.once/bazel-actions/bazel-out/unused" ] || return 1
-    rm -rf "$WORKSPACE/.once/bazel-actions"
-    env PATH="$WORKSPACE/tools:$PATH" "$ONCE_BIN" -C "$WORKSPACE" build bz_support --quiet > "$WORKSPACE/run.log" || return
+    [ ! -e "$WORKSPACE/.struo/bazel-actions/bazel-out/unused" ] || return 1
+    rm -rf "$WORKSPACE/.struo/bazel-actions"
+    env PATH="$WORKSPACE/tools:$PATH" "$STRUO_BIN" -C "$WORKSPACE" build bz_support --quiet > "$WORKSPACE/run.log" || return
     [ "$(cat "$output")" = alpha ] || return 1
     [ "$(cat "$WORKSPACE/executions")" = x ] || return 1
     printf beta > "$WORKSPACE/value.txt"
-    env PATH="$WORKSPACE/tools:$PATH" "$ONCE_BIN" -C "$WORKSPACE" build bz_support --quiet > "$WORKSPACE/run.log" || return
+    env PATH="$WORKSPACE/tools:$PATH" "$STRUO_BIN" -C "$WORKSPACE" build bz_support --quiet > "$WORKSPACE/run.log" || return
     [ "$(cat "$output")" = beta ] || return 1
     [ "$(cat "$WORKSPACE/executions")" = xx ] || return 1
     printf 'restored without execution; invalidated changed input\n'
@@ -157,7 +157,7 @@ SH
 printf '%s\n' "\$TEST_SHARD_INDEX" >> "$WORKSPACE/shards"
 SH
     chmod +x "$WORKSPACE/launcher.sh" "$WORKSPACE/test.sh"
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [[target]]
 name = "bazel"
 kind = "bazel_workspace"
@@ -195,15 +195,15 @@ JSON
   *) exit 42 ;;
 esac
 SH
-    env PATH="$WORKSPACE/tools:$PATH" "$ONCE_BIN" -C "$WORKSPACE" test bz_support_test --quiet > "$WORKSPACE/run.log" || return
+    env PATH="$WORKSPACE/tools:$PATH" "$STRUO_BIN" -C "$WORKSPACE" test bz_support_test --quiet > "$WORKSPACE/run.log" || return
     [ "$(sort "$WORKSPACE/shards" | tr '\n' ',')" = '0,1,' ] || return 1
-    local tree="$WORKSPACE/.once/bazel-actions/bazel-out/test.runfiles"
+    local tree="$WORKSPACE/.struo/bazel-actions/bazel-out/test.runfiles"
     printf stale > "$tree/stale"
-    env PATH="$WORKSPACE/tools:$PATH" "$ONCE_BIN" -C "$WORKSPACE" build bz_support_test --quiet > "$WORKSPACE/run.log" || return
+    env PATH="$WORKSPACE/tools:$PATH" "$STRUO_BIN" -C "$WORKSPACE" build bz_support_test --quiet > "$WORKSPACE/run.log" || return
     [ ! -e "$tree/stale" ] || return 1
     rm "$WORKSPACE/shards"
-    rm -rf "$WORKSPACE/.once/bazel-actions"
-    env PATH="$WORKSPACE/tools:$PATH" "$ONCE_BIN" -C "$WORKSPACE" test bz_support_test --quiet > "$WORKSPACE/run.log" || return
+    rm -rf "$WORKSPACE/.struo/bazel-actions"
+    env PATH="$WORKSPACE/tools:$PATH" "$STRUO_BIN" -C "$WORKSPACE" test bz_support_test --quiet > "$WORKSPACE/run.log" || return
     [ "$(sort "$WORKSPACE/shards" | tr '\n' ',')" = '0,1,' ] || return 1
     printf 'ran both shards with mapped runfiles after restore\n'
   }

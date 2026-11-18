@@ -5,16 +5,16 @@ next: false
 
 # Elixir
 
-Once can read an existing `mix.exs`, derive a typed build graph, and cache the
+Struo can read an existing `mix.exs`, derive a typed build graph, and cache the
 compiled project and each locked dependency separately. You can build, lint,
 test, run Mix tasks, and assemble a release without first translating the
-project into `once.toml`.
+project into `struo.toml`.
 
 ## Start With an Existing Mix Project
 
 ### Check the Toolchain
 
-Once invokes `elixir`, `erl`, and `mix` from the selected toolchain. Confirm
+Struo invokes `elixir`, `erl`, and `mix` from the selected toolchain. Confirm
 that the versions expected by the project are available:
 
 ```sh
@@ -41,8 +41,8 @@ mix local.rebar --force
 
 ### Materialize Locked Dependencies
 
-Once does not download dependencies or change `mix.lock`. If the project has a
-current lockfile, materialize its exact sources before asking Once to load the
+Struo does not download dependencies or change `mix.lock`. If the project has a
+current lockfile, materialize its exact sources before asking Struo to load the
 graph:
 
 ```sh
@@ -55,9 +55,9 @@ dependency-free project does not need `mix.lock`. A project whose entire active
 dependency graph consists of local path dependencies also works without a
 lockfile.
 
-Once currently requires a concrete lockfile when a project declares external
+Struo currently requires a concrete lockfile when a project declares external
 dependencies. Library maintainers who do not commit `mix.lock` can generate
-one locally before using Once, but repeatable builds on another machine require
+one locally before using Struo, but repeatable builds on another machine require
 the same lockfile.
 
 ### Inspect the Derived Graph
@@ -65,16 +65,16 @@ the same lockfile.
 From the directory that contains `mix.exs`, inspect the graph:
 
 ```sh
-once query workspace
-once query targets
+struo query workspace
+struo query targets
 ```
 
-No `once.toml` is required. From the directory containing `mix.exs`, the
+No `struo.toml` is required. From the directory containing `mix.exs`, the
 usual build and test commands select that project automatically:
 
 ```sh
-once build
-once test
+struo build
+struo test
 ```
 
 In a Git repository, these commands use the nearest repository root as the
@@ -83,14 +83,14 @@ This keeps sibling path dependencies inside the build and avoids resolving
 unrelated native projects elsewhere in the repository. Outside a Git
 repository, the project directory is the boundary; use a containing workspace
 with an explicit target when dependencies live outside it. Neither command
-writes a manifest. `once build` follows `MIX_ENV`, defaulting to `dev`, while
-`once test` compiles and executes the test environment. The same boundary
-applies to `once run`, `once lint`, and `--all`. Explicit targets matching
+writes a manifest. `struo build` follows `MIX_ENV`, defaulting to `dev`, while
+`struo test` compiles and executes the test environment. The same boundary
+applies to `struo run`, `struo lint`, and `--all`. Explicit targets matching
 another native project marker in the current directory remain selectable.
 Repository-root commands without an explicit native target retain ordinary
 workspace discovery. An explicit package-relative native target selects its
 owning project and target family.
-An explicit `once.toml` between the project and repository root takes priority.
+An explicit `struo.toml` between the project and repository root takes priority.
 
 Native compilation conservatively hashes non-hidden project files outside
 generated build and dependency directories. This includes compiler resources,
@@ -102,7 +102,7 @@ structured ExUnit events for totals, so summary-looking
 output from a test cannot rewrite the result. Invalidated tests count as failures,
 and excluded tests do not count as executed tests.
 
-The identifiers printed by `once query targets` are the source of truth. For a
+The identifiers printed by `struo query targets` are the source of truth. For a
 Mix project at the workspace root, discovery normally derives:
 
 - `mix_application_dev`, `mix_application_test`, and
@@ -118,20 +118,20 @@ Nested projects use package-qualified identifiers such as
 
 ### Build, Lint, Test, Run, and Release
 
-Use the derived targets through the same commands as every other Once graph:
+Use the derived targets through the same commands as every other Struo graph:
 
 ```sh
-once build mix
-once run mix_lint
-once test mix_tests
-once run mix_application_dev -- phx.server
-once build mix_release
+struo build mix
+struo run mix_lint
+struo test mix_tests
+struo run mix_application_dev -- phx.server
+struo build mix_release
 ```
 
 The argument after `--` is a Mix task selected at invocation time.
 `phx.server` is only an example; native discovery does not assume that the
 project uses Phoenix or another framework. Native tests retain the project's
-test aliases, configured test paths, and test file patterns. Once compiles
+test aliases, configured test paths, and test file patterns. Struo compiles
 application and test-support code first, then runs the aliases and tests against
 those outputs without recompiling dependencies or invoking project compilers
 again.
@@ -155,17 +155,17 @@ an explicit release target with `pre_tasks` when the release requires it.
 Run the same build twice without changing an input:
 
 ```sh
-once build mix_application_dev
-once build mix_application_dev
+struo build mix_application_dev
+struo build mix_application_dev
 ```
 
 The second invocation should restore unchanged actions from the configured
-cache. Outputs are materialized under `.once/out/`. Changing one dependency
+cache. Outputs are materialized under `.struo/out/`. Changing one dependency
 invalidates that package and its consumers, changing application source
 invalidates the application, and changing only a test file reruns the tests
 without recompiling the application.
 
-Dependency fetching is outside the Once graph. Once caches compilation after
+Dependency fetching is outside the Struo graph. Struo caches compilation after
 `deps/` contains the sources selected by `mix.lock`. Continue with
 [Caching](/guide/scripted/caching) to configure a shared remote cache.
 
@@ -173,13 +173,13 @@ Dependency fetching is outside the Once graph. Once caches compilation after
 
 Discovery preserves workspace-relative source roots for path dependencies and
 recognizes nested Mix projects. An umbrella root builds its detected child
-workspaces. Use `once query targets` to find each package-qualified target
+workspaces. Use `struo query targets` to find each package-qualified target
 rather than assuming that every target lives at the root.
 
-Targetless `once test` includes discovered nested test suites, even when native
+Targetless `struo test` includes discovered nested test suites, even when native
 `mix test` at the root runs only the root project. Each separate Mix project
 needs its own `mix deps.get --check-locked`; fetching at the root does not
-materialize a nested project's dependencies. Once preserves native test aliases,
+materialize a nested project's dependencies. Struo preserves native test aliases,
 including database creation and migration tasks. Provision any required external
 services before running those suites. Native test results remain uncached so
 these services are exercised on every run; compilation actions remain cacheable.
@@ -197,7 +197,7 @@ back to an opaque build.
   The `mix_application_test` target is still available for a test-environment
   compile.
 - If release assembly needs `assets.deploy` or another preparation task,
-  declare a `mix_release` target with `pre_tasks`. Once does not infer
+  declare a `mix_release` target with `pre_tasks`. Struo does not infer
   framework conventions.
 - Native project evaluation requires Erlang 27 or newer.
 
@@ -210,7 +210,7 @@ independently.
 
 ## Declare a Standalone Library and Test
 
-Create `apps/greeting/once.toml`:
+Create `apps/greeting/struo.toml`:
 
 ```toml
 [[target]]
@@ -236,7 +236,7 @@ Use this source layout:
 
 ```text
 apps/greeting/
-├── once.toml
+├── struo.toml
 ├── lib/
 │   └── greeting.ex
 └── test/
@@ -254,11 +254,11 @@ compiling the application a second time.
 Inspect the declared targets and their contracts:
 
 ```sh
-once query targets --kind elixir_library
-once query capabilities apps/greeting/greeting
-once query capabilities apps/greeting/greeting_test
-once query schema elixir_library
-once query schema elixir_test
+struo query targets --kind elixir_library
+struo query capabilities apps/greeting/greeting
+struo query capabilities apps/greeting/greeting_test
+struo query schema elixir_library
+struo query schema elixir_test
 ```
 
 The library exposes `build`. The test target exposes `test`. Neither target
@@ -269,23 +269,23 @@ exposes `run`.
 Build the application bytecode:
 
 ```sh
-once build apps/greeting/greeting
+struo build apps/greeting/greeting
 ```
 
 For this target, the staged bytecode and application metadata appear under
-`.once/out/apps/greeting/greeting/ebin`. Private application files appear
-under `.once/out/apps/greeting/greeting/priv`. Compile metadata and persisted
+`.struo/out/apps/greeting/greeting/ebin`. Private application files appear
+under `.struo/out/apps/greeting/greeting/priv`. Compile metadata and persisted
 warnings live beside them as `compile-metadata.tsv` and
 `compile-warnings.log`.
 
 Run the tests against that compiled library:
 
 ```sh
-once test apps/greeting/greeting_test
+struo test apps/greeting/greeting_test
 ```
 
 Test results and logs appear under
-`.once/out/apps/greeting/greeting_test/test/`, including
+`.struo/out/apps/greeting/greeting_test/test/`, including
 `test_results.json`, `elixir-test.log`, and `native_results.txt`.
 
 Changing only a test file reruns the test without recompiling the library.
@@ -297,12 +297,12 @@ inputs can also participate in cache invalidation when declared by the target.
 
 Compile-time dependencies such as macros or structs used from another target
 should be separate `elixir_library` targets connected through `deps`. This
-keeps each compiled application queryable and lets Once rebuild the affected
+keeps each compiled application queryable and lets Struo rebuild the affected
 part of the graph.
 
 The library target does not require `mix.exs`. Set `mix_config` only when the
 project file should affect the build or when tests must run through `mix test`.
-In that mode, Once still uses bytecode compiled by the library target and runs
+In that mode, Struo still uses bytecode compiled by the library target and runs
 Mix with dependency checks and compilation disabled.
 
 For a first-party project that needs its registered Mix compiler pipeline,
@@ -355,8 +355,8 @@ Fetch the exact dependency sources before loading the graph:
 
 ```sh
 mix deps.get --check-locked
-once build application_test
-once test tests
+struo build application_test
+struo test tests
 ```
 
 `mix_project` runs the first-party compiler pipeline with dependency checking
@@ -365,13 +365,13 @@ an `elixir_app` provider. A manifest can set `run_task`, or the caller can
 supply a task without coupling the discovered graph to a framework convention:
 
 ```sh
-once run mix_application_dev -- phx.server
+struo run mix_application_dev -- phx.server
 ```
 
 For third-party packages managed by Mix and Hex, declare one
 `mix_dependencies` target. Mix evaluates the active dependency graph from
 `mix.exs`, while the committed `mix.lock` supplies the exact version, source,
-and checksums. Once emits a synthetic `mix_package` target for each active
+and checksums. Struo emits a synthetic `mix_package` target for each active
 locked package and preserves Mix's dependency edges.
 
 ```toml
@@ -408,16 +408,16 @@ srcs = ["lib/**/*.ex"]
 deps = ["./mix_dependencies"]
 ```
 
-Fetch dependency sources before the Once build and keep them under the
+Fetch dependency sources before the Struo build and keep them under the
 configured vendor directory. Graph loading never runs dependency fetching or
 updates the lockfile. With `graph_file`, ordinary graph loading also avoids
-executing Mix. Without it, Once evaluates the project with isolated Mix and Hex
+executing Mix. Without it, Struo evaluates the project with isolated Mix and Hex
 homes and Hex offline mode. Vendored locked packages do not require a Hex
 archive to be installed in that isolated home. The live graph path requires
 Erlang 27 or newer for its built-in JavaScript Object Notation encoder. The
 checked-in snapshot binds the exact `mix.exs` and `mix.lock` text together with
 the selected `mix_env`, so a manifest, lockfile, or environment change makes
-graph loading fail until the snapshot is regenerated. Its `once_inputs` map
+graph loading fail until the snapshot is regenerated. Its `struo_inputs` map
 also binds every exact resolver input except the snapshot itself. Include path
 dependency manifests so their edges cannot become stale. Package compilation
 sets Hex offline mode. Mix packages use their registered compiler pipeline,
@@ -439,9 +439,9 @@ config_entry = "config/config.exs"
 The `config` globs must include every file imported by `config_entry`.
 
 Map every active Mix path dependency through `path_dependencies`. Each value is
-an ordinary first-party Once target reference. Graph loading fails instead of
+an ordinary first-party Struo target reference. Graph loading fails instead of
 silently dropping a path dependency when its application name is not mapped.
-Once preserves each mapped target's workspace-relative source root in the
+Struo preserves each mapped target's workspace-relative source root in the
 isolated build workspace, so relative paths in `mix.exs` keep their original
 meaning.
 
@@ -451,7 +451,7 @@ command fail with an explicit error.
 
 ## Lint and Release
 
-A `mix_project` can expose deterministic checks through `once run`:
+A `mix_project` can expose deterministic checks through `struo run`:
 
 ```toml
 [target.attrs]
@@ -496,25 +496,25 @@ Build the release twice to confirm that the second invocation restores the
 release action from the configured cache:
 
 ```sh
-once build release
-once build release
+struo build release
+struo build release
 ```
 
 Inspect the imported packages before building the local application:
 
 ```sh
-once query targets --kind mix_package
-once build greeting
+struo query targets --kind mix_package
+struo build greeting
 elixir \
-  -pa .once/out/mix-locked-greeting/mix/prod/lib/locked_greeting/ebin \
-  -pa .once/out/local_helper/ebin \
-  -pa .once/out/greeting/ebin \
-  -e 'IO.write(Greeting.message("Once"))'
+  -pa .struo/out/mix-locked-greeting/mix/prod/lib/locked_greeting/ebin \
+  -pa .struo/out/local_helper/ebin \
+  -pa .struo/out/greeting/ebin \
+  -e 'IO.write(Greeting.message("Struo"))'
 ```
 
 The bundled dependency starter compiles a locked `locked_greeting` package and
 a mapped local helper, then compiles the first-party `Greeting` module against
-both. Evaluating `Greeting.message("Once")` returns `Hello, Once!`, which
+both. Evaluating `Greeting.message("Struo")` returns `Hello, Struo!`, which
 verifies both provider edges as well as the imported graph.
 
 ## Target References and Limitations

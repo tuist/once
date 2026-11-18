@@ -11,4 +11,4 @@ Public inherited test methods also run on concrete suites. Overridden methods
 are selected once, instead of executing a shadowed base implementation.
 
 Kotlin JVM test results now use the standard test output location, so
-`once query test-results` can read them after a run.
+`struo query test-results` can read them after a run.

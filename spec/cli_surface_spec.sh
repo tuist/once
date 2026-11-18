@@ -1,11 +1,11 @@
 #shellcheck shell=bash
 # CLI surface checks: argument parsing, help, version, error messages.
 
-Describe 'once --help'
+Describe 'struo --help'
   It 'prints usage and exits 0'
-    When call "$ONCE_BIN" --help
+    When call "$STRUO_BIN" --help
     The status should be success
-    The stdout should include 'once'
+    The stdout should include 'struo'
     The stdout should include 'build'
     The stdout should include 'run'
     The stdout should include 'exec'
@@ -22,22 +22,22 @@ Describe 'once --help'
   End
 End
 
-Describe 'once'
+Describe 'struo'
   It 'prints root help when no command is provided'
-    When call "$ONCE_BIN"
+    When call "$STRUO_BIN"
     The status should equal 2
-    The stderr should include 'Usage: once [FLAGS] [SUBCOMMAND]'
+    The stderr should include 'Usage: struo [FLAGS] [SUBCOMMAND]'
     The stderr should include 'run'
     The stderr should include 'lint'
     The stderr should include '--list'
   End
 End
 
-Describe 'once --list'
+Describe 'struo --list'
   It 'prints the whole command surface'
-    When call "$ONCE_BIN" --list
+    When call "$STRUO_BIN" --list
     The status should be success
-    The stdout should include 'once'
+    The stdout should include 'struo'
     The stdout should include 'build'
     The stdout should include 'run'
     The stdout should include 'exec'
@@ -52,27 +52,27 @@ Describe 'once --list'
   End
 
   It 'prints a subtree when run under a namespace command'
-    When call "$ONCE_BIN" cache --list
+    When call "$STRUO_BIN" cache --list
     The status should be success
     The stdout should include 'cache'
     The stdout should include 'blob'
   End
 
   It 'emits structured output for agents'
-    When call "$ONCE_BIN" --format json --list
+    When call "$STRUO_BIN" --format json --list
     The status should be success
-    The stdout should include '"name":"once"'
+    The stdout should include '"name":"struo"'
     The stdout should include '"subcommands":'
     The stdout should include '"name":"run"'
     The stdout should include '"syntax":"--list"'
   End
 End
 
-Describe 'once --version'
+Describe 'struo --version'
   It 'prints the version'
-    When call "$ONCE_BIN" --version
+    When call "$STRUO_BIN" --version
     The status should be success
-    The stdout should include 'once'
+    The stdout should include 'struo'
   End
 End
 
@@ -81,7 +81,7 @@ Describe 'terminal control policy'
   AfterEach 'cleanup_workspace'
 
   It 'accepts the terminal control escape hatch and leaves redirected errors plain'
-    When call once --terminal-controls never build missing
+    When call struo --terminal-controls never build missing
     The status should not equal 0
     The stderr should not include '7501;'
     The stderr should not include ']8;;'
@@ -89,22 +89,22 @@ Describe 'terminal control policy'
   End
 End
 
-Describe 'once exec -e'
+Describe 'struo exec -e'
   BeforeEach 'setup_workspace'
   AfterEach 'cleanup_workspace'
 
   It 'rejects a malformed env entry without an equals sign'
-    When call once exec -e MALFORMED -- /bin/sh -c 'true'
+    When call struo exec -e MALFORMED -- /bin/sh -c 'true'
     The status should not equal 0
     The stderr should include 'KEY=VALUE'
   End
 
   It 'logs argument parsing failures to an internal session log'
-    When call once exec -e MALFORMED -- /bin/sh -c 'true'
+    When call struo exec -e MALFORMED -- /bin/sh -c 'true'
     The status should not equal 0
     The stderr should include 'KEY=VALUE'
     The stderr should not include 'argument parsing stopped'
-    log_dir="$(once_log_dir)"
+    log_dir="$(struo_log_dir)"
     log_file="$(find "$log_dir" -type f -name '*.log' | sort | head -n 1)"
     The path "$log_file" should be file
     The contents of file "$log_file" should include '"message":"argument parsing stopped"'

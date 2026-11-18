@@ -2,7 +2,7 @@
 
 ## Motivation
 
-Once needs an explicit execution boundary before adding a content-addressed
+Struo needs an explicit execution boundary before adding a content-addressed
 remote worker service. A provider selects infrastructure, but it does not tell
 the scheduler which physical resources an action consumes. In particular, a
 local micro-VM and a native process compete for the same host, while a hosted
@@ -73,7 +73,7 @@ separates a result's availability in CAS from the need to put it on the host.
 That is important when downstream consumers also execute remotely.
 
 These are architectural reasons to introduce executors, not reasons to copy
-Bazel's flags or Buck2's configuration syntax into Once.
+Bazel's flags or Buck2's configuration syntax into Struo.
 
 ## Research: Observed Failure Modes
 
@@ -109,9 +109,9 @@ bounded hosted capture, immutable environments, remote graph provenance, native
 REAPI interoperability, or speculative execution. Those are prerequisites for
 expansion, not benefits implied by introducing the executor type.
 
-## Comparison With Once
+## Comparison With Struo
 
-| Concern | Bazel / Buck2 | Once today |
+| Concern | Bazel / Buck2 | Struo today |
 | --- | --- | --- |
 | Semantic action | Command, inputs, outputs, environment and platform requirements | Typed actions and a provider-neutral prepared command |
 | Placement | Spawn strategy or execution-platform executor configuration | Optional `RemoteExecution` and adapter dispatch |
@@ -123,7 +123,7 @@ expansion, not benefits implied by introducing the executor type.
 | Materialization | Independent policy, including deferred outputs | Graph outcomes can defer restoring cached outputs; hosted actions install outputs locally |
 | Hybrid execution | Explicit policy, cancellation and output claims | No racing or fallback |
 
-Once's immediate gap is resource ownership, not a missing fleet scheduler. A
+Struo's immediate gap is resource ownership, not a missing fleet scheduler. A
 large remotely executed action must not reserve its guest memory on the client,
 and a local sandbox must not get a second independent host budget.
 
@@ -177,7 +177,7 @@ and VM overhead are also estimates, not kernel-enforced memory limits.
 ## Identity And Failure Policy
 
 This change must preserve the current action encoding and digests. Domain
-capacity and admission policy are runtime state, not new action fields. Once
+capacity and admission policy are runtime state, not new action fields. Struo
 currently keys resource estimates and provider bindings conservatively. Do not
 remove those fields merely because Bazel separates transport from identity.
 
@@ -262,7 +262,7 @@ must not bypass it. Explicit account/project placement is rejected until enforce
 
 - Resolve immutable platform and toolchain identities before changing result
   sharing, tenancy namespaces, or resource fields in the action digest.
-- Add per-service/account remote domains and domain bindings through `once.toml`,
+- Add per-service/account remote domains and domain bindings through `struo.toml`,
   not a new manifest or a provider-specific graph surface.
 - Add resource declarations and generic execution requirements to target kinds,
   along with the matching public Starlark reference and validation.
@@ -274,7 +274,7 @@ must not bypass it. Explicit account/project placement is rejected until enforce
 - Add a native REAPI adapter with missing-blob exchange, resumable server operation
   tracking, optional-cancellation capability handling, and bounded recovery of
   lost deferred input blobs. Restrict this path to duplicate-safe actions because
-  the protocol does not guarantee at-most-once execution.
+  the protocol does not guarantee at-most-struo execution.
 - Distinguish verified blob absence, transient transport failure, corruption,
   command failure, and uncertain execution state. Recovery budgets and circuit
   breakers must preserve these categories.

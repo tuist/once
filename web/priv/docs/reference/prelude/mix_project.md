@@ -22,7 +22,7 @@ participate in the cache key.
 The optional `run` capability consumes the existing build output. Set
 `run_task` for one task, use `run_tasks` for an ordered list of exact task
 argument vectors, or supply an unconfigured task with
-`once run <target> -- <task>`. Server and interactive runs are uncached by default.
+`struo run <target> -- <task>`. Server and interactive runs are uncached by default.
 Deterministic checks can opt into action caching with `run_cacheable = true`.
 Uncached runs inherit their parent environment so development applications can
 launch locally installed tools and read user-level configuration. Explicit
@@ -48,7 +48,7 @@ constrained compiler path and scratch home.
 | `env_inherit` | list&lt;string&gt; | no | `[]` | Host environment names inherited by build and run actions |
 | `env` | map&lt;string, string&gt; | no | `{}` | Explicit environment values exported during build and run actions |
 | `compile_args` | list&lt;string&gt; | no | `[]` | Additional arguments for the compiler pipeline |
-| `run_task` | string | no | empty | Mix task exposed through `once run`; when empty, the caller may supply the task after `--` |
+| `run_task` | string | no | empty | Mix task exposed through `struo run`; when empty, the caller may supply the task after `--` |
 | `run_tasks` | list&lt;list&lt;string&gt;&gt; | no | `[]` | Ordered Mix tasks and their exact arguments; mutually exclusive with `run_task` |
 | `run_no_compile` | bool | no | `true` | Pass `--no-compile` to the run task |
 | `run_no_deps_check` | bool | no | `true` | Pass `--no-deps-check` to the run task |
@@ -96,7 +96,7 @@ The same target can leave `run_task` empty and select the task at invocation
 time:
 
 ```sh
-once run application -- phx.server
+struo run application -- phx.server
 ```
 
 When `run_task` is set, arguments after `--` are appended to that task. A

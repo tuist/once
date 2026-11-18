@@ -1,0 +1,525 @@
+//! Streaming builder for action `input_digest` values.
+//!
+//! Plugins all need the same shape: a domain-separation prefix, a
+//! deterministic concatenation of `(label, content_digest)` pairs, and
+//! a small set of plugin-specific tail values (toolchain identity,
+//! Apple SDK env, dep action digests). Open-coding it in every plugin
+//! invites subtle drift: a missed sort, a forgotten NUL terminator, a
+//! domain prefix that collides across two plugins. This builder is the
+//! one canonical implementation.
+
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+use struo_cas::Digest;
+
+use crate::directory_blob::digest_directory_blob;
+use crate::OutputSymlinkMode;
+
+pub const INPUT_FINGERPRINT_SCHEMA: &str = "struo.input_fingerprint.v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InputFingerprintComponent {
+    pub category: String,
+    pub label: String,
+    pub digest: Digest,
+}
+
+impl InputFingerprintComponent {
+    #[must_use]
+    pub fn new(category: impl Into<String>, label: impl Into<String>, digest: Digest) -> Self {
+        Self {
+            category: category.into(),
+            label: label.into(),
+            digest,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InputFingerprintManifest {
+    pub schema: String,
+    pub input_digest: Digest,
+    pub components: Vec<InputFingerprintComponent>,
+}
+
+impl InputFingerprintManifest {
+    #[must_use]
+    pub fn new(input_digest: Digest, components: Vec<InputFingerprintComponent>) -> Self {
+        Self {
+            schema: INPUT_FINGERPRINT_SCHEMA.to_string(),
+            input_digest,
+            components,
+        }
+    }
+}
+
+pub fn digest_source_path<P: AsRef<Path>>(
+    workspace_root: P,
+    ws_rel: &str,
+) -> std::io::Result<Digest> {
+    let abs = workspace_root.as_ref().join(ws_rel);
+    let metadata = std::fs::symlink_metadata(&abs)?;
+    if metadata.file_type().is_symlink() {
+        let target = std::fs::read_link(&abs)?;
+        let mut bytes = b"struo.symlink.input.v1\0".to_vec();
+        bytes.extend_from_slice(target.to_string_lossy().as_bytes());
+        Ok(Digest::of_bytes(&bytes))
+    } else if metadata.is_dir() {
+        let blob = digest_directory_blob(&abs, OutputSymlinkMode::Preserve)?;
+        let special = special_permission_entries(&abs)?;
+        if special.is_empty() {
+            return Ok(blob);
+        }
+        let mut bytes = b"struo.directory.special-modes.v1\0".to_vec();
+        bytes.extend_from_slice(blob.as_bytes());
+        for (path, bits) in special {
+            bytes.extend_from_slice(path.as_bytes());
+            bytes.push(0);
+            bytes.extend_from_slice(&bits.to_le_bytes());
+        }
+        Ok(Digest::of_bytes(&bytes))
+    } else {
+        // The permission bits are part of what an action sees when the file is
+        // copied into its workspace, so they belong in the digest. Without
+        // them, making a script executable would keep serving a result built
+        // from the non-executable file.
+        crate::file_blob::digest_source_file(&abs, &metadata)
+    }
+}
+
+/// The setuid, setgid, and sticky bits of every regular file under `root`, by
+/// path. The directory digest records only read, write, and execute bits, so
+/// these are folded in separately and only when some file has one.
+fn special_permission_entries(root: &Path) -> std::io::Result<Vec<(String, u32)>> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut found = Vec::new();
+        let mut pending = vec![(root.to_path_buf(), String::new())];
+        while let Some((directory, prefix)) = pending.pop() {
+            for entry in std::fs::read_dir(&directory)? {
+                let entry = entry?;
+                let metadata = std::fs::symlink_metadata(entry.path())?;
+                let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
+                if metadata.is_dir() {
+                    pending.push((entry.path(), format!("{name}/")));
+                } else if metadata.is_file() {
+                    let bits = metadata.permissions().mode() & 0o7000;
+                    if bits != 0 {
+                        found.push((name, bits));
+                    }
+                }
+            }
+        }
+        found.sort();
+        Ok(found)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = root;
+        Ok(Vec::new())
+    }
+}
+
+#[derive(Debug)]
+/// Build an input digest piece by piece.
+///
+/// The encoding is `domain || (label || 0 || digest_bytes || 0)*` plus
+/// any caller-appended tail bytes. NUL terminators delimit fields so
+/// that two distinct `(label, digest)` sequences can never collide
+/// after concatenation. Sources should be added in sorted order; the
+/// builder does not sort on the caller's behalf because some plugins
+/// (the Rust compiler, for example) need to mix sources, dep digests,
+/// and tail keys in a specific order that's part of their cache-key
+/// contract.
+#[must_use]
+pub struct InputDigestBuilder {
+    buf: Vec<u8>,
+    components: Vec<InputFingerprintComponent>,
+}
+
+impl InputDigestBuilder {
+    /// Begin a new digest with `domain` as the leading prefix. Bumping
+    /// the domain (e.g. from `struo.rust.input.v1` to `...v2`) is the
+    /// portable way to invalidate an entire plugin's cache namespace
+    /// when its encoding changes.
+    pub fn new(domain: &[u8]) -> Self {
+        let mut buf = Vec::with_capacity(domain.len() + 64);
+        buf.extend_from_slice(domain);
+        Self {
+            buf,
+            components: Vec::new(),
+        }
+    }
+
+    /// Append a `(label, digest)` pair. Most plugins use this for
+    /// source files (label = workspace path) and for dep records
+    /// (label = `dep:<label>` or similar prefix).
+    pub fn push_keyed(&mut self, label: &[u8], digest: &Digest) -> &mut Self {
+        self.buf.extend_from_slice(label);
+        self.buf.push(0);
+        self.buf.extend_from_slice(digest.as_bytes());
+        self.buf.push(0);
+        self
+    }
+
+    pub fn push_keyed_component(
+        &mut self,
+        category: impl Into<String>,
+        label: impl Into<String>,
+        encoded_label: &[u8],
+        digest: &Digest,
+    ) -> &mut Self {
+        self.push_keyed(encoded_label, digest);
+        self.components
+            .push(InputFingerprintComponent::new(category, label, *digest));
+        self
+    }
+
+    /// Append arbitrary bytes (e.g. a toolchain identifier).
+    pub fn push_bytes(&mut self, bytes: &[u8]) -> &mut Self {
+        self.buf.extend_from_slice(bytes);
+        self.buf.push(0);
+        self
+    }
+
+    pub fn push_bytes_component(
+        &mut self,
+        category: impl Into<String>,
+        label: impl Into<String>,
+        bytes: &[u8],
+    ) -> &mut Self {
+        self.push_bytes(bytes);
+        self.record_bytes(category, label, bytes)
+    }
+
+    pub fn record_digest(
+        &mut self,
+        category: impl Into<String>,
+        label: impl Into<String>,
+        digest: Digest,
+    ) -> &mut Self {
+        self.components
+            .push(InputFingerprintComponent::new(category, label, digest));
+        self
+    }
+
+    pub fn record_bytes(
+        &mut self,
+        category: impl Into<String>,
+        label: impl Into<String>,
+        bytes: &[u8],
+    ) -> &mut Self {
+        self.record_digest(category, label, Digest::of_bytes(bytes))
+    }
+
+    /// Hash a workspace-relative source file, symbolic link, or
+    /// directory and append the result keyed by the workspace-relative
+    /// path. Files stream through [`Digest::of_reader`], symbolic links
+    /// hash their target without following it, and directories use the
+    /// same stable encoding as cached directory outputs.
+    pub fn push_source<P: AsRef<Path>>(
+        &mut self,
+        workspace_root: P,
+        ws_rel: &str,
+    ) -> std::io::Result<&mut Self> {
+        let digest = digest_source_path(workspace_root, ws_rel)?;
+        Ok(self.push_keyed(ws_rel.as_bytes(), &digest))
+    }
+
+    /// Finalise the buffer into a [`Digest`].
+    pub fn finish(self) -> Digest {
+        Digest::of_bytes(&self.buf)
+    }
+
+    #[must_use]
+    pub fn finish_with_fingerprint(self) -> InputFingerprintManifest {
+        let input_digest = Digest::of_bytes(&self.buf);
+        InputFingerprintManifest::new(input_digest, self.components)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn empty_digest_only_hashes_the_domain() {
+        let a = InputDigestBuilder::new(b"d").finish();
+        let b = InputDigestBuilder::new(b"d").finish();
+        assert_eq!(a, b, "deterministic for the same domain");
+        let c = InputDigestBuilder::new(b"d2").finish();
+        assert_ne!(a, c, "domain bump partitions cache slots");
+    }
+
+    #[test]
+    fn pushed_pairs_change_the_digest() {
+        let one = {
+            let mut b = InputDigestBuilder::new(b"d");
+            b.push_keyed(b"path", &Digest::of_bytes(b"X"));
+            b.finish()
+        };
+        let two = {
+            let mut b = InputDigestBuilder::new(b"d");
+            b.push_keyed(b"path", &Digest::of_bytes(b"Y"));
+            b.finish()
+        };
+        assert_ne!(one, two);
+    }
+
+    #[test]
+    fn fingerprint_recording_does_not_change_the_input_digest() {
+        let source = Digest::of_bytes(b"source");
+        let plain = {
+            let mut builder = InputDigestBuilder::new(b"domain");
+            builder.push_bytes(b"toolchain");
+            builder.push_keyed(b"src/lib.rs", &source);
+            builder.finish()
+        };
+        let fingerprinted = {
+            let mut builder = InputDigestBuilder::new(b"domain");
+            builder.push_bytes_component("toolchain", "identity", b"toolchain");
+            builder.push_keyed_component("source", "src/lib.rs", b"src/lib.rs", &source);
+            builder.finish_with_fingerprint()
+        };
+
+        assert_eq!(fingerprinted.input_digest, plain);
+        assert_eq!(
+            fingerprinted.components,
+            vec![
+                InputFingerprintComponent::new(
+                    "toolchain",
+                    "identity",
+                    Digest::of_bytes(b"toolchain"),
+                ),
+                InputFingerprintComponent::new("source", "src/lib.rs", source),
+            ]
+        );
+    }
+
+    #[test]
+    fn recorded_bytes_are_not_serialized_in_plaintext() {
+        let mut builder = InputDigestBuilder::new(b"domain");
+        builder.push_bytes_component("environment", "declared", b"secret-value");
+        let encoded = serde_json::to_string(&builder.finish_with_fingerprint()).unwrap();
+
+        assert!(!encoded.contains("secret-value"));
+        assert!(encoded.contains("\"category\":\"environment\""));
+        assert!(encoded.contains("\"label\":\"declared\""));
+    }
+
+    #[test]
+    fn push_source_hashes_file_contents() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("pkg")).unwrap();
+        std::fs::write(tmp.path().join("pkg/main.rs"), b"fn main() {}").unwrap();
+
+        let first = {
+            let mut b = InputDigestBuilder::new(b"test.input.v1");
+            b.push_source(tmp.path(), "pkg/main.rs").unwrap();
+            b.finish()
+        };
+        let second = {
+            let mut b = InputDigestBuilder::new(b"test.input.v1");
+            b.push_source(tmp.path(), "pkg/main.rs").unwrap();
+            b.finish()
+        };
+        assert_eq!(first, second, "stable for identical content");
+
+        std::fs::write(tmp.path().join("pkg/main.rs"), b"fn main() { /*!*/ }").unwrap();
+        let third = {
+            let mut b = InputDigestBuilder::new(b"test.input.v1");
+            b.push_source(tmp.path(), "pkg/main.rs").unwrap();
+            b.finish()
+        };
+        assert_ne!(first, third, "content change invalidates the digest");
+    }
+
+    #[test]
+    fn push_source_hashes_directory_contents() {
+        let tmp = TempDir::new().unwrap();
+        let source = tmp.path().join("Framework.framework");
+        std::fs::create_dir_all(source.join("Modules")).unwrap();
+        std::fs::write(source.join("Framework"), b"binary").unwrap();
+        std::fs::write(
+            source.join("Modules/module.modulemap"),
+            b"module Framework {}",
+        )
+        .unwrap();
+
+        let digest = |tmp: &TempDir| {
+            let mut builder = InputDigestBuilder::new(b"test.input.v1");
+            builder
+                .push_source(tmp.path(), "Framework.framework")
+                .unwrap();
+            builder.finish()
+        };
+        let first = digest(&tmp);
+        assert_eq!(first, digest(&tmp));
+
+        std::fs::write(source.join("Framework"), b"changed").unwrap();
+        assert_ne!(first, digest(&tmp));
+    }
+
+    #[test]
+    fn push_source_distinguishes_an_empty_file_from_an_empty_directory() {
+        let tmp = TempDir::new().unwrap();
+        let entry = tmp.path().join("entry");
+        std::fs::write(&entry, []).unwrap();
+        let file_digest = {
+            let mut builder = InputDigestBuilder::new(b"test.input.v1");
+            builder.push_source(tmp.path(), "entry").unwrap();
+            builder.finish()
+        };
+
+        std::fs::remove_file(&entry).unwrap();
+        std::fs::create_dir(&entry).unwrap();
+        let directory_digest = {
+            let mut builder = InputDigestBuilder::new(b"test.input.v1");
+            builder.push_source(tmp.path(), "entry").unwrap();
+            builder.finish()
+        };
+
+        assert_ne!(file_digest, directory_digest);
+    }
+
+    #[test]
+    fn push_source_hashes_directory_entries_and_contents() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("tree/nested")).unwrap();
+        std::fs::write(tmp.path().join("tree/nested/value.txt"), b"one").unwrap();
+
+        let digest = || {
+            let mut builder = InputDigestBuilder::new(b"test.directory.v1");
+            builder.push_source(tmp.path(), "tree").unwrap();
+            builder.finish()
+        };
+        let first = digest();
+        let second = digest();
+        assert_eq!(first, second);
+
+        std::fs::write(tmp.path().join("tree/nested/value.txt"), b"two").unwrap();
+        let changed_content = digest();
+        assert_ne!(first, changed_content);
+
+        std::fs::rename(
+            tmp.path().join("tree/nested/value.txt"),
+            tmp.path().join("tree/nested/renamed.txt"),
+        )
+        .unwrap();
+        assert_ne!(changed_content, digest());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn push_source_hashes_directory_symbolic_link_targets() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("tree")).unwrap();
+        std::fs::write(tmp.path().join("tree/one.txt"), b"same").unwrap();
+        std::fs::write(tmp.path().join("tree/two.txt"), b"same").unwrap();
+        symlink("one.txt", tmp.path().join("tree/current.txt")).unwrap();
+
+        let digest = || {
+            let mut builder = InputDigestBuilder::new(b"test.directory.v1");
+            builder.push_source(tmp.path(), "tree").unwrap();
+            builder.finish()
+        };
+        let first = digest();
+
+        std::fs::remove_file(tmp.path().join("tree/current.txt")).unwrap();
+        symlink("two.txt", tmp.path().join("tree/current.txt")).unwrap();
+        assert_ne!(first, digest());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn push_source_hashes_direct_symbolic_link_targets_without_following_them() {
+        use std::os::unix::fs::symlink;
+
+        let workspace = TempDir::new().unwrap();
+        let external = TempDir::new().unwrap();
+        std::fs::write(external.path().join("one.txt"), b"one").unwrap();
+        std::fs::write(external.path().join("two.txt"), b"two").unwrap();
+        let link = workspace.path().join("current.txt");
+        symlink(external.path().join("one.txt"), &link).unwrap();
+
+        let digest = || {
+            let mut builder = InputDigestBuilder::new(b"test.symlink.v1");
+            builder
+                .push_source(workspace.path(), "current.txt")
+                .unwrap();
+            builder.finish()
+        };
+        let first = digest();
+
+        std::fs::write(external.path().join("one.txt"), b"changed").unwrap();
+        assert_eq!(first, digest());
+
+        std::fs::remove_file(&link).unwrap();
+        symlink(external.path().join("two.txt"), &link).unwrap();
+        assert_ne!(first, digest());
+
+        std::fs::remove_file(&link).unwrap();
+        symlink(external.path().join("missing.txt"), &link).unwrap();
+        assert!(digest() != first);
+    }
+
+    #[test]
+    fn push_source_propagates_io_errors() {
+        let tmp = TempDir::new().unwrap();
+        let mut b = InputDigestBuilder::new(b"d");
+        let err = b.push_source(tmp.path(), "missing.rs").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod permission_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    #[test]
+    fn source_digest_changes_when_only_the_permission_bits_change() {
+        let workspace = tempfile::tempdir().unwrap();
+        let path = workspace.path().join("script.sh");
+        std::fs::write(&path, "echo hi\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let plain = digest_source_path(workspace.path(), "script.sh").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let executable = digest_source_path(workspace.path(), "script.sh").unwrap();
+        assert_ne!(plain, executable);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o4755)).unwrap();
+        let setuid = digest_source_path(workspace.path(), "script.sh").unwrap();
+        assert_ne!(executable, setuid);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o1755)).unwrap();
+        let sticky = digest_source_path(workspace.path(), "script.sh").unwrap();
+        assert_ne!(setuid, sticky);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            plain,
+            digest_source_path(workspace.path(), "script.sh").unwrap()
+        );
+    }
+
+    #[test]
+    fn directory_digest_changes_when_a_file_inside_gains_a_special_bit() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::create_dir(workspace.path().join("tree")).unwrap();
+        let file = workspace.path().join("tree/tool");
+        std::fs::write(&file, "x").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let plain = digest_source_path(workspace.path(), "tree").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o4755)).unwrap();
+        let setuid = digest_source_path(workspace.path(), "tree").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o1755)).unwrap();
+        let sticky = digest_source_path(workspace.path(), "tree").unwrap();
+        assert_ne!(plain, setuid);
+        assert_ne!(setuid, sticky);
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(plain, digest_source_path(workspace.path(), "tree").unwrap());
+    }
+}

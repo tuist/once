@@ -1,0 +1,1094 @@
+//! TOML frontend for workspace configuration.
+
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+
+use crate::cache_provider::{CacheProviderToml, InfrastructureProviderToml, InfrastructureToml};
+use crate::error::{Error, ManifestSchemaError, Result};
+use crate::target::{AttrValue, Target};
+use crate::target_ref::{normalize_manifest_target, validate_target_name};
+use crate::TOML_BUILD_FILE_NAME;
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct Manifest {
+    workspace: WorkspaceToml,
+    infrastructure: InfrastructureToml,
+    infrastructures: BTreeMap<String, InfrastructureProviderToml>,
+    cache_provider: Option<CacheProviderToml>,
+    reporting: Option<ReportingToml>,
+    modules: Option<ModulesToml>,
+    rules: Option<ModulesToml>,
+    trigger: Option<toml::Value>,
+    target: Vec<TargetToml>,
+}
+
+impl Manifest {
+    fn parse(path: &str, src: &str, package: &str) -> Result<Self> {
+        let manifest: Self = toml::from_str(src).map_err(|source| Error::Parse {
+            path: path.to_string(),
+            message: source.to_string(),
+        })?;
+        if manifest.trigger.is_some() {
+            if !package.is_empty() {
+                return Err(Error::Triggers {
+                    path: path.to_string(),
+                    diagnostics: vec![crate::triggers::root_only_diagnostic()],
+                });
+            }
+            crate::load_triggers_toml_str(path, src).map_err(|diagnostics| Error::Triggers {
+                path: path.to_string(),
+                diagnostics,
+            })?;
+        }
+        Ok(manifest)
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ReportingToml {
+    #[serde(rename = "argv_privacy")]
+    _argv_privacy: ArgvPrivacy,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ArgvPrivacy {
+    #[default]
+    Strict,
+    Workspace,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct WorkspaceToml {
+    pub include: Vec<String>,
+    pub exclude: Vec<String>,
+    pub configuration: ConfigurationToml,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct ConfigurationToml {
+    os: Option<String>,
+    arch: Option<String>,
+    tokens: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct BuildConfiguration {
+    pub os: String,
+    pub arch: String,
+    pub tokens: Vec<String>,
+}
+
+/// Invocation-time overrides layered on top of the workspace-default
+/// [`BuildConfiguration`].
+///
+/// `os` and `arch` replace the workspace values; `tokens` are appended.
+/// The merged configuration drives dependency selection and Starlark
+/// analysis, and its canonical encoding participates in configured-target
+/// identity so two invocations with different overrides never share outputs
+/// or receipts.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConfigurationOverrides {
+    pub os: Option<String>,
+    pub arch: Option<String>,
+    pub tokens: Vec<String>,
+}
+
+impl ConfigurationOverrides {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.os.is_none() && self.arch.is_none() && self.tokens.is_empty()
+    }
+}
+
+impl BuildConfiguration {
+    fn host() -> Self {
+        Self::new(std::env::consts::OS, std::env::consts::ARCH, Vec::new())
+    }
+
+    pub(crate) fn from_toml(configuration: ConfigurationToml) -> Result<Self> {
+        let os = configuration
+            .os
+            .unwrap_or_else(|| std::env::consts::OS.to_string());
+        let arch = configuration
+            .arch
+            .unwrap_or_else(|| std::env::consts::ARCH.to_string());
+        Self::from_explicit(&os, &arch, configuration.tokens)
+    }
+
+    /// Normalize explicit platform values and selection tokens without host defaults.
+    pub fn from_explicit(os: &str, arch: &str, tokens: Vec<String>) -> Result<Self> {
+        if os.trim().is_empty() || arch.trim().is_empty() {
+            return Err(Error::ManifestSchema {
+                path: TOML_BUILD_FILE_NAME.to_string(),
+                kind: ManifestSchemaError::ConfigurationPlatformEmpty,
+            });
+        }
+        if tokens.iter().any(|token| token.trim().is_empty()) {
+            return Err(Error::ManifestSchema {
+                path: TOML_BUILD_FILE_NAME.to_string(),
+                kind: ManifestSchemaError::ConfigurationTokenEmpty,
+            });
+        }
+        Ok(Self::new(os, arch, tokens))
+    }
+
+    fn new(os: &str, arch: &str, extra_tokens: Vec<String>) -> Self {
+        let os = normalize_os(os);
+        let arch = normalize_arch(arch);
+        let mut tokens = select_tokens_for(&os, &arch);
+        for token in extra_tokens {
+            if !tokens.contains(&token) {
+                tokens.push(token);
+            }
+        }
+        if !tokens.iter().any(|token| token == "default") {
+            tokens.push("default".to_string());
+        }
+        Self { os, arch, tokens }
+    }
+}
+
+impl BuildConfiguration {
+    /// Merge invocation-time overrides over this configuration.
+    ///
+    /// Platform-derived tokens (for the original operating system and
+    /// architecture) are re-derived for the resulting platform, while
+    /// any extra workspace tokens are preserved and the override tokens
+    /// are appended. This keeps the token list consistent when an override
+    /// changes the target platform.
+    #[must_use]
+    pub fn merged_with(&self, overrides: &ConfigurationOverrides) -> Self {
+        let os = overrides.os.clone().unwrap_or_else(|| self.os.clone());
+        let arch = overrides.arch.clone().unwrap_or_else(|| self.arch.clone());
+        let baseline_platform = select_tokens_for(&self.os, &self.arch);
+        let extra: Vec<String> = self
+            .tokens
+            .iter()
+            .filter(|token| *token != "default" && !baseline_platform.contains(token))
+            .cloned()
+            .chain(overrides.tokens.iter().cloned())
+            .collect();
+        Self::new(&os, &arch, extra)
+    }
+
+    /// Canonical, content-addressed encoding of this configuration.
+    ///
+    /// Callers hash these bytes to form a stable configuration identity.
+    /// The domain prefix partitions this encoding from other hashed
+    /// payloads so a configuration digest can never collide with an
+    /// unrelated one.
+    #[must_use]
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(48 + self.os.len() + self.arch.len());
+        bytes.extend_from_slice(b"struo.configuration.v1\0");
+        bytes.extend_from_slice(self.os.as_bytes());
+        bytes.push(0);
+        bytes.extend_from_slice(self.arch.as_bytes());
+        bytes.push(0);
+        for token in &self.tokens {
+            bytes.extend_from_slice(token.as_bytes());
+            bytes.push(0);
+        }
+        bytes
+    }
+}
+
+impl Default for BuildConfiguration {
+    fn default() -> Self {
+        Self::host()
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct ModulesToml {
+    pub(crate) paths: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct TargetToml {
+    name: String,
+    kind: String,
+    deps: Option<toml::Value>,
+    dependencies: BTreeMap<String, toml::Value>,
+    srcs: Vec<String>,
+    visibility: Vec<String>,
+    attrs: BTreeMap<String, toml::Value>,
+}
+
+pub fn load_toml_str(path: &str, src: &str) -> Result<Vec<Target>> {
+    load_toml_with(path, src, Path::new("."), "")
+}
+
+pub(crate) fn load_toml_with(
+    display_name: &str,
+    src: &str,
+    workspace_root: &Path,
+    package: &str,
+) -> Result<Vec<Target>> {
+    load_toml_with_configuration(
+        display_name,
+        src,
+        workspace_root,
+        package,
+        &BuildConfiguration::host(),
+    )
+}
+
+pub(crate) fn load_toml_with_configuration(
+    display_name: &str,
+    src: &str,
+    _workspace_root: &Path,
+    package: &str,
+    configuration: &BuildConfiguration,
+) -> Result<Vec<Target>> {
+    let manifest = Manifest::parse(display_name, src, package)?;
+    if (manifest.modules.is_some() || manifest.rules.is_some()) && !package.is_empty() {
+        return Err(Error::ManifestSchema {
+            path: display_name.to_string(),
+            kind: ManifestSchemaError::ModulePathsInPackage,
+        });
+    }
+    if manifest.reporting.is_some() && !package.is_empty() {
+        return Err(Error::ManifestSchema {
+            path: display_name.to_string(),
+            kind: ManifestSchemaError::ReportingInPackage,
+        });
+    }
+    manifest
+        .target
+        .into_iter()
+        .map(|target| target.into_target(display_name, package, configuration))
+        .collect()
+}
+
+pub fn load_cache_provider_toml_str(
+    path: &str,
+    src: &str,
+) -> Result<Option<crate::cache_provider::CacheProviderConfig>> {
+    Ok(load_infrastructure_toml_str(path, src)?.cache)
+}
+
+pub fn load_infrastructure_toml_str(
+    path: &str,
+    src: &str,
+) -> Result<crate::cache_provider::InfrastructureConfig> {
+    let manifest = Manifest::parse(path, src, "")?;
+    let cache = if let Some(raw) = manifest.infrastructure.cache {
+        Some(raw.into_config(path)?)
+    } else {
+        manifest
+            .cache_provider
+            .map(|raw| raw.into_config(path))
+            .transpose()?
+    };
+    let execution = manifest
+        .infrastructure
+        .execution
+        .map(|raw| raw.into_config(path, "infrastructure.execution"))
+        .transpose()?;
+    let artifacts = manifest
+        .infrastructure
+        .artifacts
+        .map(|raw| raw.into_config(path, "infrastructure.artifacts"))
+        .transpose()?;
+    let providers = manifest
+        .infrastructures
+        .into_iter()
+        .map(|(name, provider)| {
+            provider
+                .into_config(path, &name)
+                .map(|provider| (name, provider))
+        })
+        .collect::<Result<_>>()?;
+    Ok(crate::cache_provider::InfrastructureConfig {
+        cache,
+        execution,
+        artifacts,
+        publish_on_build: manifest.infrastructure.publish_on_build,
+        providers,
+    })
+}
+
+pub(crate) fn load_module_paths_toml_str(path: &str, src: &str) -> Result<Vec<String>> {
+    let manifest = Manifest::parse(path, src, "")?;
+    match (manifest.modules, manifest.rules) {
+        (Some(_), Some(_)) => Err(Error::ManifestSchema {
+            path: path.to_string(),
+            kind: ManifestSchemaError::ModulesAndRulesBothSet,
+        }),
+        (Some(modules), None) | (None, Some(modules)) => Ok(modules.paths),
+        (None, None) => Ok(Vec::new()),
+    }
+}
+
+pub(crate) fn load_workspace_toml_str(path: &str, src: &str) -> Result<WorkspaceToml> {
+    let manifest = Manifest::parse(path, src, "")?;
+    Ok(manifest.workspace)
+}
+
+pub fn load_workspace_configuration(root: &Path) -> Result<BuildConfiguration> {
+    let path = root.join(TOML_BUILD_FILE_NAME);
+    let source = match std::fs::read_to_string(&path) {
+        Ok(source) => source,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(BuildConfiguration::host());
+        }
+        Err(source) => {
+            return Err(Error::Read {
+                path: path.display().to_string(),
+                source,
+            });
+        }
+    };
+    let workspace = load_workspace_toml_str(TOML_BUILD_FILE_NAME, &source)?;
+    BuildConfiguration::from_toml(workspace.configuration)
+}
+
+impl TargetToml {
+    fn into_target(
+        self,
+        display_name: &str,
+        package: &str,
+        configuration: &BuildConfiguration,
+    ) -> Result<Target> {
+        if self.name.is_empty() {
+            return Err(Error::ManifestSchema {
+                path: display_name.to_string(),
+                kind: ManifestSchemaError::TargetNameMissing,
+            });
+        }
+        if self.kind.is_empty() {
+            return Err(Error::ManifestSchema {
+                path: display_name.to_string(),
+                kind: ManifestSchemaError::TargetKindMissing {
+                    target: self.name.clone(),
+                },
+            });
+        }
+        validate_target_name(&self.name).map_err(|source| Error::TargetNameInvalid {
+            path: display_name.to_string(),
+            target: self.name.clone(),
+            source,
+        })?;
+        let deps = deps_from_toml(
+            display_name,
+            &self.name,
+            package,
+            self.deps.as_ref(),
+            configuration,
+        )?;
+        let dependency_edges = dependency_edges_from_toml(
+            display_name,
+            &self.name,
+            package,
+            &self.dependencies,
+            configuration,
+        )?;
+        let mut attrs = BTreeMap::new();
+        let mut typed_attrs = BTreeMap::new();
+        for (key, value) in self.attrs {
+            let string_value = toml_value_to_attr_string(&value);
+            let attr_value = toml_value_to_attr_value(value);
+            attrs.insert(key.clone(), string_value);
+            typed_attrs.insert(key, attr_value);
+        }
+        Ok(Target {
+            package: package.to_string(),
+            kind: self.kind,
+            name: self.name,
+            deps,
+            dependency_edges,
+            srcs: self.srcs,
+            visibility: self.visibility,
+            attrs,
+            typed_attrs,
+            // A target written in a manifest has no native project behind it.
+            resolver_input_exclude: Vec::new(),
+        })
+    }
+}
+
+fn dependency_edges_from_toml(
+    display_name: &str,
+    target_name: &str,
+    package: &str,
+    values: &BTreeMap<String, toml::Value>,
+    configuration: &BuildConfiguration,
+) -> Result<BTreeMap<String, Vec<String>>> {
+    let mut edges = BTreeMap::new();
+    for (name, value) in values {
+        if name == "deps" {
+            return Err(Error::ManifestSchema {
+                path: display_name.to_string(),
+                kind: ManifestSchemaError::DepsRoleReserved {
+                    target: target_name.to_string(),
+                },
+            });
+        }
+        let dependencies = deps_from_toml(
+            display_name,
+            &format!("{target_name}` dependency role `{name}"),
+            package,
+            Some(value),
+            configuration,
+        )?;
+        edges.insert(name.clone(), dependencies);
+    }
+    Ok(edges)
+}
+
+fn deps_from_toml(
+    display_name: &str,
+    target_name: &str,
+    package: &str,
+    value: Option<&toml::Value>,
+    configuration: &BuildConfiguration,
+) -> Result<Vec<String>> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let selected =
+        select_dep_value_for_tokens(display_name, target_name, value, &configuration.tokens)?;
+    let toml::Value::Array(deps) = selected else {
+        return Err(Error::ManifestSchema {
+            path: display_name.to_string(),
+            kind: ManifestSchemaError::DepsWrongShape {
+                target: target_name.to_string(),
+            },
+        });
+    };
+    deps.iter()
+        .map(|dep| {
+            let Some(dep) = dep.as_str() else {
+                return Err(Error::ManifestSchema {
+                    path: display_name.to_string(),
+                    kind: ManifestSchemaError::DepsEntryNotString {
+                        target: target_name.to_string(),
+                    },
+                });
+            };
+            normalize_manifest_target(package, dep).map_err(|source| Error::DepReference {
+                path: display_name.to_string(),
+                target: target_name.to_string(),
+                source,
+            })
+        })
+        .collect()
+}
+
+fn select_dep_value_for_tokens<'a>(
+    display_name: &str,
+    target_name: &str,
+    value: &'a toml::Value,
+    tokens: &[String],
+) -> Result<&'a toml::Value> {
+    let toml::Value::Table(table) = value else {
+        return Ok(value);
+    };
+    if table.len() != 1 || !table.contains_key("select") {
+        return Ok(value);
+    }
+    let Some(toml::Value::Table(branches)) = table.get("select") else {
+        return Err(Error::ManifestSchema {
+            path: display_name.to_string(),
+            kind: ManifestSchemaError::DepsSelectWrongShape {
+                target: target_name.to_string(),
+            },
+        });
+    };
+    for token in tokens {
+        if let Some(value) = branches.get(token) {
+            return Ok(value);
+        }
+    }
+    branches
+        .get("default")
+        .ok_or_else(|| Error::ManifestSchema {
+            path: display_name.to_string(),
+            kind: ManifestSchemaError::DepsSelectNoMatch {
+                target: target_name.to_string(),
+            },
+        })
+}
+
+fn select_tokens_for(os: &str, arch: &str) -> Vec<String> {
+    match (os, arch) {
+        ("macos", "aarch64") => vec!["macos-arm64", "macos-aarch64", "macos", "arm64", "aarch64"],
+        ("macos", "x86_64") => vec!["macos-x86_64", "macos", "x86_64"],
+        ("linux", "aarch64") => vec!["linux-arm64", "linux-aarch64", "linux", "arm64", "aarch64"],
+        ("linux", "x86_64") => vec!["linux-x86_64", "linux", "x86_64"],
+        ("windows", "aarch64") => vec![
+            "windows-arm64",
+            "windows-aarch64",
+            "windows",
+            "arm64",
+            "aarch64",
+        ],
+        ("windows", "x86_64") => vec!["windows-x86_64", "windows", "x86_64"],
+        ("macos", _) => vec!["macos"],
+        ("linux", _) => vec!["linux"],
+        ("windows", _) => vec!["windows"],
+        _ => Vec::new(),
+    }
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn normalize_os(value: &str) -> String {
+    match value {
+        "darwin" | "mac" | "macosx" => "macos".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn normalize_arch(value: &str) -> String {
+    match value {
+        "arm64" => "aarch64".to_string(),
+        "amd64" => "x86_64".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn toml_value_to_attr_string(value: &toml::Value) -> String {
+    match value {
+        toml::Value::String(value) => value.clone(),
+        other => other.to_string(),
+    }
+}
+
+fn toml_value_to_attr_value(value: toml::Value) -> AttrValue {
+    match value {
+        toml::Value::String(value) => AttrValue::String(value),
+        toml::Value::Integer(value) => AttrValue::Integer(value),
+        toml::Value::Float(value) => AttrValue::Float(value),
+        toml::Value::Boolean(value) => AttrValue::Bool(value),
+        toml::Value::Array(values) => {
+            AttrValue::List(values.into_iter().map(toml_value_to_attr_value).collect())
+        }
+        toml::Value::Table(values) => AttrValue::Map(
+            values
+                .into_iter()
+                .map(|(key, value)| (key, toml_value_to_attr_value(value)))
+                .collect(),
+        ),
+        toml::Value::Datetime(value) => AttrValue::String(value.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn execution_properties_are_generic_and_not_cache_configuration() {
+        let config = load_infrastructure_toml_str("struo.toml", r#"
+[infrastructure.execution]
+provider = "workers"
+properties = { program = "/worker/tool", capabilities = ["compile", "link"], metadata = { version = 1, enabled = true } }
+"#).unwrap();
+        let execution = config.execution.unwrap();
+        assert_eq!(
+            execution.properties["metadata"],
+            serde_json::json!({"version": 1, "enabled": true})
+        );
+        assert_eq!(
+            execution.properties["capabilities"],
+            serde_json::json!(["compile", "link"])
+        );
+        for section in ["cache", "artifacts"] {
+            let source = format!(
+                "[infrastructure.{section}]\nprovider = \"workers\"\nproperties = {{ program = \"tool\" }}\n"
+            );
+            assert!(load_infrastructure_toml_str("struo.toml", &source).is_err());
+        }
+    }
+
+    #[test]
+    fn workspace_config_does_not_declare_targets() {
+        let src = r#"
+[workspace]
+include = ["crates/*/struo.toml"]
+exclude = ["fixtures/**"]
+"#;
+        let targets = load_toml_str("struo.toml", src).unwrap();
+        assert!(targets.is_empty());
+    }
+
+    #[test]
+    fn loads_named_microsandbox_execution_provider() {
+        let config = load_infrastructure_toml_str(
+            "struo.toml",
+            r#"
+[infrastructure.execution]
+provider = "remote_tests"
+
+[infrastructures.remote_tests]
+kind = "microsandbox"
+image = "node:22.18.0-alpine"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.execution,
+            Some(crate::cache_provider::ExecutionProviderConfig {
+                name: "remote_tests".to_string(),
+                account: None,
+                project: None,
+                properties: BTreeMap::new(),
+            })
+        );
+        assert_eq!(
+            config.providers.get("remote_tests"),
+            Some(
+                &crate::cache_provider::InfrastructureProviderConfig::Microsandbox(
+                    crate::cache_provider::MicrosandboxExecutionProviderConfig {
+                        image: "node:22.18.0-alpine".to_string(),
+                    }
+                )
+            )
+        );
+    }
+
+    #[test]
+    fn rejects_empty_microsandbox_image() {
+        let error = load_infrastructure_toml_str(
+            "struo.toml",
+            r#"
+[infrastructures.remote_tests]
+kind = "microsandbox"
+image = "   "
+"#,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("image must not be empty"));
+    }
+
+    #[test]
+    fn loads_named_docker_execution_provider() {
+        let config = load_infrastructure_toml_str(
+            "struo.toml",
+            r#"
+[infrastructure.execution]
+provider = "container_tests"
+
+[infrastructures.container_tests]
+kind = "docker"
+image = "node:22-bookworm"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.execution.unwrap().name, "container_tests");
+        assert_eq!(
+            config.providers.get("container_tests"),
+            Some(
+                &crate::cache_provider::InfrastructureProviderConfig::Docker(
+                    crate::cache_provider::DockerExecutionProviderConfig {
+                        image: "node:22-bookworm".to_string(),
+                    }
+                )
+            )
+        );
+    }
+
+    #[test]
+    fn rejects_missing_or_empty_docker_image() {
+        for image in ["", "image = \"\"", "image = \"   \""] {
+            let manifest = format!("[infrastructures.container_tests]\nkind = \"docker\"\n{image}");
+            let error = load_infrastructure_toml_str("struo.toml", &manifest).unwrap_err();
+            assert!(error.to_string().contains("image"), "{error}");
+            if !image.is_empty() {
+                assert!(error.to_string().contains("must not be empty"), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn loads_hosted_execution_providers() {
+        let config = load_infrastructure_toml_str(
+            "struo.toml",
+            r#"
+[infrastructures.e2b_tests]
+kind = "e2b"
+template = "vitest-v1"
+
+[infrastructures.daytona_tests]
+kind = "daytona"
+image = "node:22-bookworm"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.providers.get("e2b_tests"),
+            Some(&crate::cache_provider::InfrastructureProviderConfig::E2b(
+                crate::cache_provider::E2bExecutionProviderConfig {
+                    template: "vitest-v1".to_string(),
+                }
+            ))
+        );
+        assert_eq!(
+            config.providers.get("daytona_tests"),
+            Some(
+                &crate::cache_provider::InfrastructureProviderConfig::Daytona(
+                    crate::cache_provider::DaytonaExecutionProviderConfig {
+                        image: "node:22-bookworm".to_string(),
+                    }
+                )
+            )
+        );
+    }
+
+    #[test]
+    fn rejects_empty_hosted_provider_environments() {
+        for manifest in [
+            r#"
+[infrastructures.remote_tests]
+kind = "e2b"
+template = ""
+"#,
+            r#"
+[infrastructures.remote_tests]
+kind = "daytona"
+image = "   "
+"#,
+        ] {
+            let error = load_infrastructure_toml_str("struo.toml", manifest).unwrap_err();
+            assert!(error.to_string().contains("must not be empty"));
+        }
+    }
+
+    #[test]
+    fn loads_root_module_paths() {
+        let paths = load_module_paths_toml_str(
+            "struo.toml",
+            r#"
+[modules]
+paths = ["modules/*.star"]
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(paths, vec!["modules/*.star"]);
+    }
+
+    #[test]
+    fn loads_legacy_root_rule_paths() {
+        let paths = load_module_paths_toml_str(
+            "struo.toml",
+            r#"
+[rules]
+paths = ["rules/*.star"]
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(paths, vec!["rules/*.star"]);
+    }
+
+    #[test]
+    fn rejects_root_module_and_rule_paths_together() {
+        let err = load_module_paths_toml_str(
+            "struo.toml",
+            r#"
+[modules]
+paths = ["modules/*.star"]
+
+[rules]
+paths = ["rules/*.star"]
+"#,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("not both"));
+    }
+
+    #[test]
+    fn rejects_package_module_paths() {
+        let err = load_toml_with(
+            "apps/struo.toml",
+            r#"
+[modules]
+paths = ["modules/*.star"]
+"#,
+            Path::new("."),
+            "apps",
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("root struo.toml"));
+    }
+
+    #[test]
+    fn rejects_package_legacy_rule_paths() {
+        let err = load_toml_with(
+            "apps/struo.toml",
+            r#"
+[rules]
+paths = ["rules/*.star"]
+"#,
+            Path::new("."),
+            "apps",
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("root struo.toml"));
+    }
+
+    #[test]
+    fn reporting_privacy_is_root_only_and_rejects_unknown_modes() {
+        let source = "[reporting]\nargv_privacy = 'workspace'\n";
+        assert!(load_toml_with("struo.toml", source, Path::new("."), "").is_ok());
+        let error = load_toml_with("apps/struo.toml", source, Path::new("."), "apps").unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("reporting settings are only loaded from the root"));
+        let error = load_toml_with(
+            "struo.toml",
+            "[reporting]\nargv_privacy = 'public'\n",
+            Path::new("."),
+            "",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("unknown variant"));
+    }
+
+    #[test]
+    fn loads_workspace_scan_config() {
+        let src = r#"
+[workspace]
+include = ["crates/*/struo.toml"]
+exclude = ["fixtures/**"]
+"#;
+        let workspace = load_workspace_toml_str("struo.toml", src).unwrap();
+        assert_eq!(workspace.include, vec!["crates/*/struo.toml"]);
+        assert_eq!(workspace.exclude, vec!["fixtures/**"]);
+    }
+
+    #[test]
+    fn rejects_script_declarations() {
+        let src = r#"
+[[script]]
+name = "hello"
+argv = ["sh", "-c", "printf hello"]
+"#;
+        let err = load_toml_str("struo.toml", src).unwrap_err().to_string();
+        assert!(err.contains("unknown field `script`"));
+    }
+
+    #[test]
+    fn loads_apple_target_declarations() {
+        let src = r#"
+[[target]]
+name = "App"
+kind = "apple_application"
+deps = ["apps/ios/AppKit"]
+srcs = ["Sources/**/*.swift"]
+
+[target.attrs]
+platform = "ios"
+bundle_id = "dev.struo.App"
+minimum_os = "17.0"
+resources = ["Resources/**"]
+"#;
+        let targets =
+            load_toml_with("apps/ios/struo.toml", src, Path::new("."), "apps/ios").unwrap();
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].id(), "apps/ios/App");
+        assert_eq!(targets[0].deps, vec!["apps/ios/AppKit"]);
+        assert_eq!(
+            targets[0].attrs.get("bundle_id").map(String::as_str),
+            Some("dev.struo.App")
+        );
+        assert_eq!(
+            targets[0].attrs.get("resources").map(String::as_str),
+            Some("[\"Resources/**\"]")
+        );
+        assert_eq!(
+            targets[0].typed_attrs.get("resources"),
+            Some(&AttrValue::List(vec![AttrValue::String(
+                "Resources/**".to_string()
+            )]))
+        );
+    }
+
+    #[test]
+    fn dot_deps_are_package_relative() {
+        let src = r#"
+[[target]]
+name = "App"
+kind = "apple_application"
+deps = ["./AppKit"]
+"#;
+        let targets =
+            load_toml_with("apps/ios/struo.toml", src, Path::new("."), "apps/ios").unwrap();
+        assert_eq!(targets[0].deps, vec!["apps/ios/AppKit"]);
+    }
+
+    #[test]
+    fn named_dependency_roles_are_package_relative() {
+        let src = r#"
+[[target]]
+name = "App"
+kind = "custom_application"
+
+[target.dependencies]
+plugins = ["./CompilerPlugin"]
+runtime = ["shared/Runtime"]
+"#;
+        let targets =
+            load_toml_with("apps/ios/struo.toml", src, Path::new("."), "apps/ios").unwrap();
+        assert_eq!(
+            targets[0].dependency_edges.get("plugins"),
+            Some(&vec!["apps/ios/CompilerPlugin".to_string()])
+        );
+        assert_eq!(
+            targets[0].dependency_edges.get("runtime"),
+            Some(&vec!["shared/Runtime".to_string()])
+        );
+    }
+
+    #[test]
+    fn deps_accept_host_select_tables() {
+        let src = r#"
+[[target]]
+name = "core"
+kind = "custom_library"
+srcs = ["src/**/*.custom"]
+
+[target.deps.select]
+macos = ["./mac_only"]
+linux = ["./linux_only"]
+default = ["./portable"]
+
+[target.attrs]
+module_name = "core"
+"#;
+        let targets =
+            load_toml_with("crates/core/struo.toml", src, Path::new("."), "crates/core").unwrap();
+        let expected = if std::env::consts::OS == "macos" {
+            "crates/core/mac_only"
+        } else if std::env::consts::OS == "linux" {
+            "crates/core/linux_only"
+        } else {
+            "crates/core/portable"
+        };
+        assert_eq!(targets[0].deps, vec![expected]);
+    }
+
+    #[test]
+    fn deps_select_can_fall_back_for_other_hosts() {
+        let value: toml::Value = toml::from_str(
+            r#"
+[select]
+"macos-arm64" = ["./native"]
+default = ["./portable"]
+"#,
+        )
+        .unwrap();
+
+        let selected = select_dep_value_for_tokens(
+            "crates/core/struo.toml",
+            "core",
+            &value,
+            &select_tokens_for("macos", "x86_64"),
+        )
+        .unwrap();
+
+        assert_eq!(selected.as_array().unwrap()[0].as_str(), Some("./portable"));
+    }
+
+    #[test]
+    fn explicit_target_configuration_selects_dependencies() {
+        let configuration = BuildConfiguration::new("linux", "arm64", vec!["release".to_string()]);
+        let source = r#"
+[[target]]
+name = "App"
+kind = "plain"
+deps = { select = { release = ["./Optimized"], default = ["./Portable"] } }
+"#;
+
+        let targets =
+            load_toml_with_configuration("struo.toml", source, Path::new("."), "", &configuration)
+                .unwrap();
+
+        assert_eq!(targets[0].deps, vec!["Optimized"]);
+        assert_eq!(configuration.os, "linux");
+        assert_eq!(configuration.arch, "aarch64");
+        assert!(configuration.tokens.contains(&"linux-arm64".to_string()));
+    }
+
+    #[test]
+    fn host_select_tokens_include_specific_and_general_tokens() {
+        assert_eq!(
+            select_tokens_for("macos", "x86_64"),
+            vec!["macos-x86_64", "macos", "x86_64"]
+        );
+        assert_eq!(
+            select_tokens_for("windows", "aarch64"),
+            vec![
+                "windows-arm64",
+                "windows-aarch64",
+                "windows",
+                "arm64",
+                "aarch64"
+            ]
+        );
+    }
+
+    #[test]
+    fn configuration_canonical_bytes_are_stable() {
+        let left = BuildConfiguration::new("macos", "aarch64", Vec::new());
+        let right = BuildConfiguration::new("macos", "aarch64", Vec::new());
+        assert_eq!(left.canonical_bytes(), right.canonical_bytes());
+    }
+
+    #[test]
+    fn configuration_canonical_bytes_differ_when_tokens_differ() {
+        let debug = BuildConfiguration::new("macos", "aarch64", Vec::new());
+        let release = BuildConfiguration::new("macos", "aarch64", vec!["release".to_string()]);
+        assert_ne!(debug.canonical_bytes(), release.canonical_bytes());
+    }
+
+    #[test]
+    fn configuration_merge_appends_tokens_and_preserves_extra_tokens() {
+        let baseline =
+            BuildConfiguration::new("macos", "aarch64", vec!["distribution".to_string()]);
+        let merged = baseline.merged_with(&ConfigurationOverrides {
+            tokens: vec!["release".to_string()],
+            ..ConfigurationOverrides::default()
+        });
+        // Platform tokens are re-derived for the unchanged platform.
+        assert!(merged.tokens.contains(&"macos-arm64".to_string()));
+        // Workspace extra tokens survive a merge.
+        assert!(merged.tokens.contains(&"distribution".to_string()));
+        // Override tokens are appended.
+        assert!(merged.tokens.contains(&"release".to_string()));
+    }
+
+    #[test]
+    fn configuration_merge_rederives_platform_tokens_when_architecture_changes() {
+        let baseline = BuildConfiguration::new("macos", "aarch64", Vec::new());
+        let merged = baseline.merged_with(&ConfigurationOverrides {
+            arch: Some("x86_64".to_string()),
+            ..ConfigurationOverrides::default()
+        });
+        assert_eq!(merged.arch, "x86_64");
+        // The old platform token must not survive an architecture change.
+        assert!(!merged.tokens.contains(&"macos-arm64".to_string()));
+        assert!(merged.tokens.contains(&"macos-x86_64".to_string()));
+    }
+}

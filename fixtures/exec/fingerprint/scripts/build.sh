@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# once input "../input.txt"
-# once fingerprint "cat tool-version"
-# once cwd ".."
+# struo input "../input.txt"
+# struo fingerprint "cat tool-version"
+# struo cwd ".."
 cat input.txt

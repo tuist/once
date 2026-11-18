@@ -70,7 +70,7 @@ framework_plist() {
     <key>CFBundleExecutable</key>
     <string>$2</string>
     <key>CFBundleIdentifier</key>
-    <string>dev.once.fixture.$2</string>
+    <string>dev.struo.fixture.$2</string>
     <key>CFBundlePackageType</key>
     <string>FMWK</string>
 </dict>

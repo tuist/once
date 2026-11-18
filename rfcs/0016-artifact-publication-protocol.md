@@ -7,8 +7,8 @@ support. It extends RFC 0015; it does not replace the immutable package format.
 
 ## Problem
 
-Once must own publication, including opt-in publication after a successful build.
-A Tuist command that wraps a Once invocation is the wrong boundary. So is
+Struo must own publication, including opt-in publication after a successful build.
+A Tuist command that wraps a Struo invocation is the wrong boundary. So is
 making every producer emit a native Tuist preview request. Applications are one
 artifact category, and Tuist Previews is one consumer experience, not the
 publication protocol.
@@ -24,7 +24,7 @@ for the protocol proposed here.
 - **Producers** own packaging, variant selectors, content metadata, runtime
   closure and signing requirements. They use the artifact capability and typed
   interfaces, not provider request bodies.
-- **Once** owns export, publication policy, authentication, bounded transfer,
+- **Struo** owns export, publication policy, authentication, bounded transfer,
   retries and confirmed receipts. Publication runs outside cached graph actions.
 - **Providers** own durable storage, authorization, access, retention and
   idempotent commits. They retain unknown interfaces without interpreting them.
@@ -33,11 +33,11 @@ for the protocol proposed here.
 
 Tuist uses its existing project authentication and distribution authorization.
 Its preview experience projects compatible published applications. It is not a
-second upload performed by Once and must not become part of artifact identity.
+second upload performed by Struo and must not become part of artifact identity.
 
 ## Preserve the content envelope
 
-Preserve `once.artifact_info.v1` for existing explicit exports and reuse
+Preserve `struo.artifact_info.v1` for existing explicit exports and reuse
 `once.artifact.v1` and `once.artifact_set.v1` for immutable content. Automation
 adds a v2 producer declaration described below, not a new content format. The
 root addresses the entire set, each member addresses an artifact manifest,
@@ -142,7 +142,7 @@ without depending on Tuist names or its preview API.
 
 ### Discover
 
-`GET /capabilities` advertises `once.artifact_publication.v1`, the stable
+`GET /capabilities` advertises `struo.artifact_publication.v1`, the stable
 destination identifier, supported root schemas and digest algorithms, maximum
 blob size, maximum closure byte count, metadata/closure limits and supported
 transfer profiles. The baseline transfer profile is authenticated streaming
@@ -155,7 +155,7 @@ unsupported result before uploading. It never triggers a legacy preview upload.
 An absent endpoint must not be interpreted as an empty successful publication.
 
 After approval of discovery, every subsequent request carries an
-`Once-Destination` header with that stable destination identifier. Before
+`Struo-Destination` header with that stable destination identifier. Before
 accepting content or reading publication state, the service verifies that the
 authenticated endpoint still resolves to that identifier; mismatch returns
 409 `identity_conflict`. This fences project-handle reuse or rebinding between
@@ -184,7 +184,7 @@ validate the transport origin/scheme, bound response bodies, and confirm upload
 completion through the authenticated service. Signed URLs never enter receipts,
 logs, manifests or cached action results.
 
-Transfers stream with bounded buffers under Once's command resource admission.
+Transfers stream with bounded buffers under Struo's command resource admission.
 Do not read whole payloads into memory, start unbudgeted fan-out, or spool
 unbounded response bodies. Client and server enforce descriptor, byte, depth,
 count and time limits, including limits on aggregate closure size. The existing
@@ -195,7 +195,7 @@ allocation, not after parsing an oversized body.
 ### Commit the root atomically
 
 `PUT /publications/{intent_key}` receives the canonical intent with media type
-`application/vnd.once.publication-intent.v1+json`. Before acknowledging, the
+`application/vnd.struo.publication-intent.v1+json`. Before acknowledging, the
 provider authenticates and authorizes the destination, verifies the key, parses
 the root and manifests with the supported schemas, and verifies the entire
 declared closure. Interface payload references must resolve. Unknown interfaces
@@ -244,11 +244,11 @@ Discovery returns 200 and this object:
 
 ```json
 {
-  "schema": "once.artifact_publication.v1",
+  "schema": "struo.artifact_publication.v1",
   "destination": "provider:project:123",
   "root_schemas": ["once.artifact_set.v1"],
   "digest_algorithms": ["sha256"],
-  "transfer_profiles": ["once.http-put.v1"],
+  "transfer_profiles": ["struo.http-put.v1"],
   "limits": {
     "metadata_max_bytes": 1048576,
     "artifacts_max": 128,
@@ -284,7 +284,7 @@ A confirmed commit returns 200 or 201 and this receipt:
   "root": {
     "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "size_bytes": 123,
-    "media_type": "application/vnd.once.artifact-set.v1+json"
+    "media_type": "application/vnd.struo.artifact-set.v1+json"
   },
   "destination": "provider:project:123",
   "generation": 1,
@@ -307,14 +307,14 @@ Errors use this shape, with `missing` present only for `missing_content`:
 
 ```json
 {
-  "schema": "once.publication_error.v1",
+  "schema": "struo.publication_error.v1",
   "code": "missing_content",
   "message": "Required content is not retained",
   "missing": [
     {
       "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
       "size_bytes": 123,
-      "media_type": "application/vnd.once.artifact-set.v1+json"
+      "media_type": "application/vnd.struo.artifact-set.v1+json"
     }
   ]
 }
@@ -347,7 +347,7 @@ no publication in this destination, or 410 when the publication is no longer
 retained. It requires current authorization; a saved receipt is not an access
 token or evidence that bytes still exist.
 
-When the commit response is lost, Once reads this endpoint and validates its
+When the commit response is lost, Struo reads this endpoint and validates its
 receipt or repeats the same idempotent commit. A 401/403 is not absence and must
 not cause a fresh upload. Retryable failures are bounded; timeout or exhausted
 recovery produces an explicit unknown outcome, without a successful receipt.
@@ -377,11 +377,11 @@ disposition or an isolated content origin, never the authenticated dashboard
 origin with active MIME interpretation. Consumer-specific serving, such as a
 static site's public root, requires separate authorization and isolation.
 
-## Once-owned opt-in automation
+## Struo-owned opt-in automation
 
 Ordinary builds remain publication-free by default. A configured artifact
 provider alone is not consent to publish on build. The proposed configuration
-extends `once.toml`, not a Tuist wrapper or another settings file:
+extends `struo.toml`, not a Tuist wrapper or another settings file:
 
 ```toml
 [infrastructure.artifacts]
@@ -389,7 +389,7 @@ name = "tuist"
 
 [infrastructure.artifacts.on_build]
 targets = ["mobile/App"]
-interfaces = ["dev.once.apple-install.v2", "dev.once.android-install.v1"]
+interfaces = ["dev.struo.apple-install.v2", "dev.struo.android-install.v1"]
 ```
 
 This syntax is proposed and not accepted by the current parser. The interface
@@ -397,7 +397,7 @@ identifiers select contracts, not toolchains in Rust. Listing targets and
 interfaces explicitly authorizes publication of matching top-level build
 outputs to the selected destination. Configuring a provider for caching or
 reporting does not enable this policy. An absent policy or an explicit empty
-target list disables it. `once artifact publish` remains explicit publication,
+target list disables it. `struo artifact publish` remains explicit publication,
 independent of automatic policy.
 
 `interfaces` is an optional restriction: when present, every member must match
@@ -406,7 +406,7 @@ Omitting it allows interface-free downloads as well as typed artifacts, but
 still requires explicit target consent and full producer approval. This does
 not permit an application producer to ignore its own signing-related denials.
 
-After a successful Once build, Once's orchestration layer evaluates policy for
+After a successful Struo build, Struo's orchestration layer evaluates policy for
 requested top-level targets, never every dependency. It requests the artifact
 capability for eligible targets, reusing cached execution and packaging where
 possible, then publishes outside the graph. Publication credentials, destination
@@ -420,7 +420,7 @@ any interface restriction and carry the producer approval defined below. A
 target lacking artifact capability or an eligible member is reported as skipped
 with a reason, before network transfer.
 
-Publication remains atomic for the root being published. Once must not silently
+Publication remains atomic for the root being published. Struo must not silently
 drop ineligible members or strip private payloads from an exported set. If a
 producer mixes distributable and non-distributable members, automatic publication
 skips that root and reports why. A producer wanting separate publication units
@@ -429,13 +429,13 @@ rewriting immutable content or leaking sibling payloads.
 
 ### Producer approval boundary
 
-Automation requires the proposed `once.artifact_info.v2` declaration envelope.
+Automation requires the proposed `struo.artifact_info.v2` declaration envelope.
 It retains v1 declaration fields and adds a required `automatic_publication`
 object to each declaration:
 
 ```json
 {
-  "approved_interfaces": ["dev.once.apple-install.v2"],
+  "approved_interfaces": ["dev.struo.apple-install.v2"],
   "approved_payloads": ["bundle", "symbols"],
   "denials": []
 }
@@ -449,7 +449,7 @@ bytes. Unknown fields fail validation. Metadata remains bounded to one mebibyte.
 
 The Starlark producer evaluates its own supported consumption contracts against
 the actual declared outputs and emits this result. Generic Rust does not load
-interface handlers, inspect native packages or interpret signing modes. Once
+interface handlers, inspect native packages or interpret signing modes. Struo
 accepts automation only when every member has no denials, satisfies any interface
 restriction, and `approved_payloads` is exactly the complete set of that member's
 payload names. An interface-free download can have empty `approved_interfaces`.
@@ -470,7 +470,7 @@ Approval is a producer assertion about publication, not universal installability
 or proof of artifact trust. Consumers must independently verify supported
 contracts, native signatures and current runtime/device authorization. Adding
 mandatory signing facts to the existing Apple installation contract requires
-`dev.once.apple-install.v2`; old v1 facts are not retrospectively sufficient.
+`dev.struo.apple-install.v2`; old v1 facts are not retrospectively sufficient.
 The Android contract and any future contract must specify their producer checks
 before their interfaces can appear in approvals. Private inputs must never be
 included in a payload merely because approval metadata is absent or ignored.
@@ -492,7 +492,7 @@ Approval must bind the workspace identity, resolved service origin and stable
 destination, plus the selected targets and interfaces. A repository policy or
 destination change invalidates it. Store approval as machine-local authorization
 state, not a committed setting or cached graph result, and provide a local deny
-that wins over repository opt-in. Use Once's existing credential acquisition,
+that wins over repository opt-in. Use Struo's existing credential acquisition,
 with no implicit login during a build. Noninteractive execution needs explicit
 preauthorization and credentials; it must never answer a prompt affirmatively
 on the user's behalf. Policy and consent implementation must be reviewed
@@ -505,7 +505,7 @@ The existing `--allow-run` gate is still required but is not publication consent
 ## Application producers and Tuist consumption
 
 Apple currently exports a stable `product` member and a bundle ZIP with
-`dev.once.apple-install.v1`. Its proposed v2 contract needs explicit
+`dev.struo.apple-install.v1`. Its proposed v2 contract needs explicit
 producer-verified signing/distribution requirements before device publication is
 eligible. Automation must select v2, not the existing v1 contract. An
 ad-hoc device bundle is not made installable by publication. Simulator, desktop
@@ -516,7 +516,7 @@ protocol or by new producers.
 Android currently exposes build/run, `android_application` and `android_apk`,
 but no artifact capability or artifact provider. Debug and unsigned APK build
 support does not establish artifact publication support. Its module must add
-`once_artifact_info`, a stable `product` member and a versioned Android install
+`struo_artifact_info`, a stable `product` member and a versioned Android install
 contract describing the actual package, SDK/ABI and verified signing facts.
 Unsigned APKs cannot match an installation publication policy. Split APKs require
 an explicit install-set contract, not multiple unrelated alternative members.
@@ -544,14 +544,14 @@ promise revocation of copies users have already downloaded.
 ## Compatibility and implementation boundaries
 
 Keep the current explicit legacy adapter behavior until the generic receiving
-service and Once transport exist together. Do not advertise protocol support
+service and Struo transport exist together. Do not advertise protocol support
 before server-side storage, recovery and authorization work. Never silently
 upgrade legacy commands to a new destination or retry their non-idempotent
 uploads under these rules. Deprecating the compatibility interface is a separate
 migration with user-facing documentation and a supported replacement.
 
 Implementation requires the generic receiving service and retention model,
-Once transport and validated receipts, Once policy/trust support, producer
+Struo transport and validated receipts, Struo policy/trust support, producer
 contracts, and Tuist's application projection. Tests using a fake HTTP service
 establish the client protocol only, not server durability or native eligibility.
 This RFC does not itself implement any of those pieces.
@@ -582,7 +582,7 @@ Before enabling automatic publication, validate at least:
 
 ## Alternatives rejected
 
-- **Wrap `once build` in Tuist:** puts policy and side effects outside Once,
+- **Wrap `struo build` in Tuist:** puts policy and side effects outside Struo,
   duplicates orchestration and cannot define a general producer contract.
 - **Use the legacy preview multipart API as generic publication:** drops content
   and cannot establish atomic sets, safe retries or retention.

@@ -1,17 +1,17 @@
-# Why Once
+# Why Struo
 
 You should not have to rebuild the same inputs just because the work moved
 from your laptop to continuous integration, or from one coding agent to
-another. Once makes that work reusable without asking you to replace every
+another. Struo makes that work reusable without asking you to replace every
 working tool in your repository first.
 
 The idea is simple: describe what an action reads, what it writes, and the
-environment it needs. Once gives that contract a content-based identity and
+environment it needs. Struo gives that contract a content-based identity and
 stores the result. When the contract is unchanged, it restores the result
 instead of repeating the work.
 
 Build systems such as Bazel have demonstrated the value of explicit
-dependencies, shared caches, and remote execution. Once brings that model to
+dependencies, shared caches, and remote execution. Struo brings that model to
 existing repository automation through native project discovery, annotated
 scripts, and typed targets. The migration can start with one useful action,
 not a repository-wide rewrite.
@@ -42,11 +42,11 @@ what work should happen, what values affect it, which outputs matter, and
 what an agent can inspect while that work is running, without binding every
 automation workflow to one provider.
 
-## Once Is The Narrow Waist
+## Struo Is The Narrow Waist
 
-Once is the [narrow waist](https://en.wikipedia.org/wiki/Hourglass_model)
+Struo is the [narrow waist](https://en.wikipedia.org/wiki/Hourglass_model)
 between automation needs and the infrastructure that can make those
-workflows faster. Above Once, developers and agents describe targets,
+workflows faster. Above Struo, developers and agents describe targets,
 capabilities, and actions. Each action declares its inputs, outputs,
 environment, working directory, runtime needs, and required provider
 capabilities. Providers can supply local cache storage, shared cache storage,
@@ -58,7 +58,7 @@ implement, and flexible enough for teams to keep using the tools they
 already have.
 
 Scripts and typed targets share the same action model. Scripts already encode
-real repository knowledge, so Once lets them enter that model immediately.
+real repository knowledge, so Struo lets them enter that model immediately.
 When that work needs richer dependencies, multiple capabilities,
 structured diagnostics, or agent-driven edits, it can move into typed graph
 targets while keeping the same cache, build, run, and test workflow.
@@ -67,7 +67,7 @@ targets while keeping the same cache, build, run, and test workflow.
 
 Caching is only correct when the action contract is complete. An undeclared
 file, a changing network response, or an untracked environment variable can
-make a recorded result stale. Once gives you explicit contracts and queryable
+make a recorded result stale. Struo gives you explicit contracts and queryable
 plans, but it does not make an arbitrary command hermetic by default.
 
 Start locally, verify the inputs and outputs, and then share the result with
@@ -77,7 +77,7 @@ attached to a workflow you can inspect and trust.
 
 ## Next
 
-Continue with [Getting Started](/guide/getting-started) to install Once and
+Continue with [Getting Started](/guide/getting-started) to install Struo and
 reuse the result of a cacheable script. If running work away from the current
 computer is your main interest, read
 [Remote Execution](/guide/infrastructure/remote-execution).

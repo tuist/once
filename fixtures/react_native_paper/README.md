@@ -6,7 +6,7 @@ checkout of that revision. It does not vendor Paper or change its package
 manifests, Yarn configuration, or lockfile.
 
 Use Node.js compatible with Paper's pinned version and Corepack's Yarn 4.9.1.
-Enable the Yarn shim on `PATH` before invoking Once, including with `once -C`.
+Enable the Yarn shim on `PATH` before invoking Struo, including with `struo -C`.
 
 Native package-manager controls:
 
@@ -16,12 +16,12 @@ corepack yarn prepack
 CI=1 corepack yarn --cwd example run expo export --platform all --no-bytecode --max-workers 2 --output-dir dist
 ```
 
-Once controls:
+Struo controls:
 
 ```sh
-once build Dependencies
-once build Paper
-once build Example
+struo build Dependencies
+struo build Paper
+struo build Example
 ```
 
 `Dependencies` only installs the full workspace. `Paper` builds the library's
@@ -39,6 +39,6 @@ The dependency declaration includes both workspace manifests, Yarn's
 configuration and checked-in release, and local lifecycle scripts. Frozen
 installs remain enabled. The consumer targets declare build sources
 separately, preserving nested installs and workspace links in private copies.
-Deleting `.once/out` and rebuilding exercises cache restoration without
+Deleting `.struo/out` and rebuilding exercises cache restoration without
 changing the native source checkout. Large workspaces need enough disk space
 for the installation, private consumer trees, and atomic cache restoration.

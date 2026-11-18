@@ -47,10 +47,10 @@ _.path = [
 ]
 
 [tasks."android:install-sdk"]
-description = "Install Android SDK packages and the emulator used by Once Android validation."
+description = "Install Android SDK packages and the emulator used by Struo Android validation."
 run = '''
 set -eu
-responses="${TMPDIR:-/tmp}/once-android-sdk-licenses.$$"
+responses="${TMPDIR:-/tmp}/struo-android-sdk-licenses.$$"
 trap 'rm -f "$responses"' EXIT
 awk 'BEGIN { for (i = 0; i < 200; i++) print "y" }' > "$responses"
 sdkmanager --licenses < "$responses" >/dev/null || true
@@ -60,8 +60,8 @@ case "$(uname -m)" in
 esac
 system_image="system-images;android-35;google_apis;$emulator_abi"
 sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.3.13750724" "emulator" "$system_image" < "$responses"
-if ! avdmanager list avd | grep -q 'Name: once_example'; then
-  printf 'no\n' | avdmanager create avd --force --name once_example --package "$system_image" --device pixel_6
+if ! avdmanager list avd | grep -q 'Name: struo_example'; then
+  printf 'no\n' | avdmanager create avd --force --name struo_example --package "$system_image" --device pixel_6
 fi
 mkdir -p "$HOME/.android"
 if [ ! -f "$HOME/.android/debug.keystore" ]; then
@@ -178,6 +178,6 @@ mise run swift:install-android-sdk
 [tasks."examples:verify-portable"]
 description = "Build the release binary, materialize the portable starter examples, and execute their primary capability."
 run = '''
-mise exec -- cargo build --release --package once-cli
+mise exec -- cargo build --release --package struo-cli
 mise exec -- shellspec spec/starter_examples_spec.sh
 '''

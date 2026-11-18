@@ -1,7 +1,7 @@
 # Execution Provider Contract
 
 An execution provider runs one prepared command in an isolated environment.
-Once owns graph analysis, action identity, scheduling, and caching. A provider
+Struo owns graph analysis, action identity, scheduling, and caching. A provider
 does not receive the entire build graph and does not need to implement target
 kinds or test selection.
 
@@ -12,7 +12,7 @@ not an HTTP schema. The Tuist adapter is the one adapter that speaks the REAPI
 
 ## Prepared Command
 
-The internal [`PreparedCommand`](https://github.com/tuist/once/blob/main/crates/once-core/src/remote.rs)
+The internal [`PreparedCommand`](https://github.com/tuist/struo/blob/main/crates/struo-core/src/remote.rs)
 passes these values to an execution adapter:
 
 - **`argv`:** argument vector with a program and separate arguments. Preserve
@@ -49,13 +49,13 @@ Other coordinator platforms return an unsupported-platform error rather than
 falling back to unsafe path traversal. This applies to all archive-backed
 remote adapters, not only Docker.
 
-The resolved [`RemoteExecution`](https://github.com/tuist/once/blob/main/crates/once-core/src/action.rs)
+The resolved [`RemoteExecution`](https://github.com/tuist/struo/blob/main/crates/struo-core/src/action.rs)
 separately identifies the named provider, executor adapter, environment
 reference, and optional account/project requirements. Those requirements must
 be enforced or rejected, never silently ignored.
 
-Use Once's
-[`resolve_execution_argv` and `resolve_execution_env`](https://github.com/tuist/once/blob/main/crates/once-core/src/execution_path.rs)
+Use Struo's
+[`resolve_execution_argv` and `resolve_execution_env`](https://github.com/tuist/struo/blob/main/crates/struo-core/src/execution_path.rs)
 to resolve workspace placeholders at the guest root. Preserve argv semantics
 even if a provider API only accepts a command string. E2B's process transport
 and Daytona's command quoting are examples, not a reason to require a shell
@@ -89,16 +89,16 @@ its service's endpoints onto this lifecycle:
    failure, retains uncertain records, and releases resources only when their
    work ends.
 
-Do not install Once on the worker just to reconstruct the graph. The worker
+Do not install Struo on the worker just to reconstruct the graph. The worker
 needs the action's tools and transfer/process facilities. The current hosted
 archive adapters also require `tar` and their setup utilities in the guest.
 Those are requirements of these transports, not a mandatory wire format for
 all future providers.
 
-Use the [E2B adapter](https://github.com/tuist/once/blob/main/crates/once-core/src/remote/e2b.rs)
+Use the [E2B adapter](https://github.com/tuist/struo/blob/main/crates/struo-core/src/remote/e2b.rs)
 as a hosted reference for preparation, command execution, output retrieval,
 and cleanup. The
-[Daytona adapter](https://github.com/tuist/once/blob/main/crates/once-core/src/remote/daytona.rs)
+[Daytona adapter](https://github.com/tuist/struo/blob/main/crates/struo-core/src/remote/daytona.rs)
 shows a service that captures streams in guest files instead of returning them
 as a live process stream.
 
@@ -107,22 +107,22 @@ as a live process stream.
 Inputs may include files, directories, executable modes, and safe symbolic
 links, such as package-manager executable links. Do not flatten directories,
 dereference arbitrary links, or upload undeclared host paths. See the
-[input archive planner and builder](https://github.com/tuist/once/tree/main/crates/once-core/src/remote/archive/input)
-and [path validation](https://github.com/tuist/once/blob/main/crates/once-core/src/remote/path.rs).
+[input archive planner and builder](https://github.com/tuist/struo/tree/main/crates/struo-core/src/remote/archive/input)
+and [path validation](https://github.com/tuist/struo/blob/main/crates/struo-core/src/remote/path.rs).
 
 On an accepted exit, retrieve only declared outputs. A missing declared output
 is a failure. Reject traversal, absolute paths, undeclared entries, unsafe
 links, and unsupported archive entry types. Do not extract remote archives
 directly into the customer's workspace. Stage and validate first, then install
 with rollback if a multi-output installation fails. Reuse the
-[output archive validator](https://github.com/tuist/once/blob/main/crates/once-core/src/remote/archive/output.rs)
-and [`OutputStaging`](https://github.com/tuist/once/blob/main/crates/once-core/src/remote/output_install.rs).
+[output archive validator](https://github.com/tuist/struo/blob/main/crates/struo-core/src/remote/archive/output.rs)
+and [`OutputStaging`](https://github.com/tuist/struo/blob/main/crates/struo-core/src/remote/output_install.rs).
 
 On an unaccepted exit, return the original exit status and captured streams;
 do not publish successful outputs. Separate command failure from transport,
 policy, validation, timeout, and cleanup failures. The existing adapters return
-an [`ActionResult`](https://github.com/tuist/once/blob/main/crates/once-cas/src/model.rs)
-for the status and stream digests; the surrounding Once runner captures
+an [`ActionResult`](https://github.com/tuist/struo/blob/main/crates/struo-cas/src/model.rs)
+for the status and stream digests; the surrounding Struo runner captures
 installed output values and publishes cache results.
 
 ## Environment and Policy Enforcement
@@ -142,7 +142,7 @@ installed output values and publishes cache results.
 - Executor failure must not implicitly fall back to another executor. Cache
   unavailability policy is separate from execution placement.
 
-[`Executor::resolve`](https://github.com/tuist/once/blob/main/crates/once-core/src/executor/selection.rs)
+[`Executor::resolve`](https://github.com/tuist/struo/blob/main/crates/struo-core/src/executor/selection.rs)
 owns current policy checks. Adding a service includes wiring its selection and
 resource domain, not just adding an HTTP client.
 
@@ -158,12 +158,12 @@ host memory for packaging, transfers, capture, and validation. Aliases share
 the scheduler's remote request quota; another name does not create more
 capacity. The service must enforce physical machine and tenant quotas itself.
 
-Use [`ExecutorResources` and `ExecutionPermit`](https://github.com/tuist/once/blob/main/crates/once-core/src/executor/admission.rs)
+Use [`ExecutorResources` and `ExecutionPermit`](https://github.com/tuist/struo/blob/main/crates/struo-core/src/executor/admission.rs)
 and the shared staging/capture pools. Do not create an unbounded transfer or
 machine fan-out outside admission. Keep permits alive through background work
 and cancellation cleanup.
 
-[`RemoteIoLimits`](https://github.com/tuist/once/blob/main/crates/once-core/src/executor/io.rs)
+[`RemoteIoLimits`](https://github.com/tuist/struo/blob/main/crates/struo-core/src/executor/io.rs)
 bounds response/frame bytes, archives, entries, metadata, capture, staging,
 and transfer progress. Stream large data through bounded buffers and temporary
 files. These client limits are not guest memory enforcement or a bound on the
@@ -186,12 +186,12 @@ foreground action has already timed out.
 
 ## Ownership, Cancellation, and Cleanup
 
-The shared [hosted lifecycle](https://github.com/tuist/once/blob/main/crates/once-core/src/remote/lifecycle.rs)
+The shared [hosted lifecycle](https://github.com/tuist/struo/blob/main/crates/struo-core/src/remote/lifecycle.rs)
 provides the ownership journal, creation ownership, reconciliation, and
 deletion retries. Integrate it instead of relying only on a `finally` block.
 
 1. Persist a creation intent before sending the create request. Include the
-   unique `once-operation` marker in provider metadata.
+   unique `struo-operation` marker in provider metadata.
 2. Create on an independently owned task. If cancellation wins the race, a
    late create response must still register and run cleanup.
 3. Persist the machine id when known. Do not blindly retry creation: an error
@@ -206,7 +206,7 @@ The lifecycle's internal `Provider` trait supplies `scope`, `credential`,
 `find`, and `delete`. `HostedSandbox` supplies the id. These are cleanup seams,
 not a complete execution-provider trait: transfer and process calls still
 belong to the adapter. See the
-[E2B cleanup binding](https://github.com/tuist/once/blob/main/crates/once-core/src/remote/e2b/cleanup.rs)
+[E2B cleanup binding](https://github.com/tuist/struo/blob/main/crates/struo-core/src/remote/e2b/cleanup.rs)
 for a concrete implementation.
 
 Authenticated lookup must distinguish a complete absence from an incomplete
@@ -232,32 +232,32 @@ hit cannot bypass the executor being tested.
 
 1. **Dependency tree with executable files and safe links:** exact declared
    input tree and modes available at the requested cwd. See the
-   [input archive tests](https://github.com/tuist/once/blob/main/crates/once-core/src/remote/archive/input/tests.rs).
+   [input archive tests](https://github.com/tuist/struo/blob/main/crates/struo-core/src/remote/archive/input/tests.rs).
 2. **Arguments containing spaces, quotes, empty strings, and metacharacters:**
    same argv and selected environment, without accidental shell evaluation.
-   See the [Daytona quoting tests](https://github.com/tuist/once/blob/main/crates/once-core/src/remote/daytona.rs)
-   and [E2B process transport](https://github.com/tuist/once/blob/main/crates/once-core/src/remote/e2b/protocol/process.rs).
+   See the [Daytona quoting tests](https://github.com/tuist/struo/blob/main/crates/struo-core/src/remote/daytona.rs)
+   and [E2B process transport](https://github.com/tuist/struo/blob/main/crates/struo-core/src/remote/e2b/protocol/process.rs).
 3. **Accepted nonzero exit versus unaccepted exit:** outputs returned only for
    accepted codes, preserving status and streams. See
-   [`PreparedCommand` acceptance and adapters](https://github.com/tuist/once/blob/main/crates/once-core/src/remote.rs).
+   [`PreparedCommand` acceptance and adapters](https://github.com/tuist/struo/blob/main/crates/struo-core/src/remote.rs).
 4. **Missing, malicious, or partially installable outputs:** failure without
    unsafe publication; failed installation rolls back earlier outputs. See
-   the [output validation tests](https://github.com/tuist/once/blob/main/crates/once-core/src/remote/archive/output.rs)
-   and [rollback tests](https://github.com/tuist/once/blob/main/crates/once-core/src/remote/output_install/tests.rs).
+   the [output validation tests](https://github.com/tuist/struo/blob/main/crates/struo-core/src/remote/archive/output.rs)
+   and [rollback tests](https://github.com/tuist/struo/blob/main/crates/struo-core/src/remote/output_install/tests.rs).
 5. **Oversized/stalled transfer or excessive capture:** bounded failure and
    cleanup, without unbounded memory or staging growth. See the
-   [E2B transport tests](https://github.com/tuist/once/blob/main/crates/once-core/src/remote/e2b/transport/tests.rs).
+   [E2B transport tests](https://github.com/tuist/struo/blob/main/crates/struo-core/src/remote/e2b/transport/tests.rs).
 6. **Upload, startup, execution, deadline, or deletion failure:** cleanup is
    attempted and awaited without hiding the original failure. See the
-   [E2B lifecycle tests](https://github.com/tuist/once/blob/main/crates/once-core/src/remote/e2b.rs)
-   and [Daytona lifecycle tests](https://github.com/tuist/once/blob/main/crates/once-core/src/remote/daytona.rs).
+   [E2B lifecycle tests](https://github.com/tuist/struo/blob/main/crates/struo-core/src/remote/e2b.rs)
+   and [Daytona lifecycle tests](https://github.com/tuist/struo/blob/main/crates/struo-core/src/remote/daytona.rs).
 7. **Lost create response, cancellation, credential rotation, or foreign marker:**
    no duplicate create or foreign deletion; ownership records retained and
    permits held through cleanup. See the
-   [hosted ownership tests](https://github.com/tuist/once/blob/main/crates/once-core/src/remote/lifecycle/tests.rs).
+   [hosted ownership tests](https://github.com/tuist/struo/blob/main/crates/struo-core/src/remote/lifecycle/tests.rs).
 8. **Unsupported policy or tenant requirement:** refusal before allocation,
    never silent weakening. See the
-   [executor selection tests](https://github.com/tuist/once/blob/main/crates/once-core/src/executor/selection.rs).
+   [executor selection tests](https://github.com/tuist/struo/blob/main/crates/struo-core/src/executor/selection.rs).
 
 These references are examples to extend for your adapter, not a claim of
 service certification. Inspect the provider's inventory after failure and

@@ -57,15 +57,15 @@ adoption:
 - [`android_resource` from Buck2](https://buck2.build/docs/prelude/rules/android/android_resource/)
 - [Android source sets from the Android Gradle plugin](https://developer.android.com/build/build-variants#sourcesets)
 
-Use them when only a resource or asset node needs to move into the Once graph.
+Use them when only a resource or asset node needs to move into the Struo graph.
 
 ## Outputs
 
 | Output | Location |
 | --- | --- |
-| Static resource package | `.once/out/<target>/resources.apk` |
-| R source directory | `.once/out/<target>/generated/r` |
-| R text symbols | `.once/out/<target>/R.txt` |
+| Static resource package | `.struo/out/<target>/resources.apk` |
+| R source directory | `.struo/out/<target>/generated/r` |
+| R text symbols | `.struo/out/<target>/R.txt` |
 
 ## Example
 
@@ -75,7 +75,7 @@ name = "SharedResources"
 kind = "android_resource"
 
 [target.attrs]
-package = "dev.once.shared"
+package = "dev.struo.shared"
 manifest = "AndroidManifest.xml"
 resource_files = ["res/**"]
 min_sdk_version = 23

@@ -2,13 +2,13 @@
 
 ## Summary
 
-Once should represent test selection, planning, scheduling, execution, and
+Struo should represent test selection, planning, scheduling, execution, and
 result aggregation as separate decisions. A selected test is semantic work. A
 batch is a stable execution envelope. A local worker, remote worker, or fixed
 job is only a placement decision.
 
-The implementation creates an immutable `once.test_plan.v1` record and a
-separate `once.test_schedule.v1` execution record. The plan contains the
+The implementation creates an immutable `struo.test_plan.v1` record and a
+separate `struo.test_schedule.v1` execution record. The plan contains the
 selection policy, changed paths, unmatched paths, selected test targets,
 reasons, and stable batches. It deliberately contains no worker or
 remote-provider assignment. The schedule records local worker placement and
@@ -23,7 +23,7 @@ also gives coding agents an auditable answer to three different questions:
 
 ## Decision
 
-Once will use an assured hierarchical model:
+Struo will use an assured hierarchical model:
 
 ```text
 conservative graph envelope
@@ -36,7 +36,7 @@ conservative graph envelope
 ```
 
 Graph structure defines the default correctness boundary. Observed file access
-may narrow that boundary only when Once can establish that observation was
+may narrow that boundary only when Struo can establish that observation was
 complete. Historical and learned signals may order work, but they do not remove
 tests unless the caller explicitly chooses an approximate, budgeted policy.
 
@@ -47,7 +47,7 @@ tests unless the caller explicitly chooses an approximate, budgeted policy.
 - Keep plan and batch identities stable when runner capacity changes.
 - Make retries safe through idempotent result ingestion and logical
   deduplication.
-- Support build-once, test-many execution without rebuilding per worker.
+- Support build-struo, test-many execution without rebuilding per worker.
 - Apply the same dependency model to target kinds and annotated scripts.
 - Give coding agents evidence that their tests validate behavior, not merely
   that the tests pass after the change.
@@ -69,11 +69,11 @@ research:
 
 - Bazel and Buck2 provide conservative graph reachability, hermetic actions,
   and remote execution. Buck2 also separates test discovery from execution.
-- Nx makes project-level affectedness approachable, but a general Once surface
+- Nx makes project-level affectedness approachable, but a general Struo surface
   must not assume one package or language ecosystem.
 - The [Tuist test sharding proposal](https://community.tuist.dev/t/rfc-test-sharding/929)
-  correctly centers built test artifacts, build-once execution, timing-aware
-  balancing, and result merging. Once keeps those ideas while avoiding session
+  correctly centers built test artifacts, build-struo execution, timing-aware
+  balancing, and result merging. Struo keeps those ideas while avoiding session
   identity tied to a hosted workflow and avoiding a shard count as semantic
   identity.
 - Rothermel and Harrold's
@@ -84,7 +84,7 @@ research:
   shows that observed file dependencies can reduce end-to-end time, but its
   assumptions about deterministic behavior and complete dependencies matter.
 - [Hybrid dynamic file and static method selection](https://zbchen.github.io/files/ase2024.pdf)
-  shows why Once should accept dependency evidence at more than one
+  shows why Struo should accept dependency evidence at more than one
   granularity instead of hardcoding target-level selection forever.
 - Meta's
   [predictive test selection](https://arxiv.org/abs/1810.05286) and Microsoft's
@@ -115,7 +115,7 @@ The selection report records:
 An empty changed-path set means a full test scope. A changed manifest or
 configured graph module selects every test because graph topology or target
 behavior may have changed. A changed path without an owner also selects every
-test until Once has complete dependency evidence that proves it irrelevant.
+test until Struo has complete dependency evidence that proves it irrelevant.
 
 Declared source patterns are matched directly. Selection must not require the
 changed file to exist in the current checkout, because deleted and renamed
@@ -133,9 +133,9 @@ unit. This is the current fallback and preserves compatibility with every
 target kind.
 
 The current discovery slice projects normalized case results into an immutable
-`once.test_manifest.v1` record after a whole-target execution. The record is
+`struo.test_manifest.v1` record after a whole-target execution. The record is
 persisted separately from the latest result, so an explicit filtered run does
-not erase the complete discovered unit set. Before a manifest exists, Once
+not erase the complete discovered unit set. Before a manifest exists, Struo
 reports a whole-target fallback instead of guessing test names.
 
 Explicit unit execution is allowed only when the target kind declares case
@@ -190,7 +190,7 @@ test plan.
 
 ### Result ledger
 
-Remote execution provides at-least-once physical execution. Once therefore
+Remote execution provides at-least-struo physical execution. Struo therefore
 requires idempotent result ingestion and logical deduplication by plan, batch,
 test unit, configuration, and attempt. A late duplicate may contribute
 diagnostics, but it cannot double-count the logical test result.
@@ -201,12 +201,12 @@ run, assembled only from accepted attempts.
 
 ## Selection Policy
 
-Once first finds changed graph owners, then traverses reverse dependencies to
+Struo first finds changed graph owners, then traverses reverse dependencies to
 test targets. The traversal is iterative and indexed, so cost grows with the
 graph and changed paths rather than repeating a full dependency walk for every
 test.
 
-Target-level selection is the safe default. Within an affected target, Once
+Target-level selection is the safe default. Within an affected target, Struo
 runs every discovered test unit unless it has complete finer-grained dependency
 evidence. Coverage alone does not establish that completeness.
 
@@ -238,7 +238,7 @@ as cancelled or superseded.
 
 ## Scheduling And Remote Execution
 
-Native Once scheduling pulls ready batches from a shared queue. Workers request
+Native Struo scheduling pulls ready batches from a shared queue. Workers request
 more work as they finish, which handles duration skew better than a static
 partition. The median of recent successful uncached durations seeds
 longest-first ordering; it does not fix work to a worker. Cache hits are
@@ -286,7 +286,7 @@ line coverage alone is not sufficient evidence that a generated test detects a
 fault.
 
 Long-running plans should be cancellable and supersedable. When an agent edits
-the workspace again, Once may keep reusable completed batches whose semantic
+the workspace again, Struo may keep reusable completed batches whose semantic
 identity is unchanged, cancel obsolete work, and schedule the new plan.
 
 ## Scripted Graphs

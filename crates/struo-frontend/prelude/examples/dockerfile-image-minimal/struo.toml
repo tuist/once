@@ -1,0 +1,7 @@
+[[target]]
+name = "hello_image"
+kind = "dockerfile_image"
+
+[target.attrs]
+execution_mode = "buildkit"
+tag = "struo-dockerfile-hello:latest"

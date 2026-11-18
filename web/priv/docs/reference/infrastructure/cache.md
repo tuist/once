@@ -24,14 +24,14 @@ Your service must support:
   output and captured-stream blobs. The adapter uploads referenced content
   before publishing the result.
 - **Look up a result:** return the stored record or confirmed absence.
-  Once checks its references before reusing a remote result.
+  Struo checks its references before reusing a remote result.
 
-Action keys are opaque to the service. Once decides whether an action can
+Action keys are opaque to the service. Struo decides whether an action can
 reuse a result; the cache does not recompute keys or interpret build rules.
 
 ## Content and Action Results
 
-Once uses BLAKE3-256 digests, serialized in JSON as 64 lowercase hexadecimal
+Struo uses BLAKE3-256 digests, serialized in JSON as 64 lowercase hexadecimal
 characters. The existing REAPI transport uses SHA-256 and maps between the
 two formats as described below.
 
@@ -39,12 +39,12 @@ The native action result contains:
 
 - **`exit_code`:** signed 32-bit process status; `-1` represents a signalled
   process. Preserve the value, including nonzero codes.
-- **`stdout`, `stderr`:** optional Once digests of captured stream blobs,
+- **`stdout`, `stderr`:** optional Struo digests of captured stream blobs,
   omitted when absent.
-- **`outputs`:** map of workspace-relative paths to Once digests of captured
+- **`outputs`:** map of workspace-relative paths to Struo digests of captured
   output values, omitted when empty.
 
-Store output values as opaque bytes. Once handles directories, executable
+Store output values as opaque bytes. Struo handles directories, executable
 modes, and symlinks; the cache must not extract or rewrite them. Digests
 identify uncompressed content, independent of compression used for storage
 or transfer.
@@ -59,13 +59,13 @@ storage services in the `build.bazel.remote.execution.v2` package:
 - **`ContentAddressableStorage`:** `FindMissingBlobs`, `BatchUpdateBlobs`, and
   `BatchReadBlobs`, using SHA-256 content digests and per-blob statuses.
 - **`ActionCache`:** `GetActionResult` and `UpdateActionResult`, storing both
-  Once result records and BLAKE3-to-SHA-256 mappings.
+  Struo result records and BLAKE3-to-SHA-256 mappings.
 
 Also implement `google.bytestream.ByteStream.Read` and `Write` for larger
 content and file-backed uploads. Support both batch and streaming reads;
-not every Once read path falls back when `BatchReadBlobs` is unimplemented.
+not every Struo read path falls back when `BatchReadBlobs` is unimplemented.
 
-No REAPI execution service is required. Once does not upload REAPI `Action`
+No REAPI execution service is required. Struo does not upload REAPI `Action`
 or `Command` messages or call `QueryWriteStatus` in this cache transport.
 
 ### Discovery and tenant isolation
@@ -95,19 +95,19 @@ handle, or `default` when no project is set. The account is not prefixed to
 `instance_name`. Authorize the token against both account metadata and the
 instance; never trust those caller-selected strings as authorization.
 
-Once resolves `TUIST_TOKEN` or a stored developer/CI session. See
+Struo resolves `TUIST_TOKEN` or a stored developer/CI session. See
 [Tuist authentication](/guide/infrastructure/tuist#authenticate-automation).
 A new adapter can use its own discovery and credential flow; it does not
 need to copy Tuist's control-plane routes.
 
 ### Digest mappings
 
-For a Once digest `d`, use its lowercase hex text. The adapter constructs two
+For a Struo digest `d`, use its lowercase hex text. The adapter constructs two
 synthetic REAPI action-cache keys:
 
 ```text
-blob preimage   = UTF-8("once.blob.v1")   + byte(0) + UTF-8(hex(d))
-action preimage = UTF-8("once.action.v1") + byte(0) + UTF-8(hex(d))
+blob preimage   = UTF-8("struo.blob.v1")   + byte(0) + UTF-8(hex(d))
+action preimage = UTF-8("struo.action.v1") + byte(0) + UTF-8(hex(d))
 mapping key    = {hash: hex(SHA-256(preimage)), size_bytes: len(preimage)}
 ```
 
@@ -125,14 +125,14 @@ The action mapping holds a REAPI `ActionResult` with the exit code, stream
 digests, and output-file digests translated to SHA-256. It also preserves the
 native result as JSON bytes in
 `execution_metadata.auxiliary_metadata`, with `Any.type_url` equal to
-`type.googleapis.com/once.cache.v1.ActionResult`. Despite the `Any` wrapper,
+`type.googleapis.com/struo.cache.v1.ActionResult`. Despite the `Any` wrapper,
 its value is JSON, not a serialized protobuf message.
 
 Preserve this auxiliary metadata unchanged, including its JSON encoding.
-Once checks that the native and REAPI records agree on exit code, output
+Struo checks that the native and REAPI records agree on exit code, output
 paths, and stream presence, then checks referenced content availability.
 Older records without native metadata require fetching content to recover
-the Once digests.
+the Struo digests.
 
 ### Transfer behavior
 
@@ -145,7 +145,7 @@ write: <instance>/uploads/<upload-id>/blobs/<sha256>/<uncompressed-size>
 ```
 
 ByteStream reads request uncompressed bytes. If advertised by the service,
-Once can upload Zstandard-compressed content using
+Struo can upload Zstandard-compressed content using
 `<instance>/uploads/<upload-id>/compressed-blobs/zstd/<sha256>/<uncompressed-size>`.
 The digest and size still describe uncompressed bytes. Writes begin at offset
 zero, use byte offsets in the transmitted data, and finish with
@@ -166,23 +166,23 @@ support is negotiated separately from ByteStream compression support.
   `PERMISSION_DENIED` for denied access, `INVALID_ARGUMENT` for invalid
   requests, and `UNAVAILABLE` for temporary service outages. Never disguise
   these failures as misses.
-- **Eviction:** the service may evict content. Once treats a result with
+- **Eviction:** the service may evict content. Struo treats a result with
   confirmed-missing references as a miss, not a successful restore. A prior
   availability check does not pin content against later eviction.
 - **Service policy:** enforce tenant isolation, quotas, and retention on the
-  server. Once's local cleanup and forget operations do not delete remote
+  server. Struo's local cleanup and forget operations do not delete remote
   entries. Keep credentials out of logs.
 
-## Once Adapter Responsibilities
+## Struo Adapter Responsibilities
 
 These are client responsibilities, not extra server APIs:
 
 - Keep a local cache and consult it first. Verify downloaded sizes and hashes
   before accepting content locally, and bound transfer memory and temporary
-  storage with Once's shared transfer budget.
+  storage with Struo's shared transfer budget.
 - Upload content before its mappings and action result. Make retries safe;
   the current adapter retries some transient failures within a bounded budget.
-- Preserve failure categories. Once may execute locally when the cache is
+- Preserve failure categories. Struo may execute locally when the cache is
   unavailable, but does not treat refused access, bad configuration, invalid
   responses, or corruption as ordinary misses.
 
@@ -193,7 +193,7 @@ service received anything; verify it from an independent reader.
 
 ## Acceptance Checks
 
-Run these checks against your service through the Once adapter, using
+Run these checks against your service through the Struo adapter, using
 disposable data and two clients with separate local caches. Start with the
 [guide's remote-reuse check](/guide/infrastructure/providers#validate-a-cache-without-a-local-false-positive),
 then deliberately exercise failures:
@@ -202,7 +202,7 @@ then deliberately exercise failures:
    from an empty local cache on the second. Exit code, captured streams, and
    output bytes must match exactly, including optional or empty values.
 2. **Eviction:** delete a referenced blob, then look up the result from a
-   fresh local cache. Once must report a miss. Also evict a blob between
+   fresh local cache. Struo must report a miss. Also evict a blob between
    lookup and restoration; incomplete restoration must not count as success.
 3. **Failure classification:** compare an absent entry, a stopped service,
    rejected credentials, and denied permissions. Only confirmed absence is

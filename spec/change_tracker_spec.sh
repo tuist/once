@@ -5,22 +5,22 @@ Describe 'filesystem change tracker process'
   AfterEach 'cleanup_workspace'
 
   inspect_tracker_process() {
-    "$SPEC_PYTHON3" - "$ONCE_BIN" "$WORKSPACE" <<'PY'
+    "$SPEC_PYTHON3" - "$STRUO_BIN" "$WORKSPACE" <<'PY'
 import fcntl, json, os, pathlib, resource, select, shutil, socket, subprocess, sys, time, uuid
 binary, workspace = sys.argv[1:]
 root = pathlib.Path(workspace)
 original_binary = binary
-binary = str(root.parent / 'replaceable-once')
+binary = str(root.parent / 'replaceable-struo')
 shutil.copy2(original_binary, binary)
 # Keep the Unix socket path below the platform limit without copying its hash algorithm.
 while True:
-    runtime = pathlib.Path('/tmp') / uuid.uuid4().hex[:4]
+    runtime = pathlib.Path('/tmp') / uuid.uuid4().hex[:3]
     try:
         runtime.mkdir()
         break
     except FileExistsError:
         pass
-env = {**os.environ, 'XDG_RUNTIME_DIR': str(runtime), 'ONCE_CHANGE_TRACKER': '1', 'ONCE_CACHE_PROVIDER': 'local'}
+env = {**os.environ, 'XDG_RUNTIME_DIR': str(runtime), 'STRUO_CHANGE_TRACKER': '1', 'STRUO_CACHE_PROVIDER': 'local'}
 (root / 'modules').mkdir()
 (root / 'modules/probe.star').write_text('''
 def _impl(ctx):
@@ -29,11 +29,11 @@ def _impl(ctx):
     return {}
 probe = target_kind(impl = _impl, capabilities = [capability("build", ["default"])])
 ''')
-manifest = root / 'once.toml'
+manifest = root / 'struo.toml'
 manifest.write_text('[modules]\npaths = ["modules/*.star"]\n[[target]]\nname = "app"\nkind = "probe"\nsrcs = ["input.txt"]\n')
 source = root / 'input.txt'
 source.write_text('first')
-output = root / '.once/out/app/product'
+output = root / '.struo/out/app/product'
 socket_path = None
 
 def run(*args, **options):
@@ -45,7 +45,7 @@ def snapshot(since=None):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(12)
         client.connect(str(socket_path))
-        client.sendall(json.dumps({'command': 'barrier', 'outputs': ['.once/out/app/product'], 'since': since}).encode() + b'\n')
+        client.sendall(json.dumps({'command': 'barrier', 'outputs': ['.struo/out/app/product'], 'since': since}).encode() + b'\n')
         client.shutdown(socket.SHUT_WR)
         with client.makefile('rb') as stream:
             response = json.loads(stream.readline(1024 * 1024))
@@ -130,7 +130,7 @@ try:
     assert output.read_text() == 'second', 'source invalidation did not reach the build'
     previous = snapshot()['position']
     output.write_text('tampered')
-    previous = changed(previous, 'output', ['.once/out/app/product'])
+    previous = changed(previous, 'output', ['.struo/out/app/product'])
     run('build', 'app')
     assert output.read_text() == 'second', 'output invalidation did not restore cached bytes'
     literal = run('exec', '--', sys.executable, '-c', 'import sys; print(sys.argv[1])', '__change-tracker')

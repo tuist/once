@@ -1,8 +1,8 @@
-# RFC 0002: Once Engineering Loops
+# RFC 0002: Struo Engineering Loops
 
 ## Summary
 
-Once should grow from a cacheable build substrate into a substrate for
+Struo should grow from a cacheable build substrate into a substrate for
 engineering loops. Build, run, and test remain the first mature loop because
 they are the easiest to make deterministic. The broader product opportunity is
 to model the recurring work around software engineering: dependency review, CI
@@ -26,7 +26,7 @@ the same capability, cache, diagnostic, runtime, and MCP surfaces.
 
 ## Motivation
 
-Once already describes actions with inputs, outputs, environment, working
+Struo already describes actions with inputs, outputs, environment, working
 directory, runtime metadata, and provider capabilities. That is a narrow waist
 between developer intent and execution infrastructure.
 
@@ -44,11 +44,11 @@ Agentic engineering stresses the same waist in more places than builds:
 These loops should not be expressed only as prose in agent instructions. Prose
 context rots, diverges, and cannot reliably block unsafe changes. Whenever a
 team can express a rule as a hook, test, typed workflow, schema, or executable
-policy, Once should make that the default shape.
+policy, Struo should make that the default shape.
 
 ## Influences
 
-This direction reconciles three outside ideas with Once without absorbing their
+This direction reconciles three outside ideas with Struo without absorbing their
 entire product surface.
 
 Fabro's strongest idea is a deterministic harness around non-deterministic
@@ -60,11 +60,11 @@ and output schemas, YAML definitions agents can author, immutable data artifacts
 vault-backed secrets, remote workers, and queryable stored data.
 
 Jose Valim's "Agentic engineering is still software engineering" argues for a
-discipline Once should encode directly: use deterministic hooks and tools
+discipline Struo should encode directly: use deterministic hooks and tools
 before context, keep humans in the loop where automation has not earned trust,
 and prefer formal, executable, and test specifications over descriptive prose.
 
-Once's contribution is the narrower engineering substrate: content-addressed
+Struo's contribution is the narrower engineering substrate: content-addressed
 actions, action cache records, typed graph targets, capabilities, structured
 diagnostics, remote execution, runtime introspection, and MCP-first discovery.
 
@@ -82,10 +82,10 @@ diagnostics, remote execution, runtime introspection, and MCP-first discovery.
 ## Non-Goals
 
 - Replace CI systems, issue trackers, chat products, or incident tools.
-- Turn Once into a general business automation engine.
+- Turn Struo into a general business automation engine.
 - Replay agent output as if it were a deterministic build artifact.
 - Make natural language specs the primary source of truth.
-- Require a hosted Once service for the first useful implementation.
+- Require a hosted Struo service for the first useful implementation.
 - Add arbitrary executable graph construction to target declarations.
 
 Event registration does not change the CI replacement non-goal. The initial
@@ -99,7 +99,7 @@ Developer-facing language should avoid presenting this as a stack of layers.
 The clearer framing is:
 
 ```text
-Once gives every project a graph and a memory.
+Struo gives every project a graph and a memory.
 ```
 
 The project graph answers:
@@ -124,7 +124,7 @@ The product concepts then become:
 
 - Project graph: source-controlled intent, including targets, dependencies,
   capabilities, providers, policies, gates, and loop definitions.
-- Runs: execution history for Once invocations, actions, cache state, and
+- Runs: execution history for Struo invocations, actions, cache state, and
   action results.
 - Evidence: durable claims from runs, tools, agents, policies, and humans.
 - Views: current answers computed from graph, runs, and evidence, such as
@@ -135,14 +135,14 @@ The product concepts then become:
 The pitch should stay concrete:
 
 ```text
-The graph tells Once what matters.
-Runs tell Once what happened.
-Evidence tells Once what can be trusted.
+The graph tells Struo what matters.
+Runs tell Struo what happened.
+Evidence tells Struo what can be trusted.
 Views tell developers and agents what to do next.
 Loops make recurring engineering work repeatable.
 ```
 
-Project memory should live locally in `.once/once.sqlite`. Evidence is one
+Project memory should live locally in `.struo/struo.sqlite`. Evidence is one
 family of tables in that database, not a separate evidence-only database.
 Future remote persistence should exchange evidence and run records with
 provenance, not synchronize raw SQLite database files.
@@ -184,7 +184,7 @@ capability = "test"
 configuration = { os = "linux", arch = "x86_64", tokens = [] }
 ```
 
-Registrations live in root `once.toml`. Initial selectors are exact refs and
+Registrations live in root `struo.toml`. Initial selectors are exact refs and
 exact target/capability references with complete, normalized configuration.
 Reject duplicate members, empty required selections, absent capabilities, and
 unsupported configurations. Do not add shell stages, query selectors,
@@ -192,8 +192,8 @@ matrices, or registration-specific dependency edges. Configuration is distinct
 from the worker's execution platform. A future registration can invoke a loop
 capability; loop stages remain the only loop graph.
 
-Keep one coarse Once invocation per necessary CI worker allocation. Generating
-a CI step per Once action retains the competing dependency graph this proposal
+Keep one coarse Struo invocation per necessary CI worker allocation. Generating
+a CI step per Struo action retains the competing dependency graph this proposal
 removes. A native controller is a separate product decision, not a requirement
 for removing duplicated build knowledge from an existing CI pipeline.
 
@@ -208,8 +208,8 @@ check migration. Missing work never becomes a successful empty aggregate.
 
 Repository installation binds an authorized definition revision, repository
 identity, and check obligations. This is authorization state, not a parallel
-Once configuration file. Any future Once-owned policy declarations use the
-existing `once.toml` family. A protected branch is source provenance, not
+Struo configuration file. Any future Struo-owned policy declarations use the
+existing `struo.toml` family. A protected branch is source provenance, not
 permission to expose credentials to project code.
 
 These rules preserve selected check coverage, not the semantic correctness of
@@ -226,7 +226,7 @@ Deferred action expansion must bind its input artifact digests and be recorded
 before the expanded actions execute; it is not a reason to evaluate project
 code in the controller.
 
-Retain and verify source, submodules, large-file content, module sources, Once
+Retain and verify source, submodules, large-file content, module sources, Struo
 and built-in module identity, and tool artifacts or immutable worker images.
 Reject dirty authoritative runs. Unavailable retained inputs are unavailable,
 not permission to substitute a host tool or re-resolve dependencies. Undeclared
@@ -393,15 +393,15 @@ secret by logical name or provider handle, but not capture plaintext.
 
 ## Graph Query Expressions
 
-Once now has a read-only graph expression surface:
+Struo now has a read-only graph expression surface:
 
 ```sh
-once query 'MATCH (t:Target)-[:EXPOSES]->(c:Capability {name: "test"}) RETURN t.id'
+struo query 'MATCH (t:Target)-[:EXPOSES]->(c:Capability {name: "test"}) RETURN t.id'
 ```
 
 Engineering loops should build on this surface rather than introduce a separate
 query language for every new concept. The first implementation can keep
-`once query evidence` and `once query gates` as ergonomic commands, but they
+`struo query evidence` and `struo query gates` as ergonomic commands, but they
 should be views over a shared query model.
 
 In that model, deterministic build graph data already has nodes such as
@@ -427,12 +427,12 @@ And relationships such as:
 Future questions should be expressible in the same shape:
 
 ```sh
-once query 'MATCH (l:Loop {id: "release"})-[:BLOCKED_BY]->(g:Gate) RETURN g.id, g.status'
-once query 'MATCH (t:Target)-[:HAS_EVIDENCE]->(e:Evidence {status: "stale"}) RETURN t.id, e.kind'
-once query 'MATCH (p:Policy {name: "sdk-api"})<-[:REQUIRES]-(l:Loop) RETURN l.id'
+struo query 'MATCH (l:Loop {id: "release"})-[:BLOCKED_BY]->(g:Gate) RETURN g.id, g.status'
+struo query 'MATCH (t:Target)-[:HAS_EVIDENCE]->(e:Evidence {status: "stale"}) RETURN t.id, e.kind'
+struo query 'MATCH (p:Policy {name: "sdk-api"})<-[:REQUIRES]-(l:Loop) RETURN l.id'
 ```
 
-This changes the product framing: Once should not only provide named query
+This changes the product framing: Struo should not only provide named query
 commands. It should expose an inspectable graph of engineering state where
 named commands are stable shortcuts for common graph expressions.
 
@@ -440,14 +440,14 @@ named commands are stable shortcuts for common graph expressions.
 
 ### New Dependency Review
 
-A developer or agent changes a dependency lockfile. Once detects that the
+A developer or agent changes a dependency lockfile. Struo detects that the
 change matches a future file-change registration and starts the
 `new-dependency-review` loop. Until that selector exists, the loop can be
 invoked explicitly.
 
 ```sh
-once loop run checks/new-dependency-review
-once query evidence checks/new-dependency-review --latest
+struo loop run checks/new-dependency-review
+struo query evidence checks/new-dependency-review --latest
 ```
 
 Human output:
@@ -472,8 +472,8 @@ change.
 An agent starts from a failing capability rather than raw logs.
 
 ```sh
-once loop run repair-ci --target cli:test
-once query failures --target cli:test --similar
+struo loop run repair-ci --target cli:test
+struo query failures --target cli:test --similar
 ```
 
 The loop stages are:
@@ -500,7 +500,7 @@ the prior evidence.
 
 ### Pull Request Review
 
-Once can model review as typed checks instead of one open-ended instruction.
+Struo can model review as typed checks instead of one open-ended instruction.
 
 ```toml
 [[target]]
@@ -520,8 +520,8 @@ required_evidence = ["diff-summary", "focused-tests"]
 Daily use:
 
 ```sh
-once loop run reviews/pr-review --base main
-once query evidence reviews/pr-review --select findings
+struo loop run reviews/pr-review --base main
+struo query evidence reviews/pr-review --select findings
 ```
 
 Example finding:
@@ -593,7 +593,7 @@ Release notes: missing public API note
 Gate: blocked
 ```
 
-Once does not merely run commands. It knows which evidence is required before
+Struo does not merely run commands. It knows which evidence is required before
 the release gate can pass.
 
 ### Production Feedback
@@ -601,9 +601,9 @@ the release gate can pass.
 Observability imports should become evidence linked to targets and tests.
 
 ```sh
-once evidence import sentry --project once-site
-once query incidents --since 7d
-once loop run production-regression-review
+struo evidence import sentry --project struo-site
+struo query incidents --since 7d
+struo loop run production-regression-review
 ```
 
 Example evidence:
@@ -615,7 +615,7 @@ Suggested verification: add integration coverage for expired provider tokens
 Decision: create follow-up issue
 ```
 
-This keeps production feedback inside the engineering loop without making Once
+This keeps production feedback inside the engineering loop without making Struo
 own the monitoring system.
 
 ## Query Surface
@@ -623,13 +623,13 @@ own the monitoring system.
 The first named query shape should be intentionally small:
 
 ```sh
-once query loops
-once query loop checks/new-dependency-review
-once query evidence checks/new-dependency-review
-once query evidence --kind finding --status should_fix
-once query gates --pending
-once query decisions --target release
-once query why-blocked release
+struo query loops
+struo query loop checks/new-dependency-review
+struo query evidence checks/new-dependency-review
+struo query evidence --kind finding --status should_fix
+struo query gates --pending
+struo query decisions --target release
+struo query why-blocked release
 ```
 
 These commands should coexist with graph expressions. Named commands serve the
@@ -638,13 +638,13 @@ otherwise turn into a long tail of bespoke subcommands.
 
 MCP tools should mirror these commands:
 
-- `once_query_loops`
-- `once_query_loop`
-- `once_query_evidence`
-- `once_query_gates`
-- `once_query_decisions`
-- `once_query_why_blocked`
-- `once_apply_loop_edit`
+- `struo_query_loops`
+- `struo_query_loop`
+- `struo_query_evidence`
+- `struo_query_gates`
+- `struo_query_decisions`
+- `struo_query_why_blocked`
+- `struo_apply_loop_edit`
 
 As with current graph edits, agents should edit loop targets through validated
 operations instead of hand-editing TOML text.
@@ -663,13 +663,13 @@ loop runs. A loop run should expose:
 - Checkpoints.
 - Cancellation and resume points.
 
-This overlaps with Fabro's run event and checkpoint model, but Once should keep
+This overlaps with Fabro's run event and checkpoint model, but Struo should keep
 the state tied to targets, capabilities, evidence, and action digests rather
 than a standalone agent workflow product.
 
 ## Storage
 
-Local storage can start under Once's existing state and cache roots:
+Local storage can start under Struo's existing state and cache roots:
 
 - CAS remains the place for large immutable blobs.
 - Action cache remains the place for deterministic action results.
@@ -722,11 +722,11 @@ model and daily value.
 2. Add a local evidence store with append, query, and latest-by-target lookup.
 3. Record evidence for existing action executions without changing cache
    behavior.
-4. Add `once query evidence` for action evidence.
+4. Add `struo query evidence` for action evidence.
 5. Project evidence into the read-only graph query model.
 6. Add a minimal `engineering_loop` schema with `action`, `capability`, and
    `human_gate` stages.
-7. Add `once query loops` and `once query gates`.
+7. Add `struo query loops` and `struo query gates`.
 8. Add one built-in example loop: dependency review or release readiness.
 9. Expose the same surface over MCP.
 10. Add stale evidence diagnostics when loop inputs changed.

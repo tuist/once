@@ -5,7 +5,7 @@ next: false
 
 # Kotlin
 
-Once can compile Kotlin libraries, runnable main classes, and host-side tests for the
+Struo can compile Kotlin libraries, runnable main classes, and host-side tests for the
 [Java virtual machine](https://docs.oracle.com/javase/specs/jvms/se21/html/index.html),
 build Kotlin sources inside Android targets, and produce Kotlin/Native
 frameworks for Apple consumers.
@@ -28,7 +28,7 @@ mise exec -- java -version
 [[target]]
 name = "Greeting"
 kind = "kotlin_jvm_library"
-srcs = ["src/main/kotlin/dev/once/greeting/**/*.kt"]
+srcs = ["src/main/kotlin/dev/struo/greeting/**/*.kt"]
 
 [target.attrs]
 module_name = "greeting"
@@ -37,21 +37,21 @@ jvm_target = "17"
 [[target]]
 name = "Hello"
 kind = "kotlin_jvm_binary"
-srcs = ["src/main/kotlin/dev/once/hello/**/*.kt"]
+srcs = ["src/main/kotlin/dev/struo/hello/**/*.kt"]
 deps = ["./Greeting"]
 
 [target.attrs]
-main_class = "dev.once.hello.MainKt"
-args = ["Once"]
+main_class = "dev.struo.hello.MainKt"
+args = ["Struo"]
 ```
 
 Inspect and run the graph:
 
 ```sh
-once query schema kotlin_jvm_library
-once query target ./Hello
-once build ./Hello
-once run ./Hello
+struo query schema kotlin_jvm_library
+struo query target ./Hello
+struo build ./Hello
+struo run ./Hello
 ```
 
 The library and binary compile to Java archives. The run capability builds the
@@ -75,7 +75,7 @@ runtime_deps = ["./RuntimeSupport"]
 - `provided_deps` appears only while compiling.
 - `runtime_deps` appears only while running.
 
-Once validates every role against its own provider contract. This catches a
+Struo validates every role against its own provider contract. This catches a
 runtime artifact in a compiler-only role before invoking Kotlin.
 
 ## Use Compiler Plug-ins
@@ -115,10 +115,10 @@ runtime_deps = ["./TestRuntime"]
 labels = ["unit"]
 ```
 
-Run the target with `once test GreetingTests`. The runner discovers
+Run the target with `struo test GreetingTests`. The runner discovers
 zero-argument methods whose names begin with `test`, and it also recognizes
 [JUnit](https://junit.org/junit5/) and Kotlin test annotations when those libraries are present on the
-classpath. Once writes the standard `once.test_results.v1` record, so test
+classpath. Struo writes the standard `struo.test_results.v1` record, so test
 discovery, affected-test queries, and Model Context Protocol tools see the same
 shape as other ecosystems.
 

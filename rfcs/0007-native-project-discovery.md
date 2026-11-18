@@ -2,13 +2,13 @@
 
 ## Summary
 
-Once can recognize an ecosystem-native project, such as `mix.exs` or
+Struo can recognize an ecosystem-native project, such as `mix.exs` or
 `Cargo.toml`, and expose a typed graph without requiring a hand-written
-`once.toml`.
+`struo.toml`.
 
 A Starlark `native_project` declaration describes how to find a project and
 which ordinary target kind seeds its graph. The target kind's existing
-resolver reads authoritative native metadata and emits the detailed Once
+resolver reads authoritative native metadata and emits the detailed Struo
 targets. This keeps one graph expansion mechanism and keeps Rust independent
 of individual ecosystems.
 
@@ -17,7 +17,7 @@ Projects use the resulting graph through the ordinary query and execution
 commands without an initialization step.
 
 Discovered targets may accept invocation-specific arguments through the
-generic run capability. `once run <target> -- <arguments>` exposes those
+generic run capability. `struo run <target> -- <arguments>` exposes those
 arguments as `ctx["run"]["args"]` to the target kind. This keeps project
 discovery independent of framework conventions while allowing an ecosystem
 module to interpret its native command shape.
@@ -26,7 +26,7 @@ module to interpret its native command shape.
 
 Native project descriptions already contain application names, sources,
 dependencies, products, tests, features, environments, and releases.
-Transcribing that information before trying Once creates duplicate authority
+Transcribing that information before trying Struo creates duplicate authority
 and makes adoption unnecessarily difficult.
 
 Native project discovery must preserve these invariants:
@@ -35,7 +35,7 @@ Native project discovery must preserve these invariants:
 - native manifests and lockfiles remain authoritative;
 - actions declare inputs and outputs for caching and scheduling;
 - diagnostics remain structured;
-- discovery never writes a native manifest or `once.toml`;
+- discovery never writes a native manifest or `struo.toml`;
 - generic Rust code does not recognize Mix, Cargo, or another ecosystem by
   name.
 
@@ -133,7 +133,7 @@ Discovered seeds fill uncovered ecosystem entry points:
 - Resolver-emitted targets never participate in discovery precedence.
 
 Workspace include and exclude patterns remain the outer boundary for both
-`once.toml` files and native projects.
+`struo.toml` files and native projects.
 
 Traversal and resolver behavior compose. A Cargo workspace uses
 `on_match = "stop"` because its root resolver owns member manifests. Mix uses
@@ -148,24 +148,24 @@ targets through their ordinary graph operations:
 
 | Command line | Model Context Protocol tool | Result |
 | --- | --- | --- |
-| `once query workspace` | `once_query_workspace` | Describe the loaded workspace |
-| `once query targets` | `once_query_targets` | List the expanded typed graph |
-| `once build <target>` | `once_build_target` | Build a discovered target |
-| `once test <target>` | `once_run_tests` | Test a discovered target |
+| `struo query workspace` | `struo_query_workspace` | Describe the loaded workspace |
+| `struo query targets` | `struo_query_targets` | List the expanded typed graph |
+| `struo build <target>` | `struo_build_target` | Build a discovered target |
+| `struo test <target>` | `struo_run_tests` | Test a discovered target |
 
-Discovery never writes `once.toml` or modifies the native manifest. A future
-conversion process may produce an owned Once graph, but conversion is outside
+Discovery never writes `struo.toml` or modifies the native manifest. A future
+conversion process may produce an owned Struo graph, but conversion is outside
 the discovery contract.
 
 ## Compatibility
 
-Direct discovery is part of the behavior of the Once executable and its loaded
+Direct discovery is part of the behavior of the Struo executable and its loaded
 Starlark modules. Repositories that need reproducible behavior across machines
 must pin that tool and module version through their normal toolchain setup.
 
-A separate graph pin under `.once/` would not protect fresh clones or fresh
+A separate graph pin under `.struo/` would not protect fresh clones or fresh
 continuous integration runners. A checked-in module lock may be introduced if
-Once later supports independently versioned module packages, but it is not
+Struo later supports independently versioned module packages, but it is not
 part of native project discovery.
 
 ## Initial Ecosystems
@@ -226,13 +226,13 @@ ecosystem.
 This duplicates the existing resolver evaluator. Mechanical discovery plus
 ordinary resolver preview keeps the boundary clear.
 
-### Generate the complete `once.toml`
+### Generate the complete `struo.toml`
 
 Materializing resolver-emitted products duplicates native manifest and
-lockfile state. Only the stable seed belongs in `once.toml`.
+lockfile state. Only the stable seed belongs in `struo.toml`.
 
 ### Always delegate to the native build system
 
-That loses fine-grained Once actions and caching when native metadata can be
+That loses fine-grained Struo actions and caching when native metadata can be
 lowered correctly. External build-system bridges remain available for opaque
 behavior.

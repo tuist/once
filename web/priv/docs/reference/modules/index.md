@@ -1,11 +1,11 @@
 # Modules
 
-Once graph modules are Starlark files that export graph primitives. The primary
+Struo graph modules are Starlark files that export graph primitives. The primary
 exported primitive is a target kind: a schema, an optional resolver that expands
 locked dependency metadata into targets, and an optional implementation that
 turns one target into cacheable actions. Built-in and project target kinds use
 the same public contract, so a project can add a target kind without changing
-Once itself.
+Struo itself.
 
 Built-in analysis loads the target-kind families needed by the graph together
 with their helper dependencies. Shared, ecosystem-neutral utilities remain
@@ -32,7 +32,7 @@ execution, matching native Bazel; cache hits restore them instead.
 Aliases and manifest-mapped runfiles are materialized
 by value and remain cacheable. Test execution stays uncached, with additional
 runtime environment declared through `test_env`. Required unsupported native
-actions delegate to Bazel and remain uncached by Once. These declarations do
+actions delegate to Bazel and remain uncached by Struo. These declarations do
 not provide hermetic remote execution or cross-host cache portability.
 
 Built-in Apple target kinds use Xcode tool discovery on macOS and the registered
@@ -43,7 +43,7 @@ host architecture; `archs` still overrides library architectures. Compiler,
 SDK, resource-tool, and environment identities partition Linux action caches.
 Signing actions invoke `rcodesign` with ad-hoc signing and no timestamp service.
 Providers, action declarations, and resource budgeting are unchanged. The
-Linux starter is discoverable through `once query example apple_application
+Linux starter is discoverable through `struo query example apple_application
 apple-application-linux`, and the same example is available through MCP.
 See [Build iOS Applications on Linux](/guide/graph/apple/linux) for setup and
 unsupported macOS runtime and resolver workflows.
@@ -99,7 +99,7 @@ AppleScript resources compile from `.applescript` into `.scpt` files with
 `osacompile` on macOS. Scripting dictionaries remain `.sdef` bundle resources.
 
 macOS XCTest bundles run through Xcode's `test-without-building` harness,
-with or without an application host, using the binaries built by Once.
+with or without an application host, using the binaries built by Struo.
 Swift Testing-only bundles continue to use the structured event-stream runner.
 The generated test-run configuration is cacheable and deterministic; test
 execution continues to run fresh.
@@ -116,7 +116,7 @@ scheme references to a bundle. Completed passing or failed XCTest inventories su
 conditional source declarations only when their totals match observed cases.
 
 On macOS, an explicit `CODE_SIGNING_ALLOWED=NO` omits signing entitlements and
-the expanded signing identity from imported targets. Once still seals bundles
+the expanded signing identity from imported targets. Struo still seals bundles
 ad hoc for local integrity checks. This configuration disables capabilities
 that require authorized signing; it does not grant access to those capabilities.
 
@@ -193,12 +193,12 @@ copy_generated = target_kind(
 
 ## Target Kind Schema
 
-`target_kind(...)` declares the public contract exposed by `once query schema`
+`target_kind(...)` declares the public contract exposed by `struo query schema`
 and by [Model Context Protocol](https://modelcontextprotocol.io/) target kind
 discovery.
 
-- `kind`: optional override for the target kind used in `once.toml`.
-  When omitted, Once uses the exported symbol name.
+- `kind`: optional override for the target kind used in `struo.toml`.
+  When omitted, Struo uses the exported symbol name.
 - `docs`: short human-readable target kind description.
 - `attrs`: `attr(...)` declarations. Supported types include `string`,
   `bool`, `int`, `float`, `list<string>`, `map<string, string>`,
@@ -285,7 +285,7 @@ native = native_project(
 - `manifests` lists package-relative globs for files that describe the
   project's structure rather than its implementation, such as package
   manifests, lockfiles, and build settings. It defaults to `markers`.
-  `once query graph-repro` copies these files when it exports a redacted
+  `struo query graph-repro` copies these files when it exports a redacted
   reproduction and writes every other file in the project as an empty
   placeholder, skipping the directories `input_exclude` names, so name every file the resolver needs the contents of to
   derive the same graph, and nothing that holds implementation code or
@@ -298,7 +298,7 @@ native = native_project(
 - `requires_tools` reports executables needed when the seed resolver runs.
 - `workspace_markers` optionally lists literal paths, such as `.git`, that
   identify a containing workspace. For configuration-free `build` and `test`
-  invocations in a matching native project, Once uses the nearest ancestor
+  invocations in a matching native project, Struo uses the nearest ancestor
   containing one of these paths as the filesystem boundary. Only that native
   project family beneath the invocation directory supplies seeds, so unrelated
   native integrations elsewhere in the repository do not block the command.
@@ -307,7 +307,7 @@ native = native_project(
   repository-root invocation without an explicit target. Package-relative native
   targets select their owning project; sibling native seeds remain selectable.
   Marker files and directories both count. Without a containing marker, the
-  invocation directory remains the boundary. Existing `once.toml` manifests
+  invocation directory remains the boundary. Existing `struo.toml` manifests
   take priority. The default is `[]`, preserving ordinary workspace discovery.
 - `owns_descendants = true` makes a matched workspace root take precedence over
   other native project seeds beside or below it. Use this for a native
@@ -318,12 +318,12 @@ Detection reads file names only. It does not evaluate executable manifests or
 invoke native tools. Loading the graph runs the seed target's resolver through
 the normal trusted analysis boundary.
 
-Discovery retains at most 16 mebibytes of match records. Once stops with an
+Discovery retains at most 16 mebibytes of match records. Struo stops with an
 error if a workspace produces more, rather than allowing repository size to
 drive unbounded memory growth. Narrow the workspace include or exclude patterns,
 or use `on_match = "stop"` when nested projects belong to one workspace.
 
-Native discovery provides ephemeral seeds in workspace roots that have no explicit Once
+Native discovery provides ephemeral seeds in workspace roots that have no explicit Struo
 targets. Explicit targets take precedence only in their own package, so an
 unrelated root target does not hide native roots elsewhere in a monorepo.
 The configured workspace include and exclude patterns still define the
@@ -332,18 +332,18 @@ boundary.
 Inspect the automatically derived graph through the ordinary query surface:
 
 ```sh
-once query workspace
-once query targets
+struo query workspace
+struo query targets
 ```
 
-Discovery never writes `once.toml`. Resolver-emitted dependency and product
+Discovery never writes `struo.toml`. Resolver-emitted dependency and product
 targets remain derived from the native manifest and lockfile. Model Context
-Protocol callers use `once_query_workspace` and `once_query_targets`.
+Protocol callers use `struo_query_workspace` and `struo_query_targets`.
 
 ## Generated Zig Modules
 
 Zig modules generated by host tools use `zig_generated_library`. Its single
-`generator` dependency supplies the `once_executable` path and runtime files;
+`generator` dependency supplies the `struo_executable` path and runtime files;
 `srcs` declares generator inputs, and `args` substitutes `{output}` with the
 declared module path. Generation is a cacheable direct invocation. The emitted
 `zig_module` carries that output as a source input and preserves ordinary
@@ -376,7 +376,7 @@ The resolver receives a restricted context:
 - `ctx["configuration"]`: normalized target operating system, architecture,
   and ordered selection tokens.
 - `ctx["srcs"]`: declared build source patterns, relative to the owner package
-  except for `.once/` paths, which refer to runtime state at the workspace root.
+  except for `.struo/` paths, which refer to runtime state at the workspace root.
 - `ctx["files"]`: resolver input files decoded as text, keyed by path relative
   to the owner package. Non-empty `resolver_inputs` patterns define this map.
   When the list is empty or omitted, `srcs` is used for compatibility.
@@ -433,7 +433,7 @@ cannot replace a value declared by the owner target. Expansion stops at
 without bound.
 
 Built-in native workspace resolvers record first-party test target names in
-the non-configurable `_default_test_roots` attribute. Targetless `once test`
+the non-configurable `_default_test_roots` attribute. Targetless `struo test`
 and native command compatibility adapters use that metadata to avoid running
 test suites that belong only to resolved dependencies. A custom resolver can
 use the same convention by declaring the attribute as `list<string>` on its
@@ -445,7 +445,7 @@ kinds carry resolver-owned `executor_graph` and `workspace_outputs` attributes.
 Live discovery uses Nx's full project-graph API rather than its display graph,
 retaining external package nodes required by compiler executors. Plugin actions
 consume that canonical graph through Nx's executor API without delegating
-scheduling or caching to Nx. `nx_test` publishes `once_test_info`
+scheduling or caching to Nx. `nx_test` publishes `struo_test_info`
 and normalized suite results, without case listing, filtering, or sharding.
 Workspace inputs conservatively cover shared sources, with declared generated
 outputs excluded and declared environment inputs inherited into action hashes.
@@ -485,21 +485,21 @@ rust_binary = target_kind(
 )
 ```
 
-The requirements are returned by `once query schema` and `once query targets`,
+The requirements are returned by `struo query schema` and `struo query targets`,
 so scheduling can collect the complete tool set as soon as the graph is
 loaded. Script targets derive the same requirement from their declared
 runtime.
 
-Once carries a fixed mise version with each release. On first use it downloads
+Struo carries a fixed mise version with each release. On first use it downloads
 the matching mise release binary, verifies its published checksum, and stores
-it in Once's data directory. A developer-installed mise is never required.
-When a graph build session starts, Once resolves declared executable names from
+it in Struo's data directory. A developer-installed mise is never required.
+When a graph build session starts, Struo resolves declared executable names from
 the workspace tool environment and attempts installation when a tool is not
 ready. If workspace resolution fails, an available host executable can be used
 instead. Mise shims are not treated as concrete tool executables, so a shim
 cannot silently route an action back through a developer's global configuration.
 Command actions and scripts then run through `mise exec` with implicit
-installation disabled. Once authorizes the selected workspace configuration for
+installation disabled. Struo authorizes the selected workspace configuration for
 these managed invocations while keeping user-global mise configuration isolated.
 
 ## Starter Examples
@@ -540,12 +540,12 @@ apple_library = target_kind(
 )
 ```
 
-`once query target-kinds` lists the available target kinds with their starter
-example slugs. Use `once query schema <kind> --format json` for the full
+`struo query target-kinds` lists the available target kinds with their starter
+example slugs. Use `struo query schema <kind> --format json` for the full
 target kind contract and lightweight example descriptors:
 
 ```sh
-once query schema apple_library --format json
+struo query schema apple_library --format json
 ```
 
 ```json
@@ -565,13 +565,13 @@ Agents should use `use_when` to pick the closest starter, then materialize it
 without copying file payloads through model context:
 
 ```sh
-once edit materialize-example apple_library apple-library-minimal
+struo edit materialize-example apple_library apple-library-minimal
 ```
 
 Fetch the file bundle only when the caller needs to inspect or adapt it:
 
 ```sh
-once query example apple_library apple-library-minimal --format json
+struo query example apple_library apple-library-minimal --format json
 ```
 
 ```json
@@ -581,7 +581,7 @@ once query example apple_library apple-library-minimal --format json
   "use_when": "Start a small Apple library target.",
   "files": [
     {
-      "path": "apps/Hello/once.toml",
+      "path": "apps/Hello/struo.toml",
       "contents": "[[target]]\nname = \"Hello\"\nkind = \"apple_library\"\n..."
     }
   ]
@@ -592,8 +592,8 @@ Text files use `contents`. Binary files use `contents_base64` so direct
 materialization preserves their exact bytes.
 
 [Model Context Protocol](https://modelcontextprotocol.io/) callers use
-`once_list_target_kinds` and `once_query_schema` for discovery, then
-`once_materialize_example` for direct setup or `once_query_example` to inspect
+`struo_list_target_kinds` and `struo_query_schema` for discovery, then
+`struo_materialize_example` for direct setup or `struo_query_example` to inspect
 the file bundle. Repository contributors can run
 `mise run examples:verify-portable` to materialize and execute the portable
 starter set.
@@ -601,14 +601,14 @@ starter set.
 ## External Rule Assimilation
 
 A project module can reproduce the useful portion of a rule or plugin that
-Once has never seen before. The coding harness owns the translation and keeps
-it with the project. Once supplies the typed schema, validation, generic action
+Struo has never seen before. The coding harness owns the translation and keeps
+it with the project. Struo supplies the typed schema, validation, generic action
 primitives, execution, cache, and evidence surfaces.
 
 Start by fetching the authoritative source:
 
 ```sh
-once query external-source https://example.com/rules/write_file.star --format json
+struo query external-source https://example.com/rules/write_file.star --format json
 ```
 
 The fetch accepts public HTTPS text, does not follow redirects, and returns at
@@ -620,7 +620,7 @@ Query the authoring contract instead of assuming that a remembered primitive
 signature is still current:
 
 ```sh
-once query module-contract --format json
+struo query module-contract --format json
 ```
 
 The result contains the declaration helper source, schema invariants,
@@ -633,7 +633,7 @@ attribute needs a fallback. After writing the project module, validate it in
 isolation:
 
 ```sh
-once query validate-module modules/generated_text.star --format json
+struo query validate-module modules/generated_text.star --format json
 ```
 
 Attach the upstream relationship to the local target kind:
@@ -653,7 +653,7 @@ generated_text = target_kind(
             "write_file",
             "https://example.com/rules/write_file.star",
             "Replicate the requested generated-file node and no unrelated graph nodes.",
-            content_digest = "digest returned by once_fetch_external_source",
+            content_digest = "digest returned by struo_fetch_external_source",
         ),
     ],
     impl = _generated_text_impl,
@@ -716,7 +716,7 @@ action planners.
 The dictionary contains `provider` and, when configured, `executor`,
 `environment`, `account`, `project`, and `properties`. Empty properties and
 unset optional fields are omitted. Properties are generic JSON data owned
-and validated by target kinds, not interpreted by Once. Configure them in
+and validated by target kinds, not interpreted by Struo. Configure them in
 `[infrastructure.execution.properties]`. An explicit compute selection
 receives those properties only if its provider matches the configured
 execution provider. Execution properties participate in analysis,
@@ -752,7 +752,7 @@ See [sibling package sources](/guide/graph/rust/#build-scripts-that-read-sibling
 for the public manifest contract and path restrictions.
 
 A resolver or implementation reports an actionable failure by calling `fail` with the text
-`once.diagnostic.v1 ` followed by one JSON object holding `code`, `message`,
+`struo.diagnostic.v1 ` followed by one JSON object holding `code`, `message`,
 and optionally `attribute` and `repairs`. The engine attaches the target and
 returns a structured diagnostic with those fields, so agents receive the same
 `code`, `attribute`, and `repairs` shape as schema validation. Any other
@@ -776,7 +776,7 @@ Target kind implementations can use these generic primitives:
 Modules are trusted analysis code. `host_command` executes on the host while
 the graph is loading, so load modules only from trusted sources and reserve it
 for deterministic discovery. It must not mutate workspace sources or the build
-output tree, and resolver scratch state belongs only under `.once/tmp`. Prefer
+output tree, and resolver scratch state belongs only under `.struo/tmp`. Prefer
 declared lock files and checked-in graph snapshots when a package manager can
 supply them. Build work and source fetching belong in explicit actions or a
 separate update workflow.
@@ -895,7 +895,7 @@ separate update workflow.
 - `declare_output(name)` reserves an output under the target build
   directory.
 - `execution_path(path)` returns a stable command value for a
-  workspace-relative path. Once resolves it against the local, sandbox, or
+  workspace-relative path. Struo resolves it against the local, sandbox, or
   remote execution root immediately before launching the process. Use it for
   tools that require absolute paths without embedding a host workspace path in
   the action digest.
@@ -908,7 +908,7 @@ separate update workflow.
   for action-private helper files and `declare_output` for durable
   target outputs. `arg_format` defaults to `@{}` and must contain
   exactly one `{}` placeholder.
-- `run_action(...)` records a command action for Once to execute. Its optional keyword-only `history` reports a producer-owned logical identity for cross-run history, independently of execution and cache identity.
+- `run_action(...)` records a command action for Struo to execute. Its optional keyword-only `history` reports a producer-owned logical identity for cross-run history, independently of execution and cache identity.
 - `action_history_key(namespace, components)` creates a bounded opaque descriptor for `run_action(history = ...)`. Use a versioned ASCII namespace (1–64 bytes) and 1–8 string components (2048 bytes total, no controls). Components are encoded as a canonical JSON array and SHA-256 hashed. Choose a stable owner, native operation and structural output variant; never use run IDs, action indices, cache digests, source revisions, display labels, absolute paths or credentials. Invalid optional metadata is omitted without failing analysis. Deferred children need their own explicit keys, while cached outcomes retain recorded keys. Older actions stay ungrouped.
 
 Built-in history currently covers Rust compilation/build scripts/test-runner compilation, Go compilation, Kotlin native/JVM/test compilation, Zig compilation and delegated CMake builds. Other actions still have occurrence details but do not claim cross-run equivalence. Rust registry/git dependencies use resolver-directory, resolver logical label and source identity without revision/requested-ref or userinfo, package and native target names, a Cargo-compatible version bucket, phase, output triple, host-tool role and mobile variant/consumer. Crates.io index protocols normalize to one origin. Stable `1.x` versions share a bucket, `0.x` versions use the minor range, and `0.0.x` and prereleases stay exact. Workspace labels are version-independent; source-less generated dependency origins remain ungrouped. Target renames and incompatible versions start new histories. Producer derivation changes require a namespace version bump. The server omits ambiguous within-run keys from historical comparisons and qualifies first observations using retained reports.
@@ -997,7 +997,7 @@ Portable file actions derive their cache keys from their operation and consumed
 inputs, not from unrelated actions declared earlier by the same target. Copy,
 link, tree-digest, and archive actions infer their direct source inputs. Use the
 `inputs` argument for additional paths that influence the operation. Portable
-actions still execute in declaration order, and Once hashes generated inputs
+actions still execute in declaration order, and Struo hashes generated inputs
 directly. Blocking file operations and output capture own their scheduling
 reservations until the work stops, even when the caller is cancelled. A cancelled
 observer does not publish a completed action-cache entry for partial work.
@@ -1040,9 +1040,9 @@ and includes its identity in the action's cache key.
 - `argv`: command and arguments as strings or `cmd_args` fragments.
 - `inputs`: workspace-relative files and directories hashed into the
   action digest.
-- `outputs`: workspace-relative outputs the action must produce. Once creates
+- `outputs`: workspace-relative outputs the action must produce. Struo creates
   their parent directories. If a previous action version left a file where a
-  managed output now requires a directory, Once replaces the stale file.
+  managed output now requires a directory, Struo replaces the stale file.
   Later directory outputs supersede older child records. Later child outputs
   override earlier directory snapshots during restoration.
 - `clean_paths`: workspace-relative paths to remove before a fresh
@@ -1069,7 +1069,7 @@ and includes its identity in the action's cache key.
   Booleans, floats, strings, negative values, unknown keys, and invalid dictionary
   shapes fail analysis. For example,
   `resources = {"cpu_slots": 1, "memory_bytes": 2 * 1024 * 1024 * 1024, "slots": {"device": 1}}`.
-  These are admission estimates, not guaranteed minimums: Once clamps requests
+  These are admission estimates, not guaranteed minimums: Struo clamps requests
   to the available host pool budget. Built-in compiler target kinds declare
   their own estimates, including 4 GiB for Swift compilation, 2 GiB for Rust
   compilation and build scripts, 1 GiB for C-family compilation, and 512 MiB
@@ -1080,7 +1080,7 @@ and includes its identity in the action's cache key.
   a successful command. `copied-inputs` provides the same isolation but
   materializes private input copies for tools that cannot consume symbolic
   links. Both isolated modes create parent directories for declared outputs
-  inside the private workspace. Use `once query validate-actions` to run an
+  inside the private workspace. Use `struo query validate-actions` to run an
   uncached contract investigation that checks created, modified, and deleted
   paths and returns structured repairs. Reads that leave no observable
   filesystem evidence remain a limitation of this investigation.
@@ -1096,7 +1096,7 @@ and includes its identity in the action's cache key.
   (`sandbox = "off"`, without network denial) record directory and symlink outputs
   as fingerprints, not restorable contents.
   Keep these outputs unchanged until their consumers finish. If an output needs
-  restoration after cleanup or replacement, Once refuses rather than installing
+  restoration after cleanup or replacement, Struo refuses rather than installing
   its fingerprint as file contents. Make the producer cacheable or use an input
   sandbox when consumers need restorable outputs.
   Consumers of these fingerprint-only outputs execute afresh, even when their
@@ -1152,10 +1152,10 @@ All executable action primitives, including portable file actions, accept
 operations supply readable default names when no name is given. Bundled target
 kinds give compilation, linking, testing, packaging, and setup work descriptive
 names. Use `source_files = _action_source_files(paths)` to supply a descriptor
-of workspace source paths. Once resolves this presentation-only descriptor
+of workspace source paths. Struo resolves this presentation-only descriptor
 while collecting action metadata, memoizing file selection and repository
 mapping without adding execution observations or invalidating cached builds.
-It excludes directories, generated `.once` paths, absolute host files, and
+It excludes directories, generated `.struo` paths, absolute host files, and
 nonportable repository paths. Entries must be strings. It maps files relative
 to the nearest Git checkout, including worktrees, and honors an explicit
 `GIT_WORK_TREE`. Without a checkout, paths remain workspace-relative.
@@ -1191,7 +1191,7 @@ worker placement. Versions, VCS revisions, content digests, SDK levels, and
 compiler versions are separate concepts. Never copy raw environment maps,
 credentials, authenticated URLs, or host paths into presentation.
 
-Once retains at most eight platforms and eight context entries, with at most
+Struo retains at most eight platforms and eight context entries, with at most
 2048 bytes of string data in total. Names are bounded to 128 bytes, namespace
 keys to 64 bytes, identifiers and values to 256 bytes, and display labels to
 128 bytes. Invalid or oversized identifiers are omitted rather than truncated;
@@ -1215,12 +1215,12 @@ unless an explicit package version is available. Cargo resolvers annotate
 host-tool outputs with the schema-declared `_cargo_host_tool` boolean. This
 marker controls presentation and logical-history role, not scheduling or execution placement. The optional, nonconfigurable `_cargo_resolver` string records the resolver's logical label so separate resolver declarations in one package keep distinct histories, including host tools. It does not enter execution or cache identity.
 
-Once includes this metadata in per-action completion events and preserves it
+Struo includes this metadata in per-action completion events and preserves it
 when replaying cached target outcomes. An event server can show the name and
 link each file at the run's Git revision using its own repository integration.
 Older servers ignore the additional optional fields; no protocol upgrade or
 new required feature is necessary. If optional presentation fields exceed the
-server's event-size limit, Once retains the source links that fit and may omit
+server's event-size limit, Struo retains the source links that fit and may omit
 an oversized display name or structured context. The action's identity, timing, and result are
 preserved.
 
@@ -1236,7 +1236,7 @@ hash, including presence and embedded separators. Equal concatenated text in
 different fields cannot share a cache key. This identity encoding invalidates
 older declared-action cache entries once without changing artifact formats.
 
-The declared action is its executable cache contract. Once hashes its operation,
+The declared action is its executable cache contract. Struo hashes its operation,
 arguments, argument files, environment, working directory, path setup,
 toolchain identity, declared input contents, and dependency action digests.
 Changing target-kind module source without changing that declaration does not
@@ -1258,7 +1258,7 @@ cache identity or authorize remote graph placement.
 ## Deferred Action Planning
 
 `expand_actions(implementation, inputs, outputs, args)` declares a planning
-barrier. After preceding actions finish, Once restores its `inputs` and calls
+barrier. After preceding actions finish, Struo restores its `inputs` and calls
 the named exported Starlark function from the same module environment. This
 lets a compiler's dependency scan describe further cacheable actions without
 running the compiler during initial analysis.
@@ -1373,7 +1373,7 @@ their usual content-addressed actions. The implementation follows
 
 ## Executable And Container Providers
 
-Native binary target kinds can publish the shared `once_executable` provider.
+Native binary target kinds can publish the shared `struo_executable` provider.
 It carries the executable path, runtime files, operating system, architecture,
 architecture variant, and linkage. Consumers depend on that provider instead
 of branching on the language that produced the program.
@@ -1442,9 +1442,9 @@ that needs whole-file execution. The provider records the resolved
 `execution_mode` and any `fallback_reason`, and the `lint` capability reports a
 `whole_file_execution` note naming the reason.
 Native project discovery creates an `image` target for each `Dockerfile`. The
-Dockerfile's directory supplies its build context. Once uses the selected
+Dockerfile's directory supplies its build context. Struo uses the selected
 Buildx builder when it supports image-layout exports. When Docker's built-in
-builder is the implicit default, Once provisions and reuses a dedicated
+builder is the implicit default, Struo provisions and reuses a dedicated
 container builder for the current Docker endpoint without changing the
 selection. Set `BUILDX_BUILDER` to select a remote builder, or declare a target
 to configure a different Dockerfile, context, and caching policy.
@@ -1467,7 +1467,7 @@ each instruction's layer to `source_date_epoch` as it is exported. Whole-file
 mode normalizes the final layers.
 
 Instruction mode requires a running Docker engine with Buildx and nothing
-else. Once provisions
+else. Struo provisions
 a container builder when the selected builder cannot export image layouts.
 That builder cannot see base images stored only in the local Docker image
 store. Use whole-file `buildkit` mode with Docker's built-in builder and
@@ -1492,7 +1492,7 @@ individually, together with the destinations of any symbolic links they reach.
 Wildcards, variable sources, and context bind mounts retain the full context
 input set conservatively. Empty directories in the context are inputs, so a
 copied tree keeps them. Generated definitions always exclude
-Once runtime state from the context.
+Struo runtime state from the context.
 
 The `lint` capability uses the shared lint provider and emits warnings with
 `code`, `target`, `attribute`, source line, and suggested `repairs`. Checks cover
@@ -1508,7 +1508,7 @@ argument expressions. It also owns the `export_cache`, `cache_to`, and `caches`
 dependency contracts described below. With `execution_mode = "instructions"`,
 unsupported syntax fails with the source line and this setting; `auto` switches
 to it instead, and lint and metadata queries never fail on such syntax.
-Docker and its selected Docker Buildx builder must be reachable when Once
+Docker and its selected Docker Buildx builder must be reachable when Struo
 analyzes a build so the toolchain identity can include the builder driver and
 BuildKit version. Metadata and affected-file queries infer context inputs
 without contacting Docker.
@@ -1525,7 +1525,7 @@ platform = "linux/arm64"
 build_args = { MODE = "release" }
 ```
 
-When `srcs` is empty, Once infers every local file and symbolic link that the
+When `srcs` is empty, Struo infers every local file and symbolic link that the
 build context can expose, including hidden paths. It also adds the Dockerfile
 and the effective [Docker ignore file](https://docs.docker.com/build/building/context/#dockerignore-files)
 automatically. Dockerfile-specific ignore files take precedence over the
@@ -1536,14 +1536,14 @@ and prunes their trees before walking the context. Wildcards, exceptions, and
 other complex ignore rules remain declared as inputs, then BuildKit applies
 their complete semantics during the build. This conservative direction can
 cause extra rebuilds, but it cannot hide a file that the Dockerfile may read.
-Workspace runtime directories named `.once` are always excluded so outputs
+Workspace runtime directories named `.struo` are always excluded so outputs
 never become their own inputs.
 
 Empty directories do not participate in the inferred input set yet. Declare a
 placeholder file when a Dockerfile must copy an otherwise empty directory.
 
 Set `srcs` only when a smaller, manually maintained input set is worth the
-precision. Once still adds the Dockerfile and effective ignore file. Dockerfile
+precision. Struo still adds the Dockerfile and effective ignore file. Dockerfile
 actions use an input-only workspace view, so an explicit set must cover every
 local context file the build may read.
 
@@ -1551,7 +1551,7 @@ The rule rejects multiple values in `platform`; one target describes one
 exported platform. Selecting `network = "host"` also grants BuildKit's matching
 host-network entitlement.
 
-Dockerfile actions are not stored in the Once action cache by default because
+Dockerfile actions are not stored in the Struo action cache by default because
 image tags, package registries, and network instructions may change without a
 source edit. BuildKit still reuses its own layer cache. Set `cacheable = true`,
 `pull = false`, and an explicit `platform` with a container or remote builder
@@ -1565,12 +1565,12 @@ When the selected builder supports direct export, both archive formats are
 written without loading the image into the Docker engine. The built-in Docker
 driver cannot write an archive directly, so Docker output falls back to
 loading and saving the requested tag. That compatibility path uses shared
-engine state, leaves the loaded image behind, and always bypasses the Once
+engine state, leaves the loaded image behind, and always bypasses the Struo
 action cache. Use a container or remote builder when builds sharing the same
 tag may run concurrently.
 
 Set `export_cache = true` to export all intermediate BuildKit layers as a
-declared `layer_cache` directory alongside the archive. Once stores and restores
+declared `layer_cache` directory alongside the archive. Struo stores and restores
 that directory with the other outputs when action caching is enabled. Another
 image target can import it through a `caches` dependency:
 
@@ -1599,7 +1599,7 @@ builder = "container-builder"
 
 The dependency must enable `export_cache`. Its cache directory is an explicit
 input to the consuming action, so it is available in the isolated execution
-workspace. Once stages the build definition with the effective ignore rules
+workspace. Struo stages the build definition with the effective ignore rules
 and a final exclusion for runtime directories, so `COPY .` cannot include
 imported caches. BuildKit decides which layers match the consuming Dockerfile.
 Layer exports include intermediate stages, but do not include the mutable
@@ -1610,23 +1610,23 @@ layers between independent builders, for example
 `cache_from = ["registry.example.com/service:build-cache"]`. Exports use
 `mode=max` to retain intermediate stages. Registry publication requires the
 builder's registry credentials. `cache_to` cannot be combined with
-`cacheable = true` because a Once cache hit would skip publication.
+`cacheable = true` because a Struo cache hit would skip publication.
 
 Select an existing [remote BuildKit builder](https://docs.docker.com/build/builders/drivers/remote/)
 with `builder` to execute Dockerfile instructions remotely. The Buildx client
 transfers declared context inputs to that worker and returns the archive,
-metadata, and optional layer cache to Once. Remote builder provisioning,
+metadata, and optional layer cache to Struo. Remote builder provisioning,
 authentication, and worker resource limits are managed outside the target.
-Once budgets the local client process; it does not control the remote worker's
+Struo budgets the local client process; it does not control the remote worker's
 memory budget.
 
 ## Lint Target Kinds
 
-A lint target declares the reserved `once_lint_info` provider and generic
+A lint target declares the reserved `struo_lint_info` provider and generic
 lint capability:
 
 ```python
-providers = ["once_lint_info"]
+providers = ["struo_lint_info"]
 capabilities = [capability("lint", ["default", "lint_results"])]
 ```
 
@@ -1637,7 +1637,7 @@ execution policy. The report uses
 Tool-specific invocation and native configuration remain in the target kind.
 The Rust execution and result layers stay ecosystem-neutral.
 
-`once query module-contract --format json` returns a complete `lint_starter`,
+`struo query module-contract --format json` returns a complete `lint_starter`,
 matching target and adapter starters, and a normalized result example. See
 [Custom lint target kinds](/reference/modules/linting) for a complete direct
 reporter, native report conversion, validation, execution, and cache
@@ -1645,18 +1645,18 @@ verification workflow.
 
 ## Script-backed Test Target Kinds
 
-`once query module-contract --format json` returns a complete `test_starter`
+`struo query module-contract --format json` returns a complete `test_starter`
 for a project-local script-backed test kind, a matching
 `test_target_starter`, and a `normalized_test_result_example`. The starter
 resolves its host tool, invokes a package-relative adapter directly, declares
 all inputs and outputs, and passes exact unit filters from
 `ctx["test"]["filters"]`.
 
-A test target declares the `once_test_info` provider and the generic test
+A test target declares the `struo_test_info` provider and the generic test
 capability:
 
 ```python
-providers = ["once_test_info"]
+providers = ["struo_test_info"]
 capabilities = [capability("test", ["default", "test_results", "logs"])]
 ```
 
@@ -1664,7 +1664,7 @@ Its implementation returns `test_info` with this shape:
 
 ```python
 {
-    "schema": "once.test_info.v1",
+    "schema": "struo.test_info.v1",
     "target": ctx["label"]["id"],
     "runner": {
         "type": "scripted",
@@ -1788,8 +1788,8 @@ action resources.
 
 The provider may also return `test_discovery_inputs`, a list of
 workspace-relative files whose contents can change discovered unit
-identifiers. Once fingerprints those files before reusing a manifest. When the
-field is absent, Once conservatively fingerprints the provider's complete
+identifiers. Struo fingerprints those files before reusing a manifest. When the
+field is absent, Struo conservatively fingerprints the provider's complete
 `affected_inputs` list.
 
 For location-independent portable replay, a provider may also return
@@ -1801,7 +1801,7 @@ target attribute except the explicitly named tool-location attributes. Include
 resolved inherited environment values in `env`. Do not omit behavior-changing
 attributes or replace tool identity with a display label. Only installation
 locations may be excluded; workspace-owned runner programs and dependencies
-must remain declared inputs. Once also binds dependency inputs, source contents
+must remain declared inputs. Struo also binds dependency inputs, source contents
 (following symbolic links), the effective workspace configuration, and loaded
 module implementations. Without this object, replay binds complete target and
 provider metadata and does not guess which host paths are irrelevant.
@@ -1817,12 +1817,12 @@ The adapter writes [JavaScript Object Notation](https://www.json.org/json-en.htm
 results below the target test directory. When `ctx["test"]["batch_id"]` is
 present, the adapter must add `batches/<batch_id>` to that directory before
 declaring its result, log, and native-result paths. This prevents concurrent
-batches of one target from overwriting each other. Once merges the batch
+batches of one target from overwriting each other. Struo merges the batch
 records into the target's canonical result after the schedule completes.
 
 ```json
 {
-  "schema": "once.test_results.v1",
+  "schema": "struo.test_results.v1",
   "target": "tests/example",
   "runner": {"type": "scripted", "metadata": {}},
   "status": "passed",
@@ -1864,7 +1864,7 @@ target and semantic unit identifiers, not the worker count.
 A failed or incomplete runner exits unsuccessfully and writes a
 matching failed result when possible. A successful host process status must
 never turn a runner crash or missing successful terminal record into a pass.
-Once validates this complete record before it derives discovery data or marks
+Struo validates this complete record before it derives discovery data or marks
 a scheduled batch as successful. A malformed runner, summary, attempt, or
 artifact record fails an exact batch instead of being accepted as partial
 evidence. A successful exact batch also requires a completed execution record,
@@ -1899,12 +1899,12 @@ metadata. Avoid making consumers branch on a dependency target kind.
 ### Artifact providers
 
 Expose `capability("artifact", ["default", "artifact"])` and declare the
-`once_artifact_info` provider to support export and publication. Return:
+`struo_artifact_info` provider to support export and publication. Return:
 
 ```python
 {
     "artifact_info": {
-        "schema": "once.artifact_info.v2",
+        "schema": "struo.artifact_info.v2",
         "automatic_publication": False,
         "artifacts": [{
             "name": "product",
@@ -1936,10 +1936,10 @@ artifact identifiers.
 
 `automatic_publication` defaults to `False`. Setting it to `True` approves the
 entire exported closure, not one interface or payload, for opted-in build
-publication. It requires `once.artifact_info.v2`; v1 remains accepted without
+publication. It requires `struo.artifact_info.v2`; v1 remains accepted without
 automatic approval and rejects `automatic_publication = True`. Producer approval
 does not authorize a destination. Workspace `publish_on_build` policy and local
-authorization through `once artifact publish <target> --allow-on-build` are also
+authorization through `struo artifact publish <target> --allow-on-build` are also
 required for remote build publication. Explicit export and publication remain
 available without producer approval for automatic publication.
 
@@ -1963,6 +1963,6 @@ tool selection, generated file contents, and other non-source inputs that
 should invalidate cached actions. Do not log secrets or place secrets in
 arguments, provider records, or action metadata.
 
-When adding a public target kind, make it discoverable through `once query
-target-kinds` and `once query schema`, provide at least one starter example,
+When adding a public target kind, make it discoverable through `struo query
+target-kinds` and `struo query schema`, provide at least one starter example,
 and keep the schema, docs, and examples in sync.

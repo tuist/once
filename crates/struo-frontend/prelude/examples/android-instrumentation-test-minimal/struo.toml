@@ -1,0 +1,32 @@
+[[target]]
+name = "GreetingApp"
+kind = "android_binary"
+srcs = ["src/main/**/*.kt"]
+
+[target.attrs]
+application_id = "dev.struo.greeting"
+namespace = "dev.struo.greeting"
+manifest = "AndroidManifest.xml"
+resource_files = []
+
+[[target]]
+name = "GreetingInstrumentationApk"
+kind = "android_binary"
+srcs = ["src/androidTest/**/*.kt"]
+
+[target.attrs]
+application_id = "dev.struo.greeting.test"
+namespace = "dev.struo.greeting.test"
+manifest = "AndroidTestManifest.xml"
+resource_files = []
+instruments = "./GreetingApp"
+
+[[target]]
+name = "GreetingInstrumentationTests"
+kind = "android_instrumentation_test"
+deps = ["./GreetingApp", "./GreetingInstrumentationApk"]
+
+[target.attrs]
+test_app = "./GreetingInstrumentationApk"
+instrumentation_runner = "dev.struo.greeting.StruoInstrumentationRunner"
+labels = ["device"]

@@ -1,6 +1,6 @@
 # `zig_configure`
 
-Once-native configured Zig library target.
+Struo-native configured Zig library target.
 
 ## Description
 

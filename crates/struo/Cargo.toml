@@ -1,0 +1,31 @@
+[package]
+name = "struo"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Rust and C bindings for Struo cache access"
+
+[lib]
+name = "struo"
+path = "src/lib.rs"
+crate-type = ["rlib", "staticlib", "cdylib"]
+
+[dependencies]
+struo-cas.workspace = true
+struo-core.workspace = true
+struo-frontend.workspace = true
+
+blake3.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

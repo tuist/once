@@ -17,8 +17,8 @@ The target emits `container_image`. Its `build` capability exposes `archive`,
 [`oci_push`](/reference/prelude/oci_push) to publish the same manifest bytes.
 
 ```sh
-once query schema oci_index
-once query example oci_index oci-pull-and-extend
+struo query schema oci_index
+struo query example oci_index oci-pull-and-extend
 ```
 
 Read [Container Images](/guide/graph/containers) for the multi-platform workflow.

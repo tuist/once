@@ -13,7 +13,7 @@
 		PRIVACY_BUILD = {isa = PBXBuildFile; fileRef = PRIVACY_FILE; };
 		RESOURCES_BUNDLE_RESOURCES = {isa = PBXResourcesBuildPhase; files = (PRIVACY_BUILD); };
 		RESOURCES_BUNDLE_CONFIGS = {isa = XCConfigurationList; buildConfigurations = (RESOURCES_BUNDLE_DEBUG); defaultConfigurationName = Debug; };
-		RESOURCES_BUNDLE_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 16.0; PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = dev.once.thirdparty.resources; GENERATE_INFOPLIST_FILE = YES; SKIP_INSTALL = YES; }; };
+		RESOURCES_BUNDLE_DEBUG = {isa = XCBuildConfiguration; name = Debug; buildSettings = {SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 16.0; PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = dev.struo.thirdparty.resources; GENERATE_INFOPLIST_FILE = YES; SKIP_INSTALL = YES; }; };
 		RESOURCES_BUNDLE = {isa = PBXNativeTarget; buildConfigurationList = RESOURCES_BUNDLE_CONFIGS; buildPhases = (RESOURCES_BUNDLE_RESOURCES); name = ThirdParty_Resources; productType = "com.apple.product-type.bundle"; productName = ThirdParty_Resources; };
 	};
 	rootObject = ROOT;

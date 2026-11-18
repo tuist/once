@@ -6,7 +6,7 @@ Swift shared library for Android.
 
 Compiles Swift sources with `swiftc` into an Android `.so` and emits an
 `android_native_library` provider. The Swift standard library is linked
-statically. Once snapshots the matching C++ shared runtime from the Swift
+statically. Struo snapshots the matching C++ shared runtime from the Swift
 Software Development Kit and `android_binary` packages both libraries under
 the architecture-specific directory in the Android application package.
 
@@ -52,7 +52,7 @@ The target emits `swift_module`, `android_native_library`, and
 
 ## Runtime Boundary
 
-Once follows the official
+Struo follows the official
 [Swift Software Development Kit for Android packaging model](https://www.swift.org/documentation/articles/swift-sdk-for-android-getting-started.html):
 the Swift standard library is linked statically, while `libc++_shared.so` is
 snapshotted from the selected toolchain, content-verified, cached, and emitted
@@ -79,7 +79,7 @@ Target kind discovery exposes the official
 for runtime packaging and the
 [SwiftJava project](https://github.com/swiftlang/swift-java) for generated
 Java Native Interface bindings. A coding harness can fetch either source
-through Once before adapting a richer interoperation boundary.
+through Struo before adapting a richer interoperation boundary.
 
 ## Provider Record
 
@@ -106,11 +106,11 @@ through Once before adapting a richer interoperation boundary.
 
 | Output | Location |
 | --- | --- |
-| Shared library | `.once/out/<target>/lib<module_name>.so` |
-| C++ shared runtime | `.once/out/<target>/libc++_shared.so` |
-| Swift module | `.once/out/<target>/<module_name>.swiftmodule` |
-| Swift doc | `.once/out/<target>/<module_name>.swiftdoc` |
-| Swift interface | `.once/out/<target>/<module_name>.swiftinterface` when library evolution is enabled |
+| Shared library | `.struo/out/<target>/lib<module_name>.so` |
+| C++ shared runtime | `.struo/out/<target>/libc++_shared.so` |
+| Swift module | `.struo/out/<target>/<module_name>.swiftmodule` |
+| Swift doc | `.struo/out/<target>/<module_name>.swiftdoc` |
+| Swift interface | `.struo/out/<target>/<module_name>.swiftinterface` when library evolution is enabled |
 
 ## Example
 

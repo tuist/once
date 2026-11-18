@@ -10,7 +10,7 @@ case "${1:-}" in
     printf '%s\n' '{}'
     ;;
   info)
-    printf '%s\n' "${TMPDIR:-/tmp}/once-bazel-output-base"
+    printf '%s\n' "${TMPDIR:-/tmp}/struo-bazel-output-base"
     ;;
   fetch|build|test)
     exit 0

@@ -73,7 +73,7 @@ run creation. The route is server-owned, opaque to the client, and must not
 contain bearer credentials or a capability that bypasses dashboard access
 control. Browsing it uses the dashboard's normal authentication.
 
-Once invokes its link handler once after validating an acknowledgement that
+Struo invokes its link handler once after validating an acknowledgement that
 resolves sequence 1. The command prints the link while the build continues.
 The reconnect probe can recover the link if the first acknowledgement was lost.
 A link is optional and its absence never prevents ingestion.
@@ -197,7 +197,7 @@ semantics, and reserve deleted names and numbers. Add cross-version fixtures
 before claiming compatibility with independently deployed projectors.
 
 The [Bazel build event stream definition](https://github.com/bazelbuild/bazel/blob/master/src/main/java/com/google/devtools/build/lib/buildeventstream/proto/build_event_stream.proto)
-already models linked events, test results, actions, and artifacts. Once's
+already models linked events, test results, actions, and artifacts. Struo's
 advantage should be demonstrable execution causality, cache explanations,
 resource accounting, and recoverable delivery. A larger list of event types
 alone does not establish that advantage.
@@ -210,12 +210,12 @@ Client and producer checks run during this review:
   names. The unused toolchain-specific test parser was removed, and argument
   privacy no longer embeds toolchain or test-framework names. Target kinds
   communicate test cases only through the normalized test-results contract.
-- `mise exec -- cargo test -p once-events-client -p once-cli -p once-frontend`
+- `mise exec -- cargo test -p struo-events-client -p struo-cli -p struo-frontend`
   passed, including transport replay, attempt identity, privacy configuration,
   retained action keys, and target-kind examples.
-- `mise exec -- cargo clippy -p once-events-client -p once-cli -p once-frontend
+- `mise exec -- cargo clippy -p struo-events-client -p struo-cli -p struo-frontend
   --all-targets -- -D warnings` and the formatting check passed.
-- `mise exec -- cargo build --release -p once-cli` passed. The focused
+- `mise exec -- cargo build --release -p struo-cli` passed. The focused
   Shellspec command, run, and test suites passed with 63 examples, three
   optional microsandbox skips. The full Shellspec suite stalled in its
   translator and was stopped, so it has no pass result.

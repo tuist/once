@@ -3,9 +3,9 @@ title: Inspect retained test cases and producer attempts
 date: 2026-11-05
 ---
 
-`once query test-results` and the read-only `once_query_test_results` MCP tool
+`struo query test-results` and the read-only `struo_query_test_results` MCP tool
 now accept an exact retained case id and an optional one-based producer attempt
-position. Without a position, Once selects the last attempt in the retained
+position. Without a position, Struo selects the last attempt in the retained
 array. Full reports and summary queries are unchanged.
 
 The focused response keeps target, case, and attempt statuses distinct,

@@ -5,10 +5,10 @@ Xcode project seed.
 ## Description
 
 Reads an existing Xcode project or workspace and lowers every native target it
-finds into the Apple target kinds, so Once compiles and tests the project
+finds into the Apple target kinds, so Struo compiles and tests the project
 directly. The `.xcodeproj` remains the source of truth: targets, build
 settings, and file membership are read from it rather than restated in
-`once.toml`.
+`struo.toml`.
 
 `PROJECT_NAME` expands to the owning project's name, including when a workspace
 contains several projects. Products using it retain their native module names.
@@ -36,9 +36,9 @@ that cross a project boundary are wired. A referenced project that is not on
 disk is skipped instead of failing the graph.
 
 Xcode projects, including projects in nested packages, are recognized
-automatically, so their seeds are supplied without any `once.toml`.
+automatically, so their seeds are supplied without any `struo.toml`.
 
-When an Xcode project uses a workspace-level `Package.resolved`, Once uses its
+When an Xcode project uses a workspace-level `Package.resolved`, Struo uses its
 matching pinned revisions while lowering remote Swift packages. Checksum-pinned
 binary package archives download as normal cacheable dependencies instead of
 being fetched while the graph loads.
@@ -108,7 +108,7 @@ their own kinds, so downstream targets depend on them normally.
 
 Building the seed builds application roots, or every non-test product in a
 library-only project. Resolver metadata selects first-party test bundles for
-targetless `once test`. Lowered targets can also be built, run, and tested
+targetless `struo test`. Lowered targets can also be built, run, and tested
 individually by name.
 
 ## Tools
@@ -121,7 +121,7 @@ individually by name.
 
 Resolver inputs are read as text, so `srcs` must not glob binary files.
 
-Once compiles the project rather than delegating to `xcodebuild`, so anything
+Struo compiles the project rather than delegating to `xcodebuild`, so anything
 supplied by an external dependency manager or bootstrap step, including
 CocoaPods build integration and vendored binaries a repository fetches, has to
 be in place before the build.

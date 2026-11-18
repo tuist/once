@@ -1,5 +1,5 @@
 {
-  "name": "once-remote-vitest-fixture",
+  "name": "struo-remote-vitest-fixture",
   "private": true,
   "type": "module",
   "devDependencies": {

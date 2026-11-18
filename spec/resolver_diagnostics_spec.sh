@@ -5,10 +5,10 @@ Describe 'owner-scoped resolver diagnostics'
   AfterEach 'cleanup_workspace'
 
   prepare_missing_dependency_workspace() {
-    starter="$REPO_ROOT/crates/once-frontend/prelude/examples/elixir-library-with-mix-dependency"
+    starter="$REPO_ROOT/crates/struo-frontend/prelude/examples/elixir-library-with-mix-dependency"
     cp "$starter/mix.exs" "$starter/mix.lock" "$starter/mix-dependencies.json" "$WORKSPACE/"
     cp -R "$starter/local_helper" "$WORKSPACE/"
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [modules]
 paths = ["actions.star"]
 
@@ -42,15 +42,15 @@ STAR
 
   It 'builds an unrelated target without fetching dependencies for another project'
     prepare_missing_dependency_workspace
-    When call once build available --format json
+    When call struo build available --format json
     The status should be success
     The stdout should include 'available'
-    The file "$WORKSPACE/.once/out/available/output.txt" should include 'available'
+    The file "$WORKSPACE/.struo/out/available/output.txt" should include 'available'
   End
 
   It 'keeps missing-source diagnostics and repairs when selecting a dependent target'
     prepare_missing_dependency_workspace
-    When call once build consumer --format json
+    When call struo build consumer --format json
     The status should equal 2
     The stderr should include 'mix_dependency_sources_missing'
     The stderr should include 'mix deps.get --check-locked'
@@ -66,7 +66,7 @@ printf 'stderr-secret %s\n' "$@" >&2
 exit 128
 SH
     chmod +x "$SPEC_ROOT/bin/git"
-    cat > "$WORKSPACE/once.toml" <<'TOML'
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
 [modules]
 paths = ["repository.star"]
 
@@ -83,18 +83,18 @@ def _resolve(ctx):
     host_git_checkouts([{
         "url": host_file_read(root + "/repository-url").strip(),
         "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "path": root + "/.once/checkouts/private-package",
+        "path": root + "/.struo/checkouts/private-package",
     }], cache_root = host_env("XDG_CACHE_HOME") + "/repositories")
 
 repository_fixture = target_kind(resolver = _resolve)
 STAR
 
-    When call env PATH="$SPEC_ROOT/bin:$PATH" "$ONCE_BIN" -C "$WORKSPACE" query targets
+    When call env PATH="$SPEC_ROOT/bin:$PATH" "$STRUO_BIN" -C "$WORKSPACE" query targets
     The status should be failure
     The stdout should be blank
     The stderr should include 'repository acquisition failed'
     The stderr should include 'https://example.invalid/team/private.git'
-    The stderr should include '.once/checkouts/private-package'
+    The stderr should include '.struo/checkouts/private-package'
     The stderr should include '128'
     The stderr should include 'check repository access and the pinned revision'
     The stderr should not include 'username-secret'
@@ -103,6 +103,6 @@ STAR
     The stderr should not include 'fragment-secret'
     The stderr should not include 'stderr-secret'
     The stderr should not include 'stdout-secret'
-    The path "$WORKSPACE/.once/checkouts/private-package" should not be exist
+    The path "$WORKSPACE/.struo/checkouts/private-package" should not be exist
   End
 End

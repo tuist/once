@@ -5,7 +5,7 @@ Host-side Kotlin tests for the Java virtual machine.
 ## Description
 
 Compiles Kotlin test sources, scans the resulting classes for zero-argument
-test methods, and emits normalized Once test results. Methods whose names begin
+test methods, and emits normalized Struo test results. Methods whose names begin
 with `test` run without an external test framework. The runner also recognizes
 the `org.junit.Test` annotation from [JUnit](https://junit.org/junit5/) and the
 `kotlin.test.Test` annotation when their libraries are on the dependency
@@ -64,7 +64,7 @@ apply.
 
 ## Providers
 
-The target emits `kotlin_jvm_test` and `once_test_info`.
+The target emits `kotlin_jvm_test` and `struo_test_info`.
 
 ## Capabilities
 
@@ -76,9 +76,9 @@ The target emits `kotlin_jvm_test` and `once_test_info`.
 
 | Output | Location |
 | --- | --- |
-| Normalized results | `.once/out/<target>/test/test_results.json` |
-| Test log | `.once/out/<target>/test/kotlin-jvm-test.log` |
-| Native results | `.once/out/<target>/test/native_results.txt` |
+| Normalized results | `.struo/out/<target>/test/test_results.json` |
+| Test log | `.struo/out/<target>/test/kotlin-jvm-test.log` |
+| Native results | `.struo/out/<target>/test/native_results.txt` |
 
 ## Example
 
@@ -94,10 +94,10 @@ runtime_deps = ["./TestRuntime"]
 
 [target.attrs]
 labels = ["unit"]
-test_class = "dev.once.greeting.GreetingTest"
+test_class = "dev.struo.greeting.GreetingTest"
 ```
 
-Run all selected methods with `once test GreetingTests`. Pass a
+Run all selected methods with `struo test GreetingTests`. Pass a
 `Class#method` value through `test_class` or `args` for a narrower run.
 
 ## Limitations

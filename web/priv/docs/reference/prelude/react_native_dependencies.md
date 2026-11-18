@@ -28,7 +28,7 @@ hoisted linker.
 The installed dependency tree is the shared input for Metro, Codegen,
 autolinking, and native application targets.
 
-Include repository-local `file:` packages in `srcs`. Once stages those files
+Include repository-local `file:` packages in `srcs`. Struo stages those files
 beside the package manifest before installation, so the selected manager
 creates valid local links and changes to those packages invalidate the
 dependency action.

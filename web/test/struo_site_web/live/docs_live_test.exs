@@ -1,0 +1,103 @@
+defmodule StruoSiteWeb.DocsLiveTest do
+  use StruoSiteWeb.ConnCase
+
+  import Phoenix.LiveViewTest
+
+  test "GET /docs renders the landing page", %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/docs")
+
+    assert html =~ "id=\"docs-layout\""
+    assert html =~ ~s(data-part="feature-card")
+    assert html =~ ~s(property="og:image:width" content="1920")
+    assert html =~ ~s(property="og:image:height" content="1080")
+    assert html =~ ~s(name="twitter:image:alt" content="Documentation")
+  end
+
+  test "renders a guide page with the docs layout and prose", %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/docs/guide/why")
+
+    assert html =~ "id=\"docs-sidebar\""
+    assert html =~ ~s(<a href="/" data-phx-link=)
+    assert html =~ ~s(data-part="logo-link")
+    assert html =~ "id=\"docs-mobile-menu-trigger\""
+    assert html =~ "aria-controls=\"docs-sidebar\""
+    assert html =~ "id=\"docs-mobile-sidebar-overlay\""
+    assert html =~ "data-prose"
+  end
+
+  test "renders the native Cargo adoption path", %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/docs/guide/graph/rust")
+
+    assert html =~ "Start With an Existing Cargo Project"
+    assert html =~ "Choose How Much Configuration to Own"
+    assert html =~ "struo query targets --kind rust_binary"
+  end
+
+  test "renders a hand-written reference page", %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/docs/reference/prelude/apple_library")
+
+    assert html =~ "data-prose"
+    assert html =~ "apple_library"
+  end
+
+  test "serves infrastructure provider guides and contracts", %{conn: conn} do
+    for {path, title} <- [
+          {"/docs/guide/infrastructure/providers", "Become an Infrastructure Provider"},
+          {"/docs/reference/infrastructure", "Infrastructure Provider Contracts"},
+          {"/docs/reference/infrastructure/cache", "Cache Provider Contract"},
+          {"/docs/reference/infrastructure/execution", "Execution Provider Contract"}
+        ] do
+      {:ok, view, _html} = live(conn, path)
+      assert has_element?(view, "article h1", title)
+    end
+  end
+
+  test "documents explicit modules, dependency checks, and deferred planning", %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/docs/guide/graph/apple")
+    assert html =~ "Explicit Modules and Dependency Checks"
+    assert html =~ "dependency_check"
+    assert html =~ "not a downloadable hermetic Apple toolchain"
+
+    {:ok, _view, html} = live(conn, ~p"/docs/reference/modules")
+    assert html =~ "Deferred Action Planning"
+    assert html =~ "expand_actions"
+    assert html =~ "host_tree_sha256"
+  end
+
+  test "directory pages link to their actual editable source", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/docs/guide/graph")
+
+    assert has_element?(
+             view,
+             "a[href='https://github.com/tuist/struo/edit/main/web/priv/docs/guide/graph/index.md']"
+           )
+  end
+
+  test "generated reference pages do not offer edits to unpublished markdown", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/docs/reference/cli/build")
+
+    refute has_element?(view, "[data-part='edit-row']")
+    assert has_element?(view, "[data-part='markdown-link']")
+  end
+
+  test "guide pages offer a next step and a way back", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/docs/guide/getting-started")
+
+    assert has_element?(view, "nav[aria-label='Adjacent documentation pages']")
+    assert has_element?(view, "a[data-part='previous-page'][href='/docs/guide']")
+    assert has_element?(view, "a[data-part='next-page'][href='/docs/guide/why']")
+  end
+
+  test "renders a not-found message for unknown pages", %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/docs/nope/missing")
+
+    assert html =~ "Page not found"
+  end
+
+  test "serves raw markdown", %{conn: conn} do
+    conn = get(conn, ~p"/docs-markdown/guide/why")
+
+    assert response_content_type(conn, :md)
+    assert response(conn, 200) =~ "#"
+  end
+end

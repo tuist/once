@@ -19,7 +19,7 @@ and (.NetNewsWire.attrs | has("exported_headers") | not)
 and ."NetNewsWire-iOS".srcs == ["Sources/main.swift"]
 and (.NetNewsWire.attrs.swift_flags | index("GRAPH_COMMON") != null and index("GRAPH_DEBUG") != null and index("GRAPH_MAC") != null)
 and (."NetNewsWire-iOS".attrs.swift_flags | index("GRAPH_IOS") != null and index("GRAPH_MAC") == null)
-and .NetNewsWire.attrs.bundle_id == "dev.once.NetNewsWire"
+and .NetNewsWire.attrs.bundle_id == "dev.struo.NetNewsWire"
 and (.NetNewsWire.deps | index("NetNewsWire_Share_Extension") != null and index("Subscribe_to_Feed") != null)
 and (."NetNewsWire-iOS".deps | index("NetNewsWire_iOS_Share_Extension") != null and index("NetNewsWire_iOS_Widget_Extension") != null)
 and (.NetNewsWireTests.deps | index("NetNewsWire") != null)

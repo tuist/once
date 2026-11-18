@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+#MISE description="Resolve a released Struo binary for bootstrapping graph builds"
+set -euo pipefail
+
+release_tasks_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+host_triple() {
+  local os arch
+  os="$(uname -s)"
+  arch="$(uname -m)"
+  case "${os}:${arch}" in
+    Darwin:arm64 | Darwin:aarch64)
+      printf '%s\n' "aarch64-apple-darwin"
+      ;;
+    Darwin:x86_64)
+      printf '%s\n' "x86_64-apple-darwin"
+      ;;
+    Linux:x86_64)
+      printf '%s\n' "x86_64-unknown-linux-gnu"
+      ;;
+    Linux:arm64 | Linux:aarch64)
+      printf '%s\n' "aarch64-unknown-linux-gnu"
+      ;;
+    MINGW*:x86_64 | MSYS*:x86_64 | CYGWIN*:x86_64)
+      printf '%s\n' "x86_64-pc-windows-msvc"
+      ;;
+    *)
+      echo "unsupported bootstrap host: ${os} ${arch}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+latest_release() {
+  if [[ -n "${STRUO_BOOTSTRAP_VERSION:-}" ]]; then
+    printf '%s\n' "${STRUO_BOOTSTRAP_VERSION}"
+    return
+  fi
+  if command -v gh >/dev/null 2>&1; then
+    gh release view --repo tuist/struo --json tagName --jq .tagName
+    return
+  fi
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL https://api.github.com/repos/tuist/struo/releases/latest |
+      sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' |
+      head -n 1
+    return
+  fi
+  echo "gh or curl is required to resolve the latest Struo release" >&2
+  exit 1
+}
+
+fallback_cargo_build() {
+  echo "falling back to a Cargo-built bootstrap Struo for this host" >&2
+  export CARGO_NET_RETRY="${CARGO_NET_RETRY:-10}"
+  export CARGO_HTTP_MULTIPLEXING="${CARGO_HTTP_MULTIPLEXING:-false}"
+  local attempt=1
+  local max_attempts="${STRUO_BOOTSTRAP_CARGO_ATTEMPTS:-3}"
+  while true; do
+    if mise exec -- cargo build --locked --profile bootstrap --package struo-cli >&2; then
+      break
+    fi
+    if (( attempt >= max_attempts )); then
+      return 1
+    fi
+    echo "Cargo bootstrap build failed, retrying (${attempt}/${max_attempts})" >&2
+    sleep $((attempt * 2))
+    attempt=$((attempt + 1))
+  done
+  case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*)
+      printf '%s\n' "target/bootstrap/struo.exe"
+      ;;
+    *)
+      printf '%s\n' "target/bootstrap/struo"
+      ;;
+  esac
+}
+
+verify_checksum() {
+  local dir="$1"
+  local checksum_file="$2"
+  if command -v sha256sum >/dev/null 2>&1; then
+    (cd "${dir}" && sha256sum -c "${checksum_file}" >&2)
+    return
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    (cd "${dir}" && shasum -a 256 -c "${checksum_file}" >&2)
+    return
+  fi
+  echo "sha256sum or shasum is required to verify the Struo release archive" >&2
+  return 1
+}
+
+if [[ -n "${STRUO_BIN:-}" ]]; then
+  if [[ ! -x "${STRUO_BIN}" ]]; then
+    echo "STRUO_BIN is not executable: ${STRUO_BIN}" >&2
+    exit 1
+  fi
+  printf '%s\n' "${STRUO_BIN}"
+  exit 0
+fi
+
+released_struo() {
+  local target version exe cache_dir binary asset archive checksum url
+  target="$(host_triple)"
+  version="$(latest_release)"
+  version="${version#v}"
+  if [[ -z "${version}" ]]; then
+    echo "could not determine latest Struo release" >&2
+    return 1
+  fi
+
+  exe="struo"
+  case "${target}" in
+    *-windows-*)
+      exe="struo.exe"
+      ;;
+  esac
+
+  cache_dir="target/struo-bootstrap/${version}-${target}"
+  binary="${cache_dir}/${exe}"
+  if [[ -x "${binary}" ]]; then
+    printf '%s\n' "${binary}"
+    return 0
+  fi
+
+  mkdir -p "${cache_dir}"
+  asset="struo-${version}-${target}.tar.gz"
+  archive="${cache_dir}/${asset}"
+  checksum="${cache_dir}/${asset}.sha256"
+  url="https://github.com/tuist/struo/releases/download/${version}/${asset}"
+  if command -v curl >/dev/null 2>&1 && curl -fL "${url}" -o "${archive}" >&2; then
+    if curl -fL "${url}.sha256" -o "${checksum}" >&2 && verify_checksum "${cache_dir}" "${asset}.sha256"; then
+      tar -C "${cache_dir}" -xzf "${archive}"
+      if [[ -x "${binary}" ]]; then
+        printf '%s\n' "${binary}"
+        return 0
+      fi
+    else
+      echo "could not verify Struo release archive checksum" >&2
+    fi
+  fi
+  return 1
+}
+
+# Builds the bootstrap from this checkout with the latest released Struo, so
+# dependencies come from the remote cache instead of a cold Cargo build. The
+# released Struo may not understand this checkout's graph; callers fall back
+# to Cargo when it fails.
+graph_bootstrap() {
+  local stage0 host suffix target_id exe built output status=0
+  stage0="$(released_struo)" || return 1
+  host="$(mise exec -- rustc -vV | sed -n 's/^host: //p')"
+  if [[ -z "${host}" ]]; then
+    return 1
+  fi
+  "${release_tasks_dir}/prepare-rust-graph-deps.sh" --target "${host}" >&2 || return 1
+  "${release_tasks_dir}/write-rust-release-manifests.sh" --bootstrap --target "${host}" >&2 || return 1
+  suffix="$(printf '%s' "${host}" | tr '.-' '__')"
+  target_id="crates/struo-cli/struo_cli_bootstrap_${suffix}"
+  "${stage0}" build "${target_id}" --format json --quiet >&2 || status=$?
+  "${release_tasks_dir}/write-rust-release-manifests.sh" --clear >&2
+  if ((status != 0)); then
+    echo "the released Struo could not build the bootstrap, falling back to Cargo" >&2
+    return 1
+  fi
+
+  exe="struo"
+  case "${host}" in
+    *-windows-*)
+      exe="struo.exe"
+      ;;
+  esac
+  built=".struo/out/${target_id}/${exe}"
+  output="target/bootstrap-graph/${exe}"
+  mkdir -p "$(dirname "${output}")"
+  cp "${built}" "${output}"
+  printf '%s\n' "${output}"
+}
+
+case "${STRUO_BOOTSTRAP_SOURCE:-release}" in
+  release)
+    released_struo || fallback_cargo_build
+    ;;
+  source)
+    # A graph build only beats Cargo when the remote cache already holds
+    # the dependencies; with a cold local cache both compile everything.
+    if [[ "${STRUO_CACHE_PROVIDER:-}" == "tuist" ]]; then
+      graph_bootstrap || fallback_cargo_build
+    else
+      fallback_cargo_build
+    fi
+    ;;
+  *)
+    echo "STRUO_BOOTSTRAP_SOURCE must be 'release' or 'source'" >&2
+    exit 1
+    ;;
+esac

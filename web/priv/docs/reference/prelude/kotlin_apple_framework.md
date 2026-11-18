@@ -61,7 +61,7 @@ The target emits `kotlin_native_framework`, `apple_framework`,
 
 | Output | Location |
 | --- | --- |
-| Framework bundle | `.once/out/<target>/<product_name>.framework` |
+| Framework bundle | `.struo/out/<target>/<product_name>.framework` |
 
 ## Example
 

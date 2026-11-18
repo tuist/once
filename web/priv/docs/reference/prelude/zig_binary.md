@@ -10,7 +10,7 @@ Zig module deps are passed through `--dep` and `-M`. C provider deps contribute
 headers, definitions, include directories, static libraries, dynamic libraries,
 and linker flags.
 
-`once run` first builds the binary, then executes it with the configured
+`struo run` first builds the binary, then executes it with the configured
 `env` and `args`.
 
 Canonical module names are generated from target labels with collision-safe
@@ -44,8 +44,8 @@ unknown keys fail validation.
 | `zigopt` | list&lt;string&gt; | no | `[]` | Global Zig flags prepended before module-specific `zigopts` |
 | `host_zigopt` | list&lt;string&gt; | no | `[]` | Alias for `zigopt` when porting configured host targets |
 | `zigopts` | list&lt;string&gt; | no | `[]` | Extra flags attached to this module specification |
-| `linkopts` | list&lt;string&gt; | no | `[]` | Extra linker flags appended after Once-managed flags |
-| `use_cc_common_link` | int | no | `-1` | Compatibility setting for C provider linking; Once consumes C providers through its provider model |
+| `linkopts` | list&lt;string&gt; | no | `[]` | Extra linker flags appended after Struo-managed flags |
+| `use_cc_common_link` | int | no | `-1` | Compatibility setting for C provider linking; Struo consumes C providers through its provider model |
 | `host_use_cc_common_link` | int | no | `-1` | Host compatibility setting for C provider linking |
 | `use_standalone_translate_c` | int | no | `-1` | Set to `1` to use a standalone `translate-c` executable |
 | `translate_c` | string | no | empty | Standalone `translate-c` executable path |
@@ -58,8 +58,8 @@ unknown keys fail validation.
 | `emit_llvm_bc` | bool | no | `false` | Emit compiler bitcode output |
 | `emit_docs` | bool | no | `true` | Generate documentation alongside compilation; disable for binary-only builds |
 | `output_name` | string | no | target name | Output file name without platform extension |
-| `env` | map&lt;string, string&gt; | no | `{}` | Environment variables for `once run` |
-| `args` | list&lt;string&gt; | no | `[]` | Arguments for `once run` |
+| `env` | map&lt;string, string&gt; | no | `{}` | Environment variables for `struo run` |
+| `args` | list&lt;string&gt; | no | `[]` | Arguments for `struo run` |
 
 ## Dependency Edges
 

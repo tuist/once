@@ -1,0 +1,357 @@
+//! Integration tests for `struo-core` exercising `Runner` end-to-end
+//! with real subprocesses, distinct workspaces, and parallel execution.
+//!
+//! Each test owns its own `TempDir` and `Cas`, so the suite is
+//! parallel-safe under `cargo test`'s default scheduler.
+
+use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
+
+use struo_cas::Cas;
+use struo_core::{
+    Action, CacheState, NetworkPolicy, OutputSymlinkMode, ResourceRequest, RunOpts, Runner,
+    SandboxMode, WorkspacePath,
+};
+use tempfile::TempDir;
+
+fn ws() -> (TempDir, Runner) {
+    let tmp = TempDir::new().unwrap();
+    let cas = Cas::open(tmp.path());
+    let runner = Runner::new(cas, tmp.path().to_path_buf(), RunOpts::default());
+    (tmp, runner)
+}
+
+fn cmd(script: &str) -> Action {
+    Action::RunCommand {
+        argv: vec!["/bin/sh".into(), "-c".into(), script.into()],
+        env: BTreeMap::new(),
+        cwd: None,
+        input_digest: None,
+        inputs: vec![],
+        outputs: vec![],
+        stdout_path: None,
+        stderr_path: None,
+        output_symlink_mode: OutputSymlinkMode::default(),
+        resources: ResourceRequest::default(),
+        sandbox: SandboxMode::default(),
+        network: NetworkPolicy::default(),
+        timeout_ms: Some(10_000),
+        success_exit_codes: vec![0],
+        remote: None,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn many_independent_actions_execute_concurrently() {
+    let (_tmp, runner) = ws();
+    let runner = runner.with_max_concurrency(8);
+    let actions: Vec<Action> = (0..8u32)
+        .map(|i| {
+            cmd(&format!(
+                "mkdir -p parallel; \
+                 : > parallel/{i}.started; \
+                 attempts=0; \
+                 while [ \"$(find parallel -name '*.started' -print | wc -l | tr -d '[:space:]')\" -lt 8 ]; do \
+                   attempts=$((attempts + 1)); \
+                   if [ \"$attempts\" -gt 500 ]; then \
+                     echo 'timed out waiting for concurrent starts' >&2; \
+                     exit 124; \
+                   fi; \
+                   sleep 0.01; \
+                 done; \
+                 sleep 0.2; \
+                 printf {i}"
+            ))
+        })
+        .collect();
+    let mut handles = Vec::new();
+    let start = Instant::now();
+    for a in &actions {
+        // Move clones of the runner into spawned tasks; cloning shares
+        // the permit pool by design.
+        let runner = runner.clone();
+        let a = a.clone();
+        handles.push(tokio::spawn(async move { runner.run(&a).await.unwrap() }));
+    }
+    for h in handles {
+        h.await.unwrap();
+    }
+    assert!(
+        start.elapsed() < Duration::from_secs(6),
+        "expected concurrent execution; took {:?}",
+        start.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn a_republished_result_with_evicted_blobs_reexecutes_safely() {
+    let (_tmp, runner) = ws();
+    let mut action = cmd("printf x >> executions; printf correct > output");
+    if let Action::RunCommand { outputs, .. } = &mut action {
+        outputs.push(WorkspacePath::try_from("output").unwrap());
+    }
+    let captured = runner.run(&action).await.unwrap().result;
+    runner.cache().gc(0, false).await.unwrap();
+    runner
+        .cache()
+        .put_action_result(&action.digest(), &captured)
+        .await
+        .unwrap();
+    std::fs::write(runner.workspace_root().join("output"), b"stale").unwrap();
+    let result = runner.run(&action).await.unwrap();
+    assert_eq!(result.cache, CacheState::Miss);
+    assert_eq!(
+        std::fs::read(runner.workspace_root().join("executions")).unwrap(),
+        b"xx"
+    );
+    assert_eq!(
+        std::fs::read(runner.workspace_root().join("output")).unwrap(),
+        b"correct"
+    );
+}
+
+#[tokio::test]
+async fn second_run_of_same_action_is_a_cache_hit() {
+    let (_tmp, runner) = ws();
+    let action = cmd("printf hi");
+    let first = runner.run(&action).await.unwrap();
+    let second = runner.run(&action).await.unwrap();
+    assert_eq!(first.cache, CacheState::Miss);
+    assert_eq!(second.cache, CacheState::Hit);
+    assert_eq!(first.action, second.action);
+    assert_eq!(first.result, second.result);
+}
+
+#[tokio::test]
+async fn accepted_nonzero_exit_captures_outputs_and_is_cached() {
+    let (_tmp, runner) = ws();
+    let mut action = cmd("mkdir -p out; printf finding > out/report.sarif; exit 1");
+    if let Action::RunCommand {
+        outputs,
+        success_exit_codes,
+        ..
+    } = &mut action
+    {
+        outputs.push(WorkspacePath::try_from("out/report.sarif").unwrap());
+        *success_exit_codes = vec![0, 1];
+    }
+    let first = runner.run(&action).await.unwrap();
+    let second = runner.run(&action).await.unwrap();
+    assert_eq!(first.result.exit_code, 0);
+    assert_eq!(first.cache, CacheState::Miss);
+    assert_eq!(second.cache, CacheState::Hit);
+    assert!(first.result.outputs.contains_key("out/report.sarif"));
+}
+
+#[tokio::test]
+async fn rejected_zero_is_never_returned_or_cached_as_success() {
+    let (_tmp, runner) = ws();
+    let mut action = cmd("exit 0");
+    if let Action::RunCommand {
+        success_exit_codes, ..
+    } = &mut action
+    {
+        *success_exit_codes = vec![7];
+    }
+    let mut legacy_encoding = b"struo.action.v11\0".to_vec();
+    serde_json::to_writer(&mut legacy_encoding, &action).unwrap();
+    let legacy = struo_cas::Digest::of_bytes(&legacy_encoding);
+    runner
+        .cache()
+        .put_action_result(
+            &legacy,
+            &struo_cas::ActionResult {
+                exit_code: 0,
+                stdout: None,
+                stderr: None,
+                outputs: BTreeMap::new(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_ne!(action.digest(), legacy);
+    for cache_failures in [false, true] {
+        let runner = Runner::with_cache(
+            runner.cache().clone(),
+            runner.workspace_root(),
+            RunOpts { cache_failures },
+        );
+        for _ in 0..2 {
+            assert!(matches!(
+                runner.run(&action).await,
+                Err(struo_core::Error::RejectedZeroExitCode { .. })
+            ));
+            assert!(runner
+                .cache()
+                .get_action_result(&action.digest())
+                .await
+                .unwrap()
+                .is_none());
+        }
+    }
+}
+
+#[tokio::test]
+async fn rejected_zero_retains_its_policy_and_captured_diagnostics() {
+    let (_tmp, runner) = ws();
+    let mut action = cmd("printf detail >&2; exit 0");
+    if let Action::RunCommand {
+        success_exit_codes, ..
+    } = &mut action
+    {
+        *success_exit_codes = vec![7];
+    }
+    let error = runner.run(&action).await.unwrap_err();
+    let struo_core::Error::RejectedZeroExitCode {
+        accepted, stderr, ..
+    } = error
+    else {
+        panic!("expected a rejected-zero policy error");
+    };
+    assert_eq!(accepted, vec![7]);
+    assert_eq!(
+        runner.cache().get_blob(&stderr.unwrap()).await.unwrap(),
+        b"detail"
+    );
+}
+
+#[tokio::test]
+async fn an_accepted_nonzero_only_policy_remains_cacheable() {
+    let (_tmp, runner) = ws();
+    let mut action = cmd("exit 7");
+    if let Action::RunCommand {
+        success_exit_codes, ..
+    } = &mut action
+    {
+        *success_exit_codes = vec![7];
+    }
+    assert_eq!(runner.run(&action).await.unwrap().cache, CacheState::Miss);
+    let hit = runner.run(&action).await.unwrap();
+    assert_eq!(hit.cache, CacheState::Hit);
+    assert_eq!(hit.result.exit_code, 0);
+}
+
+#[tokio::test]
+async fn cache_keys_partition_by_workspace_path() {
+    // Two actions with the same argv but different workspace-relative
+    // cwds get different cache slots.
+    let (_tmp, runner) = ws();
+    let workspace = runner.workspace_root();
+    std::fs::create_dir(workspace.join("a")).unwrap();
+    std::fs::create_dir(workspace.join("b")).unwrap();
+    std::fs::write(workspace.join("a/marker"), b"AAA").unwrap();
+    std::fs::write(workspace.join("b/marker"), b"BBB").unwrap();
+    let mk = |sub: &str| Action::RunCommand {
+        argv: vec!["/bin/sh".into(), "-c".into(), "cat marker".into()],
+        env: BTreeMap::new(),
+        cwd: Some(WorkspacePath::try_from(sub).unwrap()),
+        input_digest: None,
+        inputs: vec![],
+        outputs: vec![],
+        stdout_path: None,
+        stderr_path: None,
+        output_symlink_mode: OutputSymlinkMode::default(),
+        resources: ResourceRequest::default(),
+        sandbox: SandboxMode::default(),
+        network: NetworkPolicy::default(),
+        timeout_ms: Some(5_000),
+        success_exit_codes: vec![0],
+        remote: None,
+    };
+    let a = runner.run(&mk("a")).await.unwrap();
+    let b = runner.run(&mk("b")).await.unwrap();
+    assert_ne!(a.action, b.action);
+    assert_eq!(
+        runner
+            .cache()
+            .get_blob(&a.result.stdout.unwrap())
+            .await
+            .unwrap(),
+        b"AAA"
+    );
+    assert_eq!(
+        runner
+            .cache()
+            .get_blob(&b.result.stdout.unwrap())
+            .await
+            .unwrap(),
+        b"BBB"
+    );
+}
+
+#[tokio::test]
+async fn failure_then_success_does_not_serve_stale_cache() {
+    // First run fails (not cached). Fix the script and rerun: must
+    // observe the new exit, not the prior failure.
+    let (tmp, _) = ws();
+    let cas = Cas::open(tmp.path());
+    let runner_fail = Runner::new(
+        cas.clone(),
+        tmp.path().to_path_buf(),
+        RunOpts {
+            cache_failures: false,
+        },
+    );
+
+    let bad = Action::RunCommand {
+        argv: vec!["/bin/sh".into(), "-c".into(), "exit 1".into()],
+        env: BTreeMap::new(),
+        cwd: None,
+        input_digest: None,
+        inputs: vec![],
+        outputs: vec![],
+        stdout_path: None,
+        stderr_path: None,
+        output_symlink_mode: OutputSymlinkMode::default(),
+        resources: ResourceRequest::default(),
+        sandbox: SandboxMode::default(),
+        network: NetworkPolicy::default(),
+        timeout_ms: Some(5_000),
+        success_exit_codes: vec![0],
+        remote: None,
+    };
+    let outcome = runner_fail.run(&bad).await.unwrap();
+    assert_eq!(outcome.result.exit_code, 1);
+    assert_eq!(outcome.cache, CacheState::Miss);
+
+    // A different action (different argv) succeeds and IS cached.
+    let good = Action::RunCommand {
+        argv: vec!["/bin/sh".into(), "-c".into(), "exit 0".into()],
+        env: BTreeMap::new(),
+        cwd: None,
+        input_digest: None,
+        inputs: vec![],
+        outputs: vec![],
+        stdout_path: None,
+        stderr_path: None,
+        output_symlink_mode: OutputSymlinkMode::default(),
+        resources: ResourceRequest::default(),
+        sandbox: SandboxMode::default(),
+        network: NetworkPolicy::default(),
+        timeout_ms: Some(5_000),
+        success_exit_codes: vec![0],
+        remote: None,
+    };
+    let outcome = runner_fail.run(&good).await.unwrap();
+    assert_eq!(outcome.result.exit_code, 0);
+    assert_eq!(outcome.cache, CacheState::Miss);
+    let again = runner_fail.run(&good).await.unwrap();
+    assert_eq!(again.cache, CacheState::Hit);
+}
+
+#[tokio::test]
+async fn isolated_workspaces_have_independent_caches() {
+    // Two runners on disjoint workspaces never see each other's
+    // results. Catches a regression where state leaks via globals.
+    let (tmp_a, runner_a) = ws();
+    let (tmp_b, runner_b) = ws();
+    assert_ne!(tmp_a.path(), tmp_b.path());
+
+    let action = cmd("printf shared");
+    let in_a = runner_a.run(&action).await.unwrap();
+    assert_eq!(in_a.cache, CacheState::Miss);
+
+    // Same action against B is still a miss - caches are per-workspace.
+    let in_b = runner_b.run(&action).await.unwrap();
+    assert_eq!(in_b.cache, CacheState::Miss);
+}

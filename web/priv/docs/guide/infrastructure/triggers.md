@@ -1,7 +1,7 @@
 # Event-Driven Automation
 
-Declare when work should run in `once.toml`. Your CI service delivers the event
-and schedules a worker; Once runs the selected capabilities.
+Declare when work should run in `struo.toml`. Your CI service delivers the event
+and schedules a worker; Struo runs the selected capabilities.
 
 A build graph already describes what to build, how to test it, and what must
 run first. A trigger selects from that graph instead of describing the same
@@ -11,24 +11,24 @@ editing a second pipeline.
 ```text
 Commit → CI service
          ↓
-         Once trigger
+         Struo trigger
          ↓
          Capabilities → Result
 ```
 
 An integrated service can read these declarations directly. A service with
 dynamic pipelines can generate worker jobs from them. In either case, the
-build graph stays in Once, not in a hand-maintained pipeline YAML file.
+build graph stays in Struo, not in a hand-maintained pipeline YAML file.
 
 ::: info Tuist support is coming
-Tuist orchestration support for Once triggers is coming. It is not available
+Tuist orchestration support for Struo triggers is coming. It is not available
 yet. Tuist's existing [shared-cache integration](/guide/infrastructure/tuist)
 is separate from trigger orchestration.
 :::
 
 ## Declare A Trigger
 
-Add a trigger to your root `once.toml`:
+Add a trigger to your root `struo.toml`:
 
 ```toml
 [[trigger]]
@@ -42,7 +42,7 @@ configuration = { os = "linux", arch = "x86_64", tokens = [] }
 ```
 
 This asks the service to run the `test` capability of `checks/core` when
-`main` changes. Once handles the target's dependencies, actions, and caching.
+`main` changes. Struo handles the target's dependencies, actions, and caching.
 The declaration does not repeat the commands used to build or test it.
 
 - `id` is the trigger's stable name.
@@ -51,7 +51,7 @@ The declaration does not repeat the commands used to build or test it.
 - `configuration` explicitly sets the target OS, architecture, and extra
   configuration tokens. The service must provide a compatible worker.
 
-`checks/core` is an example. Use `once query capabilities <target>` to inspect
+`checks/core` is an example. Use `struo query capabilities <target>` to inspect
 your own target. Triggers support `build`, `test`, and `run` on analysis-backed
 target kinds. Add more `[[trigger.invoke]]` entries to select more work, not
 another set of dependency edges.
@@ -64,7 +64,7 @@ See [target configuration](/guide/graph/configuration) and
 There is no released native trigger integration yet. The current CLI provides
 an experimental worker interface that services can integrate with.
 
-- **Tuist: coming.** Planned service integration that reads Once triggers.
+- **Tuist: coming.** Planned service integration that reads Struo triggers.
 - **[Buildkite](/guide/infrastructure/buildkite): example adapter.** Generate
   JSON steps and upload them to the running build. One worker job per matching
   trigger, not per build action. No repository pipeline YAML is needed.
@@ -88,7 +88,7 @@ an experimental worker interface that services can integrate with.
   agent pools remain necessary.
 
 **Possible means a custom adapter could use the platform's existing
-capabilities.** Once does not ship adapters for those services yet.
+capabilities.** Struo does not ship adapters for those services yet.
 
 Buildkite, Woodpecker, and Jenkins can keep the adapter entrypoint outside the
 application repository. Woodpecker's configuration extension is the closest
@@ -104,7 +104,7 @@ controller privileges. Neither should evaluate project code to select work.
 For matrix-based adapters, keep a stable required completion check that fails
 when discovery or a worker fails. Handle no matching triggers explicitly;
 an empty matrix does not reliably mean zero jobs across services. Native
-event subscriptions must still start the bootstrap whenever Once work could
+event subscriptions must still start the bootstrap whenever Struo work could
 be required.
 
 ## How A Service Integrates
@@ -116,15 +116,15 @@ be required.
    into a source ref and full commit ID, match the registered triggers, and
    schedule compatible workers. Reading trigger data does not evaluate project
    modules.
-3. **Run Once and publish the result.** On a clean checkout of that exact
-   commit, invoke the selected trigger. Once resolves and executes its graph;
+3. **Run Struo and publish the result.** On a clean checkout of that exact
+   commit, invoke the selected trigger. Struo resolves and executes its graph;
    the service handles job lifecycle, isolation, credentials, and required
    checks. Missing capabilities and failed invocations fail the run.
 
 The [Buildkite integration example](/guide/infrastructure/buildkite) shows how
 to connect these steps to an existing orchestrator. A native controller's
 proposed lifecycle is covered in the
-[engineering loops RFC](https://github.com/tuist/once/blob/main/rfcs/0002-engineering-loops.md#event-registrations).
+[engineering loops RFC](https://github.com/tuist/struo/blob/main/rfcs/0002-engineering-loops.md#event-registrations).
 
 ## Inspect And Edit Triggers
 
@@ -132,9 +132,9 @@ These commands read, validate, or edit trigger declarations without running
 project modules:
 
 ```sh
-once query triggers
-once query validate-trigger --file draft.json
-once edit triggers --file changes.json
+struo query triggers
+struo query validate-trigger --file draft.json
+struo edit triggers --file changes.json
 ```
 
 `query triggers` includes JSON schemas for trigger drafts and event files.
@@ -143,10 +143,10 @@ Edits use `{ "operations": [...] }` with `create`, replacement `update`, or
 edits still need separate activation.
 
 The same operations are available through [MCP tools](/reference/mcp/tools).
-Editing, activation, and execution require `once mcp --allow-run`.
+Editing, activation, and execution require `struo mcp --allow-run`.
 
 ::: warning Experimental worker interface
-Once does not yet receive webhooks, provision workers, or publish CI checks.
+Struo does not yet receive webhooks, provision workers, or publish CI checks.
 The current run mode is called simulation, but it executes real project code
 with the worker's permissions. Event JSON and local activation are not proof
 of source trust or a security boundary. CI must isolate execution before

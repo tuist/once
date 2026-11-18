@@ -33,7 +33,7 @@ builds.
 | `strip_debug_symbols` | bool | no | `false` | Pass `-fstrip` |
 | `zigopt` | list&lt;string&gt; | no | `[]` | Global Zig flags prepended before module-specific `zigopts` |
 | `host_zigopt` | list&lt;string&gt; | no | `[]` | Alias for `zigopt` when porting configured host targets |
-| `use_cc_common_link` | int | no | `-1` | Compatibility setting for C provider linking; Once consumes C providers through its provider model |
+| `use_cc_common_link` | int | no | `-1` | Compatibility setting for C provider linking; Struo consumes C providers through its provider model |
 | `host_use_cc_common_link` | int | no | `-1` | Host compatibility setting for C provider linking |
 | `use_standalone_translate_c` | int | no | `-1` | Set to `1` to use a standalone `translate-c` executable |
 | `translate_c` | string | no | empty | Standalone `translate-c` executable path |

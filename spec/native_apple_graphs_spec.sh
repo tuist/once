@@ -8,18 +8,18 @@ Describe 'real-world native graph shapes'
     [ "$(uname -s)" != Darwin ] || ! xcrun --find swiftc >/dev/null 2>&1
   }
 
-  graph_once() {
-    ONCE_CHANGE_TRACKER=0 RUST_LOG=off once --memory-limit 2GiB "$@" --format json
+  graph_struo() {
+    STRUO_CHANGE_TRACKER=0 RUST_LOG=off struo --memory-limit 2GiB "$@" --format json
   }
 
   graph_snapshot() {
-    graph_once query 'MATCH (t:Target) RETURN t.id, t.kind, t.attrs, t.deps, t.srcs' > "$WORKSPACE/query.json" || return
+    graph_struo query 'MATCH (t:Target) RETURN t.id, t.kind, t.attrs, t.deps, t.srcs' > "$WORKSPACE/query.json" || return
     jq '.rows | map({key: .[0], value: {kind: .[1], attrs: .[2], deps: .[3], srcs: .[4]}}) | from_entries' "$WORKSPACE/query.json" > "$WORKSPACE/graph.json" || return
     jq -e 'keys as $ids | all(.[]; all(.deps[]; . as $dep | $ids | index($dep) != null))' "$WORKSPACE/graph.json" >/dev/null
   }
 
   graph_build() {
-    graph_once build "$1" > "$WORKSPACE/build.json" 2> "$WORKSPACE/build.err" || {
+    graph_struo build "$1" > "$WORKSPACE/build.json" 2> "$WORKSPACE/build.err" || {
       cat "$WORKSPACE/build.err"
       return 1
     }
@@ -29,7 +29,7 @@ Describe 'real-world native graph shapes'
   }
 
   graph_validate() {
-    graph_once query validate-workspace > "$WORKSPACE/validation.json" || return
+    graph_struo query validate-workspace > "$WORKSPACE/validation.json" || return
     jq -e '.valid and (.diagnostics | length == 0)' "$WORKSPACE/validation.json" >/dev/null || {
       cat "$WORKSPACE/validation.json"
       return 1
@@ -37,7 +37,7 @@ Describe 'real-world native graph shapes'
   }
 
   graph_check_action_hits() {
-    graph_once query evidence > "$WORKSPACE/evidence-warm.json" || return
+    graph_struo query evidence > "$WORKSPACE/evidence-warm.json" || return
     jq -e --slurpfile cold "$WORKSPACE/evidence-cold.json" '
       ($cold[0] | map(.id)) as $old |
       [.[] | select(.id as $id | $old | index($id) == null)] as $new |
@@ -49,18 +49,18 @@ Describe 'real-world native graph shapes'
   }
 
   exercise_warm_package_graph() {
-    local ONCE_ACTUAL_SWIFT ONCE_MANIFEST_PROBES actual_swift
-    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/xcode-generated-source-e2e/." "$WORKSPACE/"
+    local STRUO_ACTUAL_SWIFT STRUO_MANIFEST_PROBES actual_swift
+    cp -R "$REPO_ROOT/crates/struo-frontend/prelude/examples/xcode-generated-source-e2e/." "$WORKSPACE/"
     mv "$WORKSPACE/Packages/Shared/Sources" "$WORKSPACE/Packages/Shared/Source"
     mkdir -p "$SPEC_ROOT/tools"
     actual_swift="$(xcrun --find swift)" || return
     cat > "$SPEC_ROOT/tools/swift" <<'SH'
 #!/bin/sh
 case " $* " in
-  *' dump-package '*) printf 'dump\n' >> "$ONCE_MANIFEST_PROBES" ;;
-  *' describe '*) printf 'describe\n' >> "$ONCE_MANIFEST_PROBES" ;;
+  *' dump-package '*) printf 'dump\n' >> "$STRUO_MANIFEST_PROBES" ;;
+  *' describe '*) printf 'describe\n' >> "$STRUO_MANIFEST_PROBES" ;;
 esac
-exec "$ONCE_ACTUAL_SWIFT" "$@"
+exec "$STRUO_ACTUAL_SWIFT" "$@"
 SH
     cat > "$SPEC_ROOT/tools/xcrun" <<'SH'
 #!/bin/sh
@@ -71,17 +71,17 @@ else
 fi
 SH
     chmod +x "$SPEC_ROOT/tools/swift" "$SPEC_ROOT/tools/xcrun"
-    export ONCE_ACTUAL_SWIFT="$actual_swift" ONCE_MANIFEST_PROBES="$SPEC_ROOT/manifest-probes"
+    export STRUO_ACTUAL_SWIFT="$actual_swift" STRUO_MANIFEST_PROBES="$SPEC_ROOT/manifest-probes"
     PATH="$SPEC_ROOT/tools:$PATH" graph_snapshot || return
     cp "$WORKSPACE/graph.json" "$SPEC_ROOT/cold-graph.json"
-    [ -s "$ONCE_MANIFEST_PROBES" ] || return 1
-    [ "$(grep -c '^describe$' "$ONCE_MANIFEST_PROBES")" -eq 1 ] || return 1
+    [ -s "$STRUO_MANIFEST_PROBES" ] || return 1
+    [ "$(grep -c '^describe$' "$STRUO_MANIFEST_PROBES")" -eq 1 ] || return 1
     jq -e 'any(.[]; .attrs.module_name == "Shared" and .srcs == ["Packages/Shared/Source/Shared/Shared.swift"])' "$WORKSPACE/graph.json" >/dev/null || return
-    cp "$ONCE_MANIFEST_PROBES" "$SPEC_ROOT/cold-probes"
+    cp "$STRUO_MANIFEST_PROBES" "$SPEC_ROOT/cold-probes"
     PATH="$SPEC_ROOT/tools:$PATH" graph_snapshot || return
     cmp -s "$WORKSPACE/graph.json" "$SPEC_ROOT/cold-graph.json" || return
-    cmp -s "$ONCE_MANIFEST_PROBES" "$SPEC_ROOT/cold-probes" || {
-      diff -u "$SPEC_ROOT/cold-probes" "$ONCE_MANIFEST_PROBES"
+    cmp -s "$STRUO_MANIFEST_PROBES" "$SPEC_ROOT/cold-probes" || {
+      diff -u "$SPEC_ROOT/cold-probes" "$STRUO_MANIFEST_PROBES"
       return 1
     }
 
@@ -90,12 +90,12 @@ SH
     perl -pi -e 's/targets: \[.target\(name: "Shared"\)\]/targets: [.target(name: "Shared"), .target(name: "Added")]/' "$WORKSPACE/Packages/Shared/Package.swift"
     PATH="$SPEC_ROOT/tools:$PATH" graph_snapshot || return
     jq -e 'to_entries | any(.key | endswith("_Added"))' "$WORKSPACE/graph.json" >/dev/null || return
-    [ "$(grep -c '^dump$' "$ONCE_MANIFEST_PROBES")" -eq 2 ] || return 1
-    [ "$(grep -c '^describe$' "$ONCE_MANIFEST_PROBES")" -eq 2 ]
+    [ "$(grep -c '^dump$' "$STRUO_MANIFEST_PROBES")" -eq 2 ] || return 1
+    [ "$(grep -c '^describe$' "$STRUO_MANIFEST_PROBES")" -eq 2 ]
   }
 
   exercise_package_path_alias() {
-    cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/xcode-generated-source-e2e/." "$WORKSPACE/"
+    cp -R "$REPO_ROOT/crates/struo-frontend/prelude/examples/xcode-generated-source-e2e/." "$WORKSPACE/"
     [ -d "$WORKSPACE/Packages/sHaReD" ] || ln -s Shared "$WORKSPACE/Packages/sHaReD"
     mkdir -p "$WORKSPACE/Packages/Consumer/Sources/Consumer"
     cat > "$WORKSPACE/Packages/Consumer/Package.swift" <<'SWIFT'
@@ -131,29 +131,29 @@ SWIFT
     graph_validate || return
 
     graph_build SwiftPackage_VaporGraph_Development || return
-    graph_once query evidence > "$WORKSPACE/evidence-cold.json" || return
-    [ "$("$WORKSPACE/.once/out/SwiftPackage_VaporGraph_Development/Development.app/Contents/MacOS/Development")" = 16 ] || return 1
-    [ ! -e "$WORKSPACE/.once/out/SwiftPackage_VaporGraph_VaporTests" ] || return 1
-    [ ! -e "$WORKSPACE/.once/out/SwiftPackage_VaporGraph_XCTVapor" ] || return 1
-    [ ! -e "$WORKSPACE/.once/out/SwiftPackage_swift-nio_NIOTransportServices" ] || return 1
+    graph_struo query evidence > "$WORKSPACE/evidence-cold.json" || return
+    [ "$("$WORKSPACE/.struo/out/SwiftPackage_VaporGraph_Development/Development.app/Contents/MacOS/Development")" = 16 ] || return 1
+    [ ! -e "$WORKSPACE/.struo/out/SwiftPackage_VaporGraph_VaporTests" ] || return 1
+    [ ! -e "$WORKSPACE/.struo/out/SwiftPackage_VaporGraph_XCTVapor" ] || return 1
+    [ ! -e "$WORKSPACE/.struo/out/SwiftPackage_swift-nio_NIOTransportServices" ] || return 1
     graph_build SwiftPackage_VaporGraph_Development || return
     jq -e '.cache == "hit"' "$WORKSPACE/build.json" >/dev/null || return
     graph_check_action_hits || return
 
-    mv "$WORKSPACE/.once/out" "$WORKSPACE/saved-outputs"
+    mv "$WORKSPACE/.struo/out" "$WORKSPACE/saved-outputs"
     graph_build SwiftPackage_VaporGraph_Development || return
     jq -e '.cache == "hit"' "$WORKSPACE/build.json" >/dev/null || return
-    [ "$("$WORKSPACE/.once/out/SwiftPackage_VaporGraph_Development/Development.app/Contents/MacOS/Development")" = 16 ] || return 1
+    [ "$("$WORKSPACE/.struo/out/SwiftPackage_VaporGraph_Development/Development.app/Contents/MacOS/Development")" = 16 ] || return 1
 
     perl -pi -e 's/GRAPH_VALUE 7/GRAPH_VALUE 9/' "$WORKSPACE/Sources/CVaporBcrypt/include/CVaporBcrypt.h"
     graph_build SwiftPackage_VaporGraph_Development || return
     jq -e '.cache == "miss"' "$WORKSPACE/build.json" >/dev/null || return
-    [ "$("$WORKSPACE/.once/out/SwiftPackage_VaporGraph_Development/Development.app/Contents/MacOS/Development")" = 18 ] || return 1
+    [ "$("$WORKSPACE/.struo/out/SwiftPackage_VaporGraph_Development/Development.app/Contents/MacOS/Development")" = 18 ] || return 1
 
     perl -pi -e 's/logValue = 2/logValue = 3/' "$WORKSPACE/Dependencies/swift-log/Sources/Logging/Logging.swift"
     graph_build SwiftPackage_VaporGraph_Development || return
     jq -e '.cache == "miss"' "$WORKSPACE/build.json" >/dev/null || return
-    [ "$("$WORKSPACE/.once/out/SwiftPackage_VaporGraph_Development/Development.app/Contents/MacOS/Development")" = 21 ] || return 1
+    [ "$("$WORKSPACE/.struo/out/SwiftPackage_VaporGraph_Development/Development.app/Contents/MacOS/Development")" = 21 ] || return 1
   }
 
   exercise_netnewswire_graph() {
@@ -165,11 +165,11 @@ SWIFT
     graph_validate || return
 
     graph_build NetNewsWire || return
-    graph_once query evidence > "$WORKSPACE/evidence-cold.json" || return
-    [ "$("$WORKSPACE/.once/out/NetNewsWire/NetNewsWire.app/Contents/MacOS/NetNewsWire")" = 11 ] || return 1
-    [ ! -e "$WORKSPACE/.once/out/NetNewsWire-iOS" ] || return 1
-    [ ! -e "$WORKSPACE/.once/out/XcodePackage_xcode_ios_Account_Account" ] || return 1
-    [ ! -e "$WORKSPACE/.once/out/NetNewsWireTests" ] || return 1
+    graph_struo query evidence > "$WORKSPACE/evidence-cold.json" || return
+    [ "$("$WORKSPACE/.struo/out/NetNewsWire/NetNewsWire.app/Contents/MacOS/NetNewsWire")" = 11 ] || return 1
+    [ ! -e "$WORKSPACE/.struo/out/NetNewsWire-iOS" ] || return 1
+    [ ! -e "$WORKSPACE/.struo/out/XcodePackage_xcode_ios_Account_Account" ] || return 1
+    [ ! -e "$WORKSPACE/.struo/out/NetNewsWireTests" ] || return 1
     graph_build NetNewsWire || return
     jq -e '.cache == "hit"' "$WORKSPACE/build.json" >/dev/null || return
     graph_check_action_hits || return
@@ -177,7 +177,7 @@ SWIFT
     perl -pi -e 's/CORE_VALUE 5/CORE_VALUE 8/' "$WORKSPACE/Modules/RSCore/Sources/RSCoreObjC/include/RSCoreObjC.h"
     graph_build NetNewsWire || return
     jq -e '.cache == "miss"' "$WORKSPACE/build.json" >/dev/null || return
-    [ "$("$WORKSPACE/.once/out/NetNewsWire/NetNewsWire.app/Contents/MacOS/NetNewsWire")" = 17 ] || return 1
+    [ "$("$WORKSPACE/.struo/out/NetNewsWire/NetNewsWire.app/Contents/MacOS/NetNewsWire")" = 17 ] || return 1
 
     perl -pi -e 's/GRAPH_MAC/GRAPH_CHANGED/' "$WORKSPACE/Config/macOS.xcconfig"
     graph_snapshot || return
@@ -193,8 +193,8 @@ SWIFT
     origin="$SPEC_ROOT/GeneratorSupport"
     mv "$WORKSPACE/App/Packages/GeneratorSupport" "$origin"
     git -C "$origin" init -q || return
-    git -C "$origin" config user.name Once || return
-    git -C "$origin" config user.email once@example.invalid || return
+    git -C "$origin" config user.name Struo || return
+    git -C "$origin" config user.email struo@example.invalid || return
     git -C "$origin" add . || return
     git -C "$origin" commit -qm pinned || return
     revision="$(git -C "$origin" rev-parse HEAD)"
@@ -208,58 +208,58 @@ SWIFT
     jq -n --arg revision "$revision" --arg url "file://$origin" '{version: 2, pins: [{identity: "generatorsupport", kind: "remoteSourceControl", location: $url, state: {revision: $revision, version: "1.0.0"}}]}' > "$WORKSPACE/App/Fetch.xcworkspace/xcshareddata/swiftpm/Package.resolved"
     graph_snapshot 2> "$WORKSPACE/query.err" || return
     jq -e '[.[] | select(.kind == "swift_package_build_tools") | .attrs.build_role] | sort == ["destination", "destination", "tools", "tools"]' "$WORKSPACE/graph.json" >/dev/null || return
-    [ ! -d "$WORKSPACE/.once/out" ] || return 1
-    [ "$(git -C "$WORKSPACE/.once/xcode-packages/generatorsupport" rev-parse HEAD)" = "$revision" ] || return 1
+    [ ! -d "$WORKSPACE/.struo/out" ] || return 1
+    [ "$(git -C "$WORKSPACE/.struo/xcode-packages/generatorsupport" rev-parse HEAD)" = "$revision" ] || return 1
     graph_validate 2> "$WORKSPACE/validation.err" || return
 
-    ONCE_CHANGE_TRACKER=0 once --memory-limit 2GiB xcodebuild -- -workspace App/Fetch.xcworkspace -scheme Fetch -configuration Development -quiet build > "$WORKSPACE/build.out" 2> "$WORKSPACE/build.err" || {
+    STRUO_CHANGE_TRACKER=0 struo --memory-limit 2GiB xcodebuild -- -workspace App/Fetch.xcworkspace -scheme Fetch -configuration Development -quiet build > "$WORKSPACE/build.out" 2> "$WORKSPACE/build.err" || {
       cat "$WORKSPACE/build.out" "$WORKSPACE/build.err"
       return 1
     }
-    binary="$WORKSPACE/.once/out/App/Fetch/Fetch.app/Contents/MacOS/Fetch"
+    binary="$WORKSPACE/.struo/out/App/Fetch/Fetch.app/Contents/MacOS/Fetch"
     [ "$("$binary")" = '42:payload' ] || return 1
-    [ "$(find "$WORKSPACE/.once/out" -name lint.txt -exec cat {} \;)" = validated ] || return 1
+    [ "$(find "$WORKSPACE/.struo/out" -name lint.txt -exec cat {} \;)" = validated ] || return 1
     graph_build App/Fetch || return
-    find "$WORKSPACE/.once/out" -name lint.txt -delete
+    find "$WORKSPACE/.struo/out" -name lint.txt -delete
     graph_build App/Fetch || return
-    [ "$(find "$WORKSPACE/.once/out" -name lint.txt -exec cat {} \;)" = validated ] || return 1
-    graph_once test App/FetchTests > "$WORKSPACE/test.json" 2> "$WORKSPACE/test.err" || {
+    [ "$(find "$WORKSPACE/.struo/out" -name lint.txt -exec cat {} \;)" = validated ] || return 1
+    graph_struo test App/FetchTests > "$WORKSPACE/test.json" 2> "$WORKSPACE/test.err" || {
       cat "$WORKSPACE/test.err"
       return 1
     }
-    jq -e '.summary.total == 1 and .summary.passed == 1' "$WORKSPACE/.once/out/App/FetchTests/test/test_results.json" >/dev/null || return
+    jq -e '.summary.total == 1 and .summary.passed == 1' "$WORKSPACE/.struo/out/App/FetchTests/test/test_results.json" >/dev/null || return
 
     host_probe="$(jq -r 'to_entries[] | select(.value.kind == "swift_macro") | .key' "$WORKSPACE/graph.json")"
     graph_build "$host_probe" || return
-    "$WORKSPACE/.once/out/$host_probe/HostProbe-tool" || return
+    "$WORKSPACE/.struo/out/$host_probe/HostProbe-tool" || return
     macro_test="$(jq -r 'to_entries[] | select(.value.kind == "apple_test_bundle" and .value.attrs.product_name == "HostProbeTests") | .key' "$WORKSPACE/graph.json")"
-    graph_once test "$macro_test" > "$WORKSPACE/macro-test.json" 2> "$WORKSPACE/macro-test.err" || { cat "$WORKSPACE/macro-test.err"; return 1; }
-    jq -e '.summary.total == 1 and .summary.passed == 1' "$WORKSPACE/.once/out/$macro_test/test/test_results.json" >/dev/null || return
-    ONCE_GENERATED_CXX=1 graph_build App/Fetch || return
+    graph_struo test "$macro_test" > "$WORKSPACE/macro-test.json" 2> "$WORKSPACE/macro-test.err" || { cat "$WORKSPACE/macro-test.err"; return 1; }
+    jq -e '.summary.total == 1 and .summary.passed == 1' "$WORKSPACE/.struo/out/$macro_test/test/test_results.json" >/dev/null || return
+    STRUO_GENERATED_CXX=1 graph_build App/Fetch || return
     [ "$("$binary")" = '42:payload' ] || return 1
-    if ONCE_GENERATED_WARNING=1 graph_once build App/Fetch > "$WORKSPACE/generated-warning.json" 2> "$WORKSPACE/generated-warning.err"; then
+    if STRUO_GENERATED_WARNING=1 graph_struo build App/Fetch > "$WORKSPACE/generated-warning.json" 2> "$WORKSPACE/generated-warning.err"; then
       return 1
     fi
     grep -q 'error:.*Generated warning must be fatal' "$WORKSPACE/generated-warning.err" || return
-    ONCE_HEADER_VALUE=8 graph_build App/Fetch || return
+    STRUO_HEADER_VALUE=8 graph_build App/Fetch || return
     [ "$("$binary")" = '43:payload' ] || return 1
     graph_build App/Fetch || return
     [ "$("$binary")" = '42:payload' ] || return 1
 
     jq -r '.[] | select(.kind == "swift_package_build_tools" and .attrs.target_name == "Generated" and .attrs.build_role == "destination") | .attrs |
       "\n[[target]]\nname = \"NoTraits\"\nkind = \"swift_package_build_tools\"\n[target.attrs]\npackage_path = \(.package_path | @json)\ntarget_name = \"Generated\"\ndeclares_traits = true\n[target.attrs.dependencies]\n" +
-      (.dependencies | to_entries | map("\(.key | @json) = \(.value | @json)") | join("\n"))' "$WORKSPACE/graph.json" >> "$WORKSPACE/once.toml"
+      (.dependencies | to_entries | map("\(.key | @json) = \(.value | @json)") | join("\n"))' "$WORKSPACE/graph.json" >> "$WORKSPACE/struo.toml"
     graph_build NoTraits || return
-    grep -q 'buildToolValue = 140' "$(find "$WORKSPACE/.once/out/NoTraits" -path '*/Generated/destination/*/Build.swift')" || return
+    grep -q 'buildToolValue = 140' "$(find "$WORKSPACE/.struo/out/NoTraits" -path '*/Generated/destination/*/Build.swift')" || return
 
     sed '/.macro(name: "HostProbe"/d; /.testTarget(name: "HostProbeTests"/d' "$WORKSPACE/App/Packages/Generated/Package.swift" > "$WORKSPACE/manifest.tmp"
     mv "$WORKSPACE/manifest.tmp" "$WORKSPACE/App/Packages/Generated/Package.swift"
     host_library="$(jq -r 'to_entries[] | select(.value.kind == "apple_library" and .value.attrs.module_name == "Generated" and (.key | endswith("_MacroHost"))) | .key' "$WORKSPACE/graph.json")"
     graph_build "$host_library" || return
-    [ -s "$WORKSPACE/.once/out/$host_library/Generated.a" ] || return 1
+    [ -s "$WORKSPACE/.struo/out/$host_library/Generated.a" ] || return 1
 
     printf '\n#warning "Nested warning must be fatal"\n' >> "$WORKSPACE/App/Packages/Generated/Sources/CGenerated/Nested/Value.c"
-    if graph_once build App/Fetch > "$WORKSPACE/warning.json" 2> "$WORKSPACE/warning.err"; then
+    if graph_struo build App/Fetch > "$WORKSPACE/warning.json" 2> "$WORKSPACE/warning.err"; then
       return 1
     fi
     grep -q 'error:.*Nested warning must be fatal' "$WORKSPACE/warning.err" || return
@@ -274,14 +274,14 @@ SWIFT
     perl -pi -e 's/prebuildValue = 2/prebuildValue = 3/' "$WORKSPACE/App/Packages/Generated/Tools/prebuild.swift"
     graph_build App/Fetch || return
     [ "$("$binary")" = '44:payload' ] || return 1
-    perl -pi -e 's/Development/InternalBeta/' "$WORKSPACE/App/once.toml"
+    perl -pi -e 's/Development/InternalBeta/' "$WORKSPACE/App/struo.toml"
     graph_build App/Fetch || return
     [ "$("$binary")" = '44:payload' ] || return 1
 
-    rm -rf "$WORKSPACE/.once/out"
+    rm -rf "$WORKSPACE/.struo/out"
     graph_build App/Fetch || return
     [ "$("$binary")" = '44:payload' ] || return 1
-    if ONCE_PLUGIN_FAIL=1 graph_once build App/Fetch > "$WORKSPACE/failure.json" 2> "$WORKSPACE/failure.err"; then
+    if STRUO_PLUGIN_FAIL=1 graph_struo build App/Fetch > "$WORKSPACE/failure.json" 2> "$WORKSPACE/failure.err"; then
       return 1
     fi
     grep -q 'Requested lint failure' "$WORKSPACE/failure.err"

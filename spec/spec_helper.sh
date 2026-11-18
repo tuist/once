@@ -2,23 +2,23 @@
 # Shared shellspec helpers.
 
 REPO_ROOT="$(cd "$SHELLSPEC_PROJECT_ROOT" && pwd)"
-ONCE_BIN="${ONCE_BIN:-${REPO_ROOT}/target/release/once}"
+STRUO_BIN="${STRUO_BIN:-${REPO_ROOT}/target/release/struo}"
 # Resolve before HOME isolation makes mise shims lose their configuration.
 SPEC_PYTHON3="${SPEC_PYTHON3:-$(python3 -c 'import sys; print(sys.executable)')}"
-export REPO_ROOT ONCE_BIN SPEC_PYTHON3
+export REPO_ROOT STRUO_BIN SPEC_PYTHON3
 
 spec_helper_precheck() {
-  if [ ! -x "$ONCE_BIN" ]; then
-    abort "once binary missing at $ONCE_BIN - run 'cargo build --release' first"
+  if [ ! -x "$STRUO_BIN" ]; then
+    abort "struo binary missing at $STRUO_BIN - run 'cargo build --release' first"
   fi
 }
 
 spec_helper_loaded() { :; }
 
 setup_workspace() {
-  SPEC_ROOT="$(mktemp -d -t once-spec.XXXXXX)"
+  SPEC_ROOT="$(mktemp -d -t struo-spec.XXXXXX)"
   WORKSPACE="$SPEC_ROOT/workspace"
-  # Per-test XDG roots and HOME so once's CAS, runtime sockets, session
+  # Per-test XDG roots and HOME so struo's CAS, runtime sockets, session
   # logs, and materialized data land under the test's tempdir instead of
   # the user's real home. They sit beside the workspace, not inside it: a
   # fixture whose package root is the workspace globs `./**/*`, and the
@@ -35,8 +35,8 @@ setup_workspace() {
   HOME="$SPEC_ROOT/home"
   mkdir -p "$WORKSPACE" "$XDG_CACHE_HOME" "$XDG_STATE_HOME" "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" "$XDG_RUNTIME_DIR" "$HOME"
   export SPEC_ROOT WORKSPACE XDG_CACHE_HOME XDG_STATE_HOME XDG_DATA_HOME XDG_CONFIG_HOME XDG_RUNTIME_DIR HOME SPEC_ORIGINAL_HOME
-  if [ "${ONCE_RUN_MICROSANDBOX_SPECS:-}" = "1" ]; then
-    MSB_HOME="$(mktemp -d /tmp/once-msb.XXXXXX)"
+  if [ "${STRUO_RUN_MICROSANDBOX_SPECS:-}" = "1" ]; then
+    MSB_HOME="$(mktemp -d /tmp/struo-msb.XXXXXX)"
     if [ -z "${MSB_PATH:-}" ] && [ -x "$SPEC_ORIGINAL_HOME/.microsandbox/bin/msb" ]; then
       MSB_PATH="$SPEC_ORIGINAL_HOME/.microsandbox/bin/msb"
     fi
@@ -46,7 +46,7 @@ setup_workspace() {
 
 cleanup_workspace() {
   case "${MSB_HOME:-}" in
-    /tmp/once-msb.*)
+    /tmp/struo-msb.*)
       rm -rf -- "$MSB_HOME"
       ;;
   esac
@@ -104,21 +104,21 @@ wait_for_server_file() {
   done
 }
 
-once() {
-  "$ONCE_BIN" -C "$WORKSPACE" "$@"
+struo() {
+  "$STRUO_BIN" -C "$WORKSPACE" "$@"
 }
 
-once_log_dir() {
+struo_log_dir() {
   case "$(uname -s)" in
     Darwin)
-      printf '%s\n' "$HOME/Library/Logs/Once"
+      printf '%s\n' "$HOME/Library/Logs/Struo"
       ;;
     *)
-      printf '%s\n' "$XDG_STATE_HOME/once/logs"
+      printf '%s\n' "$XDG_STATE_HOME/struo/logs"
       ;;
   esac
 }
 
 microsandbox_specs_disabled() {
-  [ "${ONCE_RUN_MICROSANDBOX_SPECS:-}" != "1" ]
+  [ "${STRUO_RUN_MICROSANDBOX_SPECS:-}" != "1" ]
 }

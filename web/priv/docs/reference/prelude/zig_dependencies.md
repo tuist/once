@@ -2,7 +2,7 @@
 
 Imports the locked package graph from `build.zig.zon` and exposes its direct
 packages as one Zig dependency set. Zig remains authoritative for package
-identity and content verification. Once creates ordinary synthetic targets
+identity and content verification. Struo creates ordinary synthetic targets
 from already materialized source directories and does not fetch packages during
 a build.
 
@@ -55,7 +55,7 @@ main = "src/main.zig"
 
 Remote packages should be materialized under the vendor directory using the
 content multihash recorded in the manifest. Run Zig's native fetch workflow to
-verify that hash before committing the materialized source. Once includes the
+verify that hash before committing the materialized source. Struo includes the
 actual source contents in build action keys. Local path dependencies are
 resolved relative to the manifest that declares them. Use `package_paths` when
 the source layout differs and `module_paths` when the public module is not

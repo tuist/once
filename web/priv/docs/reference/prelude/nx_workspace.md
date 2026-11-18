@@ -10,13 +10,13 @@ and task pair. Dependency edges honor Nx's `dependsOn`, including the
 upstream `^` form and the object form.
 
 Nx remains authoritative for project discovery, task configuration, named
-inputs, and executor semantics. Once schedules and caches the tasks it
+inputs, and executor semantics. Struo schedules and caches the tasks it
 emits without shelling back into `nx run`. Tasks whose executor is
 `nx:run-commands` (or its `@nx/` / `@nrwl/` aliases) or `nx:run-script`
 run their underlying command directly. Other executors run through the
 installed Nx `runExecutor` API with the resolved graph and default
 configuration, without Nx's scheduler or cache. Tasks named `test` become
-`nx_test` targets with cacheable suite-level batches through `once test`.
+`nx_test` targets with cacheable suite-level batches through `struo test`.
 
 The default task filter emits every `build`, `test`, and `lint` task in
 the graph, together with their transitive `dependsOn` tasks. For example,
@@ -31,8 +31,8 @@ the empty list to include every task Nx reports.
 | `node` | string | no | `node` | Node.js executable name, absolute path, or workspace-relative path |
 | `targets` | list&lt;string&gt; | no | `["build", "test", "lint"]` | Nx task names to emit with their transitive task dependencies; empty list includes every task |
 | `resolver_inputs` | list&lt;string&gt; | no | `srcs` | Text inputs available while deriving the graph |
-| `graph_file` | string | no |  | Optional workspace-relative Nx project-graph JSON snapshot; include external package nodes for plugin execution. Once reads it directly instead of invoking Nx |
-| `_default_test_roots` | list&lt;string&gt; | no | `[]` | Resolver-owned application and library test names selected by targetless `once test` |
+| `graph_file` | string | no |  | Optional workspace-relative Nx project-graph JSON snapshot; include external package nodes for plugin execution. Struo reads it directly instead of invoking Nx |
+| `_default_test_roots` | list&lt;string&gt; | no | `[]` | Resolver-owned application and library test names selected by targetless `struo test` |
 
 ## Providers
 
@@ -53,16 +53,16 @@ manager (npm, pnpm, yarn, or bun) so that `node_modules/nx` is present:
 npm install
 ```
 
-Once never installs Node.js dependencies or updates lock files.
+Struo never installs Node.js dependencies or updates lock files.
 
 Inspect the automatically derived graph:
 
 ```sh
-once query workspace
-once query targets --kind nx_task
+struo query workspace
+struo query targets --kind nx_task
 ```
 
-No `once.toml` is required. To configure the resolver explicitly, author a
+No `struo.toml` is required. To configure the resolver explicitly, author a
 target equivalent to:
 
 ```toml
@@ -75,7 +75,7 @@ srcs = ["nx.json", "package.json"]
 resolver_inputs = ["nx.json", "package.json", "**/project.json", "**/package.json"]
 ```
 
-Keep this seed as the only Once target while Nx's graph describes the
+Keep this seed as the only Struo target while Nx's graph describes the
 workspace. Add explicit targets beside it only for exceptional boundaries
 that Nx does not cover.
 
@@ -84,4 +84,4 @@ that Nx does not cover.
 - [`nx graph`](https://nx.dev/nx-api/nx/documents/graph) defines the
   project graph consumed by the native integration.
 - [Nx executors](https://nx.dev/concepts/executors-and-configurations)
-  describe the per-task contract Once translates.
+  describe the per-task contract Struo translates.

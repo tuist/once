@@ -4,8 +4,8 @@ This records implementation work following the
 [failure analysis](0014-executor-failure-modes.md) and
 [executor model](0014-executors-and-resource-domains.md). It distinguishes
 safeguards for existing execution paths from acceptance criteria for features
-Once does not yet implement. It does not authorize broader cache equivalence,
-remote graph placement, speculative execution, or an exactly-once claim.
+Struo does not yet implement. It does not authorize broader cache equivalence,
+remote graph placement, speculative execution, or an exactly-struo claim.
 
 ## Design Iteration
 
@@ -111,7 +111,7 @@ exact expansion planning and throughput-aware policy remain future improvements.
 
 ### Hosted Ownership
 
-Each managed create persists an intent under `.once/executors`, attaches a unique
+Each managed create persists an intent under `.struo/executors`, attaches a unique
 metadata/label marker, then persists returned sandbox IDs before handing ownership
 back. The create task survives subscriber cancellation and cleans up late responses.
 Deletion retains admission through bounded attempts and keeps failed/uncertain
@@ -321,11 +321,11 @@ Before the graph caller-ownership follow-up, the combined tree passed:
   unit tests, cache fault/persistence tests and the cancellation/graph integration
   suites. Ignored child-process helpers are exercised by their parent tests;
   live-endpoint and unrelated opt-in tests retain their own gates.
-- `mise exec -- cargo test -p once-core --all-targets --no-default-features`.
+- `mise exec -- cargo test -p struo-core --all-targets --no-default-features`.
 - Workspace and no-default-feature core Clippy with `--all-targets -- -D warnings`.
 - `mise exec -- cargo fmt --all -- --check` and `git diff --check`.
 - `mise exec -- cargo build --release`.
-- `ONCE_RUN_MICROSANDBOX_SPECS=1 mise exec -- shellspec`: 328 examples, zero
+- `STRUO_RUN_MICROSANDBOX_SPECS=1 mise exec -- shellspec`: 328 examples, zero
   failures, seven unrelated Cargo/container opt-in skips. All three real
   Microsandbox execution/input-output/cache-restoration examples ran.
 
@@ -343,11 +343,11 @@ The caller-ownership corrected tree, before the later fingerprint-only fixes, pa
 
 - `mise exec -- cargo test --workspace`: 425 core unit tests and 532 CLI unit
   tests passed, together with workspace integration and documentation tests.
-- `mise exec -- cargo test -p once-core --all-targets --no-default-features`.
+- `mise exec -- cargo test -p struo-core --all-targets --no-default-features`.
 - Workspace and no-default-feature core Clippy with `--all-targets -- -D warnings`.
 - `mise exec -- cargo fmt --all -- --check` and `git diff --check`.
 - `mise exec -- cargo build --release`.
-- `ONCE_RUN_MICROSANDBOX_SPECS=1 mise exec -- shellspec`: 328 examples, zero
+- `STRUO_RUN_MICROSANDBOX_SPECS=1 mise exec -- shellspec`: 328 examples, zero
   failures, seven unrelated Cargo/container opt-in skips. Real Microsandbox
   execution, input/output transfer and cache restoration ran.
 
@@ -380,12 +380,12 @@ The final settled tree passed:
 
 - `mise exec -- cargo test --workspace`: 549 CLI unit tests and 425 core unit
   tests passed, together with workspace integration and documentation tests.
-- `mise exec -- cargo test -p once-core --all-targets --no-default-features`.
+- `mise exec -- cargo test -p struo-core --all-targets --no-default-features`.
 - `mise exec -- cargo clippy --workspace --all-targets -- -D warnings`.
-- `mise exec -- cargo clippy -p once-core --all-targets --no-default-features -- -D warnings`.
+- `mise exec -- cargo clippy -p struo-core --all-targets --no-default-features -- -D warnings`.
 - `mise exec -- cargo fmt --all -- --check` and `git diff --check`.
 - `mise exec -- cargo build --release`, rebuilt after the final production edits.
-- `ONCE_RUN_MICROSANDBOX_SPECS=1 mise exec -- shellspec`: 328 examples, zero
+- `STRUO_RUN_MICROSANDBOX_SPECS=1 mise exec -- shellspec`: 328 examples, zero
   failures, seven existing Cargo/container skips, 823.11 seconds. Live
   Microsandbox execution, declared input/output transfer and cache restoration ran.
 
@@ -418,12 +418,12 @@ The integrated settled tree passed:
 
 - `mise exec -- cargo test --workspace`: 579 CLI, 471 core, and 262 CAS unit
   tests passed, together with workspace integration and documentation tests.
-- `mise exec -- cargo test -p once-core --all-targets --no-default-features`.
+- `mise exec -- cargo test -p struo-core --all-targets --no-default-features`.
 - `mise exec -- cargo clippy --workspace --all-targets -- -D warnings`.
-- `mise exec -- cargo clippy -p once-core --all-targets --no-default-features -- -D warnings`.
+- `mise exec -- cargo clippy -p struo-core --all-targets --no-default-features -- -D warnings`.
 - `mise exec -- cargo fmt --all -- --check` and `git diff --check`.
 - `mise exec -- cargo build --release`, rebuilt after the production changes.
-- `ONCE_RUN_MICROSANDBOX_SPECS=1 mise exec -- shellspec`: 328 examples, zero
+- `STRUO_RUN_MICROSANDBOX_SPECS=1 mise exec -- shellspec`: 328 examples, zero
   failures, seven existing Cargo/container skips, 614.30 seconds.
 
 The earlier adversarial review applies to its reviewed tree. These integration
