@@ -414,6 +414,9 @@ jobs:
       # Tuist's Linux image does not ship the ALSA runtime the binary loads.
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
+      # Bazel test actions need GNU timeout, which Tuist's macOS image lacks.
+      - if: runner.os == 'macOS'
+        run: brew install coreutils
       - uses: actions/download-artifact@v8
         with:
           name: once-${{ matrix.os }}
