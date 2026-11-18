@@ -136,7 +136,22 @@ try:
     literal = run('exec', '--', sys.executable, '-c', 'import sys; print(sys.argv[1])', '__change-tracker')
     assert '__change-tracker' in literal.stdout, literal
     # The private launcher lets the user-facing executable be replaced while the daemon lives.
-    shutil.copyfile(original_binary, binary)
+    try:
+        shutil.copyfile(original_binary, binary)
+    except OSError as error:
+        # Name whatever still executes the user-facing binary, since the
+        # tracker should only ever run from its private launcher copy.
+        holders = []
+        for entry in pathlib.Path('/proc').glob('[0-9]*'):
+            try:
+                if os.path.realpath(entry / 'exe') != os.path.realpath(binary):
+                    continue
+                cmdline = (entry / 'cmdline').read_bytes().replace(b'\0', b' ').decode(errors='replace')
+                parent = next(line.split()[1] for line in (entry / 'status').read_text().splitlines() if line.startswith('PPid:'))
+                holders.append(f'pid {entry.name} (parent {parent}): {cmdline}')
+            except (OSError, StopIteration):
+                continue
+        raise AssertionError(('binary still executing', error, holders or 'no /proc holder found'))
     run('build', 'app')
     print('daemon startup, inherited pipe EOF, read-only stability, mutations and barriers verified')
     print('high descriptor above reduced soft limit verified' if high_fd is not None else 'high descriptor unavailable under hard limit')
