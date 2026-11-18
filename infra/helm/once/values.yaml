@@ -16,7 +16,7 @@ host: buildonce.dev
 docsHost: docs.buildonce.dev
 
 image:
-  repository: ghcr.io/tuist/once-web
+  repository: ghcr.io/tuist/struo-web
   tag: ""
   pullPolicy: IfNotPresent
   # The image is published publicly on GHCR, so no pull secret is needed.

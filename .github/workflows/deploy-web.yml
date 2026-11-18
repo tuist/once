@@ -24,7 +24,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: tuist/once-web
+  IMAGE_NAME: tuist/struo-web
   HELM_CHART_PATH: infra/helm/once
   HELM_RELEASE_NAME: once
   NAMESPACE: once-production
@@ -55,11 +55,7 @@ jobs:
           file: ./web/Dockerfile
           push: true
           platforms: linux/amd64
-          # The cluster still pulls once-web; struo-web is pushed alongside it
-          # until the new package is confirmed public.
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.image_tag }}
-            ${{ env.REGISTRY }}/tuist/struo-web:${{ steps.tag.outputs.image_tag }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.image_tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
