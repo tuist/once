@@ -45,54 +45,7 @@ pub fn load_workspace_with_configuration(
     configuration: &BuildConfiguration,
 ) -> Result<Vec<Target>> {
     let scan = load_workspace_scan_with_configuration(root, configuration)?;
-    let walker = WalkDir::new(root)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|entry| {
-            if entry.depth() == 0 {
-                return true;
-            }
-            let visible = entry
-                .file_name()
-                .to_str()
-                .is_none_or(|name| !name.starts_with('.'));
-            visible
-                && (!entry.file_type().is_dir()
-                    || scan.includes_native_project_dir(
-                        &entry
-                            .path()
-                            .strip_prefix(root)
-                            .unwrap_or(entry.path())
-                            .to_string_lossy(),
-                        entry.depth(),
-                    ))
-        });
-    let mut entries: Vec<(String, PathBuf)> = Vec::new();
-    for entry in walker {
-        let entry = entry.map_err(|source| Error::Walk {
-            root: root.display().to_string(),
-            source,
-        })?;
-        if entry.file_type().is_file() && is_manifest_file(entry.file_name().to_str()) {
-            let rel_path = entry
-                .path()
-                .strip_prefix(root)
-                .unwrap_or(entry.path())
-                .to_string_lossy()
-                .replace(std::path::MAIN_SEPARATOR, "/");
-            if !scan.includes(&rel_path) {
-                continue;
-            }
-            let parent = entry.path().parent().unwrap_or(root);
-            let pkg = parent
-                .strip_prefix(root)
-                .unwrap_or(parent)
-                .to_string_lossy()
-                .replace(std::path::MAIN_SEPARATOR, "/");
-            entries.push((pkg, entry.into_path()));
-        }
-    }
-    entries.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    let entries = manifest_entries(root, &scan)?;
 
     let mut all = Vec::new();
     for (pkg, path) in entries {
@@ -339,6 +292,62 @@ pub fn load_infrastructure_config(root: &Path) -> Result<InfrastructureConfig> {
 /// on-disk provider.
 pub fn load_cache_provider(root: &Path) -> Result<CacheProviderConfig> {
     Ok(load_cache_provider_override(root)?.unwrap_or(CacheProviderConfig::Local))
+}
+
+/// Every `once.toml` the workspace loads, as its package and path, sorted.
+pub(crate) fn manifest_entries(
+    root: &Path,
+    scan: &WorkspaceScan,
+) -> Result<Vec<(String, PathBuf)>> {
+    let walker = WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| {
+            if entry.depth() == 0 {
+                return true;
+            }
+            let visible = entry
+                .file_name()
+                .to_str()
+                .is_none_or(|name| !name.starts_with('.'));
+            visible
+                && (!entry.file_type().is_dir()
+                    || scan.includes_native_project_dir(
+                        &entry
+                            .path()
+                            .strip_prefix(root)
+                            .unwrap_or(entry.path())
+                            .to_string_lossy(),
+                        entry.depth(),
+                    ))
+        });
+    let mut entries: Vec<(String, PathBuf)> = Vec::new();
+    for entry in walker {
+        let entry = entry.map_err(|source| Error::Walk {
+            root: root.display().to_string(),
+            source,
+        })?;
+        if entry.file_type().is_file() && is_manifest_file(entry.file_name().to_str()) {
+            let rel_path = entry
+                .path()
+                .strip_prefix(root)
+                .unwrap_or(entry.path())
+                .to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/");
+            if !scan.includes(&rel_path) {
+                continue;
+            }
+            let parent = entry.path().parent().unwrap_or(root);
+            let pkg = parent
+                .strip_prefix(root)
+                .unwrap_or(parent)
+                .to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/");
+            entries.push((pkg, entry.into_path()));
+        }
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    Ok(entries)
 }
 
 fn is_manifest_file(name: Option<&str>) -> bool {

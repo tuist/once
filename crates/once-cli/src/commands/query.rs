@@ -2,10 +2,12 @@
 
 mod expression;
 mod external_source;
+mod graph_repro;
 mod script;
 pub(crate) mod test_case;
 pub(crate) mod test_plan;
 
+pub(crate) use graph_repro::{graph_repro, graph_repro_value};
 pub(crate) use script::script_validation_value;
 pub(crate) use test_case::test_case_value;
 
@@ -174,11 +176,18 @@ fn workspace_summary(workspace: &Path) -> WorkspaceSummary {
             packages: Vec::new(),
             empty: false,
             load_error: Some(error.to_string()),
-            suggested_calls: vec![serde_json::json!({
-                "tool": "once_validate_workspace",
-                "arguments": {},
-                "reason": "Inspect the workspace loading or validation failure."
-            })],
+            suggested_calls: vec![
+                serde_json::json!({
+                    "tool": "once_validate_workspace",
+                    "arguments": {},
+                    "reason": "Inspect the workspace loading or validation failure."
+                }),
+                serde_json::json!({
+                    "tool": "once_export_graph_repro",
+                    "arguments": {},
+                    "reason": "When a native project fails to load, suggest that the user export a redacted reproduction without source code."
+                }),
+            ],
         },
     }
 }

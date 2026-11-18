@@ -1578,6 +1578,41 @@ Returns the same record as `once query graph-fingerprint --format json`: a singl
 }
 ```
 
+## `once_export_graph_repro`
+
+Export a redacted reproduction of the workspace's native projects and draft an issue to report a graph problem.
+
+Requires `once mcp --allow-run`. Matches `once query graph-repro --format json`. Use it when a native project's graph fails to load or disagrees with what the native build system builds, instead of changing the project to work around Once. Writes `.once/graph-repro`, replacing only the files of an earlier export there, and shares nothing. `workspace/` mirrors every native project: files matching the native project's declared manifests keep their contents, and every other file becomes an empty placeholder at the same path, so globs and resolvers see the same tree without source code. `repro.json` records the Once version, host platform, the loaded graph with absolute workspace and home paths replaced by `$WORKSPACE` and `$HOME`, diagnostics, and the loading error when there is one. Credentials in copied URLs and values of environment attributes are replaced with `<redacted>`. `ISSUE.md` drafts an issue from those facts alone, and `graph-repro.tar.gz` packs the export to attach to it. The result's `issue` gives the repository, title, body file, and a prefilled link. Ask the user to review the copied files and `repro.json` before opening the issue, and to attach the archive in the browser.
+
+**Input schema**
+
+```json
+{
+  "type": "object",
+  "properties": {}
+}
+```
+
+**Example return**
+
+```json
+{
+  "schema": "once.graph_repro_export.v1",
+  "directory": "/work/project/.once/graph-repro",
+  "archive": "/work/project/.once/graph-repro/graph-repro.tar.gz",
+  "copied": ["project.lock", "project.native"],
+  "redacted_count": 42,
+  "target_count": null,
+  "load_error": "loading graph: target kind resolver failed for `native`",
+  "issue": {
+    "repository": "tuist/once",
+    "title": "Native graph fails to load: native",
+    "body_path": "/work/project/.once/graph-repro/ISSUE.md",
+    "url": "https://github.com/tuist/once/issues/new?title=..."
+  }
+}
+```
+
 ## `once_validate_script`
 
 Parse and validate an annotated script's cache contract.

@@ -48,15 +48,18 @@ fn format_human_error(verbose: u8, error: &anyhow::Error) -> String {
         // (clippy::format_push_string); the write is infallible on a String.
         let _ = writeln!(out, "  while {frame}");
     }
+    for repair in once_frontend::analysis::AnalysisFailure::find(error)
+        .into_iter()
+        .flat_map(|failure| &failure.diagnostic.repairs)
+    {
+        let _ = writeln!(out, "  repair: {repair}");
+    }
     out
 }
 
 fn structured_dispatch_error(format: cli::Format, error: &anyhow::Error) -> String {
-    let analysis_diagnostic = error.chain().find_map(|cause| {
-        cause
-            .downcast_ref::<once_frontend::analysis::AnalysisFailure>()
-            .map(|failure| &failure.diagnostic)
-    });
+    let analysis_diagnostic =
+        once_frontend::analysis::AnalysisFailure::find(error).map(|failure| &failure.diagnostic);
     let code =
         analysis_diagnostic.map_or("operation_failed", |diagnostic| diagnostic.code.as_str());
     let envelope = serde_json::json!({
@@ -132,6 +135,43 @@ mod tests {
         let error = anyhow::anyhow!("root").context("outer");
         let out = format_human_error(0, &error);
         assert_eq!(out, "once: root\n  while outer\n");
+    }
+
+    #[test]
+    fn human_frame_lists_the_repairs_of_an_analysis_failure() {
+        let diagnostic = once_frontend::Diagnostic::new("resolver_failed", "resolver failed")
+            .with_repair("Run the native tool")
+            .with_repair("Export a reproduction");
+        let error = anyhow::Error::new(once_frontend::analysis::AnalysisFailure { diagnostic })
+            .context("loading graph");
+        let out = format_human_error(0, &error);
+        assert_eq!(
+            out,
+            "once: resolver failed\n  \
+             while loading graph\n  \
+             repair: Run the native tool\n  \
+             repair: Export a reproduction\n"
+        );
+    }
+
+    #[test]
+    fn structured_dispatch_errors_keep_a_frontend_analysis_failure() {
+        let diagnostic = once_frontend::Diagnostic::new("resolver_failed", "resolver failed")
+            .with_repair("Export a reproduction");
+        let error = anyhow::Error::new(once_frontend::Error::Analysis {
+            source: Box::new(once_frontend::analysis::AnalysisFailure { diagnostic }),
+        })
+        .context("loading graph");
+
+        let rendered = structured_dispatch_error(cli::Format::Json, &error);
+        let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+
+        assert_eq!(value["error"]["code"], "resolver_failed");
+        assert_eq!(
+            value["error"]["diagnostics"][0]["repairs"],
+            serde_json::json!(["Export a reproduction"])
+        );
+        assert!(format_human_error(0, &error).contains("repair: Export a reproduction"));
     }
 
     #[test]

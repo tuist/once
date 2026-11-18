@@ -62,7 +62,15 @@ const SERVER_INSTRUCTIONS: &str = concat!(
     "with an optional capability suffix; script execution returns its evidence subject directly. ",
     "once_validate_target checks one proposed table, once_validate_workspace checks the loaded ",
     "graph, and successful execution remains the authoritative current check. Evidence is ",
-    "historical provenance, so do not treat an older record as proof that inputs are unchanged."
+    "historical provenance, so do not treat an older record as proof that inputs are unchanged. ",
+    "When a native project's graph fails to load, or its targets, sources, or dependency edges ",
+    "disagree with what the native build system builds, the gap is in Once, not in the project: ",
+    "do not work around it with manifest edits. Offer to run once_export_graph_repro, which writes ",
+    "a copy that keeps native manifests and replaces every other file with an empty placeholder, ",
+    "an archive of it, and a drafted issue for the Once repository. Show the user the copied files ",
+    "to review, and with their approval open the issue it drafts and ask them to attach the ",
+    "archive. When working on Once itself, load an export to reproduce the gap and turn it into a ",
+    "native graph fixture with a regression test before fixing the target kind."
 );
 
 fn negotiated_protocol_version(params: Option<&Value>) -> String {
@@ -359,6 +367,9 @@ impl Server {
             "once_query_evidence" => self.tool_query_evidence(&call.arguments),
             "once_query_verification" => self.tool_query_verification(&call.arguments),
             "once_query_graph_fingerprint" => self.tool_query_graph_fingerprint(&call.arguments),
+            "once_export_graph_repro" => {
+                crate::commands::query::graph_repro_value(&self.workspace, None)
+            }
             "once_query_module_contract" => crate::commands::query::module_contract_value(),
             "once_fetch_external_source" => Self::tool_fetch_external_source(&call.arguments),
             "once_validate_module" => self.tool_validate_module(&call.arguments),
@@ -1388,11 +1399,8 @@ fn tool_error(id: Value, message: &str) -> JsonRpcResponse {
 }
 
 fn tool_error_from_error(id: Value, error: &anyhow::Error) -> JsonRpcResponse {
-    let diagnostic = error.chain().find_map(|cause| {
-        cause
-            .downcast_ref::<once_frontend::analysis::AnalysisFailure>()
-            .map(|failure| failure.diagnostic.clone())
-    });
+    let diagnostic = once_frontend::analysis::AnalysisFailure::find(error)
+        .map(|failure| failure.diagnostic.clone());
     let Some(diagnostic) = diagnostic else {
         return tool_error(id, &error.to_string());
     };

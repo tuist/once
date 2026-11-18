@@ -203,7 +203,7 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
         ],
         native_project_contract: vec![
             entry(
-                "native_project(target_kind, markers, name = None, target_name = None, docs = \"\", inputs = [], exclude = [], input_exclude = [], on_match = \"descend\", max_depth = 16, requires_tools = [])",
+                "native_project(target_kind, markers, name = None, target_name = None, docs = \"\", inputs = [], exclude = [], input_exclude = [], manifests = [], on_match = \"descend\", max_depth = 16, requires_tools = [])",
                 "Declare how Once recognizes native project roots and maps each match to one ordinary seed target.",
             ),
             entry(
@@ -225,6 +225,10 @@ pub fn module_authoring_contract() -> ModuleAuthoringContract {
             entry(
                 "input_exclude",
                 "Directory names that cannot hold a resolver input, skipped while gathering them. Separate from exclude: a vendored dependency directory is not a project of its own, yet its manifest is an input to the project that vendored it, while a build output tree or a version control directory is neither.",
+            ),
+            entry(
+                "manifests",
+                "Package-relative globs for files that describe the project's structure rather than its implementation, such as package manifests and lockfiles. Defaults to the markers. once query graph-repro copies these files and writes every other project file empty, so a graph loading problem reproduces without source code.",
             ),
             entry(
                 "explicit target precedence",

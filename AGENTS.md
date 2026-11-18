@@ -132,6 +132,21 @@ reference implementation. Treat their module-owned examples, schema
 metadata, validation, and MCP/CLI discovery shape as the template when
 wiring a new toolchain.
 
+## Native Graph Reproductions
+
+`once query graph-repro` (MCP `once_export_graph_repro`) exports a
+native project with its `manifests` copied and every other file empty,
+plus `repro.json` with the loaded graph or loading error, a drafted
+`ISSUE.md`, and `graph-repro.tar.gz` to attach to it. When a user
+reports a native graph that fails to load or disagrees with the native
+build system, ask them for this export instead of their sources. To fix
+one, load the export's `workspace/` to reproduce the gap, reduce it to a
+fixture under `fixtures/native_graphs/` or a prelude test in
+`crates/once-frontend/tests/prelude/native_graphs.rs`, confirm the test
+fails, then fix the target kind. When a resolver needs a file's contents
+to derive the graph, add its glob to that `native_project`'s `manifests`
+so later exports carry it.
+
 ## Target Names And Paths
 
 Do not invent a path-like target grammar. When a target can be

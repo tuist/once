@@ -50,6 +50,7 @@ pub(super) fn tool_requires_allow_run(name: &str) -> bool {
             | "once_edit_triggers"
             | "once_activate_triggers"
             | "once_run_trigger"
+            | "once_export_graph_repro"
     )
 }
 
@@ -72,7 +73,11 @@ fn tool_annotations(name: &str) -> Value {
         );
     let destructive = matches!(
         name,
-        "once_apply_edit" | "once_stop_runtime" | "once_edit_triggers" | "once_activate_triggers"
+        "once_apply_edit"
+            | "once_stop_runtime"
+            | "once_edit_triggers"
+            | "once_activate_triggers"
+            | "once_export_graph_repro"
     );
     let idempotent = read_only
         || matches!(
@@ -628,6 +633,16 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
                 }
             }),
             example_return: "{\n  \"schema\": \"once.graph_fingerprint.v1\",\n  \"digest\": \"a046fc32a4c232b7320b4249d630ec5a4fef9ae8c3313a65754f33cc31375676\",\n  \"target_count\": 2,\n  \"source_count\": 1,\n  \"components\": [\n    { \"category\": \"target\", \"label\": \"pkg/lib\", \"digest\": \"1111111111111111111111111111111111111111111111111111111111111111\" },\n    { \"category\": \"source\", \"label\": \"pkg/lib.rs\", \"digest\": \"2222222222222222222222222222222222222222222221111111111111111111\" },\n    { \"category\": \"toolchain\", \"label\": \"mise.toml\", \"digest\": \"3333333333333333333333333333333333333333333333333333333333333333\" }\n  ]\n}",
+        },
+        ToolDefinition {
+            name: "once_export_graph_repro",
+            description: "Export a redacted reproduction of the workspace's native projects and draft an issue to report a graph problem.",
+            long_description: "Requires `once mcp --allow-run`. Matches `once query graph-repro --format json`. Use it when a native project's graph fails to load or disagrees with what the native build system builds, instead of changing the project to work around Once. Writes `.once/graph-repro`, replacing only the files of an earlier export there, and shares nothing. `workspace/` mirrors every native project: files matching the native project's declared manifests keep their contents, and every other file becomes an empty placeholder at the same path, so globs and resolvers see the same tree without source code. `repro.json` records the Once version, host platform, the loaded graph with absolute workspace and home paths replaced by `$WORKSPACE` and `$HOME`, diagnostics, and the loading error when there is one. Credentials in copied URLs and values of environment attributes are replaced with `<redacted>`. `ISSUE.md` drafts an issue from those facts alone, and `graph-repro.tar.gz` packs the export to attach to it. The result's `issue` gives the repository, title, body file, and a prefilled link. Ask the user to review the copied files and `repro.json` before opening the issue, and to attach the archive in the browser.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {}
+            }),
+            example_return: "{\n  \"schema\": \"once.graph_repro_export.v1\",\n  \"directory\": \"/work/project/.once/graph-repro\",\n  \"archive\": \"/work/project/.once/graph-repro/graph-repro.tar.gz\",\n  \"copied\": [\"project.lock\", \"project.native\"],\n  \"redacted_count\": 42,\n  \"target_count\": null,\n  \"load_error\": \"loading graph: target kind resolver failed for `native`\",\n  \"issue\": {\n    \"repository\": \"tuist/once\",\n    \"title\": \"Native graph fails to load: native\",\n    \"body_path\": \"/work/project/.once/graph-repro/ISSUE.md\",\n    \"url\": \"https://github.com/tuist/once/issues/new?title=...\"\n  }\n}",
         },
         ToolDefinition {
             name: "once_validate_script",

@@ -4330,6 +4330,7 @@ cargo = native_project(
     # version control directory, and descending into either to find a handful
     # of manifests is the largest cost of loading a large workspace.
     input_exclude = ["target", ".git"],
+    manifests = ["Cargo.toml", "Cargo.lock", "**/Cargo.toml", ".cargo/config", ".cargo/config.toml", "rust-toolchain", "rust-toolchain.toml"],
     on_match = "stop",
     requires_tools = ["cargo", "rustc"],
 )

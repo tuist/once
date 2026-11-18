@@ -591,12 +591,39 @@ fn resolver_failure(target: &str, source: &anyhow::Error) -> Error {
     {
         Error::Analysis {
             source: Box::new(crate::analysis::AnalysisFailure {
-                diagnostic: failure.diagnostic.clone(),
+                diagnostic: with_reproduction_repair(failure.diagnostic.clone()),
             }),
         }
     } else {
-        resolution_error(target, source.to_string())
+        Error::Analysis {
+            source: Box::new(crate::analysis::AnalysisFailure {
+                diagnostic: with_reproduction_repair(
+                    crate::Diagnostic::new(
+                        "target_kind_resolver_failed",
+                        format!("resolver for `{target}` failed: {source}"),
+                    )
+                    .with_target(target),
+                ),
+            }),
+        }
     }
+}
+
+/// The repair an unexpected resolver failure carries. A failure the resolver
+/// explains itself, such as a missing tool or unfetched sources, already says
+/// what the user should do; one it does not explain may be a gap in Once, and
+/// the project's own build system is the judge of that.
+pub(crate) const REPRODUCTION_REPAIR: &str = "If the project's own build system builds it, this is a gap in Once rather than in the project: do not change the project to work around it. Tell the user, and offer to run `once query graph-repro` (MCP `once_export_graph_repro`). It exports the native manifests with every other file emptied and drafts an issue for https://github.com/tuist/once, so the user can review it and report the gap without sharing their source code.";
+
+fn with_reproduction_repair(diagnostic: crate::Diagnostic) -> crate::Diagnostic {
+    if diagnostic
+        .repairs
+        .iter()
+        .any(|repair| repair == REPRODUCTION_REPAIR)
+    {
+        return diagnostic;
+    }
+    diagnostic.with_repair(REPRODUCTION_REPAIR)
 }
 
 fn resolution_error(target: &str, message: impl Into<String>) -> Error {
@@ -853,9 +880,17 @@ resolved_set = target_kind(resolver = _resolve)
 "#,
         );
 
-        let error = crate::graph::load_graph_workspace(temp.path())
-            .unwrap_err()
-            .to_string();
+        let error = crate::graph::load_graph_workspace(temp.path()).unwrap_err();
+        let Error::Analysis { source } = &error else {
+            panic!("expected a structured resolver failure, got {error}");
+        };
+        assert_eq!(source.diagnostic.code, "target_kind_analysis_failed");
+        assert_eq!(source.diagnostic.target.as_deref(), Some("packages"));
+        assert_eq!(
+            source.diagnostic.repairs.last().map(String::as_str),
+            Some(REPRODUCTION_REPAIR)
+        );
+        let error = error.to_string();
 
         assert!(error.contains("specific resolver failure"), "{error}");
         assert!(!error.contains("declared actions or outputs"), "{error}");

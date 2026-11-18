@@ -26,6 +26,7 @@ usage.workspace = true
 console.workspace = true
 indicatif.workspace = true
 fd-lock.workspace = true
+flate2.workspace = true
 glob.workspace = true
 futures.workspace = true
 notify.workspace = true
@@ -34,6 +35,7 @@ rodio = { version = "0.23", default-features = false, features = ["playback", "t
 serde.workspace = true
 serde_json.workspace = true
 sysinfo = { workspace = true }
+tar.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 toml.workspace = true

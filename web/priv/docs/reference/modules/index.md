@@ -260,6 +260,7 @@ native = native_project(
     inputs = ["project.lock", "config/**/*"],
     exclude = ["build"],
     input_exclude = ["build", ".git"],
+    manifests = ["project.native", "project.lock", "**/module.native"],
     on_match = "stop",
     max_depth = 16,
     requires_tools = ["native-tool"],
@@ -281,6 +282,14 @@ native = native_project(
   input to the project that vendored it. A build output tree or a version
   control directory is neither, and walking one to look for inputs is the
   largest avoidable cost of loading a large workspace.
+- `manifests` lists package-relative globs for files that describe the
+  project's structure rather than its implementation, such as package
+  manifests, lockfiles, and build settings. It defaults to `markers`.
+  `once query graph-repro` copies these files when it exports a redacted
+  reproduction and writes every other file in the project as an empty
+  placeholder, skipping the directories `input_exclude` names, so name every file the resolver needs the contents of to
+  derive the same graph, and nothing that holds implementation code or
+  secrets.
 - `on_match = "stop"` keeps the shallowest matching root, which suits native
   workspaces that own nested package manifests. `"descend"` recognizes every
   nested file marker. `"all"` recognizes every matching directory, including

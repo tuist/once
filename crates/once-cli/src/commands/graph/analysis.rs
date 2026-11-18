@@ -551,17 +551,50 @@ impl BuildSession {
     }
 
     pub(super) fn target(&self, target_id: &str) -> Result<&GraphTarget> {
-        let target = self
-            .targets
-            .get(target_id)
-            .map(Arc::as_ref)
-            .with_context(|| {
-                let package = target_id.rsplit_once('/').map(|(package, _)| package);
-                let mut candidates = self.targets.keys().collect::<Vec<_>>();
-                candidates.sort_by_key(|id| (package.is_some_and(|package| !id.starts_with(&format!("{package}/"))), *id));
-                let nearby = candidates.into_iter().take(5).map(|id| format!("`{id}`")).collect::<Vec<_>>().join(", ");
-                format!("no target matches `{target_id}`; use one of these valid target selectors: {nearby}. Run `once query targets` to list the available targets")
-            })?;
+        let Some(target) = self.targets.get(target_id).map(Arc::as_ref) else {
+            let package = target_id.rsplit_once('/').map(|(package, _)| package);
+            let mut candidates = self.targets.keys().collect::<Vec<_>>();
+            candidates.sort_by_key(|id| {
+                (
+                    package.is_some_and(|package| !id.starts_with(&format!("{package}/"))),
+                    *id,
+                )
+            });
+            let nearby = candidates
+                .into_iter()
+                .take(5)
+                .map(|id| format!("`{id}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let missing = format!("no target matches `{target_id}`; use one of these valid target selectors: {nearby}. Run `once query targets` to list the available targets");
+            // A target a resolver would have emitted is missing because the
+            // resolver failed, and that failure is what the caller can act on.
+            // Only a resolver whose package contains the requested id could
+            // have emitted it; any other failure is unrelated to a typo.
+            let Some(diagnostic) = self
+                .targets
+                .values()
+                .filter(|target| {
+                    let package = &target.label.package;
+                    self.analyzer.target_kind_has_resolver(&target.kind)
+                        && (package.is_empty()
+                            || target_id == package
+                            || target_id.starts_with(&format!("{package}/")))
+                })
+                .flat_map(|target| &target.diagnostics)
+                .min_by(|left, right| left.target.cmp(&right.target))
+            else {
+                anyhow::bail!(missing);
+            };
+            return Err(
+                anyhow::Error::new(once_frontend::analysis::AnalysisFailure {
+                    diagnostic: diagnostic.clone(),
+                })
+                .context(format!(
+                    "{missing}; the graph is incomplete because a target failed to load"
+                )),
+            );
+        };
         ensure_graph_target_valid(target)?;
         Ok(target)
     }

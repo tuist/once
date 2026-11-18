@@ -75,6 +75,21 @@ pub struct AnalysisFailure {
     pub diagnostic: Diagnostic,
 }
 
+impl AnalysisFailure {
+    /// The analysis failure in `error`'s chain, if any.
+    ///
+    /// [`crate::Error::Analysis`] holds its failure boxed, and a chain yields
+    /// the box, which a plain downcast to `AnalysisFailure` does not match.
+    #[must_use]
+    pub fn find(error: &anyhow::Error) -> Option<&Self> {
+        error.chain().find_map(|cause| {
+            cause
+                .downcast_ref::<Self>()
+                .or_else(|| cause.downcast_ref::<Box<Self>>().map(AsRef::as_ref))
+        })
+    }
+}
+
 impl fmt::Display for AnalysisFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.diagnostic.message)
@@ -248,6 +263,13 @@ impl AnalysisEngine {
     #[must_use]
     pub fn target_kind_has_impl(&self, kind: &str) -> bool {
         self.target_kind_callbacks.has_impl(kind)
+    }
+
+    #[must_use]
+    pub fn target_kind_has_resolver(&self, kind: &str) -> bool {
+        self.target_kind_schemas
+            .iter()
+            .any(|schema| schema.kind == kind && schema.has_resolver())
     }
 
     pub fn load_graph_workspace(&self, root: &Path) -> Result<Vec<GraphTarget>> {

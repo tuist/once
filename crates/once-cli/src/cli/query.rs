@@ -111,6 +111,19 @@ pub enum QueryCmd {
         no_manifest: bool,
     },
 
+    /// Export a redacted copy of the workspace's native projects for reproducing graph problems.
+    ///
+    /// Copies native manifests and lockfiles, writes every other project file
+    /// as an empty placeholder at the same path, records the loaded graph or
+    /// its loading error, and drafts an issue for the Once repository with an
+    /// archive to attach. Nothing is shared. Review the copied files before
+    /// opening the issue.
+    GraphRepro {
+        /// Directory to write. Defaults to `.once/graph-repro`. An earlier export there is replaced.
+        #[usage(long, value_name = "PATH")]
+        output: Option<PathBuf>,
+    },
+
     /// List targets that expose the generic test capability.
     Tests,
 
@@ -252,6 +265,7 @@ impl QueryCmd {
             Self::Target { .. } => vec!["target"],
             Self::GraphFingerprint { .. } => vec!["graph-fingerprint"],
             Self::Artifacts { .. } => vec!["artifacts"],
+            Self::GraphRepro { .. } => vec!["graph-repro"],
             Self::Tests => vec!["tests"],
             Self::AffectedTests { .. } => vec!["affected-tests"],
             Self::TestPlan { .. } => vec!["test-plan"],

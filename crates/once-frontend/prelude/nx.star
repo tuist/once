@@ -663,6 +663,7 @@ nx = native_project(
     markers = ["nx.json"],
     target_name = "nx",
     inputs = ["package.json", "pnpm-lock.yaml", "yarn.lock", "package-lock.json", "**/project.json", "**/package.json"],
+    manifests = ["nx.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "yarn.lock", "package-lock.json", "**/project.json", "**/package.json", "**/tsconfig*.json"],
     exclude = _native_project_generated_dirs() + ["node_modules", "dist", ".nx", "tmp"],
     input_exclude = ["node_modules", ".nx", ".git", "dist", "tmp"],
     on_match = "stop",

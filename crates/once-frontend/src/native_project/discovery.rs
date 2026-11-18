@@ -365,6 +365,7 @@ mod tests {
             requires_tools: Vec::new(),
             owns_descendants: false,
             workspace_markers: Vec::new(),
+            manifests: Vec::new(),
         }
     }
 

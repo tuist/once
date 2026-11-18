@@ -9,8 +9,10 @@ use starlark::values::dict::DictRef;
 use starlark::values::list::ListRef;
 
 mod discovery;
+mod export;
 mod invocation;
 
+pub use export::{export_native_projects, ExportedNativeProject, NativeProjectExport};
 pub use invocation::{native_invocation, NativeInvocation};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -31,6 +33,11 @@ pub(crate) struct NativeProjectSchema {
     /// that cannot hold an input under any reading: a build output tree, a
     /// version control directory.
     pub(crate) input_exclude: Vec<String>,
+    /// Package-relative globs for files whose contents describe the project's
+    /// structure rather than its implementation, such as package manifests and
+    /// lockfiles. A graph export copies these and redacts every other file.
+    /// Defaults to the markers.
+    pub(crate) manifests: Vec<String>,
     pub(crate) on_match: String,
     pub(crate) max_depth: usize,
     pub(crate) requires_tools: Vec<String>,
@@ -208,6 +215,10 @@ fn native_project_schema(name: String, dict: &DictRef<'_>) -> Result<NativeProje
     let inputs = string_list(dict, "inputs")?;
     let exclude = string_list(dict, "exclude")?;
     let input_exclude = string_list(dict, "input_exclude")?;
+    let mut manifests = string_list(dict, "manifests")?;
+    if manifests.is_empty() {
+        manifests.clone_from(&markers);
+    }
     let on_match = required_string(dict, "on_match")?;
     if on_match != "stop" && on_match != "descend" && on_match != "all" {
         return Err(native_project_error(
@@ -243,7 +254,7 @@ fn native_project_schema(name: String, dict: &DictRef<'_>) -> Result<NativeProje
     for excluded in exclude.iter().chain(input_exclude.iter()) {
         validate_relative_literal(&name, "excluded directory", excluded)?;
     }
-    for input in &inputs {
+    for input in inputs.iter().chain(manifests.iter()) {
         validate_source_pattern(&name, input)?;
     }
     Ok(NativeProjectSchema {
@@ -255,6 +266,7 @@ fn native_project_schema(name: String, dict: &DictRef<'_>) -> Result<NativeProje
         inputs,
         exclude,
         input_exclude,
+        manifests,
         on_match,
         max_depth,
         requires_tools,

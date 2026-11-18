@@ -3610,6 +3610,8 @@ mix = native_project(
     markers = ["mix.exs"],
     workspace_markers = [".git"],
     inputs = ["mix.lock", ".formatter.exs", "config/**/*.exs"],
+    manifests = ["**/mix.exs", "**/mix.lock", "**/.formatter.exs"],
+    input_exclude = ["_build", ".elixir_ls", ".git"],
     exclude = _native_project_generated_dirs(),
     requires_tools = ["elixir"],
 )

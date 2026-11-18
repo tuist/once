@@ -557,4 +557,5 @@ dockerfile = native_project(
     markers = ["Dockerfile"],
     target_name = "image",
     exclude = _native_project_generated_dirs() + [".git", ".once", "node_modules", ".build"],
+    manifests = ["Dockerfile", "**/Dockerfile", "**/*.Dockerfile", ".dockerignore", "**/.dockerignore"],
 )

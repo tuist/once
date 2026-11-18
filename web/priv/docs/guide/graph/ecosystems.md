@@ -175,3 +175,50 @@ Unsupported does not have to mean blocked. Keep that behavior in a script,
 define a checked-in local module, or contribute the missing typed behavior.
 The important part is to keep the boundary visible so readers and agents can
 tell which system owns each step.
+
+## Report a Native Graph That Loads Wrong
+
+When Once derives a project's graph from its native manifests and the result
+fails to load, or its targets, sources, or dependency edges disagree with what
+the native build system builds, export a redacted reproduction:
+
+```sh
+once query graph-repro
+```
+
+The export lands in `.once/graph-repro`. Its `workspace` directory mirrors
+every native project Once discovered: manifests and lockfiles keep their
+contents, and every other file is empty at the same path, so the graph loads
+the same way without any source code. Credentials in URLs, such as a private
+registry's, are replaced with `<redacted>` in copied files. `repro.json` records the Once version,
+the host platform, and the graph Once loaded or the error that stopped it, with
+absolute workspace and home directory paths replaced by `$WORKSPACE` and
+`$HOME`, and the values of environment attributes replaced with `<redacted>`.
+Running the export again replaces only the files an earlier export wrote.
+
+The export also drafts the report. `ISSUE.md` holds an issue for the
+[Once repository](https://github.com/tuist/once/issues) built only from the
+facts above, and `graph-repro.tar.gz` packs the whole export to attach to it.
+The command prints a link that opens the issue prefilled. Nothing is shared
+until you open it.
+
+Review the copied files and `repro.json` before opening the issue, since a
+manifest or an attribute can still name private hosts or hold a secret the
+export did not recognize. Then describe what the native build system builds
+that Once gets wrong, open the issue, and attach the archive. With the GitHub
+CLI:
+
+```sh
+gh issue create --repo tuist/once --title "..." --body-file .once/graph-repro/ISSUE.md
+```
+
+GitHub accepts attachments only in the browser, so add the archive there.
+
+Most of the time a coding agent finds the gap first. When a resolver fails in
+a way it does not explain itself, the error carries a repair that tells the agent not to change the project to
+work around it, and to offer you this export and the issue it drafts instead. The repair appears in
+human output, in the structured error of `--format json`, and in
+[`once mcp`](/reference/mcp/) tool errors. Agents connected through `once mcp --allow-run`
+can run the export with the `once_export_graph_repro` tool, and are told to
+suggest it when a graph loads without errors but disagrees with the native
+build system.

@@ -645,7 +645,24 @@ async fn dispatch_test(workspace: &Path, xdg: &Xdg, args: TestDispatchArgs) -> R
                 .filter(once_frontend::TargetKindSchema::has_resolver)
                 .map(|schema| schema.kind)
                 .collect();
-            commands::query::default_test_plan_with_graph(workspace, &graph, &resolver_kinds)?
+            let plan =
+                commands::query::default_test_plan_with_graph(workspace, &graph, &resolver_kinds)?;
+            // With nothing selected, an empty plan means a resolver that would
+            // have emitted the tests failed, and that failure is the answer.
+            if plan.batches.is_empty() {
+                if let Some(diagnostic) = graph
+                    .iter()
+                    .filter(|target| resolver_kinds.contains(&target.kind))
+                    .flat_map(|target| &target.diagnostics)
+                    .next()
+                {
+                    return Err(once_frontend::analysis::AnalysisFailure {
+                        diagnostic: diagnostic.clone(),
+                    }
+                    .into());
+                }
+            }
+            plan
         }
     };
     Box::pin(commands::test_schedule::run(
@@ -755,6 +772,11 @@ async fn run_query_command(
                 include_manifest: !no_manifest,
             };
             commands::query::graph_fingerprint(workspace, output, options)
+                .await
+                .map(|()| ExitCode::SUCCESS)
+        }
+        Some(cli::QueryCmd::GraphRepro { output: directory }) => {
+            commands::query::graph_repro(workspace, output, directory.as_deref())
                 .await
                 .map(|()| ExitCode::SUCCESS)
         }
