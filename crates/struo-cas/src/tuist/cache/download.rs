@@ -9,7 +9,6 @@
 //! message, and transfers are bounded by the transfer semaphore, regardless
 //! of the sizes a remote entry declares.
 
-use sha2::Digest as _;
 use tokio::io::AsyncWriteExt;
 
 use super::*;

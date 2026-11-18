@@ -50,7 +50,7 @@ emit()
     let (store, ()) = with_active_store(store_for(tmp.path(), "pkg"), || {
         run(&source).unwrap();
     });
-    for actions in store.actions.chunks_exact(4) {
+    for actions in store.actions.as_chunks::<4>().0 {
         assert!(actions[0].history.is_some());
         assert_eq!(actions[0].history, actions[1].history);
         assert_ne!(actions[0].history, actions[2].history);

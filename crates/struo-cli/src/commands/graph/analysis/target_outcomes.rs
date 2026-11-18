@@ -358,7 +358,7 @@ impl TargetOutcomes {
             .with_extension(format!("json.tmp-{}", std::process::id()));
         // Large workspaces record tens of megabytes of outcomes; stream them to
         // the file rather than building the whole document in memory first.
-        let written = std::fs::File::create(&temporary).ok().is_some_and(|file| {
+        let written = std::fs::File::create(&temporary).is_ok_and(|file| {
             let mut writer = std::io::BufWriter::new(file);
             let stored = StoredRef {
                 schema: SCHEMA,
