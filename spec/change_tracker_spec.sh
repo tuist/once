@@ -140,18 +140,34 @@ try:
         shutil.copyfile(original_binary, binary)
     except OSError as error:
         # Name whatever still executes the user-facing binary, since the
-        # tracker should only ever run from its private launcher copy.
-        holders = []
-        for entry in pathlib.Path('/proc').glob('[0-9]*'):
-            try:
-                if os.path.realpath(entry / 'exe') != os.path.realpath(binary):
+        # tracker should only ever run from its private launcher copy. The
+        # holder may be short-lived, so keep looking until the file frees up.
+        def holders():
+            found = []
+            for entry in pathlib.Path('/proc').glob('[0-9]*'):
+                try:
+                    cmdline = (entry / 'cmdline').read_bytes().replace(b'\0', b' ').decode(errors='replace')
+                    parent = next(line.split()[1] for line in (entry / 'status').read_text().splitlines() if line.startswith('PPid:'))
+                except (OSError, StopIteration):
                     continue
-                cmdline = (entry / 'cmdline').read_bytes().replace(b'\0', b' ').decode(errors='replace')
-                parent = next(line.split()[1] for line in (entry / 'status').read_text().splitlines() if line.startswith('PPid:'))
-                holders.append(f'pid {entry.name} (parent {parent}): {cmdline}')
-            except (OSError, StopIteration):
-                continue
-        raise AssertionError(('binary still executing', error, holders or 'no /proc holder found'))
+                try:
+                    executing = os.path.samefile(entry / 'exe', binary)
+                except OSError:
+                    executing = 'once' in cmdline
+                if executing:
+                    found.append(f'pid {entry.name} (parent {parent}): {cmdline}')
+            return found
+        seen, freed_after = [], None
+        started = time.monotonic()
+        while time.monotonic() - started < 5:
+            seen.extend(holder for holder in holders() if holder not in seen)
+            try:
+                shutil.copyfile(original_binary, binary)
+                freed_after = round(time.monotonic() - started, 3)
+                break
+            except OSError:
+                time.sleep(0.01)
+        raise AssertionError(('binary still executing', error, 'freed after', freed_after, seen or 'no /proc holder found'))
     run('build', 'app')
     print('daemon startup, inherited pipe EOF, read-only stability, mutations and barriers verified')
     print('high descriptor above reduced soft limit verified' if high_fd is not None else 'high descriptor unavailable under hard limit')
