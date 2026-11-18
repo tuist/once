@@ -44,8 +44,8 @@ mod test_schedule;
 mod xdg;
 
 pub use action::{
-    Action, ArchiveEntry, ArchiveEntryKind, ArchiveFormat, CopyPathMode, NetworkPolicy,
-    OutputSymlinkMode, PreparePathMode, RemoteExecution, SandboxMode,
+    copy_files_destinations, Action, ArchiveEntry, ArchiveEntryKind, ArchiveFormat, CopyPathMode,
+    NetworkPolicy, OutputSymlinkMode, PreparePathMode, RemoteExecution, SandboxMode,
 };
 pub use contract::{
     validate_action_contract, validate_action_contract_with_options, ActionContractDiagnostic,

@@ -2038,6 +2038,9 @@ fn operation_to_action(operation: DeclaredActionOperation, input_digest: Digest)
             mode: match mode {
                 DeclaredCopyPathMode::File => CopyPathMode::File,
                 DeclaredCopyPathMode::Tree => CopyPathMode::Tree,
+                DeclaredCopyPathMode::Files { strip_prefix } => CopyPathMode::Files {
+                    strip_prefix: workspace_path(&strip_prefix, "copy_path strip_prefix")?,
+                },
             },
             input_digest: Some(input_digest),
         },

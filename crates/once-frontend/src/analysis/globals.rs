@@ -852,6 +852,8 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
     /// materializing a directory symlink at the destination. `kind = "tree"`
     /// copies directory contents and preserves their symlink layout. Tree
     /// copies accept one source string or a list of source directories.
+    /// `kind = "files"` copies a list of files into the `destination`
+    /// directory as one action, each at its path below `strip_prefix`.
     #[allow(clippy::too_many_arguments)]
     fn copy_path<'v>(
         source: Value<'v>,
@@ -864,12 +866,14 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named)] presentation: Option<Value<'v>>,
         #[starlark(require = named)] display_name: Option<String>,
         #[starlark(require = named)] source_files: Option<Value<'v>>,
+        #[starlark(require = named)] strip_prefix: Option<String>,
     ) -> anyhow::Result<NoneType> {
         if !analysis_active() {
             return Ok(NoneType);
         }
-        let mode = parse_copy_path_mode(kind.as_deref())?;
-        let sources = unpack_copy_sources(source, mode)?;
+        let mode = parse_copy_path_mode(kind.as_deref(), strip_prefix)?;
+        let sources = unpack_copy_sources(source, &mode)?;
+        let outputs = copy_path_outputs(&sources, destination, &mode)?;
         let mut inputs = inputs
             .map(|value| unpack_string_list(value, "inputs"))
             .transpose()?
@@ -889,7 +893,7 @@ fn prelude_globals(builder: &mut GlobalsBuilder) {
             argv: Vec::new(),
             arg_files: Vec::new(),
             inputs,
-            outputs: vec![destination.to_string()],
+            outputs,
             stdout: None,
             stderr: None,
             clean_paths: Vec::new(),
@@ -1749,17 +1753,51 @@ fn unpack_write_content(content: Value<'_>) -> Result<Vec<u8>> {
     unpack_byte_list(content, "content")
 }
 
-fn parse_copy_path_mode(kind: Option<&str>) -> Result<DeclaredCopyPathMode> {
-    match kind.unwrap_or("file") {
-        "file" => Ok(DeclaredCopyPathMode::File),
-        "tree" => Ok(DeclaredCopyPathMode::Tree),
-        other => Err(anyhow!(
-            "expected `kind` to be `file` or `tree`, got `{other}`"
+fn parse_copy_path_mode(
+    kind: Option<&str>,
+    strip_prefix: Option<String>,
+) -> Result<DeclaredCopyPathMode> {
+    match (kind.unwrap_or("file"), strip_prefix) {
+        ("files", Some(strip_prefix)) => Ok(DeclaredCopyPathMode::Files { strip_prefix }),
+        ("files", None) => Err(anyhow!(
+            "`copy_path` with kind `files` requires `strip_prefix`"
+        )),
+        (_, Some(_)) => Err(anyhow!(
+            "`strip_prefix` applies only to `copy_path` with kind `files`"
+        )),
+        ("file", None) => Ok(DeclaredCopyPathMode::File),
+        ("tree", None) => Ok(DeclaredCopyPathMode::Tree),
+        (other, None) => Err(anyhow!(
+            "expected `kind` to be `file`, `tree`, or `files`, got `{other}`"
         )),
     }
 }
 
-fn unpack_copy_sources(source: Value<'_>, mode: DeclaredCopyPathMode) -> Result<Vec<String>> {
+fn copy_path_outputs(
+    sources: &[String],
+    destination: &str,
+    mode: &DeclaredCopyPathMode,
+) -> Result<Vec<String>> {
+    let DeclaredCopyPathMode::Files { strip_prefix } = mode else {
+        return Ok(vec![destination.to_string()]);
+    };
+    let sources = sources
+        .iter()
+        .map(|source| once_core::WorkspacePath::try_from(source.as_str()))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let destinations = once_core::copy_files_destinations(
+        &sources,
+        &once_core::WorkspacePath::try_from(destination)?,
+        &once_core::WorkspacePath::try_from(strip_prefix.as_str())?,
+    )
+    .map_err(|reason| anyhow!("`copy_path`: {reason}"))?;
+    Ok(destinations
+        .into_iter()
+        .map(|path| path.as_str().to_string())
+        .collect())
+}
+
+fn unpack_copy_sources(source: Value<'_>, mode: &DeclaredCopyPathMode) -> Result<Vec<String>> {
     let sources = if let Some(source) = source.unpack_str() {
         vec![source.to_string()]
     } else {
@@ -1771,6 +1809,9 @@ fn unpack_copy_sources(source: Value<'_>, mode: DeclaredCopyPathMode) -> Result<
         )),
         DeclaredCopyPathMode::Tree if sources.is_empty() => Err(anyhow!(
             "`copy_path` with kind `tree` requires at least one source"
+        )),
+        DeclaredCopyPathMode::Files { .. } if sources.is_empty() => Err(anyhow!(
+            "`copy_path` with kind `files` requires at least one source"
         )),
         _ => Ok(sources),
     }

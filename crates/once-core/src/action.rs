@@ -340,14 +340,42 @@ pub enum ArchiveEntryKind {
     Symlink,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-/// Whether a copy action moves one file or a whole subtree.
+/// Whether a copy action moves one file, a whole subtree, or a list of files.
 pub enum CopyPathMode {
     /// Copy a single file.
     File,
     /// Copy a directory and everything beneath it.
     Tree,
+    /// Copy each source to the destination directory, at its path relative
+    /// to `strip_prefix`. Outputs are the copied files, so several such
+    /// copies can share one destination directory.
+    Files { strip_prefix: WorkspacePath },
+}
+
+/// Where a `files` copy puts each source: the destination directory joined
+/// with the source's path below `strip_prefix`.
+pub fn copy_files_destinations(
+    sources: &[WorkspacePath],
+    destination: &WorkspacePath,
+    strip_prefix: &WorkspacePath,
+) -> std::result::Result<Vec<WorkspacePath>, String> {
+    sources
+        .iter()
+        .map(|source| {
+            let relative = source.strip_prefix(strip_prefix).ok_or_else(|| {
+                format!(
+                    "source `{}` is not inside strip_prefix `{}`",
+                    source.as_str(),
+                    strip_prefix.as_str()
+                )
+            })?;
+            destination
+                .join(relative)
+                .map_err(|error| error.to_string())
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
