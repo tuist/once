@@ -493,6 +493,29 @@ def _elixir_include_destination(ctx, src, include_dir):
         rel = rel[len("include/"):]
     return include_dir + "/" + rel
 
+def _elixir_copy_files(ctx, sources, destination_dir, destination, identity, identifier):
+    # One copy action per source root instead of one per file: each copy is a
+    # cache lookup and upload, which dominates when a project ships hundreds
+    # of resources.
+    groups = {}
+    for source in sources:
+        relative = destination(ctx, source, destination_dir)[len(destination_dir) + 1:]
+        if not source.endswith(relative):
+            fail(ctx["label"]["id"] + ": cannot place " + source + " at " + relative)
+        root = source[:len(source) - len(relative)].rstrip("/")
+        groups.setdefault(root, []).append(source)
+    for root, files in sorted(groups.items()):
+        copy_path(
+            files,
+            destination_dir,
+            kind = "files",
+            strip_prefix = root,
+            inputs = files,
+            toolchain_identity = identity,
+            identifier = identifier + ":" + root,
+            source_files = _action_source_files(files),
+        )
+
 def _elixir_erlang_atom(value):
     return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
@@ -1080,24 +1103,8 @@ def _elixir_library_impl(ctx):
         toolchain_identity = toolchain["identity"] + "\x00elixir-stage-app.v2\x00mix_env\x00" + mix_env,
         identifier = ctx["label"]["id"] + ":elixir-stage-app",
     )
-    for src in priv_srcs:
-        copy_path(
-            src,
-            _elixir_priv_destination(ctx, src, priv_dir),
-            inputs = [src],
-            toolchain_identity = toolchain["identity"] + "\x00elixir-stage-priv.v2",
-            identifier = ctx["label"]["id"] + ":elixir-stage-priv:" + src,
-            source_files = _action_source_files([src]),
-        )
-    for src in include:
-        copy_path(
-            src,
-            _elixir_include_destination(ctx, src, include_dir),
-            inputs = [src],
-            toolchain_identity = toolchain["identity"] + "\x00elixir-stage-include.v1",
-            identifier = ctx["label"]["id"] + ":elixir-stage-include:" + src,
-            source_files = _action_source_files([src]),
-        )
+    _elixir_copy_files(ctx, priv_srcs, priv_dir, _elixir_priv_destination, toolchain["identity"] + "\x00elixir-stage-priv.v3", ctx["label"]["id"] + ":elixir-stage-priv")
+    _elixir_copy_files(ctx, include, include_dir, _elixir_include_destination, toolchain["identity"] + "\x00elixir-stage-include.v2", ctx["label"]["id"] + ":elixir-stage-include")
     app = {
         "elixir_app": True,
         "app_name": app_name,
@@ -3040,24 +3047,8 @@ def _mix_project_impl(ctx):
         toolchain_identity = toolchain["identity"] + "\x00mix-project-compile.v3\x00" + paths["mix_env"] + "\x00" + _mix_workspace_path(ctx, "."),
         identifier = ctx["label"]["id"] + ":mix-compile",
     )
-    for source in priv:
-        copy_path(
-            source,
-            _elixir_priv_destination(ctx, source, paths["priv_dir"]),
-            inputs = [source],
-            toolchain_identity = toolchain["identity"] + "\x00mix-project-priv.v1",
-            identifier = ctx["label"]["id"] + ":mix-project-priv:" + source,
-            source_files = _action_source_files([source]),
-        )
-    for source in include:
-        copy_path(
-            source,
-            _elixir_include_destination(ctx, source, paths["include_dir"]),
-            inputs = [source],
-            toolchain_identity = toolchain["identity"] + "\x00mix-project-include.v1",
-            identifier = ctx["label"]["id"] + ":mix-project-include:" + source,
-            source_files = _action_source_files([source]),
-        )
+    _elixir_copy_files(ctx, priv, paths["priv_dir"], _elixir_priv_destination, toolchain["identity"] + "\x00mix-project-priv.v2", ctx["label"]["id"] + ":mix-project-priv")
+    _elixir_copy_files(ctx, include, paths["include_dir"], _elixir_include_destination, toolchain["identity"] + "\x00mix-project-include.v2", ctx["label"]["id"] + ":mix-project-include")
     return provider
 
 def _mix_release_runner_source(pre_tasks):
