@@ -26,7 +26,7 @@ Describe 'once'
   It 'prints root help when no command is provided'
     When call "$ONCE_BIN"
     The status should equal 2
-    The stderr should include 'Usage: once [FLAGS] <SUBCOMMAND>'
+    The stderr should include 'Usage: once [FLAGS] [SUBCOMMAND]'
     The stderr should include 'run'
     The stderr should include 'lint'
     The stderr should include '--list'
