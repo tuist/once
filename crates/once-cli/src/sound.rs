@@ -309,16 +309,15 @@ struct SynthShared {
 }
 
 fn audio_loop(events: &mpsc::Receiver<Event>, shared: Arc<SynthShared>) {
-    let Ok((_stream, handle)) = rodio::OutputStream::try_default() else {
+    let Ok(mut stream) = rodio::DeviceSinkBuilder::open_default_sink() else {
         drain(events);
         return;
     };
+    stream.log_on_drop(false);
     let sample_rate = 48_000;
-    let synth = AmbientSynth::new(Arc::clone(&shared), sample_rate);
-    if handle.play_raw(synth).is_err() {
-        drain(events);
-        return;
-    }
+    stream
+        .mixer()
+        .add(AmbientSynth::new(Arc::clone(&shared), sample_rate));
     while let Ok(event) = events.recv() {
         apply_event(&shared, event);
     }
@@ -341,7 +340,7 @@ fn audio_loop(events: &mpsc::Receiver<Event>, shared: Arc<SynthShared>) {
         std::thread::sleep(Duration::from_millis(50));
     }
     // Extra grace so the last buffered samples reach the device before we
-    // let `_stream` drop and take the mixer with it.
+    // let `stream` drop and take the mixer with it.
     std::thread::sleep(POST_FINISH_GRACE);
 }
 
@@ -978,16 +977,16 @@ impl Iterator for AmbientSynth {
 }
 
 impl Source for AmbientSynth {
-    fn current_frame_len(&self) -> Option<usize> {
+    fn current_span_len(&self) -> Option<usize> {
         None
     }
 
-    fn channels(&self) -> u16 {
-        1
+    fn channels(&self) -> rodio::ChannelCount {
+        rodio::ChannelCount::MIN
     }
 
-    fn sample_rate(&self) -> u32 {
-        self.sample_rate
+    fn sample_rate(&self) -> rodio::SampleRate {
+        rodio::SampleRate::new(self.sample_rate).expect("the synth sample rate is non-zero")
     }
 
     fn total_duration(&self) -> Option<Duration> {
