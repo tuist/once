@@ -551,6 +551,40 @@ async fn parallel_actions_respect_the_advertised_concurrency_and_upload_only_cha
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn more_remote_actions_run_at_once_than_the_host_capture_budget_holds() {
+    // The host's capture budget fits eight hosted actions; Tuist results come
+    // back as digests, so it must not cap remote work below the account.
+    let stems = (0..10).map(|index| format!("p{index}")).collect::<Vec<_>>();
+    let mut pieces = format!(
+        "[target.dependencies]\npieces = [{}]\n",
+        stems
+            .iter()
+            .map(|stem| format!("\"./{stem}\""))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    for stem in &stems {
+        pieces.push_str(&format!(
+            "[[target]]\nname = \"{stem}\"\nkind = \"piece\"\n[target.attrs]\nstem = \"{stem}\"\n"
+        ));
+    }
+    let server = tuist_execution::start_with(None, stems.len(), false).await;
+    let module = PARALLEL.replace("\"tr a-z", "\"sleep 2; tr a-z");
+    let root = workspace(&server.url, &module, &pieces);
+    let home = tempfile::tempdir().unwrap();
+    for stem in &stems {
+        std::fs::write(root.path().join(format!("{stem}.in")), stem).unwrap();
+    }
+
+    let output = build_with(root.path(), home.path(), &["--cpu-limit", "1"]).await;
+    assert!(output.status.success(), "{}", stderr(&output));
+    let state = server.service.state.lock().await;
+    assert_eq!(state.executed.len(), stems.len());
+    assert_eq!(state.over_limit, 0, "Once never exceeds max_concurrency");
+    assert_eq!(state.max_in_flight, stems.len());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn remote_actions_use_the_advertised_concurrency_not_local_cpu_slots() {
     let server = tuist_execution::start_with(None, 3, false).await;
     let module = PARALLEL.replace("\"tr a-z", "\"sleep 1; tr a-z").replace(
