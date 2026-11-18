@@ -31,7 +31,7 @@ env:
 jobs:
   detect:
     name: Check for releasable changes
-    runs-on: ubuntu-24.04
+    runs-on: tuist-linux
     outputs:
       should-release: ${{ steps.detect.outputs.should-release }}
       latest-version: ${{ steps.detect.outputs.latest-version }}
@@ -62,6 +62,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # The Linux and Windows legs stay on GitHub-hosted runners: Tuist's
+        # Linux runners are Ubuntu 24.04 amd64 only (glibc 2.39), and there is
+        # no Windows profile.
         include:
           # Ubuntu 22.04 keeps the binaries loadable on glibc 2.35.
           - runner: ubuntu-22.04
@@ -247,7 +250,7 @@ jobs:
     name: Build SDK libraries
     needs: [detect, build]
     if: needs.detect.outputs.should-release == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: tuist-linux
     steps:
       - name: Confirm SDK libraries built
         run: echo "SDK libraries were packaged and uploaded by the build matrix."
@@ -259,7 +262,7 @@ jobs:
       - build
       - build-xcframework
     if: needs.detect.outputs.should-release == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: tuist-linux
     steps:
       - uses: actions/checkout@v7
         with:
@@ -293,6 +296,8 @@ jobs:
       - publish
       - build-sdk-libs
     if: needs.detect.outputs.should-release == 'true' && needs.publish.result == 'success' && needs.build-sdk-libs.result == 'success'
+    # npm trusted publishing accepts OIDC tokens only from GitHub-hosted
+    # runners, so this job cannot move to Tuist's runners.
     runs-on: ubuntu-24.04
     permissions:
       contents: read

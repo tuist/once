@@ -3,7 +3,7 @@
 Measures Once's per-build overhead when every action already has a local
 cache hit. Catches regressions like a change tracker leak that adds
 seconds per build without changing any output. Runs in CI on `pull_request`
-against `ubuntu-latest` and `macos-latest`; macOS coverage matters
+on Tuist's Linux and macOS runners; macOS coverage matters
 because the filesystem-watching backend differs per platform and some
 overheads (FSEvents, in particular) show up only there.
 

@@ -30,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [tuist-linux-large, tuist-macos]
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
@@ -42,7 +42,7 @@ jobs:
           version: "2026.10.2"
           experimental: true
           cache: true
-      - if: matrix.os == 'ubuntu-latest'
+      - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
       - uses: Swatinem/rust-cache@v2
         with:

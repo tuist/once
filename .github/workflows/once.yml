@@ -16,7 +16,7 @@ env:
 jobs:
   changes:
     name: changes
-    runs-on: ubuntu-latest
+    runs-on: tuist-linux
     outputs:
       rust_ci: ${{ steps.filter.outputs.rust_ci }}
     steps:
@@ -59,7 +59,7 @@ jobs:
     name: fmt
     needs: changes
     if: needs.changes.outputs.rust_ci == 'true'
-    runs-on: ubuntu-latest
+    runs-on: tuist-linux
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
@@ -78,7 +78,7 @@ jobs:
     name: clippy
     needs: changes
     if: needs.changes.outputs.rust_ci == 'true'
-    runs-on: ubuntu-latest
+    runs-on: tuist-linux-large
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
@@ -110,7 +110,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [tuist-linux-large, tuist-macos]
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
@@ -201,7 +201,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [tuist-linux-large, tuist-macos]
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
@@ -258,7 +258,7 @@ jobs:
     name: tuist cache smoke
     needs: changes
     if: needs.changes.outputs.rust_ci == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: tuist-linux-large
     permissions:
       contents: read
       id-token: write
@@ -346,7 +346,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [tuist-linux-large, tuist-macos]
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
@@ -378,7 +378,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [tuist-linux-large, tuist-macos]
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
@@ -401,7 +401,7 @@ jobs:
     name: iOS SDK check
     needs: changes
     if: needs.changes.outputs.rust_ci == 'true'
-    runs-on: macos-15
+    runs-on: tuist-macos
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
@@ -416,6 +416,8 @@ jobs:
           cache-bin: false
       - run: mise exec -- cargo check --locked -p once --target aarch64-apple-ios --target aarch64-apple-ios-sim --target x86_64-apple-ios
 
+  # The Windows jobs stay on GitHub-hosted runners because Tuist's runner
+  # fleet has no Windows profile.
   windows-build:
     name: windows build
     needs: changes
