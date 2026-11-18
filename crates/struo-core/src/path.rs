@@ -50,6 +50,22 @@ impl WorkspacePath {
         }
     }
 
+    /// The path below `prefix`, or `None` when this path is not inside it.
+    /// An empty prefix is the workspace root and contains every path.
+    pub fn strip_prefix(&self, prefix: &WorkspacePath) -> Option<&str> {
+        if prefix.0.is_empty() {
+            return Some(&self.0);
+        }
+        self.0
+            .strip_prefix(prefix.0.as_str())
+            .and_then(|rest| rest.strip_prefix('/'))
+    }
+
+    /// This path with `relative` appended as further components.
+    pub fn join(&self, relative: &str) -> std::result::Result<Self, WorkspacePathError> {
+        Self::from_package_relative(&self.0, relative)
+    }
+
     /// Build a workspace path from a package directory and a
     /// package-relative source path. Mirrors the ad-hoc string joins
     /// every plugin used to do by hand and routes the result through

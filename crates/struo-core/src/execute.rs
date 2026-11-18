@@ -229,6 +229,21 @@ async fn execute_portable_action(
                 CopyPathMode::Tree => {
                     copy_tree(sources, destination, workspace_root, lease).await?;
                 }
+                CopyPathMode::Files { strip_prefix } => {
+                    let destinations =
+                        crate::action::copy_files_destinations(sources, destination, strip_prefix)
+                            .map_err(|reason| Error::InvalidCopyPath { reason })?;
+                    for (source, target) in sources.iter().zip(&destinations) {
+                        copy_file(source, target, workspace_root, lease).await?;
+                    }
+                    return capture_file_action_outputs(
+                        &destinations,
+                        workspace_root,
+                        cache,
+                        lease,
+                    )
+                    .await;
+                }
             }
             capture_file_action_outputs(
                 std::slice::from_ref(destination),

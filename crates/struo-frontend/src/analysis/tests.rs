@@ -1193,6 +1193,48 @@ write_tree_digest(".struo/out/p/staged", ".struo/out/p/staged.sha256", include_s
 }
 
 #[test]
+fn copy_path_files_declares_each_copied_file_as_an_output() {
+    let tmp = TempDir::new().unwrap();
+    let store = store_for(tmp.path(), "p");
+    let (store, ()) = with_active_store(store, || {
+        run(r#"
+copy_path(["p/priv/a.txt", "p/priv/static/b.css"], ".struo/out/p/priv", kind = "files", strip_prefix = "p/priv")
+"#)
+        .unwrap();
+    });
+
+    let action = &store.actions[0];
+    assert_eq!(
+        action.operation,
+        Some(DeclaredActionOperation::CopyPath {
+            sources: vec![
+                "p/priv/a.txt".to_string(),
+                "p/priv/static/b.css".to_string()
+            ],
+            destination: ".struo/out/p/priv".to_string(),
+            mode: DeclaredCopyPathMode::Files {
+                strip_prefix: "p/priv".to_string(),
+            },
+        })
+    );
+    assert_eq!(
+        action.outputs,
+        vec![
+            ".struo/out/p/priv/a.txt".to_string(),
+            ".struo/out/p/priv/static/b.css".to_string(),
+        ]
+    );
+
+    let store = store_for(tmp.path(), "p");
+    let (_, error) = with_active_store(store, || {
+        run(r#"copy_path(["p/other/a.txt"], ".struo/out/p/priv", kind = "files", strip_prefix = "p/priv")"#)
+            .unwrap_err()
+            .to_string()
+    });
+    assert!(error.contains("not inside strip_prefix"), "{error}");
+}
+
+#[test]
 fn write_archive_records_entries_inputs_and_digest_output() {
     let tmp = TempDir::new().unwrap();
     let store = store_for(tmp.path(), "p");

@@ -929,6 +929,12 @@ Built-in history currently covers Rust compilation/build scripts/test-runner com
 - `copy_path(source, destination, kind = "tree", inputs = [])` copies
   one or more directory contents while preserving their symlink layout. Each
   source tree is automatically hashed as an input.
+- `copy_path(sources, destination, kind = "files", strip_prefix = root)`
+  copies a list of files into the `destination` directory as one action. Each
+  file lands at its path below `strip_prefix`, and a source outside it fails
+  analysis. The outputs are the copied files rather than the directory, so
+  several copies can fill one destination. Prefer it over one `copy_path` per
+  file: every action pays its own cache lookup and upload.
 - `materialize_host_file(source, destination)` snapshots one absolute host
   toolchain file into a workspace output, preserving its permissions. Analysis
   records its [256-bit Secure Hash Algorithm digest](https://csrc.nist.gov/pubs/fips/180-4/upd1/final)

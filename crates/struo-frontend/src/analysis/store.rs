@@ -120,11 +120,12 @@ pub enum DeclaredArchiveFormat {
     Zip,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DeclaredCopyPathMode {
     File,
     Tree,
+    Files { strip_prefix: String },
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]

@@ -1164,6 +1164,40 @@ mod tests {
         assert!(outcome.result.outputs.contains_key("out/copied.txt"));
     }
 
+    #[tokio::test]
+    async fn copy_files_action_places_each_file_below_the_prefix_and_keeps_siblings() {
+        let (tmp, cas) = fresh_cas();
+        std::fs::create_dir_all(tmp.path().join("app/priv/static")).unwrap();
+        std::fs::write(tmp.path().join("app/priv/a.txt"), "a").unwrap();
+        std::fs::write(tmp.path().join("app/priv/static/b.css"), "b").unwrap();
+        std::fs::create_dir_all(tmp.path().join("out/priv")).unwrap();
+        std::fs::write(tmp.path().join("out/priv/other.txt"), "other").unwrap();
+        let action = Action::CopyPath {
+            sources: vec![
+                WorkspacePath::try_from("app/priv/a.txt").unwrap(),
+                WorkspacePath::try_from("app/priv/static/b.css").unwrap(),
+            ],
+            destination: WorkspacePath::try_from("out/priv").unwrap(),
+            mode: CopyPathMode::Files {
+                strip_prefix: WorkspacePath::try_from("app/priv").unwrap(),
+            },
+            input_digest: Some(Digest::of_bytes(b"copy-files")),
+        };
+
+        let outcome = run(&action, tmp.path(), &cas, RunOpts::default())
+            .await
+            .unwrap();
+
+        let read = |path: &str| std::fs::read_to_string(tmp.path().join(path)).unwrap();
+        assert_eq!(read("out/priv/a.txt"), "a");
+        assert_eq!(read("out/priv/static/b.css"), "b");
+        assert_eq!(read("out/priv/other.txt"), "other");
+        assert_eq!(
+            outcome.result.outputs.keys().collect::<Vec<_>>(),
+            ["out/priv/a.txt", "out/priv/static/b.css"]
+        );
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn copy_file_action_materializes_a_directory_symlink_value() {
