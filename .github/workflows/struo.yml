@@ -105,6 +105,8 @@ jobs:
           cache-bin: false
       - run: mise exec -- cargo clippy --workspace --all-targets -- -D warnings
 
+  # macOS jobs pin Xcode 26 with tuist-macos-26-6, matching the macos-latest
+  # image they ran on before; tuist-macos follows the newest fleet Xcode.
   tests:
     name: tests (${{ matrix.os }})
     needs: changes
@@ -116,7 +118,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [tuist-linux-large, tuist-macos]
+        os: [tuist-linux-large, tuist-macos-26-6]
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
@@ -210,7 +212,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [tuist-linux-large, tuist-macos]
+        os: [tuist-linux-large, tuist-macos-26-6]
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
@@ -361,7 +363,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [tuist-linux-large, tuist-macos]
+        os: [tuist-linux-large, tuist-macos-26-6]
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
@@ -396,7 +398,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [tuist-linux-large, tuist-macos]
+        os: [tuist-linux-large, tuist-macos-26-6]
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
@@ -428,7 +430,7 @@ jobs:
     name: iOS SDK check
     needs: changes
     if: needs.changes.outputs.rust_ci == 'true'
-    runs-on: tuist-macos
+    runs-on: tuist-macos-26-6
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
