@@ -50,6 +50,10 @@ env = { PATH = "$clean_path", ONCE_BIN = "$ONCE_BIN" }
 TOML
   }
 
+  last_progress_line() {
+    tail -n 1 "$ONCE_PROGRESS"
+  }
+
   create_rust_test_workspace() {
     cp -R "$REPO_ROOT/crates/once-frontend/prelude/examples/rust-test-minimal/." "$WORKSPACE/"
   }
@@ -671,6 +675,16 @@ KOTLIN
     The stdout should include '"target":"graph_e2e"'
     The stdout should include '"placement":"local"'
     The stdout should include '"duration_ms"'
+  End
+
+  It 'reports one progress snapshot for a whole test schedule'
+    create_parallel_shellspec_test_workspace
+    export ONCE_PROGRESS="$WORKSPACE/progress.jsonl"
+
+    When call once --format json test --all --jobs 2
+    The status should be success
+    The stdout should include 'once.test_schedule.v1'
+    The result of function last_progress_line should include '"command":"test","target":"","state":"succeeded","planned":2,"done":2'
   End
 
   It 'runs shellspec tests and exposes normalized test results'

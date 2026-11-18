@@ -25,6 +25,8 @@ pub(super) fn run_test_target(
         SandboxMode::CopiedInputs => "copied-inputs",
     };
     let mut command = Command::new(executable);
+    // The schedule writes one snapshot for all of its batches.
+    command.env_remove(crate::progress_file::ENV);
     command.arg("-C").arg(workspace).arg("--format").arg("json");
     if limits.memory_bytes > 0 {
         command

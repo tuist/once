@@ -48,7 +48,28 @@ use crate::reporter::{ColorMode, ReporterOptions, TerminalReporter, Verbosity};
 /// snapshot updates.
 const EVENT_BUS_CAPACITY: usize = 1024;
 
+/// The run's local subscribers: the terminal renderer and, when
+/// `ONCE_PROGRESS` names a file, the machine-readable progress sink.
+struct Reporters {
+    terminal: Option<TerminalReporter>,
+    progress: Option<crate::progress_file::ProgressFile>,
+}
+
 fn spawn_reporter(
+    bus: &RunEventBus,
+    output: Output,
+    command_label: &str,
+    command: &str,
+    target_id: &str,
+) -> Reporters {
+    let progress = crate::progress_file::ProgressFile::spawn(bus, command, target_id);
+    Reporters {
+        terminal: spawn_terminal_reporter(bus, output, command_label),
+        progress,
+    }
+}
+
+fn spawn_terminal_reporter(
     bus: &RunEventBus,
     output: Output,
     command_label: &str,
@@ -137,7 +158,7 @@ pub async fn build(
     } else {
         format!("build {target_id}")
     };
-    let reporter = spawn_reporter(&bus, output, &command_label);
+    let reporter = spawn_reporter(&bus, output, &command_label, "build", target_id);
     let live_reporter = crate::live_run_reporter::spawn(
         &bus,
         workspace,
@@ -323,9 +344,12 @@ pub async fn build(
 
 /// Await the terminal reporter's shutdown so its final summary lands
 /// before the CLI returns. A no-op when no reporter was spawned.
-async fn finish_reporter(reporter: Option<TerminalReporter>) {
-    if let Some(reporter) = reporter {
+async fn finish_reporter(reporters: Reporters) {
+    if let Some(reporter) = reporters.terminal {
         reporter.finish().await;
+    }
+    if let Some(progress) = reporters.progress {
+        progress.finish().await;
     }
 }
 
@@ -471,7 +495,7 @@ pub async fn test_with_filters(
     let started_at = Instant::now();
     let bus = RunEventBus::new(EVENT_BUS_CAPACITY);
     let command_label = format!("test {target_id}");
-    let reporter = spawn_reporter(&bus, output, &command_label);
+    let reporter = spawn_reporter(&bus, output, &command_label, "test", target_id);
     let live_reporter = crate::live_run_reporter::spawn_with_test_context(
         &bus,
         workspace,
@@ -486,156 +510,160 @@ pub async fn test_with_filters(
     bus_events::target_cache_checking(&bus, target_id);
     let bus_observer: std::sync::Arc<dyn once_core::ActionOutputObserver> =
         BusOutputObserver::new(bus.clone(), target_id.to_string());
-    let graph = match resolved.load_graph(workspace) {
-        Ok(graph) => graph,
-        Err(error) => {
-            let duration_ms: u64 = started_at
-                .elapsed()
-                .as_millis()
-                .try_into()
-                .unwrap_or(u64::MAX);
-            bus_events::target_failed(&bus, target_id, duration_ms);
-            finish_live_reporter(live_reporter).await;
-            finish_reporter(reporter).await;
-            return Err(error).context("loading graph");
+    // Every failure below still ends the run on the bus, so subscribers such
+    // as the progress file record the outcome before the error returns.
+    let result: Result<()> = async {
+        let graph = resolved.load_graph(workspace).context("loading graph")?;
+        if !test_filters.is_empty() {
+            let local_manifest;
+            let manifest = if let Some(manifest) = portable_manifest {
+                manifest
+            } else {
+                local_manifest = crate::commands::query::test_manifest_record_with_graph(
+                    workspace, target_id, &graph,
+                )?;
+                &local_manifest
+            };
+            for test_filter in test_filters {
+                crate::commands::query::validate_test_unit(manifest, target_id, test_filter)?;
+            }
         }
-    };
-    if !test_filters.is_empty() {
-        let local_manifest;
-        let manifest = if let Some(manifest) = portable_manifest {
-            manifest
+        let discovery_before = if test_filters.is_empty() && resolved.path_suffix.is_empty() {
+            crate::commands::query::test_plan::portable::discovery_fingerprint(
+                workspace, &graph, target_id,
+            )
+            .ok()
         } else {
-            local_manifest = crate::commands::query::test_manifest_record_with_graph(
-                workspace, target_id, &graph,
-            )?;
-            &local_manifest
+            None
         };
-        for test_filter in test_filters {
-            crate::commands::query::validate_test_unit(manifest, target_id, test_filter)?;
-        }
-    }
-    let discovery_before = if test_filters.is_empty() && resolved.path_suffix.is_empty() {
-        crate::commands::query::test_plan::portable::discovery_fingerprint(
-            workspace, &graph, target_id,
-        )
-        .ok()
-    } else {
-        None
-    };
-    let session = analysis::BuildSession::new_with_options_with_configuration(
-        workspace,
-        cache,
-        graph,
-        AnalysisOptions {
-            test_filters: test_filters.to_vec(),
-            test_batch_id: test_batch_id.map(str::to_string),
-            ..AnalysisOptions::default()
-        },
-        sandbox,
-        resolved,
-    )
-    .await?
-    .with_resource_limits(resource_limits)
-    .with_event_bus(bus.clone())
-    .suppress_target_lifecycle(target_id);
-    let session = session.with_output_observer(bus_observer.clone());
-    bus_events::target_preparing(&bus, target_id);
-    bus_events::target_executing(&bus, target_id);
-    let target = session.target(target_id)?;
-    let test_capability = ensure_capability(target, "test")?;
-    if !test_capability.requires_outputs.is_empty()
-        && target
-            .capabilities
-            .iter()
-            .any(|capability| capability.name == "build")
-    {
-        let build_record = build_target(workspace, cache, target, &session, sandbox).await?;
-        record_capability_run(workspace, &build_record).await;
-    }
-    let record = if let Some(outcome) = session.run_with_analysis(target, "test").await? {
-        let analysis::BuildOutcome {
-            provider,
-            action_digest,
-            input_digest,
-            input_fingerprint,
-            outputs,
-            cache_tag,
-            cache_state,
-            result,
-            ..
-        } = outcome;
-        let test_results = provider
-            .pointer("/test_info/outputs/results")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string);
-        CapabilityRunRecord {
-            target: target.label.id.clone(),
-            kind: target.kind.clone(),
-            capability: test_capability.name.clone(),
-            status: "completed".to_string(),
-            action_digest: action_digest.to_string(),
-            cache: cache_tag.to_string(),
-            output_groups: test_capability.output_groups.clone(),
-            required_outputs: test_capability.requires_outputs.clone(),
-            outputs,
-            test_results,
-            input_digest,
-            input_fingerprint,
-            cache_state,
-            result,
-        }
-    } else {
-        run_target_capability(workspace, cache, target, "test", sandbox, &session).await?
-    };
-    record_capability_run(workspace, &record).await;
-    if test_filters.is_empty() {
-        crate::commands::query::refresh_test_manifest_for_target(
+        let session = analysis::BuildSession::new_with_options_with_configuration(
             workspace,
-            target,
-            discovery_before.as_deref(),
+            cache,
+            graph,
+            AnalysisOptions {
+                test_filters: test_filters.to_vec(),
+                test_batch_id: test_batch_id.map(str::to_string),
+                ..AnalysisOptions::default()
+            },
+            sandbox,
+            resolved,
         )
-        .context("persisting test manifest")?;
+        .await?
+        .with_resource_limits(resource_limits)
+        .with_event_bus(bus.clone())
+        .suppress_target_lifecycle(target_id);
+        let session = session.with_output_observer(bus_observer.clone());
+        bus_events::target_preparing(&bus, target_id);
+        bus_events::target_executing(&bus, target_id);
+        // The session suppresses the root's lifecycle, so its scheduler leaves
+        // the root out of what it plans; this run executes and completes it.
+        bus_events::targets_planned(&bus, 1);
+        let target = session.target(target_id)?;
+        let test_capability = ensure_capability(target, "test")?;
+        if !test_capability.requires_outputs.is_empty()
+            && target
+                .capabilities
+                .iter()
+                .any(|capability| capability.name == "build")
+        {
+            let build_record = build_target(workspace, cache, target, &session, sandbox).await?;
+            record_capability_run(workspace, &build_record).await;
+        }
+        let record = if let Some(outcome) = session.run_with_analysis(target, "test").await? {
+            let analysis::BuildOutcome {
+                provider,
+                action_digest,
+                input_digest,
+                input_fingerprint,
+                outputs,
+                cache_tag,
+                cache_state,
+                result,
+                ..
+            } = outcome;
+            let test_results = provider
+                .pointer("/test_info/outputs/results")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            CapabilityRunRecord {
+                target: target.label.id.clone(),
+                kind: target.kind.clone(),
+                capability: test_capability.name.clone(),
+                status: "completed".to_string(),
+                action_digest: action_digest.to_string(),
+                cache: cache_tag.to_string(),
+                output_groups: test_capability.output_groups.clone(),
+                required_outputs: test_capability.requires_outputs.clone(),
+                outputs,
+                test_results,
+                input_digest,
+                input_fingerprint,
+                cache_state,
+                result,
+            }
+        } else {
+            run_target_capability(workspace, cache, target, "test", sandbox, &session).await?
+        };
+        record_capability_run(workspace, &record).await;
+        if test_filters.is_empty() {
+            crate::commands::query::refresh_test_manifest_for_target(
+                workspace,
+                target,
+                discovery_before.as_deref(),
+            )
+            .context("persisting test manifest")?;
+        }
+        let test_results =
+            load_test_results_for_events(workspace, target_id, record.test_results.as_deref());
+        // Fan the normalized test-results blob out as
+        // `TestSuiteStarted` / `TestCaseCompleted` / `TestSuiteCompleted`
+        // events on the bus so the server projector can persist per-case
+        // rows. These cases are retrospective because this runner supplies a
+        // report only after execution. Streaming-capable runners publish live
+        // starts and completions directly from their output observer.
+        tracing::debug!(
+            has_test_results = test_results.is_some(),
+            target = target_id,
+            "publishing test results"
+        );
+        if let Some(results) = &test_results {
+            let n = results
+                .get("cases")
+                .and_then(serde_json::Value::as_array)
+                .map_or(0, std::vec::Vec::len);
+            tracing::debug!(cases = n, target = target_id, "publishing test cases");
+            publish_test_results_events(&bus, target_id, results).await;
+        }
+        let duration_ms: u64 = started_at
+            .elapsed()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+        bus_events::target_capturing(&bus, target_id);
+        bus_events::target_publishing(&bus, target_id);
+        bus_events::target_finished(
+            &bus,
+            target_id,
+            duration_ms,
+            &record.cache,
+            record.result.exit_code,
+        );
+        write_record(output, &record).await?;
+        emit_capability_completion_sounds(&record);
+        Ok(())
     }
-    let test_results =
-        load_test_results_for_events(workspace, target_id, record.test_results.as_deref());
-    // Fan the normalized test-results blob out as
-    // `TestSuiteStarted` / `TestCaseCompleted` / `TestSuiteCompleted`
-    // events on the bus so the server projector can persist per-case
-    // rows. These cases are retrospective because this runner supplies a
-    // report only after execution. Streaming-capable runners publish live
-    // starts and completions directly from their output observer.
-    tracing::debug!(
-        has_test_results = test_results.is_some(),
-        target = target_id,
-        "publishing test results"
-    );
-    if let Some(results) = &test_results {
-        let n = results
-            .get("cases")
-            .and_then(serde_json::Value::as_array)
-            .map_or(0, std::vec::Vec::len);
-        tracing::debug!(cases = n, target = target_id, "publishing test cases");
-        publish_test_results_events(&bus, target_id, results).await;
+    .await;
+    if result.is_err() {
+        let duration_ms: u64 = started_at
+            .elapsed()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+        bus_events::target_failed(&bus, target_id, duration_ms);
     }
-    let duration_ms: u64 = started_at
-        .elapsed()
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX);
-    bus_events::target_capturing(&bus, target_id);
-    bus_events::target_publishing(&bus, target_id);
-    bus_events::target_finished(
-        &bus,
-        target_id,
-        duration_ms,
-        &record.cache,
-        record.result.exit_code,
-    );
-    write_record(output, &record).await?;
-    emit_capability_completion_sounds(&record);
     finish_live_reporter(live_reporter).await;
     finish_reporter(reporter).await;
-    Ok(ExitCode::SUCCESS)
+    result.map(|()| ExitCode::SUCCESS)
 }
 
 // Fan the normalized `once.test_results.v1` blob out onto the event

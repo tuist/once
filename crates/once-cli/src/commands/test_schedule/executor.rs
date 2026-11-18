@@ -33,16 +33,42 @@ pub(super) fn execute(
         memory_bytes: worker_memory_limit(resource_limits.memory_bytes, workers),
         cpu_slots: worker_cpu_limit(resource_limits.cpu_slots, workers),
     };
-    execute_with(plan, estimates, Some(workers), |batch| {
-        run_test_target(
+    let progress = crate::progress_file::ScheduleProgress::start(plan.batches.len());
+    let completed = execute_with(plan, estimates, Some(workers), |batch| {
+        if let Some(progress) = &progress {
+            progress.batch_started(&batch.target);
+        }
+        let run = run_test_target(
             executable,
             workspace,
             batch,
             sandbox,
             child_limits,
             portable,
-        )
-    })
+        );
+        if let Some(progress) = &progress {
+            let run = run.as_ref().ok();
+            progress.batch_finished(
+                &batch.target,
+                run.and_then(|run| run["success"].as_bool()) == Some(true),
+                run.and_then(|run| run.pointer("/record/cache"))
+                    .and_then(Value::as_str)
+                    == Some("hit"),
+                run.and_then(|run| run.pointer("/results/summary")),
+            );
+        }
+        run
+    });
+    if let Some(progress) = &progress {
+        let succeeded = completed.as_ref().is_ok_and(|completed| {
+            completed
+                .runs
+                .iter()
+                .all(|run| run["success"].as_bool() == Some(true))
+        });
+        progress.finish(succeeded);
+    }
+    completed
 }
 
 fn bounded_worker_request(
