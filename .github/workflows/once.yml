@@ -411,6 +411,9 @@ jobs:
           # GitHub-hosted runners share the default key, and their cached
           # pipx tools link to interpreters that Tuist runners lack.
           cache_key_prefix: mise-v1-tuist
+      # Tuist's Linux image does not ship the ALSA runtime the binary loads.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev libasound2-dev
       - uses: actions/download-artifact@v8
         with:
           name: once-${{ matrix.os }}
