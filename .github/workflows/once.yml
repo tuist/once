@@ -68,7 +68,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.10.2"
+          version: "2026.11.9"
           experimental: true
           cache: true
           # GitHub-hosted runners share the default key, and their cached
@@ -90,7 +90,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.10.2"
+          version: "2026.11.9"
           experimental: true
           cache: true
           # GitHub-hosted runners share the default key, and their cached
@@ -125,7 +125,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.10.2"
+          version: "2026.11.9"
           experimental: true
           cache: true
           # GitHub-hosted runners share the default key, and their cached
@@ -219,7 +219,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.10.2"
+          version: "2026.11.9"
           experimental: true
           cache: true
           # GitHub-hosted runners share the default key, and their cached
@@ -282,7 +282,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.10.2"
+          version: "2026.11.9"
           experimental: true
           cache: true
           # GitHub-hosted runners share the default key, and their cached
@@ -370,7 +370,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.10.2"
+          version: "2026.11.9"
           experimental: true
           cache: true
           # GitHub-hosted runners share the default key, and their cached
@@ -405,7 +405,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.10.2"
+          version: "2026.11.9"
           experimental: true
           cache: true
           # GitHub-hosted runners share the default key, and their cached
@@ -433,7 +433,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
         with:
-          version: "2026.10.2"
+          version: "2026.11.9"
           install_args: "rust"
       - run: mise exec -- rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
       - uses: Swatinem/rust-cache@v2
