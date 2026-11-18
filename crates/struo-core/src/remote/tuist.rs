@@ -79,10 +79,10 @@ pub(super) async fn execute_command(
     let prepare_ms = prepare_started.elapsed().as_millis() as u64;
     let admission_started = Instant::now();
     let lease = command.lease.as_ref();
-    let capture = lease.map(crate::ExecutionPermit::capture_budget);
-    if let Some(capture) = &capture {
-        capture.reserve_upfront().await?;
-    }
+    // No capture reservation: results arrive as digests, and their files are
+    // staged under a transfer permit sized to the real bytes. Reserving the
+    // per-action capture allowance here capped remote work at a handful of
+    // actions regardless of the account's concurrency.
     let slot = execution.admit().await;
     let admission_ms = admission_started.elapsed().as_millis() as u64;
     let upload_started = Instant::now();
