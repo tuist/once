@@ -30,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [tuist-linux-large, tuist-macos-26-6]
+        os: [tuist-linux-large, tuist-macos]
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4

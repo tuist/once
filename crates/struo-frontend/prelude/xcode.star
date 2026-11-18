@@ -2564,6 +2564,11 @@ def _xcode_swift_package_with_implicit_resources(package_dir, absolute, info):
     return info
 
 def _swift_package_metadata(argv, absolute, env = {}, check = True):
+    # Since Swift 6.4, even read-only `swift package` subcommands create
+    # `.build` state in the package. Point them at Struo's scratch tree so
+    # graph loading never mutates the package directory.
+    index = argv.index("--package-path") + 2
+    argv = argv[:index] + ["--scratch-path", workspace_root() + "/.struo/tmp/swiftpm-metadata/" + _swiftpm_sanitize(absolute)] + argv[index:]
     if absolute != workspace_root() and not absolute.startswith(_xcode_workspace_root()):
         return host_command(argv, env = env, check = check)
     inputs = [

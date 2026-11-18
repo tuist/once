@@ -7160,6 +7160,10 @@ def _swift_package_dependencies_impl(ctx):
         "--disable-sandbox",
         "--package-path", package_path,
         "--scratch-path", scratch,
+        # The declared archive and module paths follow the native build
+        # system's layout; Swift 6.4 defaults to Swift Build, which uses
+        # `out/Products/<Configuration>` instead.
+        "--build-system", "native",
         "--configuration", configuration,
         "--triple", triple,
         "--sdk", swiftc["sdk_path"],
