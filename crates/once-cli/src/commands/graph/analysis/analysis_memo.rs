@@ -157,12 +157,13 @@ fn executable_identity() -> Option<String> {
         let executable = std::env::current_exe().ok()?;
         let metadata = std::fs::metadata(&executable).ok()?;
         Some(format!(
-            "{}:{}:{}.{}:{}",
+            "{}:{}:{}.{}:{}:{:?}",
             executable.display(),
             metadata.len(),
             metadata.ctime(),
             metadata.ctime_nsec(),
-            metadata.ino()
+            metadata.ino(),
+            once_host_tree::unsettled_stamp(&metadata)
         ))
     }
     #[cfg(not(unix))]

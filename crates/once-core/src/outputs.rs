@@ -245,7 +245,8 @@ fn spawn_output_validation(
     }));
 }
 
-fn existing_output_matches_digest(path: &Path, expected: Digest) -> bool {
+/// Whether the output already on disk at `path` is the one `expected` names.
+pub fn existing_output_matches_digest(path: &Path, expected: Digest) -> bool {
     let owner = crate::resource_scope::current();
     existing_output_matches_digest_owned(path, expected, owner.as_deref())
 }

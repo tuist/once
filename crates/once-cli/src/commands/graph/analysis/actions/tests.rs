@@ -1432,6 +1432,7 @@ async fn matching_indexed_output_does_not_require_cached_blob() {
     let cache = CacheProvider::Local(once_cas::Cas::open(workspace.path().join("cache")));
     let output = workspace.path().join("out.txt");
     std::fs::write(&output, b"present").unwrap();
+    std::thread::sleep(once_host_tree::SETTLE_WINDOW * 2);
     let result = ActionResult {
         exit_code: 0,
         stdout: None,

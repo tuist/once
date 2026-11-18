@@ -164,6 +164,7 @@ fn graph_tool_cache_reuses_existing_paths_for_unchanged_configuration() {
     let executable = workspace.path().join("tools/node");
     std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
     std::fs::write(&executable, b"node").unwrap();
+    std::thread::sleep(once_host_tree::SETTLE_WINDOW * 2);
     let tools = vec!["node".to_string()];
     let executables = vec!["node".to_string()];
     let fingerprint = graph_tool_cache_fingerprint(workspace.path(), &tools, &executables).unwrap();

@@ -122,6 +122,7 @@ fn changed_outputs_do_not_reuse_the_recorded_digest() {
     let relative = ".once/out/library.rlib";
     std::fs::create_dir_all(workspace.path().join(".once/out")).unwrap();
     std::fs::write(workspace.path().join(relative), "first").unwrap();
+    std::thread::sleep(once_host_tree::SETTLE_WINDOW * 2);
     let expected = once_cas::Digest::of_bytes(b"encoded output");
     let cache = SourceDigestCache::open(workspace.path());
     cache.record_output(workspace.path(), relative, expected);

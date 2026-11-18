@@ -251,7 +251,11 @@ pub fn tree_stat_fingerprint(root: &Path) -> std::io::Result<String> {
     {
         let mut hasher = sha2::Sha256::new();
         hasher.update(b"once.tree_stat.v3\0");
-        hash_stat_directory(root, root, &mut hasher, 0)?;
+        let mut unsettled = None;
+        hash_stat_directory(root, root, &mut hasher, 0, &mut unsettled)?;
+        if let Some(stamp) = unsettled {
+            hasher.update(stamp.to_le_bytes());
+        }
         Ok(hex_lower(&hasher.finalize()))
     }
     #[cfg(not(unix))]
@@ -276,6 +280,7 @@ fn hash_stat_directory(
     directory: &Path,
     hasher: &mut sha2::Sha256,
     depth: u32,
+    unsettled: &mut Option<u128>,
 ) -> std::io::Result<()> {
     if depth > MAX_DEPTH {
         return Err(std::io::Error::new(
@@ -292,6 +297,9 @@ fn hash_stat_directory(
         let path = child.path();
         let metadata = std::fs::symlink_metadata(&path)?;
         let relative = portable_path(path.strip_prefix(root).map_err(std::io::Error::other)?)?;
+        if unsettled.is_none() {
+            *unsettled = crate::unsettled_stamp(&metadata);
+        }
         hasher.update(relative.as_bytes());
         hasher.update([0]);
         hasher.update(host_file_mode(&metadata).to_le_bytes());
@@ -308,7 +316,7 @@ fn hash_stat_directory(
                 hasher.update(stat_change_marker(&target));
             }
         } else if metadata.is_dir() {
-            hash_stat_directory(root, &path, hasher, depth + 1)?;
+            hash_stat_directory(root, &path, hasher, depth + 1, unsettled)?;
         }
         hasher.update([0]);
     }
@@ -440,6 +448,7 @@ mod tests {
             std::fs::create_dir_all(tree).unwrap();
             std::fs::write(tree.join("a.txt"), b"a").unwrap();
         }
+        std::thread::sleep(crate::SETTLE_WINDOW * 2);
         let path = tmp.path().join("cache");
         let first = TreeDigestCache::open(path.clone());
         let second = TreeDigestCache::open(path.clone());
@@ -614,6 +623,7 @@ mod tests {
         let tree = tmp.path().join("tree");
         std::fs::create_dir_all(&tree).unwrap();
         std::fs::write(tree.join("a.txt"), b"a").unwrap();
+        std::thread::sleep(crate::SETTLE_WINDOW * 2);
         let path = tmp.path().join("cache");
 
         let cache = TreeDigestCache::open(path.clone());

@@ -128,6 +128,8 @@ struct Fingerprint {
     inode: u64,
     #[cfg(unix)]
     mode: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    unsettled: Option<u128>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -256,7 +258,9 @@ impl SourceDigestCache {
             return Ok(digest);
         }
         let digest = once_core::digest_source_path(workspace, relative)?;
-        self.inner
+        let unsettled = fingerprint.unsettled.is_some();
+        let previous = self
+            .inner
             .entries
             .write()
             .expect("source digest cache lock poisoned")
@@ -268,7 +272,11 @@ impl SourceDigestCache {
                     tree,
                 },
             );
-        self.inner.dirty.store(true, Ordering::Relaxed);
+        // Persisting a description that cannot match yet only rewrites the
+        // file; the recorded digest already says the same thing.
+        if !(unsettled && previous.is_some_and(|entry| entry.digest == digest)) {
+            self.inner.dirty.store(true, Ordering::Relaxed);
+        }
         self.record_observation(relative, digest);
         Ok(digest)
     }
@@ -419,17 +427,32 @@ impl SourceDigestCache {
         let Some(described) = describe_output(workspace, relative) else {
             return false;
         };
-        self.inner
+        let (matches, unsettled) = self
+            .inner
             .output_entries
             .read()
             .expect("output digest cache lock poisoned")
             .get(relative)
-            .is_some_and(|entry| {
-                Fingerprint::can_reuse()
-                    && entry.digest == expected
-                    && entry.fingerprint == described.fingerprint
-                    && entry.tree == described.tree
-            })
+            .filter(|entry| entry.digest == expected)
+            .map_or((false, false), |entry| {
+                (
+                    entry.fingerprint == described.fingerprint && entry.tree == described.tree,
+                    entry.fingerprint.unsettled.is_some()
+                        || described.fingerprint.unsettled.is_some(),
+                )
+            });
+        if matches || !unsettled {
+            return matches;
+        }
+        // Outputs are recorded the moment they are written, so their
+        // descriptions start out unable to vouch for them. Check the bytes
+        // instead, and record a description that can once they settle.
+        let verified =
+            once_core::existing_output_matches_digest(&workspace.join(relative), expected);
+        if verified {
+            self.record_output(workspace, relative, expected);
+        }
+        verified
     }
 
     fn record_output(&self, workspace: &Path, relative: &str, digest: Digest) {
@@ -571,6 +594,7 @@ impl Fingerprint {
             inode: std::os::unix::fs::MetadataExt::ino(metadata),
             #[cfg(unix)]
             mode: std::os::unix::fs::MetadataExt::mode(metadata),
+            unsettled: once_host_tree::unsettled_stamp(metadata),
         })
     }
 

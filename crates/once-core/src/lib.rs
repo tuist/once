@@ -27,6 +27,7 @@ mod local;
 #[cfg(target_os = "linux")]
 mod network;
 mod outputs;
+pub use outputs::existing_output_matches_digest;
 mod path;
 mod plan;
 mod remote;

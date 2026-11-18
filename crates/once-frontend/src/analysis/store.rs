@@ -1015,10 +1015,11 @@ impl HostCache {
         {
             use std::os::unix::fs::MetadataExt as _;
             Some(format!(
-                "{resolved}:{}:{}.{}",
+                "{resolved}:{}:{}.{}:{:?}",
                 metadata.len(),
                 metadata.ctime(),
-                metadata.ctime_nsec()
+                metadata.ctime_nsec(),
+                once_host_tree::unsettled_stamp(&metadata)
             ))
         }
         #[cfg(not(unix))]

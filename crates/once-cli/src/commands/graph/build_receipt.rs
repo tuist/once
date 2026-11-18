@@ -578,6 +578,7 @@ mod tests {
 
         let host_tool = temporary.path().join("tool");
         tokio::fs::write(&host_tool, b"one").await.unwrap();
+        tokio::time::sleep(once_host_tree::SETTLE_WINDOW * 2).await;
         let host_paths = BTreeSet::from([host_tool.clone()]);
         store(
             temporary.path(),

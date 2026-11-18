@@ -5,6 +5,8 @@
 
 mod digest;
 mod digest_cache;
+mod settled;
 
 pub use digest::{copy_escaping_symlink_targets, host_file_mode, host_tree_sha256_hex};
 pub use digest_cache::{tree_stat_fingerprint, TreeDigestCache};
+pub use settled::{unsettled_stamp, SETTLE_WINDOW};

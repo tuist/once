@@ -25,6 +25,8 @@ pub(super) struct PathFingerprint {
     inode: u64,
     #[cfg(unix)]
     mode: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    unsettled: Option<u128>,
 }
 
 pub(super) fn capture(
@@ -118,6 +120,7 @@ impl PathFingerprint {
             inode: std::os::unix::fs::MetadataExt::ino(metadata),
             #[cfg(unix)]
             mode: std::os::unix::fs::MetadataExt::mode(metadata),
+            unsettled: once_host_tree::unsettled_stamp(metadata),
         })
     }
 }
@@ -156,6 +159,7 @@ mod tests {
         std::fs::create_dir_all(&nested).unwrap();
         let file = nested.join("source.rs");
         std::fs::write(&file, b"before").unwrap();
+        std::thread::sleep(once_host_tree::SETTLE_WINDOW * 2);
         let paths = BTreeSet::from([directory.path().to_path_buf()]);
         let baseline = capture(&paths).unwrap();
         assert!(changed(&baseline).is_empty());

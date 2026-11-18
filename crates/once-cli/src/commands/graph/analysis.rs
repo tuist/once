@@ -1313,6 +1313,9 @@ fn graph_tool_paths_fingerprint(paths: &BTreeMap<String, String>) -> Option<Dige
                 push_fingerprint_part(&mut bytes, &value.to_le_bytes());
             }
         }
+        if let Some(stamp) = once_host_tree::unsettled_stamp(&metadata) {
+            push_fingerprint_part(&mut bytes, &stamp.to_le_bytes());
+        }
     }
     Some(Digest::of_bytes(&bytes))
 }
