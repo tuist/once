@@ -27,6 +27,10 @@ pub enum RunEvent {
     RunStarted { at_epoch_ms: i64 },
     /// The run has ended. Emitted once as the terminal event.
     RunCompleted { at_epoch_ms: i64, exit_status: i32 },
+    /// A scheduler planned to build `count` targets that publish their
+    /// own lifecycle events. A run with several schedulers emits one per
+    /// scheduler; local progress reporting sums them. Not on the wire.
+    TargetsPlanned { at_epoch_ms: i64, count: u32 },
     /// A target has been accepted into the scheduler and is waiting
     /// for its dependencies or a worker.
     TargetQueued { at_epoch_ms: i64, target_id: String },

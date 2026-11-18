@@ -317,6 +317,13 @@ pub fn run_started(bus: &RunEventBus, target_id: &str, at_epoch_ms: i64) {
     target_queued_at(bus, target_id, at_epoch_ms);
 }
 
+pub fn targets_planned(bus: &RunEventBus, count: usize) {
+    bus.publish(RunEvent::TargetsPlanned {
+        at_epoch_ms: now_epoch_ms(),
+        count: u32::try_from(count).unwrap_or(u32::MAX),
+    });
+}
+
 pub fn target_queued(bus: &RunEventBus, target_id: &str) {
     target_queued_at(bus, target_id, now_epoch_ms());
 }

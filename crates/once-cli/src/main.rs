@@ -13,6 +13,7 @@ mod errors;
 mod live_run_reporter;
 mod logging;
 mod native_invocation;
+mod progress_file;
 mod provision;
 mod reference;
 mod render;

@@ -328,6 +328,36 @@ then invoke the relevant build, run, test, or script capability when the user
 needs a current result. The action cache decides whether that invocation can be
 reused safely.
 
+## Follow Build and Test Progress
+
+A harness that runs `once build` or `once test` in a shell can show progress
+while the command runs. Set `ONCE_PROGRESS` to a file path, and Once appends one
+JSON object per line to that file: a snapshot of the run so far, written at
+most once a second when something changed, and a final snapshot when the run
+ends. Read only the last complete line.
+
+```json
+{"v":1,"command":"build","target":"app","state":"running",
+ "planned":40,"done":12,"cached":9,"failed":0,"running":["lib"],
+ "tests":{"passed":0,"failed":0,"skipped":0},"elapsed_ms":5321}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `v` | Format version, `1`. A new version means a change older readers cannot interpret. |
+| `command` | `build` or `test`. |
+| `target` | The target the run was asked for. Empty for a scheduled `once test` without one target. |
+| `state` | `running`, `succeeded`, or `failed`. |
+| `planned` | Targets the run will execute, or test batches for a scheduled `once test`. Zero until planning ends. |
+| `done`, `cached`, `failed` | Finished targets or batches, those restored from cache, and those that failed. |
+| `running` | Up to five targets in progress. |
+| `tests` | Test cases that passed, failed, and were skipped so far. |
+| `elapsed_ms` | Time since the run started. |
+
+Once never fails a run because it cannot write the file. Commands that run
+several targets one after another, such as `once build` without a target, start
+a new snapshot sequence for each target in the same file.
+
 ## Completion Contract
 
 A harness should report success only after all of these are true:

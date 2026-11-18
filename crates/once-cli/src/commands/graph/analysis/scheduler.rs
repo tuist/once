@@ -52,6 +52,16 @@ impl<'a> BuildScheduler<'a> {
         let mut state = BuildState::new(self.targets, self.reachable, self.retained)?;
         let mut running = JoinSet::new();
 
+        if let Some(bus) = &self.context.event_bus {
+            let suppressed = &self.context.suppressed_target_lifecycle;
+            let count = self
+                .reachable
+                .iter()
+                .filter(|id| !suppressed.contains(*id))
+                .count();
+            crate::bus_events::targets_planned(bus, count);
+        }
+
         self.spawn_ready(&mut state, &mut running)?;
         while state.completed < self.reachable.len() {
             if running.is_empty() {
