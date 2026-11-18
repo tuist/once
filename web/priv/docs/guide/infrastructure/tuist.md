@@ -209,6 +209,12 @@ steps:
 
 The resulting session remains available for the rest of the job.
 
+In an [Amp orb](https://ampcode.com/docs/orbs), Struo signs in with the orb's
+identity token, so cacheable commands work without logging in first. Connect
+the Amp workspace in your Tuist account's Integrations settings. When the
+workspace is connected to several Tuist accounts, Struo authenticates as the
+manifest's `account`.
+
 ## Connection recovery
 
 Struo retries transient cache failures during blob existence checks, uploads, and
