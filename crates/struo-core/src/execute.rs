@@ -688,9 +688,15 @@ fn extract_zip_archive(
                 .map_err(|source| Error::InvalidDownloadAndExtract {
                     reason: format!("reading ZIP entry {index}: {source}"),
                 })?;
+        let name = entry
+            .name()
+            .map_err(|source| Error::InvalidDownloadAndExtract {
+                reason: format!("reading ZIP entry {index} name: {source}"),
+            })?
+            .into_owned();
         let Some(relative) = entry.enclosed_name() else {
             return Err(Error::InvalidDownloadAndExtract {
-                reason: format!("ZIP entry `{}` escapes the destination", entry.name()),
+                reason: format!("ZIP entry `{name}` escapes the destination"),
             });
         };
         if relative.components().any(|component| {
@@ -700,7 +706,7 @@ fn extract_zip_archive(
             )
         }) {
             return Err(Error::InvalidDownloadAndExtract {
-                reason: format!("ZIP entry `{}` escapes the destination", entry.name()),
+                reason: format!("ZIP entry `{name}` escapes the destination"),
             });
         }
         let output = destination.join(&relative);
@@ -712,15 +718,12 @@ fn extract_zip_archive(
             && file_type != 0o120_000
         {
             return Err(Error::InvalidDownloadAndExtract {
-                reason: format!("ZIP entry `{}` has an unsupported file type", entry.name()),
+                reason: format!("ZIP entry `{name}` has an unsupported file type"),
             });
         }
         if traverses_extracted_symlink(destination, &relative) {
             return Err(Error::InvalidDownloadAndExtract {
-                reason: format!(
-                    "ZIP entry `{}` is written through a symbolic link",
-                    entry.name()
-                ),
+                reason: format!("ZIP entry `{name}` is written through a symbolic link"),
             });
         }
         if file_type == 0o120_000 {
@@ -728,12 +731,12 @@ fn extract_zip_archive(
             let mut bounded = std::io::Read::take(&mut entry, limits.max_metadata_bytes);
             std::io::Read::read_to_string(&mut bounded, &mut target).map_err(|source| {
                 Error::InvalidDownloadAndExtract {
-                    reason: format!("reading ZIP symbolic link `{}`: {source}", entry.name()),
+                    reason: format!("reading ZIP symbolic link `{name}`: {source}"),
                 }
             })?;
             extract_zip_symlink(&relative, Path::new(&target), &output).map_err(|reason| {
                 Error::InvalidDownloadAndExtract {
-                    reason: format!("ZIP entry `{}` {reason}", entry.name()),
+                    reason: format!("ZIP entry `{name}` {reason}"),
                 }
             })?;
             continue;
@@ -752,7 +755,6 @@ fn extract_zip_archive(
         if entry.size() > remaining {
             return Err(expanded_too_far());
         }
-        let name = entry.name().to_string();
         let written = extract_bounded_file(&mut entry, &name, &output, unix_mode, remaining)?
             .ok_or_else(expanded_too_far)?;
         remaining -= written;
