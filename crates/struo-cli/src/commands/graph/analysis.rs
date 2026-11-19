@@ -1081,12 +1081,16 @@ async fn resolve_graph_tools(
         if let Err(error) = struo_core::workspace_prepare_tools(workspace, &tool_name_refs).await {
             tracing::debug!(
                 %error,
-                "preparing graph tools through mise failed; falling back to the host toolchain"
+                "preparing graph tools through mise failed; falling back to the host toolchain for tools it could not install"
             );
-        } else {
-            (paths, failures) =
-                resolve_graph_tool_executables(workspace, &tool_names, &executable_names).await?;
         }
+        // mise installs every tool it can even when another one fails. Without
+        // resolving again, whether an installable tool resolves through mise or
+        // the host would depend on whether an earlier or concurrent invocation
+        // happened to install it first, and the resulting PATH changes the
+        // cache key of every action that uses the tool.
+        (paths, failures) =
+            resolve_graph_tool_executables(workspace, &tool_names, &executable_names).await?;
     }
     let all_managed = failures.is_empty();
     for (executable, error) in failures {

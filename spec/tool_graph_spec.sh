@@ -75,4 +75,42 @@ EOF
     The path "$WORKSPACE/.struo/out/tools/probe/Probe/probe.txt" should be file
     The contents of file "$WORKSPACE/.struo/out/tools/probe/Probe/probe.txt" should equal 'managed-tool:http:struo-probe'
   End
+
+  add_uninstallable_tool_target() {
+    mkdir -p "$WORKSPACE/tools/unavailable"
+    cat > "$WORKSPACE/modules/unavailable.star" <<'EOF'
+def _unavailable_impl(ctx):
+    return {}
+
+unavailable_tool = target_kind(
+    docs = "Declares a tool mise cannot install.",
+    tools = [tool("struo-spec-unavailable-tool", executables = ["struo-spec-unavailable-tool"])],
+    capabilities = [capability("build", ["default"])],
+    impl = _unavailable_impl,
+)
+EOF
+    cat > "$WORKSPACE/tools/unavailable/struo.toml" <<'EOF'
+[[target]]
+name = "Unavailable"
+kind = "unavailable_tool"
+EOF
+  }
+
+  build_probe_twice() {
+    env PATH=/usr/bin:/bin "$STRUO_BIN" -C "$WORKSPACE" --format json build tools/probe/Probe \
+      >"$WORKSPACE/first-build.json" || return
+    env PATH=/usr/bin:/bin "$STRUO_BIN" -C "$WORKSPACE" --format json build tools/probe/Probe
+  }
+
+  It 'keys a managed tool the same way when another declared tool cannot be installed'
+    create_graph_tool_workspace
+    add_uninstallable_tool_target
+
+    When call build_probe_twice
+    The status should be success
+    The stdout should include '"status":"completed"'
+    The stdout should include '"cache":"hit"'
+    The contents of file "$WORKSPACE/first-build.json" should include '"cache":"miss"'
+    The contents of file "$WORKSPACE/.struo/out/tools/probe/Probe/probe.txt" should equal 'managed-tool:http:struo-probe'
+  End
 End
