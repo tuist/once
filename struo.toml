@@ -15,12 +15,12 @@ provider = "tuist"
 [infrastructures.tuist]
 kind = "tuist"
 account = "tuist"
-project = "once"
+project = "struo"
 
 [infrastructures.tuist-web]
 kind = "tuist"
 account = "tuist"
-project = "once-web"
+project = "struo-web"
 
 [[target]]
 name = "cargo_dependencies"
