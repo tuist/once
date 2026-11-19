@@ -86,7 +86,7 @@ Describe 'turborepo pnpm monorepo'
   executed_tasks() {
     for target in "$@"; do
       struo -v build "$target" 2>&1 | sed -n 's/.*Run Turborepo task · \([^ ]*\) · .* · executed.*/\1/p'
-    done | sort -u | tr '\n' ' '
+    done | LC_ALL=C sort -u | tr '\n' ' '
   }
 
   target_graph() {
