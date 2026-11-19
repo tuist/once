@@ -1,11 +1,11 @@
 # Struo JavaScript Software Development Kit
 
-`buildstruo` exposes Struo primitives to Node.js. It loads the same
+`@tuist/struo` exposes Struo primitives to Node.js. It loads the same
 native Struo library used by the other language libraries and does not expose script
 execution.
 
 ```js
-const { Cache } = require("buildstruo");
+const { Cache } = require("@tuist/struo");
 
 async function example() {
   const cache = new Cache();

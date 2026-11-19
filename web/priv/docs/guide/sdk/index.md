@@ -31,7 +31,7 @@ They do not execute commands or load the repository graph.
 | Rust | `struo` crate | Asynchronous | [Rust](/guide/sdk/rust) |
 | Swift | `Struo.xcframework` and the matching Swift wrapper | Asynchronous | [Swift](/guide/sdk/swift) |
 | Ruby | `struo` gem | Synchronous | [Ruby](/guide/sdk/ruby) |
-| JavaScript | `buildstruo` package for Node.js | Promise-based | [JavaScript](/guide/sdk/javascript) |
+| JavaScript | `@tuist/struo` package for Node.js | Promise-based | [JavaScript](/guide/sdk/javascript) |
 | C | `libstruo` and `struo.h` | Synchronous | [C](/guide/sdk/c) |
 
 Choose the binding used by the process that owns the integration. All

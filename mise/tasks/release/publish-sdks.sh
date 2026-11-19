@@ -50,7 +50,7 @@ cp -R packages/ruby/. "${stage_dir}/ruby/"
 rm -rf "${stage_dir}/js/node_modules" "${stage_dir}/ruby/"*.gem
 
 npm_has_version() {
-  npm view "buildstruo@${version}" version >/dev/null 2>&1
+  npm view "@tuist/struo@${version}" version >/dev/null 2>&1
 }
 
 gem_has_version() {
@@ -67,7 +67,7 @@ gem_has_version() {
 
 publish_npm() {
   if npm_has_version; then
-    echo "buildstruo@${version} is already on npm; skipping"
+    echo "@tuist/struo@${version} is already on npm; skipping"
     return 0
   fi
 

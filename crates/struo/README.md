@@ -87,13 +87,13 @@ puts bytes
 Install the JavaScript library from npm:
 
 ```sh
-npm install buildstruo
+npm install @tuist/struo
 ```
 
 Use it from Node.js:
 
 ```js
-const { Cache } = require("buildstruo");
+const { Cache } = require("@tuist/struo");
 
 async function main() {
   const cache = new Cache();

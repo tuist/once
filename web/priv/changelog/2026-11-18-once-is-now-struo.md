@@ -15,7 +15,7 @@ every name you type does:
 | `# once` script headers and `#!/usr/bin/env -S once exec` shebangs | `# struo`, `struo exec` |
 | `ONCE_*` environment variables | `STRUO_*` |
 | `once_*` MCP tools | `struo_*` |
-| `once` Rust crate, `Once` Swift module, `buildonce` npm and RubyGems packages | `struo`, `Struo`, `buildstruo` |
+| `once` Rust crate, `Once` Swift module, `buildonce` npm and RubyGems packages | `struo`, `Struo`, `@tuist/struo` (npm) and `struo` (RubyGems) |
 | `github:tuist/once` in mise | `github:tuist/struo` |
 
 Rename `once.toml` files to `struo.toml`, `.once/` entries in ignore files to

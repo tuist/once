@@ -283,7 +283,7 @@ LOCK
     mkdir -p \
       "$WORKSPACE/packages/js/prebuilds" \
       "$WORKSPACE/packages/ruby/prebuilds"
-    printf '{"name":"buildstruo","version":"0.0.0"}\n' > "$WORKSPACE/packages/js/package.json"
+    printf '{"name":"@tuist/struo","version":"0.0.0"}\n' > "$WORKSPACE/packages/js/package.json"
     printf 'Gem::Specification.new\n' > "$WORKSPACE/packages/ruby/struo.gemspec"
   }
 

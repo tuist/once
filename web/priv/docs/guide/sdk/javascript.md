@@ -5,13 +5,13 @@ next: false
 
 # JavaScript Software Development Kit
 
-The JavaScript library is the `buildstruo` npm package. It exposes cache
+The JavaScript library is the `@tuist/struo` npm package. It exposes cache
 primitives for Node.js applications and tools. Script execution belongs to
 the command line and is not part of this library. See the
 [language-library overview](/guide/sdk/) to compare the available bindings.
 
 ```js
-const { Cache } = require("buildstruo");
+const { Cache } = require("@tuist/struo");
 
 async function main() {
   const cache = new Cache();
@@ -27,7 +27,7 @@ async function main() {
 Install the package from npm:
 
 ```sh
-npm install buildstruo
+npm install @tuist/struo
 ```
 
 The package includes prebuilt native Struo libraries for supported
@@ -73,7 +73,7 @@ other payloads whose size is not tightly bounded.
 inputs:
 
 ```js
-const { ActionKey } = require("buildstruo");
+const { ActionKey } = require("@tuist/struo");
 
 const source = await cache.putFile("inputs/source");
 const actionDigest = new ActionKey("example.compile")

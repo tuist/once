@@ -1,5 +1,5 @@
 {
-  "name": "buildstruo",
+  "name": "@tuist/struo",
   "version": "0.0.0",
   "description": "JavaScript software development kit for Struo cache access",
   "license": "MIT",
