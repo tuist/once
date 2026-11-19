@@ -280,8 +280,8 @@ async fn failed_multi_output_install_rolls_back_every_published_output() {
 
 #[tokio::test]
 async fn remote_snapshots_preserve_links_and_recheck_coordinator_targets_on_restore() {
-    use struo_cas::{ActionResult, CacheProvider};
     use std::os::unix::fs::symlink;
+    use struo_cas::{ActionResult, CacheProvider};
 
     let workspace = tempfile::tempdir().unwrap();
     let cas = tempfile::tempdir().unwrap();
@@ -384,8 +384,8 @@ async fn remote_snapshots_preserve_links_and_recheck_coordinator_targets_on_rest
 
 #[tokio::test]
 async fn unsafe_remote_links_are_rejected_before_capture_and_on_cached_restore() {
-    use struo_cas::{ActionResult, CacheProvider};
     use std::os::unix::fs::symlink;
+    use struo_cas::{ActionResult, CacheProvider};
 
     for target in [
         "/etc/passwd",
@@ -456,7 +456,7 @@ async fn remote_snapshot_decoder_rejects_writes_through_links_before_publication
         (1, "link/secret", b"overwrite".as_slice()),
     ] {
         blob.push(kind);
-        blob.extend_from_slice(&(path.len() as u32).to_le_bytes());
+        blob.extend_from_slice(&u32::try_from(path.len()).unwrap().to_le_bytes());
         blob.extend_from_slice(&0o755_u32.to_le_bytes());
         blob.extend_from_slice(&(content.len() as u64).to_le_bytes());
         blob.extend_from_slice(path.as_bytes());

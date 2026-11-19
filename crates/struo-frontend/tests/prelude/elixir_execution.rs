@@ -86,12 +86,12 @@ result = repr(_mix_rebar_package_action(ctx, "deps/demo", "demo", "prod", [],
         .any(|a| a.argv.first().map(String::as_str) == Some("/worker/elixir/bin/elixir")));
 
     let mix = declare(
-        r#"
+        r"
 def host_file_exists(path):
     return False
 ctx['capability'] = 'build'
 result = repr(_mix_project_impl(ctx))
-"#,
+",
     )
     .unwrap();
     assert_eq!(

@@ -90,7 +90,7 @@ impl TuistCache {
                     transfer::record(
                         TransferDirection::Download,
                         local,
-                        digest.size_bytes as u64,
+                        digest.size_bytes.cast_unsigned(),
                         started.elapsed(),
                     );
                     mirrored.push((digest_key(digest), local));

@@ -6,7 +6,7 @@ use crate::{resolve_execution_argv, Error, Result, WorkspacePath};
 pub(super) fn output_roots(outputs: &[WorkspacePath]) -> Vec<WorkspacePath> {
     let paths = outputs
         .iter()
-        .map(|path| path.as_str())
+        .map(WorkspacePath::as_str)
         .collect::<std::collections::BTreeSet<_>>();
     paths
         .iter()
@@ -53,7 +53,12 @@ pub(super) fn arguments(command: &PreparedCommand<'_>, root: &Path) -> Result<Ve
         script.push_str("cd -- \"$1\"; shift; ");
     }
     script.push_str("exec \"$@\"");
-    let mut wrapped = vec!["/bin/sh".into(), "-c".into(), script, "struo-command".into()];
+    let mut wrapped = vec![
+        "/bin/sh".into(),
+        "-c".into(),
+        script,
+        "struo-command".into(),
+    ];
     wrapped.extend(parameters);
     wrapped.extend(arguments);
     Ok(wrapped)

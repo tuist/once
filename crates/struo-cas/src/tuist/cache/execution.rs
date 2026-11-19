@@ -342,6 +342,7 @@ impl TuistExecution {
     /// are [`ErrorKind::NotFound`], a rejected platform or request is
     /// [`ErrorKind::Misconfigured`], and a worker limit the action exceeded is
     /// [`ErrorKind::Exhausted`].
+    #[allow(clippy::too_many_lines)]
     pub async fn execute(
         &self,
         action: &reapi::Digest,
@@ -653,6 +654,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn output_batches_preserve_order_limits_and_integrity() {
         use crate::tuist::cache::fault_server::{connected_cache, FaultServer};
 

@@ -1,5 +1,6 @@
 #![cfg(unix)]
 
+use std::fmt::Write as _;
 use std::path::Path;
 use std::process::Output;
 
@@ -385,7 +386,10 @@ async fn a_mismatched_worker_image_fails_before_anything_runs() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::too_many_lines)]
 async fn redirected_streams_and_outputs_outside_cwd_are_restored_and_cached() {
+    use std::os::unix::fs::PermissionsExt as _;
+
     let server = tuist_execution::start().await;
     let root = workspace(
         &server.url,
@@ -437,7 +441,6 @@ distributed = target_kind(
         "#!/bin/sh\ncase \"$1\" in\nwhich) printf /bin/sh;;\nexec) exit 97;;\n*) exit 0;;\nesac\n",
     )
     .unwrap();
-    use std::os::unix::fs::PermissionsExt as _;
     std::fs::set_permissions(&mise, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::create_dir(root.path().join("nested work")).unwrap();
     std::fs::write(
@@ -564,9 +567,11 @@ async fn more_remote_actions_run_at_once_than_the_host_capture_budget_holds() {
             .join(", ")
     );
     for stem in &stems {
-        pieces.push_str(&format!(
+        write!(
+            pieces,
             "[[target]]\nname = \"{stem}\"\nkind = \"piece\"\n[target.attrs]\nstem = \"{stem}\"\n"
-        ));
+        )
+        .unwrap();
     }
     let server = tuist_execution::start_with(None, stems.len(), false).await;
     let module = PARALLEL.replace("\"tr a-z", "\"sleep 2; tr a-z");

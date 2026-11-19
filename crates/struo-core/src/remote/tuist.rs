@@ -56,8 +56,12 @@ fn vm_memory_gb(request: &crate::ResourceRequest, max_concurrency: usize) -> Opt
             && request.memory_bytes <= gb * GIB
     });
     needed
-        .or_else(|| sizes.last())
+        .or_else(|| sizes.clone().next_back())
         .filter(|gb| *gb > VM_MEMORY_SIZES_GB[0])
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 pub(super) async fn execute_command(
@@ -76,7 +80,7 @@ pub(super) async fn execute_command(
         .map_or_else(RemoteIoLimits::default, crate::ExecutionPermit::io_limits);
     let (action_digest, input_tree, timeout) =
         prepare(&execution, remote, &command, setup, workspace, limits).await?;
-    let prepare_ms = prepare_started.elapsed().as_millis() as u64;
+    let prepare_ms = elapsed_ms(prepare_started);
     let admission_started = Instant::now();
     let lease = command.lease.as_ref();
     // No capture reservation: results arrive as digests, and their files are
@@ -84,10 +88,10 @@ pub(super) async fn execute_command(
     // per-action capture allowance here capped remote work at a handful of
     // actions regardless of the account's concurrency.
     let slot = execution.admit().await;
-    let admission_ms = admission_started.elapsed().as_millis() as u64;
+    let admission_ms = elapsed_ms(admission_started);
     let upload_started = Instant::now();
     upload_missing(&execution, &input_tree, workspace, lease).await?;
-    let input_upload_ms = upload_started.elapsed().as_millis() as u64;
+    let input_upload_ms = elapsed_ms(upload_started);
     tracing::debug!(executor = PROVIDER, action_digest = %action_digest.hash, "executing remote action");
 
     let execute_started = Instant::now();
@@ -102,7 +106,7 @@ pub(super) async fn execute_command(
         }
         executed => executed?,
     };
-    let execute_rpc_ms = execute_started.elapsed().as_millis() as u64;
+    let execute_rpc_ms = elapsed_ms(execute_started);
     // Downloading results does not occupy the account's execution capacity.
     drop(slot);
     let download_started = Instant::now();
@@ -148,7 +152,7 @@ pub(super) async fn execute_command(
         admission_ms,
         input_upload_ms,
         execute_rpc_ms,
-        output_download_ms = download_started.elapsed().as_millis() as u64,
+        output_download_ms = elapsed_ms(download_started),
         "remote action completed"
     );
     Ok(ActionResult {
@@ -196,6 +200,7 @@ async fn connect(remote: &RemoteExecution, cache: &CacheProvider) -> Result<Tuis
 
 /// Encode the action and its input tree; returns the action digest, every
 /// blob the action references, and its timeout.
+#[allow(clippy::too_many_lines)]
 async fn prepare(
     execution: &TuistExecution,
     remote: &RemoteExecution,
@@ -545,7 +550,7 @@ async fn install_outputs(
 ) -> Result<std::collections::BTreeMap<String, struo_cas::Digest>> {
     let metadata_started = Instant::now();
     let entries = output_entries(execution, cache, command, result, limits).await?;
-    let metadata_ms = metadata_started.elapsed().as_millis() as u64;
+    let metadata_ms = elapsed_ms(metadata_started);
     let outputs = command::output_roots(command.outputs)
         .into_iter()
         .filter(|output| {
@@ -594,7 +599,7 @@ async fn install_outputs(
             (entry, local)
         })
         .collect::<Vec<_>>();
-    let files_ms = download_started.elapsed().as_millis() as u64;
+    let files_ms = elapsed_ms(download_started);
     let staging_started = Instant::now();
     // The staged copy and the backup of any outputs it replaces.
     let phase = super::phase_permit(command.lease.as_ref(), bytes.saturating_mul(2)).await?;
@@ -614,10 +619,10 @@ async fn install_outputs(
     } else {
         &outputs
     };
-    let staging_ms = staging_started.elapsed().as_millis() as u64;
+    let staging_ms = elapsed_ms(staging_started);
     let capture_started = Instant::now();
     let captured = staging.capture(&outputs, captured_outputs, cache).await?;
-    let capture_ms = capture_started.elapsed().as_millis() as u64;
+    let capture_ms = elapsed_ms(capture_started);
     let publish_started = Instant::now();
     staging.install_admitted(&outputs, workspace, phase).await?;
     tracing::debug!(
@@ -627,7 +632,7 @@ async fn install_outputs(
         files_ms,
         staging_ms,
         capture_ms,
-        publish_ms = publish_started.elapsed().as_millis() as u64,
+        publish_ms = elapsed_ms(publish_started),
         "remote outputs restored"
     );
     Ok(captured)

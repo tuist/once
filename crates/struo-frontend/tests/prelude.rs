@@ -3290,7 +3290,9 @@ result = repr(_mix_rebar_package_action(
     result.unwrap();
 
     let config = action_by_identifier(&store, "mix-ranch:rebar-config");
-    assert!(config.inputs.contains(&"deps/ranch/priv/config.script".into()));
+    assert!(config
+        .inputs
+        .contains(&"deps/ranch/priv/config.script".into()));
     let metadata = action_by_identifier(&store, "mix-ranch:rebar-metadata");
     let app = action_by_identifier(&store, "mix-ranch:rebar-app");
     for output in &metadata.outputs {
