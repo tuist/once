@@ -153,3 +153,201 @@ fn portable_binding_rejects_changed_inputs_configuration_and_module_implementati
         .to_string()
         .contains("stale"));
 }
+
+#[test]
+fn portable_binding_ignores_runtime_outputs_but_tracks_recursive_sources() {
+    for patterns in [
+        vec!["**/*".into(), "nested/**/*".into()],
+        vec![".".into(), "./nested/**/*".into()],
+        vec!["nested".into()],
+        vec!["nested/*".into()],
+    ] {
+        let (workspace, mut graph, portable) = fixture();
+        graph[0].srcs = patterns;
+        let source = workspace.path().join("nested/deeper/source");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, "first").unwrap();
+        let plan = TestPlan::new(
+            portable.plan.selection,
+            vec![TestBatch::new("tests", vec![]).unwrap()],
+        )
+        .unwrap();
+        let portable = PortableTestPlan::export(workspace.path(), &graph, plan).unwrap();
+
+        let output = workspace.path().join(".struo/out/tests/binary");
+        std::fs::create_dir_all(output.parent().unwrap()).unwrap();
+        std::fs::write(&output, "generated output").unwrap();
+        portable.validate(workspace.path(), &graph).unwrap();
+        std::fs::write(&output, "changed generated output").unwrap();
+        portable.validate(workspace.path(), &graph).unwrap();
+
+        std::fs::write(&source, "other").unwrap();
+        assert!(portable.validate(workspace.path(), &graph).is_err());
+        std::fs::write(&source, "first").unwrap();
+        portable.validate(workspace.path(), &graph).unwrap();
+
+        let added = workspace.path().join("nested/deeper/added");
+        std::fs::write(&added, "new source").unwrap();
+        assert!(portable.validate(workspace.path(), &graph).is_err());
+        std::fs::remove_file(added).unwrap();
+        portable.validate(workspace.path(), &graph).unwrap();
+        std::fs::remove_file(source).unwrap();
+        assert!(portable.validate(workspace.path(), &graph).is_err());
+    }
+}
+
+#[test]
+fn portable_binding_preserves_directory_only_source_patterns() {
+    for pattern in ["nested/*/", "nested/subdir/"] {
+        let (workspace, mut graph, portable) = fixture();
+        graph[0].srcs = vec![pattern.into()];
+        let source = workspace.path().join("nested/subdir/input.rs");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, "first").unwrap();
+        let unrelated = workspace.path().join("nested/unrelated.txt");
+        std::fs::write(&unrelated, "first").unwrap();
+        let plan = TestPlan::new(
+            portable.plan.selection,
+            vec![TestBatch::new("tests", vec![]).unwrap()],
+        )
+        .unwrap();
+        let portable = PortableTestPlan::export(workspace.path(), &graph, plan).unwrap();
+
+        std::fs::write(&unrelated, "other").unwrap();
+        portable.validate(workspace.path(), &graph).unwrap();
+        std::fs::write(workspace.path().join("nested/added.txt"), "not a source").unwrap();
+        portable.validate(workspace.path(), &graph).unwrap();
+        std::fs::write(&source, "other").unwrap();
+        assert!(portable.validate(workspace.path(), &graph).is_err());
+        std::fs::write(&source, "first").unwrap();
+        portable.validate(workspace.path(), &graph).unwrap();
+        std::fs::write(workspace.path().join("nested/subdir/added.rs"), "source").unwrap();
+        assert!(portable.validate(workspace.path(), &graph).is_err());
+
+        let directory = workspace.path().join("nested/subdir");
+        std::fs::remove_dir_all(&directory).unwrap();
+        std::fs::write(&directory, "first").unwrap();
+        let portable =
+            PortableTestPlan::export(workspace.path(), &graph, portable.plan.clone()).unwrap();
+        std::fs::write(&directory, "other").unwrap();
+        portable.validate(workspace.path(), &graph).unwrap();
+    }
+}
+
+#[test]
+fn portable_binding_tracks_provider_runtime_inputs_before_overlapping_sources() {
+    for field in ["affected_inputs", "test_discovery_inputs"] {
+        let (workspace, mut graph, portable) = fixture();
+        graph[0].srcs = vec!["tree".into(), "tree/subdir/**/*".into()];
+        std::fs::write(
+            workspace.path().join("struo.toml"),
+            "[modules]\npaths = [\"custom.star\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            workspace.path().join("custom.star"),
+            format!(
+                "def _impl(ctx):\n    return {{\"{field}\": [\"tree/subdir\"]}}\ncustom_test = target_kind(impl = _impl)\n"
+            ),
+        )
+        .unwrap();
+        let source = workspace.path().join("tree/subdir/.struo/input");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, "first").unwrap();
+        let unrelated = workspace.path().join("tree/.struo/unrelated");
+        std::fs::create_dir_all(unrelated.parent().unwrap()).unwrap();
+        std::fs::write(&unrelated, "first").unwrap();
+        let plan = TestPlan::new(
+            portable.plan.selection,
+            vec![TestBatch::new("tests", vec![]).unwrap()],
+        )
+        .unwrap();
+        let portable = PortableTestPlan::export(workspace.path(), &graph, plan).unwrap();
+
+        std::fs::write(&unrelated, "other").unwrap();
+        portable.validate(workspace.path(), &graph).unwrap();
+        std::fs::write(&source, "other").unwrap();
+        assert!(portable.validate(workspace.path(), &graph).is_err());
+        std::fs::write(&source, "first").unwrap();
+        portable.validate(workspace.path(), &graph).unwrap();
+        let added = workspace.path().join("tree/subdir/.struo/added");
+        std::fs::write(&added, "source").unwrap();
+        assert!(portable.validate(workspace.path(), &graph).is_err());
+        std::fs::remove_file(added).unwrap();
+        portable.validate(workspace.path(), &graph).unwrap();
+        std::fs::remove_file(source).unwrap();
+        assert!(portable.validate(workspace.path(), &graph).is_err());
+    }
+}
+
+#[test]
+fn portable_binding_tracks_explicit_runtime_sources() {
+    for (package, declared) in [
+        ("", ".struo/packages/input.rs"),
+        ("", ".struo/packages"),
+        ("package", "./.struo/packages/input.rs"),
+    ] {
+        let (workspace, mut graph, mut portable) = fixture();
+        graph[0].label.package = package.into();
+        if !package.is_empty() {
+            graph[0].label.id = format!("{package}/tests");
+        }
+        portable.plan.selection.tests[0].id = graph[0].label.id.clone();
+        graph[0].srcs = vec!["**/*".into(), declared.into()];
+        let source = workspace.path().join(".struo/packages/input.rs");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, "first").unwrap();
+        let plan = TestPlan::new(
+            portable.plan.selection,
+            vec![TestBatch::new(&graph[0].label.id, vec![]).unwrap()],
+        )
+        .unwrap();
+        let portable = PortableTestPlan::export(workspace.path(), &graph, plan).unwrap();
+
+        std::fs::create_dir_all(workspace.path().join(".struo/out")).unwrap();
+        std::fs::write(workspace.path().join(".struo/out/binary"), "output").unwrap();
+        portable.validate(workspace.path(), &graph).unwrap();
+        std::fs::write(&source, "other").unwrap();
+        assert!(portable.validate(workspace.path(), &graph).is_err());
+        std::fs::write(&source, "first").unwrap();
+        portable.validate(workspace.path(), &graph).unwrap();
+        std::fs::remove_file(source).unwrap();
+        assert!(portable.validate(workspace.path(), &graph).is_err());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn portable_binding_tracks_symlink_sources_with_multiple_patterns() {
+    let (workspace, mut graph, portable) = fixture();
+    graph[0].srcs = vec!["alias/**/*.rs".into(), "tests/**/*.rs".into()];
+    std::fs::create_dir_all(workspace.path().join("hidden")).unwrap();
+    std::fs::create_dir_all(workspace.path().join("tests/nested")).unwrap();
+    std::fs::write(workspace.path().join("tests/nested/test.rs"), "test").unwrap();
+    let source = workspace.path().join("hidden/source.rs");
+    std::fs::write(&source, "first").unwrap();
+    std::os::unix::fs::symlink("hidden", workspace.path().join("alias")).unwrap();
+    let plan = TestPlan::new(
+        portable.plan.selection,
+        vec![TestBatch::new("tests", vec![]).unwrap()],
+    )
+    .unwrap();
+    let portable = PortableTestPlan::export(workspace.path(), &graph, plan).unwrap();
+
+    std::fs::write(
+        workspace.path().join("hidden/unrelated.txt"),
+        "not a source",
+    )
+    .unwrap();
+    portable.validate(workspace.path(), &graph).unwrap();
+    std::fs::write(&source, "other").unwrap();
+    assert!(portable.validate(workspace.path(), &graph).is_err());
+    std::fs::write(&source, "first").unwrap();
+    portable.validate(workspace.path(), &graph).unwrap();
+    std::fs::write(workspace.path().join("hidden/added.rs"), "new source").unwrap();
+    assert!(portable.validate(workspace.path(), &graph).is_err());
+    std::fs::remove_file(workspace.path().join("hidden/added.rs")).unwrap();
+    portable.validate(workspace.path(), &graph).unwrap();
+    std::fs::remove_file(source).unwrap();
+    assert!(portable.validate(workspace.path(), &graph).is_err());
+}
