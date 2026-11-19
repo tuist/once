@@ -418,6 +418,11 @@ impl Action {
     pub fn digest(&self) -> Digest {
         let domain = match self {
             Action::CopyPath { .. } => b"struo.action.copy_path.v2\0".as_slice(),
+            // Zip entries below 4 GiB no longer carry ZIP64 extras.
+            Action::WriteArchive {
+                format: ArchiveFormat::Zip,
+                ..
+            } => b"struo.action.write_archive.zip.v2\0".as_slice(),
             // Old normalized results cannot distinguish accepted exits from rejected zero.
             Action::RunCommand {
                 success_exit_codes, ..
@@ -560,6 +565,24 @@ mod tests {
             serde_json::to_writer(&mut encoded, &action).unwrap();
             let legacy = Digest::of_bytes(&encoded);
             assert_eq!(action.digest() == legacy, codes.contains(&0));
+        }
+    }
+
+    #[test]
+    fn only_zip_archives_partition_legacy_action_keys() {
+        for format in [ArchiveFormat::Tar, ArchiveFormat::TarGz, ArchiveFormat::Zip] {
+            let action = Action::WriteArchive {
+                entries: Vec::new(),
+                output: WorkspacePath::try_from("out/archive").unwrap(),
+                sha256_output: None,
+                uncompressed_sha256_output: None,
+                format,
+                input_digest: None,
+            };
+            let mut encoded = ACTION_DIGEST_DOMAIN.to_vec();
+            serde_json::to_writer(&mut encoded, &action).unwrap();
+            let legacy = Digest::of_bytes(&encoded);
+            assert_eq!(action.digest() == legacy, format != ArchiveFormat::Zip);
         }
     }
 

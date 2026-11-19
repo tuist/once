@@ -107,8 +107,10 @@ fn write_zip(
             .unix_permissions(entry.mode);
         match &entry.source {
             ResolvedSource::File(source) => {
-                archive.start_file(&entry.path, options.large_file(true))?;
-                io::copy(&mut BufReader::new(File::open(source)?), &mut archive)?;
+                let file = File::open(source)?;
+                let large = file.metadata()?.len() >= u64::from(u32::MAX);
+                archive.start_file(&entry.path, options.large_file(large))?;
+                io::copy(&mut BufReader::new(file), &mut archive)?;
             }
             ResolvedSource::Directory => {
                 archive.add_directory(format!("{}/", entry.path), options)?;
@@ -713,7 +715,20 @@ mod tests {
             std::fs::read_to_string(sha256).unwrap().trim(),
             hex_lower(&Sha256::digest(&first))
         );
-        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(first)).unwrap();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(first.clone())).unwrap();
+        for index in 0..archive.len() {
+            let start = usize::try_from(archive.by_index(index).unwrap().header_start()).unwrap();
+            let header = &first[start..];
+            let name_len = u16::from_le_bytes([header[26], header[27]]) as usize;
+            let extra_len = u16::from_le_bytes([header[28], header[29]]) as usize;
+            let mut extra = &header[30 + name_len..30 + name_len + extra_len];
+            while extra.len() >= 4 {
+                let id = u16::from_le_bytes([extra[0], extra[1]]);
+                assert_ne!(id, 0x0001, "small entries must not carry ZIP64 extras");
+                let size = u16::from_le_bytes([extra[2], extra[3]]) as usize;
+                extra = &extra[4 + size..];
+            }
+        }
         let mut bytes = String::new();
         let mut executable = archive.by_name("usr/local/bin/hello").unwrap();
         assert_eq!(executable.unix_mode().unwrap() & 0o777, 0o755);
