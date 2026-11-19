@@ -333,7 +333,7 @@ impl Producers {
     fn spend_repair(&self) -> bool {
         self.inner
             .remaining
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
                 remaining.checked_sub(1)
             })
             .is_ok()

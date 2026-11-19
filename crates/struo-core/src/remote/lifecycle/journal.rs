@@ -207,7 +207,7 @@ impl Journal {
             .take(MAX_ENTRIES + 1)
         {
             entries += 1;
-            let is_record = entry.ok().is_some_and(|entry| {
+            let is_record = entry.is_ok_and(|entry| {
                 entry
                     .file_name()
                     .to_str()
