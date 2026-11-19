@@ -375,7 +375,9 @@ impl Service {
         for output in &command.output_paths {
             std::fs::create_dir_all(working.join(output).parent().unwrap()).unwrap();
         }
-        let output = self.spawn(&command, &working)?;
+        // The command blocks; keep it off the runtime that serves the other
+        // actions' uploads.
+        let output = tokio::task::block_in_place(|| self.spawn(&command, &working))?;
         self.state
             .lock()
             .await
