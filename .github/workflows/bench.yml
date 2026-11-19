@@ -11,6 +11,13 @@ on:
       - '.github/workflows/bench.yml'
   push:
     branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/**'
+      - 'benchmarks/**'
+      - 'mise.toml'
+      - '.github/workflows/bench.yml'
 
 concurrency:
   group: bench-${{ github.ref }}
@@ -30,7 +37,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [tuist-linux-large, tuist-macos]
+        # Renovate dependency bumps benchmark on Linux only.
+        os: ${{ fromJSON(startsWith(github.head_ref, 'renovate/') && '["tuist-linux-large"]' || '["tuist-linux-large","tuist-macos"]') }}
     steps:
       - uses: actions/checkout@v7
       # pipx tools link to the python3 they were installed with, which on

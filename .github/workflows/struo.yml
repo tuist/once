@@ -19,6 +19,8 @@ jobs:
     runs-on: tuist-linux
     outputs:
       rust_ci: ${{ steps.filter.outputs.rust_ci }}
+      runners: ${{ steps.runners.outputs.runners }}
+      macos: ${{ steps.runners.outputs.macos }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -40,7 +42,9 @@ jobs:
             fi
           fi
 
-          git diff --name-only "$base" "$head" > changed-files.txt
+          # Three dots diff against the merge base, so a pull request
+          # that is behind main is not charged with main's own changes.
+          git diff --name-only "$base...$head" > changed-files.txt
 
           rust_ci=false
           while IFS= read -r path; do
@@ -54,6 +58,19 @@ jobs:
           echo "rust_ci=$rust_ci" >> "$GITHUB_OUTPUT"
           echo "Rust CI required: $rust_ci"
           sed 's/^/- /' changed-files.txt
+      # Dependency bumps from Renovate run on Linux only; main still runs
+      # every platform after they merge, so macOS regressions surface there.
+      - id: runners
+        name: select runners
+        shell: bash
+        run: |
+          if [[ "${{ startsWith(github.head_ref, 'renovate/') }}" == "true" ]]; then
+            echo 'runners=["tuist-linux-large"]' >> "$GITHUB_OUTPUT"
+            echo "macos=false" >> "$GITHUB_OUTPUT"
+          else
+            echo 'runners=["tuist-linux-large","tuist-macos"]' >> "$GITHUB_OUTPUT"
+            echo "macos=true" >> "$GITHUB_OUTPUT"
+          fi
 
   fmt:
     name: fmt
@@ -116,7 +133,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [tuist-linux-large, tuist-macos]
+        os: ${{ fromJSON(needs.changes.outputs.runners) }}
     steps:
       - uses: actions/checkout@v7
       # pipx tools link to the python3 they were installed with, which on
@@ -217,7 +234,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [tuist-linux-large, tuist-macos]
+        os: ${{ fromJSON(needs.changes.outputs.runners) }}
     steps:
       - uses: actions/checkout@v7
       # pipx tools link to the python3 they were installed with, which on
@@ -375,7 +392,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [tuist-linux-large, tuist-macos]
+        os: ${{ fromJSON(needs.changes.outputs.runners) }}
     steps:
       - uses: actions/checkout@v7
       # pipx tools link to the python3 they were installed with, which on
@@ -417,7 +434,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [tuist-linux-large, tuist-macos]
+        os: ${{ fromJSON(needs.changes.outputs.runners) }}
     steps:
       - uses: actions/checkout@v7
       # pipx tools link to the python3 they were installed with, which on
@@ -455,7 +472,7 @@ jobs:
   ios-sdk-check:
     name: iOS SDK check
     needs: changes
-    if: needs.changes.outputs.rust_ci == 'true'
+    if: needs.changes.outputs.rust_ci == 'true' && needs.changes.outputs.macos == 'true'
     runs-on: tuist-macos
     steps:
       - uses: actions/checkout@v7
