@@ -25,9 +25,9 @@ concurrency:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: tuist/struo-web
-  HELM_CHART_PATH: infra/helm/once
-  HELM_RELEASE_NAME: once
-  NAMESPACE: once-production
+  HELM_CHART_PATH: infra/helm/struo
+  HELM_RELEASE_NAME: struo
+  NAMESPACE: struo-production
   DEPLOY_SHA: ${{ inputs.commit_sha || github.sha }}
 
 jobs:
@@ -65,7 +65,7 @@ jobs:
     runs-on: tuist-linux
     environment:
       name: production
-      url: https://buildonce.dev
+      url: https://struo.run
     timeout-minutes: 20
     env:
       KUBECONFIG: ${{ github.workspace }}/.kube/config
@@ -127,8 +127,8 @@ jobs:
           kubectl -n "$NAMESPACE" get events --sort-by=.lastTimestamp 2>&1 | tail -100 || true
           echo "::endgroup::"
           echo "::group::deployment and pods"
-          kubectl -n "$NAMESPACE" describe deploy/once || true
-          for pod in $(kubectl -n "$NAMESPACE" get pods -l app.kubernetes.io/name=once -o name 2>/dev/null); do
+          kubectl -n "$NAMESPACE" describe deploy/struo || true
+          for pod in $(kubectl -n "$NAMESPACE" get pods -l app.kubernetes.io/name=struo -o name 2>/dev/null); do
             kubectl -n "$NAMESPACE" describe "$pod" || true
             kubectl -n "$NAMESPACE" logs "$pod" --all-containers --tail=500 || true
             kubectl -n "$NAMESPACE" logs "$pod" --all-containers --previous --tail=500 || true
@@ -140,6 +140,6 @@ jobs:
           echo "::endgroup::"
       - name: Smoke test
         run: |
-          kubectl -n "$NAMESPACE" rollout status deploy/once --timeout=10m
+          kubectl -n "$NAMESPACE" rollout status deploy/struo --timeout=10m
           kubectl -n "$NAMESPACE" run smoke-$RANDOM --rm -i --restart=Never --image=curlimages/curl \
-            --command -- curl -fsS "http://once/ready"
+            --command -- curl -fsS "http://struo/ready"

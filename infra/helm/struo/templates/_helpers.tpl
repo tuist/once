@@ -1,37 +1,37 @@
-{{- define "once.name" -}}
+{{- define "struo.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "once.fullname" -}}
+{{- define "struo.fullname" -}}
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
-{{- printf "%s-%s" .Release.Name (include "once.name" .) | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-%s" .Release.Name (include "struo.name" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 {{- end -}}
 
-{{- define "once.labels" -}}
-app.kubernetes.io/name: {{ include "once.name" . }}
+{{- define "struo.labels" -}}
+app.kubernetes.io/name: {{ include "struo.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 
-{{- define "once.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "once.name" . }}
+{{- define "struo.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "struo.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
-{{- define "once.webLabels" -}}
-{{ include "once.labels" . }}
+{{- define "struo.webLabels" -}}
+{{ include "struo.labels" . }}
 app.kubernetes.io/component: web
 {{- end -}}
 
-{{- define "once.webSelectorLabels" -}}
-{{ include "once.selectorLabels" . }}
+{{- define "struo.webSelectorLabels" -}}
+{{ include "struo.selectorLabels" . }}
 app.kubernetes.io/component: web
 {{- end -}}
 
-{{- define "once.appSecretName" -}}
-{{ include "once.fullname" . }}-app
+{{- define "struo.appSecretName" -}}
+{{ include "struo.fullname" . }}-app
 {{- end -}}

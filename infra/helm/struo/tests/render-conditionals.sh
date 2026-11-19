@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-chart_path="${CHART_PATH:-infra/helm/once}"
+chart_path="${CHART_PATH:-infra/helm/struo}"
 rendered_manifest="${RENDERED_MANIFEST:-}"
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
 render() {
-  helm template once "$chart_path" --namespace once-production "$@"
+  helm template struo "$chart_path" --namespace struo-production "$@"
 }
 
 external_secret_count() {
@@ -80,7 +80,7 @@ if ! grep -q '^kind: Issuer$' "$tmpdir/dns-issuer-no-es.yaml"; then
 fi
 
 render --set dnsIssuer.enabled=true --set externalSecrets.enabled=true >"$tmpdir/dns-issuer-with-es.yaml"
-if ! grep -q 'name: cloudflare-buildonce-token' "$tmpdir/dns-issuer-with-es.yaml"; then
+if ! grep -q 'name: cloudflare-struo-token' "$tmpdir/dns-issuer-with-es.yaml"; then
   echo "token ExternalSecret not rendered when dnsIssuer and externalSecrets enabled" >&2
   exit 1
 fi

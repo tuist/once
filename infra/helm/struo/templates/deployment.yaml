@@ -1,17 +1,17 @@
-{{- $appSecret := include "once.appSecretName" . -}}
+{{- $appSecret := include "struo.appSecretName" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "once.fullname" . }}
+  name: {{ include "struo.fullname" . }}
   labels:
-    {{- include "once.webLabels" . | nindent 4 }}
+    {{- include "struo.webLabels" . | nindent 4 }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
   selector:
     matchLabels:
-      {{- include "once.selectorLabels" . | nindent 6 }}
+      {{- include "struo.selectorLabels" . | nindent 6 }}
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -20,16 +20,16 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "once.webSelectorLabels" . | nindent 8 }}
+        {{- include "struo.webSelectorLabels" . | nindent 8 }}
     spec:
-      serviceAccountName: {{ include "once.fullname" . }}
+      serviceAccountName: {{ include "struo.fullname" . }}
       {{- if .Values.image.pullSecretName }}
       imagePullSecrets:
         - name: {{ .Values.image.pullSecretName }}
       {{- end }}
       terminationGracePeriodSeconds: 30
       containers:
-        - name: once
+        - name: struo
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:

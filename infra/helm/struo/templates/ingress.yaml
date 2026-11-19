@@ -1,9 +1,9 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "once.fullname" . }}
+  name: {{ include "struo.fullname" . }}
   labels:
-    {{- include "once.labels" . | nindent 4 }}
+    {{- include "struo.labels" . | nindent 4 }}
   annotations:
     {{- if .Values.ingress.issuer }}
     cert-manager.io/issuer: {{ .Values.ingress.issuer | quote }}
@@ -16,10 +16,10 @@ spec:
   tls:
     - hosts:
         - {{ .Values.host }}
-        {{- if .Values.docsHost }}
-        - {{ .Values.docsHost }}
+        {{- range .Values.legacyHosts }}
+        - {{ . }}
         {{- end }}
-      secretName: {{ include "once.fullname" . }}-tls
+      secretName: {{ include "struo.fullname" . }}-tls
   rules:
     - host: {{ .Values.host }}
       http:
@@ -28,18 +28,18 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "once.fullname" . }}
+                name: {{ include "struo.fullname" . }}
                 port:
                   name: http
-    {{- if .Values.docsHost }}
-    - host: {{ .Values.docsHost }}
+    {{- range .Values.legacyHosts }}
+    - host: {{ . }}
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: {{ include "once.fullname" . }}
+                name: {{ include "struo.fullname" $ }}
                 port:
                   name: http
     {{- end }}

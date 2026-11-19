@@ -9,11 +9,12 @@ sources:
   - ingress
 
 domainFilters:
+  - struo.run
   - buildonce.dev
 
 policy: upsert-only
 registry: txt
-txtOwnerId: once-production
+txtOwnerId: struo-production
 interval: 1m
 triggerLoopOnEvent: false
 

@@ -46,6 +46,6 @@ defmodule StruoSiteWeb.Endpoint do
   plug Plug.MethodOverride
   plug Plug.Head
   plug Plug.Session, @session_options
-  plug StruoSiteWeb.Plugs.DocsRedirect
+  plug StruoSiteWeb.Plugs.LegacyHostRedirect
   plug StruoSiteWeb.Router
 end

@@ -1,19 +1,19 @@
-# Production values for the Struo website Helm chart. The release, namespace,
-# and secret names keep their original `once` identifiers so upgrades stay in place.
+# Production values for the Struo website Helm chart.
 #
 # This chart assumes the cluster has cert-manager, ingress-nginx,
 # external-dns, and external-secrets-operator with a 1Password
 # ClusterSecretStore named `onepassword`.
 
 nameOverride: ""
-fullnameOverride: "once"
+fullnameOverride: "struo"
 
-host: buildonce.dev
+host: struo.run
 
-# Legacy documentation host. The docs now live in the app under /docs; the app
-# 301-redirects this host to buildonce.dev/docs. Kept on the ingress so
-# cert-manager issues its certificate and external-dns publishes it.
-docsHost: docs.buildonce.dev
+# Hosts the site used before the rename. They stay on the ingress so
+# cert-manager keeps their certificate and external-dns keeps their records,
+# and the app 301-redirects them to struo.run (docs.buildonce.dev to /docs).
+# Leave empty while another release still claims them.
+legacyHosts: []
 
 image:
   repository: ghcr.io/tuist/struo-web
@@ -54,18 +54,18 @@ service:
 ingress:
   className: nginx
   # A namespaced Issuer (created by templates/dns-issuer.yaml) that can solve
-  # the DNS-01 challenge for buildonce.dev. When set, it takes precedence over
+  # the DNS-01 challenge for struo.run and the legacy hosts. When set, it takes precedence over
   # clusterIssuer, which the shared cluster only scopes to the tuist.dev zone.
-  issuer: letsencrypt-buildonce
+  issuer: letsencrypt-struo
   clusterIssuer: letsencrypt-cloudflare
 
-# Namespaced ACME issuer for buildonce.dev. Its Cloudflare token is synced from
-# 1Password into the namespace and grants edit access to the buildonce.dev zone.
+# Namespaced ACME issuer. Its Cloudflare token is synced from 1Password into the
+# namespace and grants edit access to the struo.run and buildonce.dev zones.
 dnsIssuer:
   enabled: true
   email: ops@tuist.dev
   acmeServer: https://acme-v02.api.letsencrypt.org/directory
-  tokenSecretName: cloudflare-buildonce-token
+  tokenSecretName: cloudflare-struo-token
   tokenRemoteRef: "cloudflare-struo-dns/credential"
 
 env: {}

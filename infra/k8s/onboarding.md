@@ -6,7 +6,7 @@ tests. Cluster-level controllers such as external-dns are installed here.
 
 ## DNS Controller
 
-external-dns watches the Struo website Ingress and keeps the `buildonce.dev` Cloudflare
+external-dns watches the Struo website Ingress and keeps the `struo.run` and `buildonce.dev` Cloudflare
 record in sync with the ingress-nginx LoadBalancer address. Install it once per
 workload cluster after ingress-nginx is available.
 
@@ -15,7 +15,7 @@ Prerequisites:
 - The current `KUBECONFIG` points at the Struo production workload cluster (still named `once-production`).
 - The Cloudflare API token is stored at
   `op://struo-k8s-production/cloudflare-struo-dns/credential`.
-- The token has `Zone:Read` and `DNS:Edit` permissions for `buildonce.dev`.
+- The token has `Zone:Read` and `DNS:Edit` permissions for the `struo.run` and `buildonce.dev` zones.
 
 ```bash
 tmpdir="$(mktemp -d)"
@@ -43,5 +43,5 @@ Validate:
 
 ```bash
 kubectl -n external-dns get deploy external-dns
-dig @1.1.1.1 buildonce.dev A +short
+dig @1.1.1.1 struo.run A +short
 ```

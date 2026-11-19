@@ -199,8 +199,8 @@ jobs:
           install_args: "helm@3.21.0"
           cache: "false"
 
-      - run: mise --no-config exec helm@3.21.0 -- helm lint infra/helm/once
-      - run: mise --no-config exec helm@3.21.0 -- helm template once infra/helm/once --namespace once-production >/tmp/struo-helm-rendered.yaml
-      - run: mise --no-config exec helm@3.21.0 -- bash infra/helm/once/tests/render-conditionals.sh
+      - run: mise --no-config exec helm@3.21.0 -- helm lint infra/helm/struo
+      - run: mise --no-config exec helm@3.21.0 -- helm template struo infra/helm/struo --namespace struo-production >/tmp/struo-helm-rendered.yaml
+      - run: mise --no-config exec helm@3.21.0 -- bash infra/helm/struo/tests/render-conditionals.sh
         env:
           RENDERED_MANIFEST: /tmp/struo-helm-rendered.yaml

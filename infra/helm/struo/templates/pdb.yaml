@@ -2,12 +2,12 @@
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: {{ include "once.fullname" . }}
+  name: {{ include "struo.fullname" . }}
   labels:
-    {{- include "once.labels" . | nindent 4 }}
+    {{- include "struo.labels" . | nindent 4 }}
 spec:
   minAvailable: {{ .Values.pdb.minAvailable }}
   selector:
     matchLabels:
-      {{- include "once.webSelectorLabels" . | nindent 6 }}
+      {{- include "struo.webSelectorLabels" . | nindent 6 }}
 {{- end }}
