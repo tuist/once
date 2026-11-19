@@ -1,11 +1,11 @@
 # Struo Ruby Software Development Kit
 
-`buildstruo` exposes Struo primitives to Ruby. It loads the same
+`struo` exposes Struo primitives to Ruby. It loads the same
 native Struo library used by the other language libraries and does not expose script
 execution.
 
 ```ruby
-require "buildstruo"
+require "struo"
 
 cache = Struo::Cache.new
 digest = cache.put_blob("hello")

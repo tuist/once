@@ -67,13 +67,13 @@ out of the host language's memory.
 Install the Ruby library from RubyGems:
 
 ```sh
-gem install buildstruo
+gem install struo
 ```
 
 Use it to read and write blobs through the default local cache:
 
 ```ruby
-require "buildstruo"
+require "struo"
 
 cache = Struo::Cache.new
 digest = cache.put_blob("hello")

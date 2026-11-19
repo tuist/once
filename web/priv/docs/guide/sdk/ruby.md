@@ -5,13 +5,13 @@ next: false
 
 # Ruby Software Development Kit
 
-The Ruby library is the `buildstruo` gem. It exposes Struo cache primitives for
+The Ruby library is the `struo` gem. It exposes Struo cache primitives for
 Ruby applications and tools. Script execution belongs to the command line and
 is not part of this library. See the [language-library overview](/guide/sdk/)
 to compare the available bindings.
 
 ```ruby
-require "buildstruo"
+require "struo"
 
 cache = Struo::Cache.new
 digest = cache.put_blob("hello")
@@ -25,7 +25,7 @@ raise unless bytes == "hello"
 Install the gem from RubyGems:
 
 ```sh
-gem install buildstruo
+gem install struo
 ```
 
 The gem includes prebuilt native Struo libraries for supported platforms.

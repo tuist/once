@@ -299,7 +299,7 @@ LOCK
       'exit 1'
     write_stub gem \
       '#!/usr/bin/env bash' \
-      'if [ "$1" = list ]; then echo "buildstruo (0.9.0, 0.1.0)"; exit 0; fi' \
+      'if [ "$1" = list ]; then echo "struo (0.9.0, 0.1.0)"; exit 0; fi' \
       'echo "gem $* should not have run" >&2' \
       'exit 1'
     cd "$WORKSPACE"
@@ -321,7 +321,7 @@ LOCK
     # 0.54.0 must not be read as published just because 0.5.4 is.
     write_stub gem \
       '#!/usr/bin/env bash' \
-      'if [ "$1" = list ]; then echo "buildstruo (0.5.4, 0.1.0)"; exit 0; fi' \
+      'if [ "$1" = list ]; then echo "struo (0.5.4, 0.1.0)"; exit 0; fi' \
       'if [ "$1" = push ]; then echo "pushed $2"; exit 0; fi' \
       'exit 0'
     cd "$WORKSPACE"
@@ -329,7 +329,7 @@ LOCK
     When call "$REPO_ROOT/mise/tasks/release/publish-sdks.sh" --version 0.54.0
     The status should be success
     The stdout should not include 'already on RubyGems'
-    The stdout should include 'pushed buildstruo-0.54.0.gem'
+    The stdout should include 'pushed struo-0.54.0.gem'
   End
 
   It 'publishes to RubyGems even when npm publishing fails'
@@ -343,15 +343,15 @@ LOCK
       'exit 0'
     write_stub gem \
       '#!/usr/bin/env bash' \
-      'if [ "$1" = list ]; then echo "buildstruo (0.1.0)"; exit 0; fi' \
+      'if [ "$1" = list ]; then echo "struo (0.1.0)"; exit 0; fi' \
       'if [ "$1" = push ]; then echo "pushed $2"; exit 0; fi' \
       'exit 0'
     cd "$WORKSPACE"
 
     When call "$REPO_ROOT/mise/tasks/release/publish-sdks.sh" --version 0.9.0
     The status should be failure
-    The stdout should include 'pushed buildstruo-0.9.0.gem'
-    The stderr should include 'failed to publish buildstruo 0.9.0 to: npm'
+    The stdout should include 'pushed struo-0.9.0.gem'
+    The stderr should include 'failed to publish 0.9.0 to: npm'
   End
 
   It 'rejects npm clients too old for trusted publishing'
@@ -364,7 +364,7 @@ LOCK
       'exit 0'
     write_stub gem \
       '#!/usr/bin/env bash' \
-      'if [ "$1" = list ]; then echo "buildstruo (0.9.0)"; exit 0; fi' \
+      'if [ "$1" = list ]; then echo "struo (0.9.0)"; exit 0; fi' \
       'exit 0'
     cd "$WORKSPACE"
 

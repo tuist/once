@@ -1,5 +1,5 @@
 Gem::Specification.new do |spec|
-  spec.name = "buildstruo"
+  spec.name = "struo"
   spec.version = ENV.fetch("STRUO_VERSION", "0.0.0")
   spec.summary = "Ruby software development kit for Struo"
   spec.description = "Embeds Struo primitives in Ruby through the native Struo library."

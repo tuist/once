@@ -4,7 +4,7 @@ require "tmpdir"
 require "open3"
 
 $LOAD_PATH.unshift(File.expand_path("lib", __dir__))
-require "buildstruo"
+require "struo"
 
 def assert_raises_struo_error
   yield
@@ -83,7 +83,7 @@ Dir.mktmpdir("struo-ruby-") do |dir|
       RbConfig.ruby,
       "-I#{File.expand_path("lib", __dir__)}",
       "-e",
-      "require 'buildstruo'",
+      "require 'struo'",
     ],
     "STRUO_LIBRARY_PATH" => "/missing/libstruo.dylib",
   )

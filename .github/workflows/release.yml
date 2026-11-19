@@ -326,8 +326,23 @@ jobs:
       # RubyGems also uses trusted publishing: this exchanges the workflow's
       # OIDC identity for a short-lived key and exports it as
       # GEM_HOST_API_KEY. The trusted publisher on rubygems.org pins the
-      # repository and this workflow's filename, like npm's.
-      - uses: rubygems/configure-rubygems-credentials@dc5a8d8553e6ee01fc26761a49e99e733d17954a # v2.1.0
+      # repository and this workflow's filename, like npm's. `owner` is the
+      # immutable ID of the tuist RubyGems account, which a pending publisher
+      # requires before it lets the first push create the gem. The released
+      # configure-rubygems-credentials action has no input for it yet.
+      - name: Exchange OIDC token for a RubyGems key
+        env:
+          RUBYGEMS_OWNER_ID: "247110"
+        run: |
+          set -euo pipefail
+          jwt="$(curl -fsS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=rubygems.org" | jq -r .value)"
+          echo "::add-mask::${jwt}"
+          key="$(jq -n --arg jwt "$jwt" --arg owner "$RUBYGEMS_OWNER_ID" '{jwt: $jwt, owner: $owner}' |
+            curl -fsS -X POST -H "Content-Type: application/json" --data @- \
+              https://rubygems.org/api/v1/oidc/trusted_publisher/exchange_token | jq -r .rubygems_api_key)"
+          echo "::add-mask::${key}"
+          echo "GEM_HOST_API_KEY=${key}" >> "$GITHUB_ENV"
       # No ~/.npmrc is written on purpose. npm only starts the OIDC exchange
       # when it finds no configured credential, so an _authToken line here
       # would make it publish anonymously and fail with a 404 that says the
