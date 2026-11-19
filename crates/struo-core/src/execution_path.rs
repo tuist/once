@@ -3,13 +3,48 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 pub const EXECUTION_ROOT_MARKER: &str = "{{struo.execution_root}}";
+/// The executing user's home directory.
+pub const HOME_MARKER: &str = "{{struo.home}}";
+const DATA_DIR_MARKER: &str = "{{struo.data_dir}}";
+const CACHE_DIR_MARKER: &str = "{{struo.cache_dir}}";
 
 #[must_use]
 pub fn resolve_execution_value(value: &str, execution_root: &Path) -> String {
-    if !value.contains(EXECUTION_ROOT_MARKER) {
-        return value.to_string();
+    let mut value = value.replace(EXECUTION_ROOT_MARKER, &command_path(execution_root));
+    if value.contains("{{struo.") {
+        for (marker, path) in host_directories() {
+            value = value.replace(marker, &command_path(&path));
+        }
     }
-    value.replace(EXECUTION_ROOT_MARKER, &command_path(execution_root))
+    value
+}
+
+/// Spell paths inside Struo's own data and cache directories with markers
+/// that resolve on the executing host, so action keys do not depend on where
+/// the coordinator keeps them.
+#[must_use]
+pub fn portable_host_value(value: &str) -> String {
+    let mut directories = host_directories();
+    directories.retain(|(marker, _)| *marker != HOME_MARKER);
+    directories.sort_by_key(|(_, path)| std::cmp::Reverse(path.as_os_str().len()));
+    directories
+        .into_iter()
+        .fold(value.to_string(), |value, (marker, path)| {
+            value.replace(&command_path(&path), marker)
+        })
+}
+
+fn host_directories() -> Vec<(&'static str, std::path::PathBuf)> {
+    let xdg = crate::Xdg::from_env();
+    let mut directories = vec![
+        (DATA_DIR_MARKER, xdg.struo_data()),
+        (CACHE_DIR_MARKER, xdg.cache_home.join("struo")),
+    ];
+    let home = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    if let Some(home) = std::env::var_os(home) {
+        directories.push((HOME_MARKER, home.into()));
+    }
+    directories
 }
 
 /// Spell a path for a command line or environment value. On Windows,
@@ -83,6 +118,20 @@ mod tests {
             resolve_execution_value("plain", Path::new("/sandbox")),
             "plain"
         );
+    }
+
+    #[test]
+    fn host_directories_round_trip_through_markers() {
+        let xdg = crate::Xdg::from_env();
+        let data = command_path(&xdg.struo_data());
+        let cache = command_path(&xdg.cache_home.join("struo"));
+        let value = format!("{data}/tools/mise-data/installs/erlang:/usr/bin:{cache}/mise");
+        let portable = portable_host_value(&value);
+        assert_eq!(
+            portable,
+            "{{struo.data_dir}}/tools/mise-data/installs/erlang:/usr/bin:{{struo.cache_dir}}/mise"
+        );
+        assert_eq!(resolve_execution_value(&portable, Path::new("/ws")), value);
     }
 
     #[test]

@@ -102,6 +102,25 @@ EOF
     env PATH=/usr/bin:/bin "$STRUO_BIN" -C "$WORKSPACE" --format json build tools/probe/Probe
   }
 
+  build_probe_from_another_home() {
+    env PATH=/usr/bin:/bin "$STRUO_BIN" -C "$WORKSPACE" --format json build tools/probe/Probe \
+      >"$WORKSPACE/first-build.json" || return
+    other_cache="$SPEC_ROOT/other-cache"
+    mkdir -p "$other_cache/struo" "$SPEC_ROOT/other-home"
+    ln -s "$XDG_CACHE_HOME/struo/cas" "$other_cache/struo/cas"
+    env PATH=/usr/bin:/bin HOME="$SPEC_ROOT/other-home" XDG_CACHE_HOME="$other_cache" \
+      "$STRUO_BIN" -C "$WORKSPACE" --format json build tools/probe/Probe
+  }
+
+  It 'keeps HOME and the managed mise cache directory out of action keys'
+    create_graph_tool_workspace
+
+    When call build_probe_from_another_home
+    The status should be success
+    The stdout should include '"cache":"hit"'
+    The contents of file "$WORKSPACE/first-build.json" should include '"cache":"miss"'
+  End
+
   It 'keys a managed tool the same way when another declared tool cannot be installed'
     create_graph_tool_workspace
     add_uninstallable_tool_target

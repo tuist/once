@@ -7,6 +7,8 @@ use std::process::{Output, Stdio};
 use futures::future::try_join_all;
 use tokio::process::Command;
 
+use crate::execution_path::{portable_host_value, EXECUTION_ROOT_MARKER, HOME_MARKER};
+
 use super::{
     managed_mise,
     mise_runtime::{managed_mise_cache_dir, managed_mise_config_dir, managed_mise_data_dir},
@@ -63,7 +65,10 @@ pub async fn workspace_mise_command(workspace: &Path) -> Result<Option<Vec<Strin
 }
 
 fn mise_execution_prefix(mise: &Path, locked: bool) -> Vec<String> {
-    let mut argv = vec![mise.display().to_string(), "exec".to_string()];
+    let mut argv = vec![
+        portable_host_value(&mise.display().to_string()),
+        "exec".to_string(),
+    ];
     if locked {
         argv.push("--locked".to_string());
     }
@@ -81,12 +86,25 @@ pub fn workspace_mise_env(workspace: &Path, tools: &[&str]) -> BTreeMap<String, 
     // so mise's home directory has to be forwarded explicitly. The
     // variable that names it is platform specific: `HOME` on Unix,
     // `USERPROFILE` on Windows.
+    // Directories that vary between machines are spelled as markers the
+    // runner resolves, so they do not enter action keys.
+    let home = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
     for key in ["HOME", "USERPROFILE"] {
         if let Some(value) = env::var_os(key) {
-            selected.insert(key.into(), value.to_string_lossy().into_owned());
+            let value = if key == home {
+                HOME_MARKER.to_string()
+            } else {
+                value.to_string_lossy().into_owned()
+            };
+            selected.insert(key.into(), value);
         }
     }
     for (key, value) in managed_mise_isolation(workspace) {
+        let value = if key == "MISE_TRUSTED_CONFIG_PATHS" {
+            EXECUTION_ROOT_MARKER.to_string()
+        } else {
+            portable_host_value(&value)
+        };
         selected.insert(key.into(), value);
     }
     selected.insert("MISE_ENABLE_TOOLS".into(), tools.join(","));
@@ -175,7 +193,7 @@ pub async fn workspace_tool_env_with_executables(
     let mise_env = mise_env(workspace).await?;
     let mut selected = select_extra_env(&mise_env, extra_keys);
     let path = workspace_path(workspace, tools, executables, &mise_env).await?;
-    selected.insert("PATH".into(), path);
+    selected.insert("PATH".into(), portable_host_value(&path));
     selected.extend(workspace_mise_env(workspace, tools));
     Ok(selected)
 }
@@ -191,7 +209,7 @@ pub fn workspace_prepared_tool_env(
     let mut selected = workspace_mise_env(workspace, tools);
     selected.insert(
         "PATH".into(),
-        build_action_path(executable_paths, &BTreeMap::new())?,
+        portable_host_value(&build_action_path(executable_paths, &BTreeMap::new())?),
     );
     Ok(selected)
 }
@@ -447,11 +465,46 @@ mod tests {
             selected
                 .get("MISE_TRUSTED_CONFIG_PATHS")
                 .map(String::as_str),
-            Some(tmp.path().to_string_lossy().as_ref())
+            Some(EXECUTION_ROOT_MARKER)
         );
-        assert!(selected.contains_key("MISE_DATA_DIR"));
-        assert!(selected.contains_key("MISE_CONFIG_DIR"));
-        assert!(selected.contains_key("MISE_CACHE_DIR"));
+        assert_eq!(
+            selected.get("MISE_DATA_DIR").map(String::as_str),
+            Some("{{struo.data_dir}}/tools/mise-data")
+        );
+        assert_eq!(
+            selected.get("MISE_CONFIG_DIR").map(String::as_str),
+            Some("{{struo.data_dir}}/tools/mise-config")
+        );
+        assert_eq!(
+            selected.get("MISE_CACHE_DIR").map(String::as_str),
+            Some("{{struo.cache_dir}}/mise")
+        );
+        let home = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+        if env::var_os(home).is_some() {
+            assert_eq!(selected.get(home).map(String::as_str), Some(HOME_MARKER));
+        }
+        for (key, value) in &selected {
+            assert_eq!(
+                crate::resolve_execution_value(value, tmp.path()),
+                workspace_mise_env_on_host(tmp.path(), key),
+                "{key} resolves to the host value"
+            );
+        }
+    }
+
+    fn workspace_mise_env_on_host(workspace: &Path, key: &str) -> String {
+        match key {
+            "MISE_ENABLE_TOOLS" => "rust".into(),
+            "MISE_AUTO_INSTALL" | "MISE_EXEC_AUTO_INSTALL" => "0".into(),
+            "HOME" | "USERPROFILE" => env::var(key).unwrap(),
+            _ => {
+                managed_mise_isolation(workspace)
+                    .into_iter()
+                    .find(|(name, _)| *name == key)
+                    .unwrap()
+                    .1
+            }
+        }
     }
 
     #[test]
@@ -459,6 +512,13 @@ mod tests {
         assert_eq!(
             mise_execution_prefix(Path::new("/struo/mise"), true),
             ["/struo/mise", "exec", "--locked", "--"]
+        );
+        let managed = super::super::mise_runtime::managed_mise_path();
+        let prefix = mise_execution_prefix(&managed, false);
+        assert!(prefix[0].starts_with("{{struo.data_dir}}/tools/mise/"));
+        assert_eq!(
+            crate::resolve_execution_value(&prefix[0], Path::new("/ws")),
+            managed.display().to_string()
         );
     }
 }
