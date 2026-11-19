@@ -3,6 +3,7 @@
 //! Tuist for a short-lived access token, caching the result in memory for
 //! the life of the process.
 
+use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
@@ -16,6 +17,7 @@ use super::{env_token, TuistAuth, OIDC_TOKEN_REFRESH_WINDOW_SECONDS, PROVIDER_NA
 use crate::{Error, ErrorKind, Result};
 
 const OIDC_AUDIENCE: &str = "tuist";
+const AMP_OIDC_AUDIENCE: &str = "https://tuist.dev";
 const OIDC_REQUEST_TIMEOUT_SECONDS: u64 = 30;
 const OIDC_EXCHANGE_MAX_RETRIES: usize = 3;
 const OIDC_EXCHANGE_RETRY_BASE_DELAY_MS: u64 = 100;
@@ -40,14 +42,22 @@ impl TuistAuth {
             self.remember_ci_token(&token)?;
             return Ok(token);
         }
-        let oidc_token = Self::fetch_ci_oidc_token()?;
-        let access_token = self.exchange_oidc_token(&oidc_token)?;
+        let identity = Self::fetch_ci_oidc_token()?;
+        // An Amp workspace can be connected to several Tuist accounts, so its
+        // tokens name the account from the manifest. Other providers omit the
+        // field, which servers predating it reject.
+        let account_handle = if identity.from_amp {
+            self.config.account.as_deref()
+        } else {
+            None
+        };
+        let access_token = self.exchange_oidc_token(&identity.token, account_handle)?;
         self.store_access_token(&access_token)?;
         self.remember_ci_token(&access_token)?;
         Ok(access_token)
     }
 
-    fn fetch_ci_oidc_token() -> Result<String> {
+    fn fetch_ci_oidc_token() -> Result<IdentityToken> {
         if env_is_truthy("GITHUB_ACTIONS") {
             let request_url = env_token("ACTIONS_ID_TOKEN_REQUEST_URL").ok_or_else(|| {
                 Error::InvalidConfig {
@@ -60,12 +70,14 @@ impl TuistAuth {
                     provider: PROVIDER_NAME,
                     message: "GitHub Actions OpenID Connect token request variables are not set. Set `permissions: id-token: write` in the workflow.".to_string(),
                 })?;
-            return Self::fetch_github_actions_oidc_token(&request_url, &request_token);
+            return Self::fetch_github_actions_oidc_token(&request_url, &request_token)
+                .map(IdentityToken::ci);
         }
 
         if env_is_truthy("CIRCLECI") {
             return env_token("CIRCLE_OIDC_TOKEN_V2")
                 .or_else(|| env_token("CIRCLE_OIDC_TOKEN"))
+                .map(IdentityToken::ci)
                 .ok_or_else(|| Error::InvalidConfig {
                     provider: PROVIDER_NAME,
                     message: "CircleCI OpenID Connect token was not found. Enable OpenID Connect for the CircleCI project.".to_string(),
@@ -75,16 +87,56 @@ impl TuistAuth {
         if env_is_truthy("BITRISE_IO") {
             return env_token("BITRISE_OIDC_ID_TOKEN")
                 .or_else(|| env_token("BITRISE_IDENTITY_TOKEN"))
+                .map(IdentityToken::ci)
                 .ok_or_else(|| Error::InvalidConfig {
                     provider: PROVIDER_NAME,
                     message: "Bitrise OpenID Connect token was not found. Add the Bitrise identity token step before this step.".to_string(),
                 });
         }
 
+        if is_amp_orb() {
+            return Self::fetch_amp_oidc_token().map(|token| IdentityToken {
+                token,
+                from_amp: true,
+            });
+        }
+
         Err(Error::InvalidConfig {
             provider: PROVIDER_NAME,
-            message: "OpenID Connect authentication is not supported in this environment. Supported Continuous Integration providers: GitHub Actions, CircleCI, Bitrise.".to_string(),
+            message: "OpenID Connect authentication is not supported in this environment. Supported providers: GitHub Actions, CircleCI, Bitrise, Amp orbs.".to_string(),
         })
+    }
+
+    /// Amp mints orb identity tokens through its CLI, which every orb has
+    /// signed in. Tuist accepts them only for its fixed Amp audience.
+    fn fetch_amp_oidc_token() -> Result<String> {
+        let output = Command::new("amp")
+            .args(["orb", "id-token", "--audience", AMP_OIDC_AUDIENCE])
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|source| {
+                auth_error(
+                    "fetch Amp OpenID Connect token",
+                    ErrorKind::Unavailable,
+                    format!("could not run `amp orb id-token`: {source}"),
+                )
+            })?;
+        if !output.status.success() {
+            return Err(auth_error(
+                "fetch Amp OpenID Connect token",
+                ErrorKind::Unavailable,
+                format!("`amp orb id-token` exited with {}", output.status),
+            ));
+        }
+        let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if token.is_empty() {
+            return Err(auth_error(
+                "fetch Amp OpenID Connect token",
+                ErrorKind::Protocol,
+                "`amp orb id-token` printed no token".to_string(),
+            ));
+        }
+        Ok(token)
     }
 
     fn fetch_github_actions_oidc_token(request_url: &str, request_token: &str) -> Result<String> {
@@ -140,12 +192,16 @@ impl TuistAuth {
         Ok(token.to_string())
     }
 
-    fn exchange_oidc_token(&self, oidc_token: &str) -> Result<Token> {
+    fn exchange_oidc_token(&self, oidc_token: &str, account_handle: Option<&str>) -> Result<Token> {
         let client = Self::oidc_http_client()?;
         let endpoint = self.oidc_exchange_endpoint()?;
 
         for retry in 0..=OIDC_EXCHANGE_MAX_RETRIES {
-            match Self::exchange_oidc_token_once(&client, endpoint.clone(), oidc_token) {
+            let request = OidcExchangeRequest {
+                token: oidc_token,
+                account_handle,
+            };
+            match Self::exchange_oidc_token_once(&client, endpoint.clone(), &request) {
                 Ok(token) => return Ok(token),
                 Err(error) if retry < OIDC_EXCHANGE_MAX_RETRIES && error.retryable() => {
                     thread::sleep(oidc_exchange_retry_delay(retry));
@@ -160,11 +216,11 @@ impl TuistAuth {
     fn exchange_oidc_token_once(
         client: &Client,
         endpoint: Url,
-        oidc_token: &str,
+        request: &OidcExchangeRequest<'_>,
     ) -> std::result::Result<Token, OidcExchangeAttemptError> {
         let response = client
             .post(endpoint)
-            .json(&OidcExchangeRequest { token: oidc_token })
+            .json(request)
             .send()
             .map_err(|source| OidcExchangeAttemptError {
                 message: redact::transport(&source),
@@ -257,9 +313,26 @@ struct OidcTokenResponse {
     value: String,
 }
 
+/// A provider's identity token, and whether Amp minted it.
+struct IdentityToken {
+    token: String,
+    from_amp: bool,
+}
+
+impl IdentityToken {
+    fn ci(token: String) -> Self {
+        Self {
+            token,
+            from_amp: false,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct OidcExchangeRequest<'a> {
     token: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    account_handle: Option<&'a str>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -283,6 +356,12 @@ impl OidcExchangeAttemptError {
     fn into_remote_error(self) -> Error {
         auth_error("exchange OpenID Connect token", self.kind, self.message)
     }
+}
+
+/// Amp sets `AMP_ORB` in every orb, where no Continuous Integration
+/// variable is present.
+pub(super) fn is_amp_orb() -> bool {
+    env_is_truthy("AMP_ORB")
 }
 
 fn env_is_truthy(name: &str) -> bool {

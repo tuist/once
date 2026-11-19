@@ -237,10 +237,13 @@ impl TuistAuth {
     }
 }
 
+/// Whether to sign in through `OpenID Connect` instead of a browser: on
+/// Continuous Integration, or in an Amp orb.
 fn is_ci_environment() -> bool {
-    CI_ENVIRONMENT_VARIABLES
-        .iter()
-        .any(|name| std::env::var_os(name).is_some())
+    oidc::is_amp_orb()
+        || CI_ENVIRONMENT_VARIABLES
+            .iter()
+            .any(|name| std::env::var_os(name).is_some())
 }
 
 fn print_prompt(prompt: &TuistAuthPrompt) {
@@ -280,6 +283,7 @@ mod tests {
         "BITRISE_IO",
         "BITRISE_OIDC_ID_TOKEN",
         "BITRISE_IDENTITY_TOKEN",
+        "AMP_ORB",
         "TUIST_TOKEN",
     ];
 
@@ -758,6 +762,60 @@ mod tests {
 
         assert!(exchange_request.starts_with("POST /api/auth/oidc/token "));
         assert!(exchange_request.contains(r#""token":"circle-identity-token""#));
+        assert_eq!(stored.access_token, "tuist-access-token");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn amp_orb_login_exchanges_orb_token_for_the_manifest_account() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let exchange_server = OneShotHttpServer::new(
+            200,
+            r#"{"access_token":"tuist-access-token","expires_in":3600}"#,
+        );
+        let temp = TempDir::new().unwrap();
+        let auth = TuistAuth::new(temp.path(), &static_config(exchange_server.base_url()));
+        let bin = TempDir::new().unwrap();
+        let arguments = bin.path().join("arguments");
+        let amp = bin.path().join("amp");
+        std::fs::write(
+            &amp,
+            format!(
+                "#!/bin/sh\necho \"$*\" > '{}'\necho amp-identity-token\n",
+                arguments.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&amp, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        with_ci_env(&[("AMP_ORB", "1".to_string())], || {
+            let path = std::env::var_os("PATH").unwrap_or_default();
+            let mut paths = vec![bin.path().to_path_buf()];
+            paths.extend(std::env::split_paths(&path));
+            std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
+            let mut handler = |_| panic!("browser prompt should not be used in an Amp orb");
+            let result = auth.login_with_handler(false, &mut handler);
+            std::env::set_var("PATH", path);
+            result.unwrap();
+        });
+
+        let exchange_request = exchange_server.request();
+        let stored = auth
+            .storage()
+            .unwrap()
+            .load(&auth.storage_key())
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(arguments).unwrap().trim(),
+            "orb id-token --audience https://tuist.dev"
+        );
+        assert!(exchange_request.starts_with("POST /api/auth/oidc/token "));
+        assert!(
+            exchange_request.contains(r#"{"token":"amp-identity-token","account_handle":"acme"}"#)
+        );
         assert_eq!(stored.access_token, "tuist-access-token");
     }
 

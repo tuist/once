@@ -125,7 +125,16 @@ pub async fn spawn_with_test_context(
                 return Ok(0);
             };
 
-            let Some(token) = auth_token(&workspace, &xdg) else {
+            // Resolving a token can run a blocking `OpenID Connect` exchange,
+            // which must not run on this runtime.
+            let token_workspace = workspace.clone();
+            let token_xdg = xdg.clone();
+            let token =
+                tokio::task::spawn_blocking(move || auth_token(&token_workspace, &token_xdg))
+                    .await
+                    .ok()
+                    .flatten();
+            let Some(token) = token else {
                 tracing::debug!("Struo live reporter: no credentials configured");
                 return Ok(0);
             };
