@@ -132,6 +132,37 @@ TOML
     The contents of file "$WORKSPACE/packages/app/coverage/result.txt" should equal 'actual coverage'
   End
 
+  path_changes() {
+    struo --format json build probe | jq -r .cache || return
+    mkdir -p "$WORKSPACE/../extra-bin" "$WORKSPACE/../other-home"
+    HOME="$WORKSPACE/../other-home" PATH="$WORKSPACE/../extra-bin:$PATH" struo --format json build probe | jq -r .cache
+  }
+
+  It "keeps the caller's PATH and HOME out of task cache keys and still finds the package manager"
+    command -v node >/dev/null 2>&1 || Skip 'node is required'
+    command -v npm >/dev/null 2>&1 || Skip 'npm is required'
+    printf '%s\n' '{"name":"probe","private":true,"scripts":{"build":"node build.js"}}' > "$WORKSPACE/package.json"
+    printf '%s\n' "require('node:fs').writeFileSync('result.txt', 'built')" > "$WORKSPACE/build.js"
+    cat > "$WORKSPACE/struo.toml" <<'TOML'
+[[target]]
+name = "probe"
+kind = "nx_task"
+[target.attrs]
+project = "probe"
+task = "build"
+runnable = true
+executor = "nx:run-script"
+commands = ["npm run build"]
+outputs = ["result.txt"]
+TOML
+
+    When call path_changes
+    The status should be success
+    The stdout should equal 'miss
+hit'
+    The contents of file "$WORKSPACE/result.txt" should equal 'built'
+  End
+
   generated_dependency_changes() {
     SEED=first struo --format json build consumer >/dev/null || return
     test "$(cat "$WORKSPACE/result.txt")" = first || return

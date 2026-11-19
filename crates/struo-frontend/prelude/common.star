@@ -192,6 +192,43 @@ def _apple_materialize_native_dep(ctx, dep, state = None):
 def _android_materialize_native_dep(ctx, dep, state = None):
     return dep
 
+# The package manager a JavaScript workspace declares in its root
+# package.json `packageManager` field, else the one whose lockfile is present.
+def _javascript_package_manager():
+    root = workspace_root() + "/"
+    if host_file_exists(root + "package.json"):
+        declared = json_decode(host_file_read(root + "package.json")).get("packageManager") or ""
+        if declared:
+            return declared.split("@")[0]
+    for lockfile, manager in [("pnpm-lock.yaml", "pnpm"), ("yarn.lock", "yarn"), ("bun.lock", "bun"), ("bun.lockb", "bun")]:
+        if host_file_exists(root + lockfile):
+            return manager
+    return "npm"
+
+# PATH for a JavaScript workspace task run from `cwd`, built from stable parts
+# so the action cache key does not change with the caller's shell: the
+# `node_modules/.bin` chain up to the workspace root, the directories of
+# Node.js and the workspace's package manager, and the system directories.
+# Graph loading is not cached as an action, so it passes `host_path` to keep
+# the caller's PATH as well.
+def _javascript_task_path(node, cwd = ".", host_path = False):
+    segments = []
+    parts = [part for part in (cwd or ".").split("/") if part and part != "."]
+    for index in range(len(parts), -1, -1):
+        directory = "/".join(parts[:index])
+        segments.append(execution_path((directory + "/" if directory else "") + "node_modules/.bin"))
+    for tool in [node, host_which_optional(_javascript_package_manager())]:
+        directory = _parent_dir(tool or "")
+        if directory and directory not in segments:
+            segments.append(directory)
+    if host_os() == "windows":
+        segments.extend(["C:\\Windows\\System32", "C:\\Windows"])
+    else:
+        segments.extend(["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"])
+    if host_path and host_env("PATH"):
+        segments.append(host_env("PATH"))
+    return (";" if host_os() == "windows" else ":").join(segments)
+
 def _parent_dir(path):
     idx = -1
     for i in range(len(path)):

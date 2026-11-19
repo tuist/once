@@ -99,10 +99,16 @@ Coverage falls into three groups today:
   dependency schedule, action hashing, output snapshots, and cache. It does
   not invoke `nx build`, `nx test`, or Nx's task runner.
 
-Commands retain the host's activated `PATH` after the project-local tool
-directories, so package-manager shims and additional toolchains remain
-available. Install and activate those tools before invoking Struo. Struo does
-not install SDKs, restore NuGet packages, or download browser binaries.
+Commands do not inherit your shell's `PATH`, so changing it does not
+invalidate cached tasks. Their `PATH` holds the project-local
+`node_modules/.bin` directories, the directories of Node.js and of the
+workspace's package manager (from the root `packageManager` field or the
+lockfile), and the system directories. A command that needs a tool installed
+anywhere else can declare `{"env": "PATH"}` among the task's `inputs`, which
+passes your shell's `PATH` through as a keyed input. Commands do not receive
+`HOME` either, so tools fall back to the account's home directory; declare
+`{"env": "HOME"}` to pass yours through. Struo does not install
+SDKs, restore NuGet packages, or download browser binaries.
 
 Struo conservatively hashes workspace sources and installed dependencies,
 excluding declared generated outputs and runtime caches. This covers shared

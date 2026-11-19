@@ -31,10 +31,14 @@ resolver. Declaring an `nx_task` by hand is only necessary when the
 workspace is not fully covered by the `nx` native project.
 
 Commands can invoke installed tools such as `tsc` and `vitest` by name.
-Struo prepends `node_modules/.bin` directories from the command's working
-directory through the workspace root to `PATH`, with the nearest package
-taking precedence, then retains the activated host `PATH` for package
-managers and additional toolchains.
+The command's `PATH` holds the `node_modules/.bin` directories from its
+working directory through the workspace root, with the nearest package taking
+precedence, then the directories of Node.js and of the workspace's package
+manager, then the system directories. It does not include your shell's
+`PATH`, so changing it does not invalidate cached tasks. A task whose Nx
+`inputs` include `{"env": "PATH"}` inherits your shell's value instead, as part
+of its cache key. `HOME` is only passed when the inputs declare
+`{"env": "HOME"}` in the same way.
 
 Source hashing conservatively includes workspace sources and installed
 dependencies, excluding declared outputs and runtime caches. Dependency output

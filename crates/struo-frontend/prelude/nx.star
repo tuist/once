@@ -50,32 +50,9 @@ def _nx_binary(ctx):
         return resolved
     fail(ctx["label"]["id"] + ": nx was not found; install it in the workspace (`npm install`) or make `nx` available on PATH")
 
-def _nx_env_with_path(env, node, cwd = None):
-    merged = {}
-    for name, value in env.items():
-        merged[name] = value
-    # Standard system binaries (mkdir, cp, rm, ...) live under /usr/bin or
-    # /bin on macOS and Linux and are required to run `nx:run-commands` shell
-    # commands that shell out to them. On Windows the corresponding path
-    # segments are added.
-    path_segments = []
-    if cwd != None:
-        parts = [part for part in cwd.split("/") if part and part != "."]
-        for index in range(len(parts), -1, -1):
-            directory = "/".join(parts[:index])
-            path_segments.append(execution_path((directory + "/" if directory else "") + "node_modules/.bin"))
-    node_dir = _parent_dir(node)
-    if node_dir:
-        path_segments.append(node_dir)
-    if host_os() == "windows":
-        path_segments.extend(["C:\\Windows\\System32", "C:\\Windows"])
-    else:
-        path_segments.extend(["/usr/bin", "/bin", "/usr/sbin", "/sbin"])
-    separator = ";" if host_os() == "windows" else ":"
-    host_path = host_env("PATH")
-    if host_path:
-        path_segments.append(host_path)
-    merged["PATH"] = separator.join(path_segments)
+def _nx_env_with_path(env, node, cwd = ".", host_path = False):
+    merged = dict(env)
+    merged["PATH"] = _javascript_task_path(node, cwd, host_path)
     return merged
 
 _NX_GRAPH_OUTPUT = ".nx/struo-workspace-graph.json"
@@ -116,7 +93,7 @@ def _nx_load_graph(ctx):
     argv = [node, "-e", _NX_PROJECT_GRAPH, nx_binary, _NX_GRAPH_OUTPUT]
     host_command(
         argv,
-        env = _nx_env_with_path(_nx_env(), node),
+        env = _nx_env_with_path(_nx_env(), node, host_path = True),
         cwd = workspace_root(),
     )
     raw = host_file_read(workspace_root() + "/" + _NX_GRAPH_OUTPUT)
@@ -501,9 +478,6 @@ def _nx_task_impl(ctx, is_test = False):
     cwd = command_cwd if command_cwd else "."
     node = _nx_node(ctx)
     env = _nx_env_with_path(_nx_env(), node, cwd)
-    home = host_env("HOME")
-    if home:
-        env["HOME"] = home
     for name in _nx_attr(ctx, "env_inherit", []):
         value = host_env(name)
         if value:
