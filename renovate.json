@@ -2,5 +2,24 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended"
+  ],
+  "timezone": "Europe/Berlin",
+  "packageRules": [
+    {
+      "description": "Batch non-major Rust crate updates into one weekly pull request.",
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["minor", "patch", "digest"],
+      "matchPackageNames": ["!rust"],
+      "groupName": "rust crates",
+      "schedule": ["* 0-5 * * 1"]
+    },
+    {
+      "description": "Batch non-major mise tool updates into one weekly pull request. The Rust toolchain stays separate because it sets the MSRV.",
+      "matchManagers": ["mise"],
+      "matchUpdateTypes": ["minor", "patch", "digest"],
+      "matchPackageNames": ["!rust"],
+      "groupName": "mise tools",
+      "schedule": ["* 0-5 * * 1"]
+    }
   ]
 }
