@@ -301,8 +301,8 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      # npm authenticates through trusted publishing: it trades this workflow's
-      # OIDC identity for a short-lived publish credential, so there is no npm
+      # npm and RubyGems authenticate through trusted publishing: each trades this workflow's
+      # OIDC identity for a short-lived publish credential, so there is no
       # token to store or rotate. The trusted publisher registered on npmjs.com
       # pins the org, the repository and this workflow's filename, which means
       # renaming this file revokes npm publishing until it is re-registered.
@@ -323,14 +323,11 @@ jobs:
         with:
           version: ${{ env.MISE_VERSION }}
           install_args: "ruby node"
-      - uses: 1password/load-secrets-action/configure@dafbe7cb03502b260e2b2893c753c352eee545bf
-        with:
-          service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-      - uses: 1password/load-secrets-action@dafbe7cb03502b260e2b2893c753c352eee545bf
-        with:
-          export-env: true
-        env:
-          RUBYGEMS_API_KEY: op://struo/RubyGems API Key/api_key
+      # RubyGems also uses trusted publishing: this exchanges the workflow's
+      # OIDC identity for a short-lived key and exports it as
+      # GEM_HOST_API_KEY. The trusted publisher on rubygems.org pins the
+      # repository and this workflow's filename, like npm's.
+      - uses: rubygems/configure-rubygems-credentials@dc5a8d8553e6ee01fc26761a49e99e733d17954a # v2.1.0
       # No ~/.npmrc is written on purpose. npm only starts the OIDC exchange
       # when it finds no configured credential, so an _authToken line here
       # would make it publish anonymously and fail with a 404 that says the
@@ -340,6 +337,4 @@ jobs:
           NODE_OPTIONS: --use-openssl-ca
           SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
         run: |
-          echo "::add-mask::${RUBYGEMS_API_KEY}"
-          export GEM_HOST_API_KEY="${RUBYGEMS_API_KEY}"
           mise run release:publish-sdks --version "${{ needs.detect.outputs.next-version }}"
