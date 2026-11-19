@@ -26,6 +26,7 @@ PRELUDE_SOURCES = [
     "ruby.star",
     "javascript.star",
     "nx.star",
+    "turbo.star",
     "react_native.star",
     "oci.star",
     "dockerfile_parser.star",
@@ -155,6 +156,11 @@ PRELUDE_TARGET_KINDS = {
         "nx_workspace",
         "nx_task",
         "nx_test",
+    ],
+    "turbo.star": [
+        "turbo_workspace",
+        "turbo_task",
+        "turbo_test",
     ],
     "react_native.star": [
         "react_native_dependencies",

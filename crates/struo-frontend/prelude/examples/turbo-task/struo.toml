@@ -1,0 +1,12 @@
+[[target]]
+name = "greeting__build"
+kind = "turbo_task"
+srcs = ["packages/greeting/**/*.js"]
+
+[target.attrs]
+package = "@example/greeting"
+task = "build"
+command = "node build.js"
+package_dir = "packages/greeting"
+source_dirs = ["packages/greeting"]
+outputs = ["packages/greeting/dist/**"]

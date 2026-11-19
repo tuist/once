@@ -1,0 +1,278 @@
+{
+  "packages": [
+    {
+      "name": "//",
+      "path": "",
+      "tasks": {
+        "items": []
+      },
+      "allDependencies": {
+        "items": [
+          {
+            "name": "//"
+          }
+        ]
+      }
+    },
+    {
+      "name": "@example/greeting",
+      "path": "packages/greeting",
+      "tasks": {
+        "items": [
+          {
+            "name": "build"
+          },
+          {
+            "name": "lint"
+          },
+          {
+            "name": "test"
+          }
+        ]
+      },
+      "allDependencies": {
+        "items": [
+          {
+            "name": "//"
+          }
+        ]
+      }
+    },
+    {
+      "name": "hello",
+      "path": "apps/hello",
+      "tasks": {
+        "items": [
+          {
+            "name": "build"
+          },
+          {
+            "name": "lint"
+          },
+          {
+            "name": "test"
+          }
+        ]
+      },
+      "allDependencies": {
+        "items": [
+          {
+            "name": "//"
+          },
+          {
+            "name": "@example/greeting"
+          }
+        ]
+      }
+    }
+  ],
+  "dry": {
+    "turboVersion": "2.11.13",
+    "globalCacheInputs": {
+      "files": {},
+      "environmentVariables": {
+        "specified": {
+          "env": [],
+          "passThroughEnv": null
+        },
+        "configured": [],
+        "inferred": [],
+        "passthrough": null
+      }
+    },
+    "tasks": [
+      {
+        "taskId": "@example/greeting#build",
+        "task": "build",
+        "package": "@example/greeting",
+        "command": "node build.js",
+        "directory": "packages/greeting",
+        "dependencies": [],
+        "resolvedTaskDefinition": {
+          "outputs": [
+            "dist/**"
+          ],
+          "cache": true,
+          "dependsOn": [
+            "^build"
+          ],
+          "inputs": [],
+          "outputLogs": "full",
+          "persistent": false,
+          "interruptible": false,
+          "env": [],
+          "passThroughEnv": null,
+          "interactive": false
+        },
+        "environmentVariables": {
+          "specified": {
+            "env": [],
+            "passThroughEnv": null
+          },
+          "configured": [],
+          "inferred": [],
+          "passthrough": null
+        }
+      },
+      {
+        "taskId": "@example/greeting#lint",
+        "task": "lint",
+        "package": "@example/greeting",
+        "command": "<NONEXISTENT>",
+        "directory": "packages/greeting",
+        "dependencies": [],
+        "resolvedTaskDefinition": {
+          "outputs": [],
+          "cache": true,
+          "dependsOn": [],
+          "inputs": [],
+          "outputLogs": "full",
+          "persistent": false,
+          "interruptible": false,
+          "env": [],
+          "passThroughEnv": null,
+          "interactive": false
+        },
+        "environmentVariables": {
+          "specified": {
+            "env": [],
+            "passThroughEnv": null
+          },
+          "configured": [],
+          "inferred": [],
+          "passthrough": null
+        }
+      },
+      {
+        "taskId": "@example/greeting#test",
+        "task": "test",
+        "package": "@example/greeting",
+        "command": "<NONEXISTENT>",
+        "directory": "packages/greeting",
+        "dependencies": [
+          "@example/greeting#build"
+        ],
+        "resolvedTaskDefinition": {
+          "outputs": [],
+          "cache": true,
+          "dependsOn": [
+            "build"
+          ],
+          "inputs": [],
+          "outputLogs": "full",
+          "persistent": false,
+          "interruptible": false,
+          "env": [],
+          "passThroughEnv": null,
+          "interactive": false
+        },
+        "environmentVariables": {
+          "specified": {
+            "env": [],
+            "passThroughEnv": null
+          },
+          "configured": [],
+          "inferred": [],
+          "passthrough": null
+        }
+      },
+      {
+        "taskId": "hello#build",
+        "task": "build",
+        "package": "hello",
+        "command": "node build.js",
+        "directory": "apps/hello",
+        "dependencies": [
+          "@example/greeting#build"
+        ],
+        "resolvedTaskDefinition": {
+          "outputs": [
+            "dist/**"
+          ],
+          "cache": true,
+          "dependsOn": [
+            "^build"
+          ],
+          "inputs": [],
+          "outputLogs": "full",
+          "persistent": false,
+          "interruptible": false,
+          "env": [],
+          "passThroughEnv": null,
+          "interactive": false
+        },
+        "environmentVariables": {
+          "specified": {
+            "env": [],
+            "passThroughEnv": null
+          },
+          "configured": [],
+          "inferred": [],
+          "passthrough": null
+        }
+      },
+      {
+        "taskId": "hello#lint",
+        "task": "lint",
+        "package": "hello",
+        "command": "<NONEXISTENT>",
+        "directory": "apps/hello",
+        "dependencies": [],
+        "resolvedTaskDefinition": {
+          "outputs": [],
+          "cache": true,
+          "dependsOn": [],
+          "inputs": [],
+          "outputLogs": "full",
+          "persistent": false,
+          "interruptible": false,
+          "env": [],
+          "passThroughEnv": null,
+          "interactive": false
+        },
+        "environmentVariables": {
+          "specified": {
+            "env": [],
+            "passThroughEnv": null
+          },
+          "configured": [],
+          "inferred": [],
+          "passthrough": null
+        }
+      },
+      {
+        "taskId": "hello#test",
+        "task": "test",
+        "package": "hello",
+        "command": "node test.js",
+        "directory": "apps/hello",
+        "dependencies": [
+          "hello#build"
+        ],
+        "resolvedTaskDefinition": {
+          "outputs": [],
+          "cache": true,
+          "dependsOn": [
+            "build"
+          ],
+          "inputs": [],
+          "outputLogs": "full",
+          "persistent": false,
+          "interruptible": false,
+          "env": [],
+          "passThroughEnv": null,
+          "interactive": false
+        },
+        "environmentVariables": {
+          "specified": {
+            "env": [],
+            "passThroughEnv": null
+          },
+          "configured": [],
+          "inferred": [],
+          "passthrough": null
+        }
+      }
+    ]
+  }
+}

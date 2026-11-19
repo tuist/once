@@ -100,6 +100,9 @@ query-before-build workflow, current limitations, and follow-up steps:
 - [Nx](/guide/graph/nx) reads an existing Nx workspace, derives one Struo
   target per project and task, and schedules `nx:run-commands` and
   `nx:run-script` tasks directly through Struo.
+- [Turborepo](/guide/graph/turborepo) reads an existing Turborepo
+  workspace, derives one Struo target per package and task, and runs each
+  package script directly through Struo, locally or on remote workers.
 - [Zig](/guide/graph/zig) covers modules, binaries, tests, libraries, and C or
   C++ dependencies.
 

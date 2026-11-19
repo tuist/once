@@ -1,0 +1,12 @@
+{
+  "name": "acme-monorepo",
+  "private": true,
+  "packageManager": "pnpm@10.19.0",
+  "scripts": {
+    "build": "turbo run build",
+    "lint": "node tooling/lint/bin.js turbo.json"
+  },
+  "devDependencies": {
+    "turbo": "2.11.13"
+  }
+}

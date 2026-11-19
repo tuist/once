@@ -135,6 +135,7 @@ defmodule StruoSiteWeb.Docs.Sidebar do
             icon: "react-native"
           },
           %Item{label: "Rust", slug: "/docs/guide/graph/rust", icon: "rust"},
+          %Item{label: "Turborepo", slug: "/docs/guide/graph/turborepo", icon: "turborepo"},
           %Item{label: "Zig", slug: "/docs/guide/graph/zig", icon: "zig"}
         ]
       },
@@ -287,6 +288,7 @@ defmodule StruoSiteWeb.Docs.Sidebar do
               target_group("Ruby", ~w(rspec_test minitest_test)),
               target_group("JavaScript", ~w(javascript_build vitest_test jest_test)),
               target_group("Nx", ~w(nx_workspace nx_task nx_test)),
+              target_group("Turborepo", ~w(turbo_workspace turbo_task turbo_test)),
               target_group(
                 "React Native",
                 ~w(react_native_dependencies react_native_module

@@ -1,0 +1,8 @@
+[[target]]
+name = "turbo"
+kind = "turbo_workspace"
+srcs = ["turbo.json", "package.json", "graph.json"]
+
+[target.attrs]
+resolver_inputs = ["turbo.json", "package.json", "**/package.json"]
+graph_file = "graph.json"

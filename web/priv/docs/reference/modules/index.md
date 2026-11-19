@@ -453,6 +453,14 @@ Dependency output snapshots, including transitive snapshots, are explicit action
 inputs so generated content changes invalidate consumers. Test targets also
 execute through the build capability when used as prerequisites.
 
+The Turborepo resolver emits `turbo_task` and `turbo_test` from turbo's package
+graph and `--dry=json` task graph, records every test in `_default_test_roots`,
+and bridges script-less tasks to the runnable tasks behind them. Its actions
+declare the package, its internal workspace dependencies, installed packages,
+and transitive upstream output snapshots as inputs, and unpack missing upstream
+outputs before running. They use no `clean_paths`, `create_dirs`, or stream
+redirection, so every remote execution provider accepts them.
+
 A resolver can also return a non-configurable `_display_name` string for the
 owner. Generic run reporting uses it as the user-facing label without knowing
 which target kind produced it. When absent, reporting uses the target label.

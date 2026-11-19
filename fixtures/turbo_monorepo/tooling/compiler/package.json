@@ -1,0 +1,6 @@
+{
+  "name": "@acme/compiler",
+  "version": "0.0.0",
+  "private": true,
+  "bin": { "acme-compile": "./bin.js" }
+}

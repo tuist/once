@@ -1,0 +1,10 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "build": {
+      "env": ["APP_MODE"],
+      "outputs": ["build/**", "!build/cache/**"]
+    }
+  }
+}

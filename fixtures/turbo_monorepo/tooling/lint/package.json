@@ -1,0 +1,6 @@
+{
+  "name": "@acme/lint",
+  "version": "0.0.0",
+  "private": true,
+  "bin": { "acme-lint": "./bin.js" }
+}

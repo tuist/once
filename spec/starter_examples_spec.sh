@@ -85,6 +85,9 @@ rust_library|rust-library-minimal|build
 rust_proc_macro|rust-proc-macro-minimal|build
 rust_test|rust-test-minimal|build
 shellspec_test|shellspec-test-minimal|test
+turbo_task|turbo-task|build
+turbo_test|turbo-test|test
+turbo_workspace|turbo-workspace-native-project|build
 vitest_test|vitest-test-minimal|test
 zig_binary|zig-binary-with-library|build
 zig_c_library|zig-c-library-with-c-provider|build

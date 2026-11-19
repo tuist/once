@@ -1,0 +1,12 @@
+{
+  "name": "hello",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "build": "node build.js",
+    "test": "node test.js"
+  },
+  "dependencies": {
+    "@example/greeting": "*"
+  }
+}

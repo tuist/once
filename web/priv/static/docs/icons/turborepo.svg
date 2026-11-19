@@ -1,0 +1,7 @@
+<svg width="1000" height="1000" viewBox="0 0 1000 1000" xmlns="http://www.w3.org/2000/svg">
+<circle cx="500" cy="500" r="185" fill="none" stroke="black" stroke-width="110"/>
+<path d="M500 120A380 380 0 0 1 880 500" fill="none" stroke="black" stroke-width="80" stroke-linecap="round"/>
+<path d="M880 500A380 380 0 0 1 500 880" fill="none" stroke="black" stroke-width="80" stroke-linecap="round" stroke-dasharray="40 70"/>
+<path d="M500 880A380 380 0 0 1 120 500" fill="none" stroke="black" stroke-width="80" stroke-linecap="round" stroke-dasharray="40 70"/>
+<path d="M120 500A380 380 0 0 1 500 120" fill="none" stroke="black" stroke-width="80" stroke-linecap="round" stroke-dasharray="40 70"/>
+</svg>

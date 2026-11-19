@@ -669,6 +669,36 @@ mod tests {
     }
 
     #[test]
+    fn built_in_native_projects_detect_turborepo_roots_once() {
+        let temporary = tempfile::tempdir().unwrap();
+        std::fs::write(temporary.path().join("turbo.json"), "{}\n").unwrap();
+        std::fs::write(temporary.path().join("package.json"), "{}\n").unwrap();
+        // Package configurations extend the root and are not workspaces.
+        std::fs::create_dir_all(temporary.path().join("apps/web")).unwrap();
+        std::fs::write(
+            temporary.path().join("apps/web/turbo.json"),
+            "{\"extends\":[\"//\"]}\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(temporary.path().join("node_modules/turbo")).unwrap();
+        std::fs::write(
+            temporary.path().join("node_modules/turbo/turbo.json"),
+            "{}\n",
+        )
+        .unwrap();
+
+        let matches = detect_native_projects(temporary.path()).unwrap();
+
+        let turbo: Vec<_> = matches
+            .iter()
+            .filter(|matched| matched.native_project == "turbo")
+            .collect();
+        assert_eq!(turbo.len(), 1, "{matches:?}");
+        assert!(turbo[0].package.is_empty());
+        assert_eq!(turbo[0].markers, vec!["turbo.json".to_string()]);
+    }
+
+    #[test]
     fn built_in_native_projects_ignore_generated_dependency_trees() {
         let temporary = tempfile::tempdir().unwrap();
         std::fs::write(temporary.path().join("mix.exs"), "raise \"not executed\"\n").unwrap();

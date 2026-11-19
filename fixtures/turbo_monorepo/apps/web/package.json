@@ -1,0 +1,18 @@
+{
+  "name": "@acme/web",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build.js",
+    "deploy": "node scripts/deploy.js",
+    "dev": "node scripts/build.js --watch",
+    "lint": "acme-lint src scripts",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@acme/ui": "workspace:*"
+  },
+  "devDependencies": {
+    "@acme/lint": "workspace:*"
+  }
+}

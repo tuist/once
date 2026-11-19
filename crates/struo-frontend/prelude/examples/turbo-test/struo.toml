@@ -1,0 +1,10 @@
+[[target]]
+name = "hello__test"
+kind = "turbo_test"
+srcs = ["test.js"]
+
+[target.attrs]
+package = "hello"
+task = "test"
+command = "node test.js"
+source_dirs = [""]

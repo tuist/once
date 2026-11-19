@@ -1,0 +1,9 @@
+{
+  "name": "struo-turbo-workspace-example",
+  "private": true,
+  "packageManager": "npm@10.9.0",
+  "workspaces": ["apps/*", "packages/*"],
+  "devDependencies": {
+    "turbo": "^2.0.0"
+  }
+}

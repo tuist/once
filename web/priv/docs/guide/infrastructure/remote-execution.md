@@ -25,7 +25,9 @@ For each remote action, Struo performs this lifecycle:
    alone does not establish immutable identity.
 2. Create a fresh sandbox.
 3. Package only the declared input files, directories, executable modes, and
-   safe symbolic links.
+   safe symbolic links. A link is safe when it resolves inside a declared
+   input or to a directory that holds declared inputs, such as a workspace
+   package linked from `node_modules`.
 4. Transfer that package into a clean `/workspace` directory.
 5. Run the declared argument list with its working directory, selected
    environment variables, resources, and timeout.

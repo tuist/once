@@ -1,0 +1,17 @@
+{
+  "name": "@acme/core",
+  "version": "0.0.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "acme-compile",
+    "dev": "acme-compile",
+    "lint": "acme-lint src",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "@acme/compiler": "workspace:*",
+    "@acme/config": "workspace:*",
+    "@acme/lint": "workspace:*"
+  }
+}
