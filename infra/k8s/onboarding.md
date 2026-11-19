@@ -14,7 +14,7 @@ Prerequisites:
 
 - The current `KUBECONFIG` points at the Struo production workload cluster (still named `once-production`).
 - The Cloudflare API token is stored at
-  `op://once-k8s-production/cloudflare-struo-dns/credential`.
+  `op://struo-k8s-production/cloudflare-struo-dns/credential`.
 - The token has `Zone:Read` and `DNS:Edit` permissions for `buildonce.dev`.
 
 ```bash
@@ -22,7 +22,7 @@ tmpdir="$(mktemp -d)"
 chmod 700 "$tmpdir"
 trap 'rm -rf "$tmpdir"' EXIT
 token_file="$tmpdir/cloudflare-api-token"
-op read 'op://once-k8s-production/cloudflare-struo-dns/credential' | tr -d '\n' >"$token_file"
+op read 'op://struo-k8s-production/cloudflare-struo-dns/credential' | tr -d '\n' >"$token_file"
 chmod 600 "$token_file"
 
 kubectl create namespace external-dns --dry-run=client -o yaml | kubectl apply -f -

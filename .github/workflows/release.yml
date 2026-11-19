@@ -330,7 +330,7 @@ jobs:
         with:
           export-env: true
         env:
-          RUBYGEMS_API_KEY: op://once/RubyGems API Key/api_key
+          RUBYGEMS_API_KEY: op://struo/RubyGems API Key/api_key
       # No ~/.npmrc is written on purpose. npm only starts the OIDC exchange
       # when it finds no configured credential, so an _authToken line here
       # would make it publish anonymously and fail with a 404 that says the
