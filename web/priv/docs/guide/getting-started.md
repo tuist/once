@@ -26,7 +26,7 @@ directory, outside the checkout so mise does not load its full tool list:
 
 ```sh
 git clone https://github.com/tuist/struo.git
-mise exec rust@1.96.0 -- cargo build --release -p struo-cli --manifest-path "$PWD/struo/Cargo.toml"
+mise exec rust@1.99.0 -- cargo build --release -p struo-cli --manifest-path "$PWD/struo/Cargo.toml"
 ./struo/target/release/struo --version
 ```
 

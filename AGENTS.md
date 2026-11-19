@@ -218,7 +218,7 @@ Prefer fields over string interpolation so logs stay queryable.
 
 ## Toolchain
 
-The repo pins `rust = "1.96.0"` in `mise.toml` and the workspace
+The repo pins `rust = "1.99.0"` in `mise.toml` and the workspace
 `rust-version`. Bumping the toolchain affects the user-facing MSRV;
 do it deliberately, not as a side effect of adding a dependency. The
 Windows CI job reads the workspace `rust-version` so it stays aligned
