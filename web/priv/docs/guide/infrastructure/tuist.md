@@ -237,8 +237,7 @@ asks the service to run the action, and reads outputs back from the same cache.
 Dependencies still decide when each action starts, and results stay in the
 project cache for later builds and other machines.
 
-Pin the worker image the project's execution service runs and select the same
-Tuist infrastructure for caching and execution:
+Select the same Tuist infrastructure for caching and execution:
 
 ```toml
 [infrastructure.cache]
@@ -251,18 +250,23 @@ provider = "tuist"
 kind = "tuist"
 account = "acme"
 project = "app"
-execution_image = "sha-REPLACE_WITH_THE_IMAGE_TAG"
 ```
 
 ```sh
 struo build --remote your_target
 ```
 
+Struo asks the execution service which worker image it runs at the start of
+each build and uses it, so updates to the worker image do not require changes
+to the workspace. Each image partitions build configuration and cached
+results, so the first build after an image change runs its actions again. To
+fail instead of following an image change, pin it with
+`execution_image = "sha-..."` in the infrastructure.
+
 The credential needs read and write access to the project. Struo fails before
 uploading anything when the account has no execution capacity, when the cache
-and execution name different projects, or when `execution_image` differs from
-the image the service advertises. Changing the image partitions build
-configuration and cached results.
+and execution name different projects, or when a pinned `execution_image`
+differs from the image the service advertises.
 
 The Tuist server must advertise the worker image, the cache endpoint, the
 account's execution concurrency, and the absolute directory where workers run

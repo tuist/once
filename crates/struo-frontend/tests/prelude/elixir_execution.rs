@@ -67,6 +67,16 @@ fn remote_elixir_actions_use_image_tools_and_partition_by_image() {
         action.toolchain_identity,
         action_by_identifier(&second, "pkg/demo:elixir-compile").toolchain_identity
     );
+    let follow = |image: &str| {
+        let store = declare(&format!(
+            "worker.pop('environment')\nexecution['environment'] = '{image}'\n{COMPILE}"
+        ))
+        .unwrap();
+        action_by_identifier(&store, "pkg/demo:elixir-compile").clone()
+    };
+    let (followed_b, followed_c) = (follow("image-b"), follow("image-c"));
+    assert_eq!(followed_b.argv[0], "/worker/elixir/bin/elixir");
+    assert_ne!(followed_b.toolchain_identity, followed_c.toolchain_identity);
 
     let rebar = declare(
         r#"
@@ -108,6 +118,10 @@ fn remote_elixir_rejects_missing_mismatched_and_unsafe_toolchains() {
             "image-bound toolchain description",
         ),
         ("worker['environment'] = 'image-b'", "must match"),
+        (
+            "worker.pop('environment')\nexecution.pop('environment')",
+            "require an execution environment",
+        ),
         (
             "worker['elixir_bin'] = '/worker/../coordinator'",
             "absolute worker path",

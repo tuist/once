@@ -51,7 +51,6 @@ Describe the worker paths in the workspace configuration:
 ```toml
 [infrastructure.execution.properties.elixir]
 schema_version = 1
-environment = "REPLACE_WITH_THE_SELECTED_IMMUTABLE_IMAGE"
 os = "linux"
 arch = "x86_64"
 elixir_bin = "/opt/elixir/bin"
@@ -60,8 +59,11 @@ mix_home = "/opt/mix"
 rebar3 = "/opt/mix/rebar3"
 ```
 
-These paths are illustrative and must exist inside the selected image. The
-`environment` must match the provider's pinned execution image exactly. Linux
+These paths are illustrative and must exist inside the selected image. To
+bind the description to one image, add `environment` with that image; it must
+then match the execution image exactly, and builds fail when the image
+changes. Without it, the description applies to whichever image the provider
+selects. Linux
 `x86_64` and `arm64` descriptions are supported when the provider supports that
 platform. The complete execution binding participates in action identity;
 changing an image or its toolchain paths invalidates compiled results.

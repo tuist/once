@@ -44,6 +44,30 @@ pub(crate) fn resolve_execution(
     }))
 }
 
+/// Bind Tuist execution to the image its service runs now when the workspace
+/// does not pin `execution_image`, so a worker image roll does not break it.
+pub(crate) async fn resolve_execution_image(
+    workspace: &Path,
+    xdg: &Xdg,
+    mut binding: RemoteExecution,
+) -> Result<RemoteExecution> {
+    if binding.environment.is_some()
+        || binding.executor.as_deref().unwrap_or(&binding.provider) != "tuist"
+    {
+        return Ok(binding);
+    }
+    let CacheProvider::Tuist(cache) = resolve(workspace, xdg)? else {
+        return Ok(binding);
+    };
+    let execution = cache
+        .execution()
+        .await
+        .context("discovering the image Tuist remote execution runs")?;
+    tracing::debug!(image = %execution.image(), "resolved Tuist execution image");
+    binding.environment = Some(execution.image().to_string());
+    Ok(binding)
+}
+
 fn bind_environment_override(
     mut binding: RemoteExecution,
     lookup: impl Fn(&str) -> Option<String>,

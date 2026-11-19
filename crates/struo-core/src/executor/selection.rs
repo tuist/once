@@ -97,7 +97,7 @@ impl Executor {
         {
             return Err(Error::RemoteProviderConfig {
                 provider: binding.provider.clone(),
-                message: "Tuist remote execution requires an explicit worker image; set `execution_image` on a `kind = \"tuist\"` infrastructure in the workspace struo.toml to the image the project's execution service runs, such as sha-<commit>; Tuist providers from user configuration cannot carry an execution image".into(),
+                message: "Tuist remote execution has no worker image; Struo binds the image the project's execution service advertises when `struo build --remote` starts, or set `execution_image` on a `kind = \"tuist\"` infrastructure in the workspace struo.toml to pin one, such as sha-<commit>".into(),
             });
         }
         Self::validate_default_environment(binding, executor, |name| {

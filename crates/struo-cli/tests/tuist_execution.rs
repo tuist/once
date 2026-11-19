@@ -115,6 +115,11 @@ fn sha256(bytes: &[u8]) -> String {
 }
 
 fn manifest(url: &str, image: &str) -> String {
+    let pin = if image.is_empty() {
+        String::new()
+    } else {
+        format!("execution_image = \"{image}\"")
+    };
     format!(
         r#"
 [modules]
@@ -128,7 +133,7 @@ kind = "tuist"
 url = "{url}"
 account = "acme"
 project = "app"
-execution_image = "{image}"
+{pin}
 [[target]]
 name = "app"
 kind = "distributed"
@@ -361,7 +366,7 @@ distributed = target_kind(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_mismatched_worker_image_fails_before_anything_runs() {
+async fn a_pinned_image_must_match_and_an_unpinned_one_follows_the_service() {
     let server = tuist_execution::start().await;
     let root = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
@@ -383,6 +388,16 @@ async fn a_mismatched_worker_image_fails_before_anything_runs() {
         stderr(&output)
     );
     assert!(server.service.state.lock().await.executed.is_empty());
+
+    std::fs::write(root.path().join("struo.toml"), manifest(&server.url, "")).unwrap();
+    let output = build(root.path(), home.path()).await;
+    assert!(output.status.success(), "{}", stderr(&output));
+    let state = server.service.state.lock().await;
+    assert!(!state.executed.is_empty());
+    assert!(state.platforms.iter().all(|platform| platform.contains(&(
+        "tuist-image".to_string(),
+        tuist_execution::IMAGE.to_string()
+    ))));
 }
 
 #[tokio::test(flavor = "multi_thread")]

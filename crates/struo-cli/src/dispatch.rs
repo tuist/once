@@ -198,11 +198,12 @@ async fn run_command(
         } => {
             let mut resolved = resolve_configuration(&config)?;
             if remote {
-                resolved = resolved.with_execution(crate::cache_provider::resolve_execution(
-                    workspace,
-                    xdg,
-                    compute.as_deref(),
-                )?)?;
+                let execution =
+                    crate::cache_provider::resolve_execution(workspace, xdg, compute.as_deref())?;
+                resolved = resolved.with_execution(
+                    crate::cache_provider::resolve_execution_image(workspace, xdg, execution)
+                        .await?,
+                )?;
             }
             if verify_reproducible {
                 let targets = resolve_build_targets(workspace, target, all)?;

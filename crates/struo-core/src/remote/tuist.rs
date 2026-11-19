@@ -190,7 +190,7 @@ async fn connect(remote: &RemoteExecution, cache: &CacheProvider) -> Result<Tuis
     let image = remote.environment.as_deref().unwrap_or_default();
     if image != execution.image() {
         return Err(config_error(format!(
-            "execution_image `{image}` does not match the image `{}` the project's execution service runs; set execution_image = \"{}\"",
+            "execution_image `{image}` does not match the image `{}` the project's execution service runs; remove execution_image to follow the service's image, or set execution_image = \"{}\"",
             execution.image(),
             execution.image()
         )));

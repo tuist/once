@@ -229,7 +229,9 @@ def _elixir_execution_toolchain():
     toolchain = (execution.get("properties") or {}).get("elixir")
     if type(toolchain) != "dict" or toolchain.get("schema_version") != 1:
         fail("Remote Elixir builds require infrastructure.execution.properties.elixir with schema_version = 1 and an image-bound toolchain description")
-    if not execution.get("environment") or toolchain.get("environment") != execution["environment"]:
+    if not execution.get("environment"):
+        fail("Remote Elixir builds require an execution environment, such as the image the execution service runs")
+    if toolchain.get("environment") and toolchain["environment"] != execution["environment"]:
         fail("Elixir execution toolchain environment must match the selected execution environment")
     if toolchain.get("os") != "linux" or toolchain.get("arch") not in ["arm64", "x86_64"]:
         fail("Elixir execution toolchains require Linux workers with arch arm64 or x86_64")
