@@ -130,6 +130,7 @@ PRELUDE_TARGET_KINDS = {
         "kotlin_jvm_library",
         "kotlin_jvm_binary",
         "kotlin_jvm_test",
+        "java_import",
     ],
     "elixir.star": [
         "mix_workspace",

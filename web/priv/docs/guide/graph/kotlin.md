@@ -57,6 +57,39 @@ struo run ./Hello
 The library and binary compile to Java archives. The run capability builds the
 archive first, then starts the main class with the complete runtime classpath.
 
+## Mix Java Sources
+
+List `.java` files in `srcs` next to the Kotlin sources. Kotlin and Java can
+reference each other in either direction, and Java test classes in a
+`kotlin_jvm_test` are discovered like Kotlin ones:
+
+```toml
+[[target]]
+name = "Greeting"
+kind = "kotlin_jvm_library"
+srcs = ["src/main/kotlin/**/*.kt", "src/main/java/**/*.java"]
+
+[target.attrs]
+jvm_target = "1.8"
+javac_opts = ["-Xlint:none"]
+```
+
+## Import Prebuilt Java Archives
+
+Use [`java_import`](/reference/prelude/java_import) for archives built
+elsewhere, such as Maven artifacts resolved by another tool:
+
+```toml
+[[target]]
+name = "TestLibraries"
+kind = "java_import"
+
+[target.attrs]
+jars = ["third_party/junit-4.13.2.jar", "third_party/hamcrest-core-1.3.jar"]
+```
+
+Any Kotlin or Android role that accepts `java_library` accepts the import.
+
 ## Model Classpath Roles
 
 Use `deps` for normal compile and runtime libraries. More precise relationships
@@ -138,8 +171,7 @@ Apple target should consume Kotlin/Native code as a framework.
 - [`kotlin_jvm_test`](/reference/prelude/kotlin_jvm_test)
 - [`kotlin_apple_framework`](/reference/prelude/kotlin_apple_framework)
 
-Java source compilation, resource packaging, annotation processing, Kotlin
-symbol processing, incremental compilation, interface archive generation,
+Resource packaging, annotation processing, Kotlin symbol processing, incremental compilation, interface archive generation,
 and test framework lifecycle integration remain outside the typed Kotlin Java
 virtual machine surface. Android local tests remain available through
 [`android_local_test`](/reference/prelude/android_local_test).

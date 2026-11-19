@@ -6,6 +6,15 @@ Kotlin library for the Java virtual machine.
 
 Compiles Kotlin sources with `kotlinc` into one Java archive. The provider can
 feed other Kotlin targets and Android targets that accept `java_library`.
+
+Java sources (`.java`) matched by `srcs` compile jointly with the Kotlin
+sources. `kotlinc` reads the Java sources so Kotlin can reference Java
+declarations, then `javac` compiles the Java sources against the Kotlin
+classes, so Java can reference Kotlin declarations too. Both class trees are
+merged into the archive with fixed entry timestamps and permissions, so the
+archive bytes depend only on the class files. `javac` receives
+`--release` derived from `jvm_target` (`1.8` becomes `8`) unless `javac_opts`
+sets `--release`, `-source`, or `-target`.
 Dependency roles distinguish normal, friend, exported, compile-only, and
 runtime-only classpaths.
 
@@ -28,6 +37,8 @@ runtime-only classpaths.
 | `kotlin_home` | string | no | inferred | Kotlin installation root used to find the standard library |
 | `kotlin_stdlib` | string | no | inferred | Override the Kotlin standard library Java archive path |
 | `java_home` | string | no | `JAVA_HOME` | Java runtime home exposed to the compiler |
+| `javac` | string | no | host tool | Override the Java compiler used for Java sources |
+| `javac_opts` | list&lt;string&gt; | no | `[]` | Additional Java compiler arguments for Java sources |
 
 ## Dependency Edges
 
@@ -66,12 +77,14 @@ The target emits `kotlin_jvm_library` and `java_library`.
 | Output | Location |
 | --- | --- |
 | Java archive | `.struo/out/<target>/<output>` |
+| Kotlin classes, with Java sources | `.struo/out/<target>/kotlin_classes` |
+| Java classes, with Java sources | `.struo/out/<target>/java_classes` |
 
 With `manifest`, compilation emits a declared classes tree and a separate
 archive action packages it with the supplied manifest using JDK 17 or newer
 `jar`. Archive entry timestamps are fixed, and the manifest contents and archive
-tool identity participate in caching. Without `manifest`, `kotlinc` continues
-to emit the archive directly. Struo does not infer publication metadata or
+tool identity participate in caching. Without `manifest` or Java sources,
+`kotlinc` continues to emit the archive directly. Struo does not infer publication metadata or
 invent library versions.
 
 ## Example
@@ -93,7 +106,7 @@ jvm_target = "17"
 
 ## Limitations
 
-Java source compilation, resource packaging, annotation processing, Kotlin
-symbol processing, incremental compilation, and source-only interface archive
-generation are not implemented yet. Use an Android target for mixed Android
-Java and Kotlin sources, or keep these steps behind a script target.
+Resource packaging, Java annotation processing, Kotlin symbol processing,
+incremental compilation, and source-only interface archive generation are not
+implemented yet. Keep these steps behind a script target. Use
+[`java_import`](/reference/prelude/java_import) for prebuilt archives.

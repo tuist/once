@@ -74,6 +74,8 @@ jest_test|jest-test-minimal|test
 kotlin_jvm_binary|kotlin-jvm-binary-minimal|build
 kotlin_jvm_library|kotlin-jvm-library-minimal|build
 kotlin_jvm_test|kotlin-jvm-test-minimal|test
+kotlin_jvm_test|kotlin-jvm-mixed-java|test
+java_import|java-import-minimal|build
 minitest_test|minitest-test-minimal|test
 pytest_test|pytest-test-minimal|test
 rspec_test|rspec-test-minimal|test

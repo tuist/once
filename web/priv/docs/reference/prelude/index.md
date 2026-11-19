@@ -137,6 +137,8 @@ you already have.
   main class for the host Java virtual machine
 - [`kotlin_jvm_test`](/reference/prelude/kotlin_jvm_test): host-side Kotlin
   tests with normalized Struo test results
+- [`java_import`](/reference/prelude/java_import): prebuilt Java archives,
+  such as Maven artifacts, exposed as a Java library provider
 - [`kotlin_apple_framework`](/reference/prelude/kotlin_apple_framework):
   Kotlin/Native framework bundle consumed by Apple application and test
   targets

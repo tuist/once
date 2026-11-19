@@ -209,6 +209,18 @@ public class BrokenSuite {
 "#,
     )
     .unwrap();
+    std::fs::write(
+        dir.path().join("IgnoredSuite.java"),
+        r#"import org.junit.*;
+@Ignore("whole suite")
+public class IgnoredSuite {
+  static { if (true) throw new AssertionError("ignored suite initialized"); }
+  @Test public void first() {}
+  @Test public void second() {}
+}
+"#,
+    )
+    .unwrap();
     write_junit4_discovery_fixtures(dir);
     let compile = Command::new("javac")
         .args(["-classpath", classpath, "-d", "classes"])
@@ -218,6 +230,7 @@ public class BrokenSuite {
             "ParameterSuite.java",
             "FailureSuite.java",
             "BrokenSuite.java",
+            "IgnoredSuite.java",
             "ASuite.java",
             "ZOnceTest.java",
             "InvalidTest.java",
@@ -282,7 +295,9 @@ fn junit4_runner_preserves_native_lifecycle_rules_parameters_and_failures() {
     )
     .unwrap();
     for (filters, total, passed, failed, skipped) in [
-        (vec![], 11, 3, 6, 2),
+        (vec![], 13, 3, 6, 4),
+        (vec!["IgnoredSuite"], 2, 0, 0, 2),
+        (vec!["IgnoredSuite#second"], 1, 0, 0, 1),
         (vec!["ASuite"], 1, 0, 1, 0),
         (vec!["ZOnceTest"], 1, 0, 1, 0),
         (vec!["InvalidTest"], 1, 0, 1, 0),
@@ -316,7 +331,7 @@ fn junit4_runner_preserves_native_lifecycle_rules_parameters_and_failures() {
         assert_eq!(report["summary"]["passed"], passed, "{report}");
         assert_eq!(report["summary"]["failed"], failed, "{report}");
         assert_eq!(report["summary"]["skipped"], skipped, "{report}");
-        if total == 11 {
+        if total == 13 {
             let log = std::fs::read_to_string(dir.path().join("run.log")).unwrap();
             assert!(log.contains("setup failed"), "{log}");
             assert!(log.contains("teardown failed"), "{log}");

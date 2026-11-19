@@ -275,7 +275,7 @@ defmodule StruoSiteWeb.Docs.Sidebar do
               target_group("Android", ~w(android_resource android_library android_local_test
                 android_instrumentation_test android_binary)),
               target_group("Cross-platform", ~w(swift_android_library kotlin_apple_framework)),
-              target_group("Kotlin", ~w(kotlin_jvm_library kotlin_jvm_binary kotlin_jvm_test)),
+              target_group("Kotlin", ~w(kotlin_jvm_library kotlin_jvm_binary kotlin_jvm_test java_import)),
               target_group("C and C++", ~w(c_library)),
               target_group("CMake", ~w(cmake_project cmake_test cmake_workspace cmake_target)),
               target_group("Elixir", ~w(mix_workspace mix_dependencies mix_package mix_project

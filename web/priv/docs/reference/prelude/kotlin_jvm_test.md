@@ -5,7 +5,10 @@ Host-side Kotlin tests for the Java virtual machine.
 ## Description
 
 Compiles Kotlin test sources, scans the resulting classes for zero-argument
-test methods, and emits normalized Struo test results. Methods whose names begin
+test methods, and emits normalized Struo test results. Java test sources in
+`srcs` compile jointly with the Kotlin sources, as described for
+[`kotlin_jvm_library`](/reference/prelude/kotlin_jvm_library#description), and
+Java test classes are discovered like Kotlin ones. Methods whose names begin
 with `test` run without an external test framework. The runner also recognizes
 the `org.junit.Test` annotation from [JUnit](https://junit.org/junit5/) and the
 `kotlin.test.Test` annotation when their libraries are on the dependency
@@ -29,7 +32,9 @@ and setup or teardown failures reported as failed. `Class#method` selects all
 parameter values; `Class#method[0]` selects an exact parameterized case when
 the runner uses that name. Aggregate suites execute their child classes once;
 a class-only suite filter selects all its children. Invalid annotated methods
-are reported through native JUnit initialization failures. Convention-only
+are reported through native JUnit initialization failures. A class annotated
+with `@Ignore` reports each of its test methods, or each parameterized case,
+as skipped, matching JUnit's own counts, without initializing the class. Convention-only
 methods are not JUnit tests.
 
 ## Test Attributes
@@ -46,7 +51,7 @@ methods are not JUnit tests.
 | `labels` | list&lt;string&gt; | no | `[]` | Labels exposed during test discovery |
 | `timeout_ms` | integer | no |  | Optional test timeout in milliseconds |
 | `java` | string | no | host tool | Override the Java runtime path |
-| `javac` | string | no | host tool | Override the Java compiler used for the reflection runner |
+| `javac` | string | no | host tool | Override the Java compiler used for Java sources and the generated runner |
 
 The compiler attributes from
 [`kotlin_jvm_library`](/reference/prelude/kotlin_jvm_library#attributes) also

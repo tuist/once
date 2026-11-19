@@ -404,6 +404,14 @@ def _jvm_junit4_methods():
       }
 
       @Override public void testIgnored(org.junit.runner.Description description) {
+        if (description.getMethodName() == null && description.getClassName() != null) {
+          List<org.junit.runner.Description> children = new ArrayList<>();
+          collectIgnoredClassCases(ignoredClassDescription(description.getClassName()), filters, children);
+          if (!children.isEmpty()) {
+            for (org.junit.runner.Description child : children) testIgnored(child);
+            return;
+          }
+        }
         TestCase result = entry(description);
         if (!"failed".equals(result.status)) result.status = "skipped";
       }
@@ -452,8 +460,12 @@ def _jvm_junit4_methods():
           }
           @Override public String describe() { return String.join(", ", filters); }
         };
-        org.junit.runner.Runner runner = request.getRunner();
-        if (!filter.shouldRun(runner.getDescription())) continue;
+        org.junit.runner.Description described = request.getRunner().getDescription();
+        if (described.getChildren().isEmpty() && type.isAnnotationPresent(org.junit.Ignore.class)) {
+          org.junit.runner.Description expanded = ignoredClassDescription(className);
+          if (expanded != null) described = expanded;
+        }
+        if (!filter.shouldRun(described)) continue;
         request = request.filterWith(filter);
       }
       runners.put(className, request.getRunner());
@@ -470,6 +482,38 @@ def _jvm_junit4_methods():
       if (!result.failure.isEmpty()) logText.append(result.failure);
     }
     return cases;
+  }
+
+  private static org.junit.runner.Description ignoredClassDescription(String className) {
+    try {
+      Class<?> type = Class.forName(className, false, StruoJvmTestRunner.class.getClassLoader());
+      org.junit.runner.Runner runner = new org.junit.internal.builders.AllDefaultPossibilitiesBuilder(true) {
+        @Override protected org.junit.internal.builders.IgnoredBuilder ignoredBuilder() {
+          return new org.junit.internal.builders.IgnoredBuilder() {
+            @Override public org.junit.runner.Runner runnerForClass(Class<?> testClass) { return null; }
+          };
+        }
+      }.runnerForClass(type);
+      return runner == null ? null : runner.getDescription();
+    } catch (Throwable error) {
+      return null;
+    }
+  }
+
+  private static void collectIgnoredClassCases(org.junit.runner.Description description, List<String> filters, List<org.junit.runner.Description> out) {
+    if (description == null) return;
+    if (description.isTest()) {
+      String method = description.getMethodName();
+      if (method == null) return;
+      if (filters.isEmpty() || matchesFilter(filters, description.getClassName(), method)
+          || (method.contains("[") && matchesFilter(filters, description.getClassName(), method.substring(0, method.indexOf('['))))) {
+        out.add(description);
+      }
+      return;
+    }
+    for (org.junit.runner.Description child : description.getChildren()) {
+      collectIgnoredClassCases(child, filters, out);
+    }
   }
 
   private static void collectJUnit4OwnedClasses(org.junit.runner.Description description, String owner, java.util.Set<String> owned) {

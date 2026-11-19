@@ -1737,6 +1737,16 @@ initializing ignored suites or invoking ignored methods. Public inherited test
 methods run on concrete suites, with overridden methods selected once. Existing
 non-public methods declared on the concrete suite remain discoverable.
 
+`kotlin_jvm_library`, `kotlin_jvm_binary`, and `kotlin_jvm_test` compile
+`.java` files in `srcs` jointly with Kotlin: `kotlinc` reads them for symbol
+resolution, then a separate `javac` action compiles them against the Kotlin
+class tree, a tree copy merges both trees, and `write_archive` packages
+libraries as deterministic ZIP archives. Each step is a declared,
+cacheable action. `java_import` exposes prebuilt archives through the same
+`transitive_compile_jars` and `transitive_runtime_jars` fields as other Java
+library providers. Absolute host archives are snapshotted
+with `materialize_host_file`, so cache identity follows their contents.
+
 `kotlin_jvm_library.manifest` optionally supplies a package-relative JAR manifest.
 With it, compilation emits a declared classes tree and a separate JDK archive
 action fingerprints the manifest and resolved `jar` tool identity. The `jar`
@@ -1761,7 +1771,8 @@ declared as action inputs. Native outcomes retain per-case normalized results
 and exact class or method filtering, including parameterized case names.
 Aggregate suites own their child classes instead of rerunning them independently;
 class-only suite filters select their descendants, and malformed annotated test
-methods surface as native initialization failures. Existing convention-based
+methods surface as native initialization failures. A class-level `@Ignore`
+expands to one skipped case per test method or parameterized case. Existing convention-based
 test behavior is unchanged. Prepare custom-runner SDK and configuration inputs
 explicitly; undeclared runtime downloads are not covered by the action cache.
 

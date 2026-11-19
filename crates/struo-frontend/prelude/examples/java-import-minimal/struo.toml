@@ -1,0 +1,12 @@
+[[target]]
+name = "Quotes"
+kind = "java_import"
+
+[target.attrs]
+jars = ["libs/quotes.jar"]
+
+[[target]]
+name = "QuoteTests"
+kind = "kotlin_jvm_test"
+srcs = ["src/test/kotlin/**/*.kt"]
+deps = ["./Quotes"]

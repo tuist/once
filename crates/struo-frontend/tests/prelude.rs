@@ -6384,6 +6384,196 @@ result = repr(_kotlin_jvm_test_impl(ctx))
 }
 
 #[test]
+fn prelude_kotlin_jvm_compiles_java_sources_against_kotlin_output() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let main_dir = workspace.path().join("apps/mixed/src/main");
+    let test_dir = workspace.path().join("apps/mixed/src/test");
+    let kotlin_dir = workspace.path().join("toolchains/kotlin/lib");
+    for dir in [&main_dir, &test_dir, &kotlin_dir] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    std::fs::write(main_dir.join("Greeter.kt"), "class Greeter\n").unwrap();
+    std::fs::write(main_dir.join("Punctuation.java"), "class Punctuation {}\n").unwrap();
+    std::fs::write(test_dir.join("GreeterTest.kt"), "class GreeterTest\n").unwrap();
+    std::fs::write(test_dir.join("JavaTest.java"), "class JavaTest {}\n").unwrap();
+    let stdlib = kotlin_dir.join("kotlin-stdlib.jar");
+    std::fs::write(&stdlib, "stdlib").unwrap();
+    let stdlib = stdlib.to_string_lossy();
+    let ctx = |name: &str, srcs: &str, capability: &str, attrs: &str| {
+        format!(
+            r#"{{
+    "label": {{"package": "apps/mixed", "name": "{name}", "id": "apps/mixed/{name}"}},
+    "attr": {{"kotlinc": "/tools/kotlinc", "java": "/tools/java", "javac": "/tools/javac", "kotlin_stdlib": "{stdlib}", "jvm_target": "1.8"{attrs}}},
+    "deps": [{{"transitive_compile_jars": ["libs/dep.jar"], "transitive_runtime_jars": ["libs/dep.jar"]}}],
+    "deps_by_role": {{}},
+    "srcs": [{srcs}],
+    "build_dir": ".struo/out/apps/mixed/{name}",
+    "scratch_dir": ".struo/tmp/analysis/apps/mixed/{name}",
+    "capability": "{capability}",
+}}"#
+        )
+    };
+    let source = format!(
+        r#"{prelude}
+def host_command(argv, env = None, merge_stderr = None):
+    return argv[0] + " 17\n"
+
+library = _kotlin_jvm_library_impl({library})
+_kotlin_jvm_library_impl({pinned})
+tests = _kotlin_jvm_test_impl({tests})
+result = repr([library, tests])
+"#,
+        library = ctx("Lib", r#""src/main/*.kt", "src/main/*.java""#, "build", ""),
+        pinned = ctx(
+            "Pinned",
+            r#""src/main/*.kt", "src/main/*.java""#,
+            "build",
+            r#", "javac_opts": ["--release=11"]"#,
+        ),
+        tests = ctx("Tests", r#""src/test/*.kt", "src/test/*.java""#, "test", ""),
+    );
+    let store = store_for(workspace.path(), "apps/mixed");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+    out.unwrap();
+
+    // kotlinc reads the Java sources for symbol resolution but emits only Kotlin classes.
+    let kotlin = action_by_identifier(&store, "kotlin_jvm_compile:apps/mixed/Lib");
+    assert!(kotlin
+        .argv
+        .iter()
+        .any(|arg| arg.ends_with("Punctuation.java")));
+    let kotlin_out = ".struo/out/apps/mixed/kotlin_classes";
+    assert_eq!(kotlin.outputs, vec![kotlin_out.to_string()]);
+    // javac compiles the Java sources against the Kotlin output and the dependency classpath.
+    let javac = action_by_identifier(&store, "kotlin_jvm_javac:apps/mixed/Lib");
+    assert_eq!(javac.argv[0], "/tools/javac");
+    let release = javac
+        .argv
+        .iter()
+        .position(|arg| arg == "--release")
+        .unwrap();
+    assert_eq!(javac.argv[release + 1], "8");
+    let classpath = &javac.argv[javac
+        .argv
+        .iter()
+        .position(|arg| arg == "-classpath")
+        .unwrap()
+        + 1];
+    assert!(classpath.starts_with(kotlin_out), "{classpath}");
+    assert!(classpath.contains("libs/dep.jar"), "{classpath}");
+    assert!(javac.inputs.iter().any(|input| input == kotlin_out));
+    assert!(!javac.argv.iter().any(|arg| arg.ends_with("Greeter.kt")));
+    let pinned = action_by_identifier(&store, "kotlin_jvm_javac:apps/mixed/Pinned");
+    assert!(!pinned.argv.iter().any(|arg| arg == "--release"));
+    assert!(pinned.argv.iter().any(|arg| arg == "--release=11"));
+    let merge = action_by_identifier(&store, "kotlin_jvm_merge_classes:apps/mixed/Lib");
+    assert_eq!(
+        merge.operation,
+        Some(DeclaredActionOperation::CopyPath {
+            sources: vec![
+                kotlin_out.to_string(),
+                ".struo/out/apps/mixed/java_classes".to_string()
+            ],
+            destination: ".struo/out/apps/mixed/classes".to_string(),
+            mode: DeclaredCopyPathMode::Tree,
+        })
+    );
+    let archive = action_by_identifier(&store, "kotlin_jvm_archive:apps/mixed/Lib");
+    assert_eq!(archive.outputs[0], ".struo/out/apps/mixed/Lib.jar");
+    let Some(DeclaredActionOperation::WriteArchive {
+        entries, format, ..
+    }) = &archive.operation
+    else {
+        panic!("expected a write_archive action: {archive:?}");
+    };
+    assert_eq!(*format, DeclaredArchiveFormat::Zip);
+    let tree = entries
+        .iter()
+        .find(|entry| entry.kind == DeclaredArchiveEntryKind::Tree)
+        .expect("classes tree entry");
+    assert_eq!(
+        tree.source.as_deref(),
+        Some(".struo/out/apps/mixed/classes")
+    );
+    assert!(entries
+        .iter()
+        .any(|entry| entry.path == "META-INF/MANIFEST.MF"));
+
+    // Test discovery scans the merged tree, so Java test classes are found.
+    let test_javac = action_by_identifier(&store, "kotlin_jvm_test_javac:apps/mixed/Tests");
+    assert!(test_javac
+        .argv
+        .iter()
+        .any(|arg| arg.ends_with("JavaTest.java")));
+    let run = action_by_identifier(&store, "kotlin_jvm_test:apps/mixed/Tests");
+    let classes_dir = ".struo/out/apps/mixed/test/classes";
+    let runner = run
+        .argv
+        .iter()
+        .position(|arg| arg == "StruoJvmTestRunner")
+        .unwrap();
+    assert_eq!(run.argv[runner + 1], classes_dir);
+    let merge = action_by_identifier(&store, "kotlin_jvm_test_merge_classes:apps/mixed/Tests");
+    assert_eq!(merge.outputs, vec![classes_dir.to_string()]);
+}
+
+#[test]
+fn prelude_java_import_exposes_jars_and_snapshots_host_archives() {
+    let prelude = all_prelude_source();
+    let workspace = TempDir::new().unwrap();
+    let libs = workspace.path().join("third_party/libs");
+    std::fs::create_dir_all(&libs).unwrap();
+    std::fs::write(libs.join("a.jar"), "a").unwrap();
+    std::fs::write(libs.join("b.jar"), "b").unwrap();
+    let host = TempDir::new().unwrap();
+    let host_jar = host.path().join("junit.jar");
+    std::fs::write(&host_jar, "junit").unwrap();
+    let host_jar = host_jar.to_string_lossy();
+    let source = format!(
+        r#"{prelude}
+ctx = {{
+    "label": {{"package": "third_party", "name": "Libs", "id": "third_party/Libs"}},
+    "attr": {{"jars": ["libs/*.jar", "{host_jar}"]}},
+    "deps": [{{"transitive_compile_jars": ["dep/api.jar"], "transitive_runtime_jars": ["dep/api.jar", "dep/impl.jar"]}}],
+    "deps_by_role": {{"runtime_deps": [{{"transitive_runtime_jars": ["dep/runtime.jar"], "transitive_compile_jars": ["dep/runtime.jar"]}}]}},
+    "srcs": [],
+    "build_dir": ".struo/out/third_party/Libs",
+    "scratch_dir": ".struo/tmp/analysis/third_party/Libs",
+    "capability": "build",
+}}
+provider = _java_import_impl(ctx)
+result = repr([provider["transitive_compile_jars"], provider["transitive_runtime_jars"]])
+"#
+    );
+    let store = store_for(workspace.path(), "third_party");
+
+    let (store, out) = with_active_store(store, || eval_prelude_source_to_repr(source));
+
+    let snapshot = ".struo/out/third_party/jars/1/junit.jar";
+    assert_eq!(
+        out.unwrap(),
+        format!(
+            r#"[["third_party/libs/a.jar", "third_party/libs/b.jar", "{snapshot}", "dep/api.jar"], ["third_party/libs/a.jar", "third_party/libs/b.jar", "{snapshot}", "dep/api.jar", "dep/impl.jar", "dep/runtime.jar"]]"#
+        )
+    );
+    let import = action_by_identifier(&store, &format!("materialize_host_file:{snapshot}"));
+    assert_eq!(import.outputs, vec![snapshot.to_string()]);
+
+    let missing = format!(
+        r#"{prelude}
+result = repr(_java_import_impl({{"label": {{"package": "third_party", "name": "Libs", "id": "third_party/Libs"}}, "attr": {{"jars": ["missing/*.jar"]}}, "deps": [], "deps_by_role": {{}}, "srcs": [], "build_dir": ".struo/out/third_party/Libs", "capability": "build"}}))
+"#
+    );
+    let (_, err) = with_active_store(store_for(workspace.path(), "third_party"), || {
+        eval_prelude_source_to_repr(missing)
+    });
+    let err = err.unwrap_err();
+    assert!(err.contains("java_import_jar_not_found"), "{err}");
+}
+
+#[test]
 fn prelude_android_rejects_rust_rlib_native_dep() {
     let prelude = all_prelude_source();
     let err = eval_prelude_function_in(
