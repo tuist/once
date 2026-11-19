@@ -8,7 +8,7 @@ use sha2::{Digest as _, Sha256};
 use struo_cas::{reapi, ReapiMessage as _};
 
 use crate::remote::archive::input::plan::InputPlan;
-use crate::remote::path::relative_link_stays_within;
+use crate::remote::path::input_link_stays_within;
 use crate::{Error, RemoteIoLimits, Result, WorkspacePath};
 
 use super::PROVIDER;
@@ -95,7 +95,7 @@ fn add_entry(
             .workspace
             .read_link(relative)
             .map_err(|source| file_error("read_remote_input_link", relative, source))?;
-        if !relative_link_stays_within(relative, &target, &plan.declared_roots) {
+        if !input_link_stays_within(relative, &target, &plan.declared_roots) {
             return Err(api_error(format!(
                 "input symbolic link `{}` targets `{}` outside declared input trees",
                 relative.display(),

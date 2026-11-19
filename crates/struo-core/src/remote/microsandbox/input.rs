@@ -7,7 +7,7 @@ use crate::{Error, Result, WorkspacePath};
 
 use super::microsandbox_error;
 use super::path::guest_path;
-use crate::remote::path::relative_link_stays_within;
+use crate::remote::path::input_link_stays_within;
 
 enum HostEntry {
     Directory {
@@ -59,7 +59,7 @@ pub(super) async fn stage_inputs(
                 set_mode(fs, &guest, mode).await?;
             }
             HostEntry::Symlink { relative, target } => {
-                if !relative_link_stays_within(&relative, &target, &declared_roots) {
+                if !input_link_stays_within(&relative, &target, &declared_roots) {
                     return Err(transfer_error(
                         &relative,
                         format!(

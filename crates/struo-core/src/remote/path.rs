@@ -96,6 +96,33 @@ pub(super) fn relative_link_stays_within(
     declared_roots.iter().any(|root| resolved.starts_with(root))
 }
 
+/// Like [`relative_link_stays_within`], but also accepts a link to a directory
+/// that holds declared inputs, such as a workspace package linked from
+/// `node_modules` whose files are declared one by one. The worker builds that
+/// directory from the declared entries alone, so the link still resolves only
+/// to transferred content.
+pub(super) fn input_link_stays_within(
+    link: &Path,
+    target: &Path,
+    declared_roots: &[PathBuf],
+) -> bool {
+    if relative_link_stays_within(link, target, declared_roots) {
+        return true;
+    }
+    if target.is_absolute() {
+        return false;
+    }
+    let Some(resolved) = link
+        .parent()
+        .and_then(|parent| normalize(&parent.join(target)))
+    else {
+        return false;
+    };
+    declared_roots
+        .iter()
+        .any(|root| root != &resolved && root.starts_with(&resolved))
+}
+
 pub(super) fn path_is_declared(path: &Path, declared_roots: &[PathBuf]) -> bool {
     declared_roots.iter().any(|root| path.starts_with(root))
 }
@@ -127,6 +154,35 @@ mod tests {
             Path::new("node_modules/.bin/vitest"),
             Path::new("../vitest/bin.mjs"),
             &[PathBuf::from("node_modules")],
+        ));
+    }
+
+    #[test]
+    fn input_links_may_target_directories_holding_declared_inputs() {
+        let roots = [
+            PathBuf::from("node_modules/@acme/ui"),
+            PathBuf::from("packages/ui/package.json"),
+            PathBuf::from("packages/ui/src/index.ts"),
+        ];
+        assert!(input_link_stays_within(
+            Path::new("node_modules/@acme/ui"),
+            Path::new("../../packages/ui"),
+            &roots,
+        ));
+        assert!(!input_link_stays_within(
+            Path::new("node_modules/@acme/ui"),
+            Path::new("../../packages/web"),
+            &roots,
+        ));
+        assert!(!input_link_stays_within(
+            Path::new("node_modules/@acme/ui"),
+            Path::new("../../../outside"),
+            &roots,
+        ));
+        assert!(!relative_link_stays_within(
+            Path::new("node_modules/@acme/ui"),
+            Path::new("../../packages/ui"),
+            &roots,
         ));
     }
 

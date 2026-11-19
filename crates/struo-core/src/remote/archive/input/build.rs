@@ -3,7 +3,7 @@ use std::path::Path;
 use super::plan::InputPlan;
 use crate::remote::archive::limits::{limit_error, LimitedWriter};
 use crate::remote::archive::{archive_error, file_error, TempArchive};
-use crate::remote::path::relative_link_stays_within;
+use crate::remote::path::input_link_stays_within;
 use crate::Result;
 
 pub(super) fn archive(
@@ -35,7 +35,7 @@ pub(super) fn archive(
                 .map_err(|source_error| {
                     file_error("read_remote_input_link", &relative, source_error)
                 })?;
-            if !relative_link_stays_within(&relative, &target, &plan.declared_roots) {
+            if !input_link_stays_within(&relative, &target, &plan.declared_roots) {
                 return Err(archive_error(
                     provider,
                     format!(
