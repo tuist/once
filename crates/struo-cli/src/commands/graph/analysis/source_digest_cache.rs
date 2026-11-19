@@ -9,7 +9,7 @@ use struo_cas::Digest;
 
 use crate::commands::change_tracker::ChangePosition;
 
-const SCHEMA: &str = "struo.source-digests.v4";
+const SCHEMA: &str = "struo.source-digests.v5";
 
 /// What a filesystem watcher can say about the window since this cache was
 /// written.
@@ -110,6 +110,10 @@ struct Entry {
     /// of `lstat` calls rather than a read of every byte.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     tree: Option<String>,
+    /// The path reaches its content through a symbolic link to a directory.
+    /// The watcher does not follow links, so it cannot vouch for this path.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    linked: bool,
 }
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
@@ -160,6 +164,20 @@ pub(crate) fn stored_position(workspace: &Path) -> Option<ChangePosition> {
     let path = workspace.join(".struo").join("source-digests.json");
     let cache = serde_json::from_slice::<CacheFile>(&std::fs::read(path).ok()?).ok()?;
     (cache.schema == SCHEMA).then_some(cache.position).flatten()
+}
+
+/// Whether a parent directory of `relative` is, or sits under, a symbolic link.
+fn reached_through_link(workspace: &Path, relative: &str) -> bool {
+    let Some((parent, _)) = relative.rsplit_once('/') else {
+        return false;
+    };
+    match (
+        workspace.canonicalize(),
+        workspace.join(parent).canonicalize(),
+    ) {
+        (Ok(root), Ok(resolved)) => resolved != root.join(parent),
+        _ => true,
+    }
 }
 
 impl SourceDigestCache {
@@ -225,6 +243,7 @@ impl SourceDigestCache {
                 .read()
                 .expect("source digest cache lock poisoned")
                 .get(relative)
+                .filter(|entry| !entry.linked)
                 .map(|entry| entry.digest)
             {
                 self.record_observation(relative, digest);
@@ -258,6 +277,7 @@ impl SourceDigestCache {
             return Ok(digest);
         }
         let digest = struo_core::digest_source_path(workspace, relative)?;
+        let linked = reached_through_link(workspace, relative);
         let unsettled = fingerprint.unsettled.is_some();
         let previous = self
             .inner
@@ -270,6 +290,7 @@ impl SourceDigestCache {
                     fingerprint,
                     digest,
                     tree,
+                    linked,
                 },
             );
         // Persisting a description that cannot match yet only rewrites the
@@ -461,6 +482,7 @@ impl SourceDigestCache {
             fingerprint: described.fingerprint,
             digest,
             tree: described.tree,
+            linked: false,
         });
         let mut entries = self
             .inner

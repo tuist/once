@@ -135,7 +135,7 @@ pub(super) async fn serve(workspace: &Path, socket: &Path) -> Result<()> {
         root_fingerprint: Mutex::new(root_fingerprint),
     });
     let callback_state = Arc::clone(&state);
-    let mut source_watcher = notify::recommended_watcher(move |event| {
+    let mut source_watcher = source_watcher(move |event| {
         callback_state.handle_event(event);
     })
     .context("creating filesystem change tracker")?;
@@ -439,7 +439,7 @@ impl TrackerState {
             return Ok(());
         }
         let callback_state = Arc::clone(self);
-        let mut watcher = notify::recommended_watcher(move |event| {
+        let mut watcher = source_watcher(move |event| {
             callback_state.handle_event(event);
         })
         .context("refreshing filesystem change tracker")?;
@@ -618,6 +618,21 @@ impl OutputIdentity {
                 .map(|metadata| (metadata.dev(), metadata.ino())),
         )
     }
+}
+
+/// A watcher that reports every change under its real workspace path.
+///
+/// Package managers link workspace packages into `node_modules`. Following
+/// those links while registering a recursive watch reaches the package's
+/// directories a second time, and inotify keeps one watch per inode, so the
+/// later registration wins and edits to the real sources arrive under the
+/// link's path, where no input names them. Content reached only through a
+/// link is not observed; the source digest cache re-reads such paths itself.
+fn source_watcher(handler: impl notify::EventHandler) -> notify::Result<RecommendedWatcher> {
+    RecommendedWatcher::new(
+        handler,
+        notify::Config::default().with_follow_symlinks(false),
+    )
 }
 
 fn watch_output(watcher: &mut RecommendedWatcher, path: &Path) -> Result<()> {
@@ -958,6 +973,61 @@ mod tests {
         )
         .await;
         let _ = rebuilt_output_changed;
+        task.abort();
+    }
+
+    // Package managers link workspace packages into `node_modules`. An inotify
+    // watch belongs to an inode, so following that link would re-register the
+    // package's directories under the link's path, and edits to the real
+    // sources would be reported where no input names them.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn symlinked_directories_do_not_hide_changes_to_their_targets() {
+        let temporary = TempDir::new().unwrap();
+        let workspace = temporary.path().join("workspace");
+        tokio::fs::create_dir_all(&workspace).await.unwrap();
+        // Which registration of a shared inode wins depends on directory
+        // order, so one link is created before its target and one after.
+        tokio::fs::create_dir_all(workspace.join("node_modules"))
+            .await
+            .unwrap();
+        std::os::unix::fs::symlink("../ui_early", workspace.join("node_modules/early")).unwrap();
+        for package in ["ui_early", "ui_late"] {
+            tokio::fs::create_dir_all(workspace.join(package).join("src"))
+                .await
+                .unwrap();
+            tokio::fs::write(workspace.join(package).join("src/index.ts"), b"one")
+                .await
+                .unwrap();
+        }
+        std::os::unix::fs::symlink("../ui_late", workspace.join("node_modules/late")).unwrap();
+        let socket = temporary.path().join("tracker.sock");
+        let server_workspace = workspace.clone();
+        let server_socket = socket.clone();
+        let task = tokio::spawn(async move {
+            serve(&server_workspace, &server_socket).await.unwrap();
+        });
+        wait_until_listening(&socket).await;
+        let initial = settled_snapshot(&socket, &[]).await;
+
+        for package in ["ui_early", "ui_late"] {
+            tokio::fs::write(workspace.join(package).join("src/index.ts"), b"two")
+                .await
+                .unwrap();
+        }
+        let expected = ["ui_early/src/index.ts", "ui_late/src/index.ts"].map(String::from);
+        let edited = barrier_until(
+            &socket,
+            &[],
+            &initial.position,
+            "both source edits",
+            |snapshot| {
+                let named = named(snapshot.source_changes.as_ref());
+                expected.iter().all(|path| named.contains(path))
+            },
+        )
+        .await;
+        let _ = edited;
         task.abort();
     }
 

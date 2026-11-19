@@ -100,6 +100,43 @@ fn same_length_content_changes_invalidate_the_digest() {
     assert_ne!(cache.digest(workspace.path(), "source.rs").unwrap(), first);
 }
 
+// The change tracker does not follow symbolic links, so it never reports an
+// edit made behind a linked directory, such as a package linked from outside
+// the workspace.
+#[cfg(unix)]
+#[test]
+fn watcher_cannot_vouch_for_sources_behind_linked_directories() {
+    let workspace = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::fs::write(elsewhere.path().join("index.js"), "one").unwrap();
+    std::fs::create_dir(workspace.path().join("node_modules")).unwrap();
+    std::os::unix::fs::symlink(
+        elsewhere.path(),
+        workspace.path().join("node_modules/linked"),
+    )
+    .unwrap();
+    std::fs::write(workspace.path().join("local.js"), "one").unwrap();
+    let cache = SourceDigestCache::open(workspace.path());
+    let linked = cache
+        .digest(workspace.path(), "node_modules/linked/index.js")
+        .unwrap();
+    let local = cache.digest(workspace.path(), "local.js").unwrap();
+    cache.with_known_changes(KnownChanges::Since {
+        sources: BTreeSet::new(),
+        outputs: BTreeSet::new(),
+    });
+
+    std::fs::write(elsewhere.path().join("index.js"), "two").unwrap();
+
+    assert_ne!(
+        cache
+            .digest(workspace.path(), "node_modules/linked/index.js")
+            .unwrap(),
+        linked
+    );
+    assert_eq!(cache.digest(workspace.path(), "local.js").unwrap(), local);
+}
+
 #[test]
 fn malformed_cache_files_are_ignored() {
     let workspace = tempfile::tempdir().unwrap();
