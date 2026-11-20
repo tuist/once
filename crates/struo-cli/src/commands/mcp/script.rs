@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use struo_core::{ResourceLimits, WorkspacePath};
 
-use super::tool_args;
+use super::parse_args;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -24,7 +24,7 @@ struct ExecuteScriptArgs {
 }
 
 pub(super) fn validate(workspace: &Path, args: &Value) -> Result<Value> {
-    let args: ScriptPathArgs = serde_json::from_value(tool_args(args))?;
+    let args: ScriptPathArgs = parse_args(args)?;
     crate::commands::query::script_validation_value(workspace, &args.path)
 }
 
@@ -33,7 +33,7 @@ pub(super) fn execute(
     args: &Value,
     resource_limits: &ResourceLimits,
 ) -> Result<Value> {
-    let args: ExecuteScriptArgs = serde_json::from_value(tool_args(args))?;
+    let args: ExecuteScriptArgs = parse_args(args)?;
     if args.verify_reproducible {
         let path = WorkspacePath::try_from(args.path.as_str())?;
         let annotations =

@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use struo_core::SandboxMode;
 
-use super::{run_async_result, tool_args, Server};
+use super::{parse_args, run_async_result, Server};
 use crate::cli::ArtifactCmd;
 
 #[derive(Deserialize)]
@@ -32,13 +32,13 @@ struct PublishArgs {
 
 impl Server {
     pub(super) fn tool_query_artifacts(&self, args: &Value) -> Result<Value> {
-        let args: super::TargetExecutionArgs = serde_json::from_value(tool_args(args))?;
+        let args: super::TargetExecutionArgs = parse_args(args)?;
         crate::commands::graph::artifacts::query(&self.workspace, &args.target)
     }
 
     pub(super) fn tool_artifacts(&self, args: &Value, publish: bool) -> Result<Value> {
         let cmd = if publish {
-            let args: PublishArgs = serde_json::from_value(tool_args(args))?;
+            let args: PublishArgs = parse_args(args)?;
             ArtifactCmd::Publish {
                 target: struo_frontend::normalize_cli_target_from(
                     &self.workspace,
@@ -52,7 +52,7 @@ impl Server {
                 sandbox: SandboxMode::Off,
             }
         } else {
-            let args: ExportArgs = serde_json::from_value(tool_args(args))?;
+            let args: ExportArgs = parse_args(args)?;
             ArtifactCmd::Export {
                 target: struo_frontend::normalize_cli_target_from(
                     &self.workspace,
