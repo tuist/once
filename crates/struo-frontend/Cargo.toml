@@ -17,6 +17,7 @@ struo-host-tree.workspace = true
 struo-presentation.workspace = true
 plist = { version = "1.10", default-features = false }
 quick-xml = "0.42"
+hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

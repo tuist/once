@@ -140,7 +140,7 @@ impl AnalysisEngine {
         let mut hash = sha2::Sha256::new();
         hash.update(self.source.as_bytes());
         hash.update(self.configuration.canonical_bytes());
-        super::globals::hex_digest(&hash.finalize())
+        hex::encode(hash.finalize())
     }
 
     /// Engine over the built-in prelude only, with no workspace on disk.
@@ -499,7 +499,7 @@ impl AnalysisEngine {
                 part(&serde_json::to_vec(provider.as_ref()).ok()?);
             }
         }
-        Some(super::globals::hex_digest(&hasher.finalize()))
+        Some(hex::encode(hasher.finalize()))
     }
 
     /// Whether every answer a stored analysis recorded is still the answer the

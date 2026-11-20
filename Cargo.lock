@@ -5883,6 +5883,7 @@ dependencies = [
  "base64 0.23.1",
  "futures",
  "glob",
+ "hex",
  "include_dir",
  "plist",
  "quick-xml",
