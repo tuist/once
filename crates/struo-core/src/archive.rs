@@ -543,7 +543,7 @@ impl<W> DigestWriter<W> {
     }
 
     fn digest_hex(&self) -> String {
-        hex_lower(&self.hasher.clone().finalize())
+        hex::encode(self.hasher.clone().finalize())
     }
 }
 
@@ -557,16 +557,6 @@ impl<W: Write> Write for DigestWriter<W> {
     fn flush(&mut self) -> io::Result<()> {
         self.inner.flush()
     }
-}
-
-fn hex_lower(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
 }
 
 #[cfg(test)]
@@ -627,7 +617,7 @@ mod tests {
         assert_eq!(first, std::fs::read(&output).unwrap());
         assert_eq!(
             std::fs::read_to_string(&digest).unwrap().trim(),
-            hex_lower(&Sha256::digest(&first))
+            hex::encode(Sha256::digest(&first))
         );
 
         let mut archive = tar::Archive::new(first.as_slice());
@@ -713,7 +703,7 @@ mod tests {
         assert_eq!(first, std::fs::read(&output).unwrap());
         assert_eq!(
             std::fs::read_to_string(sha256).unwrap().trim(),
-            hex_lower(&Sha256::digest(&first))
+            hex::encode(Sha256::digest(&first))
         );
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(first.clone())).unwrap();
         for index in 0..archive.len() {
@@ -800,11 +790,11 @@ mod tests {
         assert!(tar_bytes.len() > first.len());
         assert_eq!(
             std::fs::read_to_string(&compressed_digest).unwrap().trim(),
-            hex_lower(&Sha256::digest(&first))
+            hex::encode(Sha256::digest(&first))
         );
         assert_eq!(
             std::fs::read_to_string(&tar_digest).unwrap().trim(),
-            hex_lower(&Sha256::digest(&tar_bytes))
+            hex::encode(Sha256::digest(&tar_bytes))
         );
 
         let plain = temporary.path().join("layer.tar");

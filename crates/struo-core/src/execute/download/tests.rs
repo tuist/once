@@ -291,7 +291,7 @@ async fn serve_archive(body: Vec<u8>) -> String {
 
 fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::Digest as _;
-    super::hex_lower(&sha2::Sha256::digest(bytes))
+    hex::encode(sha2::Sha256::digest(bytes))
 }
 
 async fn download_into(
