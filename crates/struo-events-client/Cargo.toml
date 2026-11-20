@@ -10,6 +10,7 @@ repository.workspace = true
 struo-core.workspace = true
 
 anyhow.workspace = true
+bytes.workspace = true
 prost = "0.14"
 thiserror.workspace = true
 tokio.workspace = true

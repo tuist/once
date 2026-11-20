@@ -13,6 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .boxed(".once.events.v1.ActionCompleted.presentation")
         .boxed(".once.events.v1.ActionCompleted.history")
         .boxed(".once.events.v1.RunEvent.payload.run_started")
+        .bytes(".once.events.v1.LogChunk.bytes")
         .compile_protos(&[proto], &["proto"])?;
     Ok(())
 }

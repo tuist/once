@@ -566,7 +566,7 @@ mod tests {
             ExecutorResources::new(Arc::new(ResourcePool::new(ResourceLimits::new(1, 1 << 30))));
         let action = Action::WriteFile {
             path: WorkspacePath::try_from("out.txt").unwrap(),
-            bytes: b"same".to_vec(),
+            bytes: bytes::Bytes::from_static(b"same"),
             input_digest: None,
         };
         let digest = action.digest();
@@ -951,7 +951,7 @@ mod tests {
         let (tmp, cas) = fresh_cas();
         let action = Action::WriteFile {
             path: WorkspacePath::try_from("out/generated.txt").unwrap(),
-            bytes: b"generated".to_vec(),
+            bytes: bytes::Bytes::from_static(b"generated"),
             input_digest: Some(Digest::of_bytes(b"write-file")),
         };
 
@@ -1061,7 +1061,7 @@ mod tests {
         let (tmp, cas) = fresh_cas();
         let action = Action::WriteFile {
             path: WorkspacePath::try_from("out/generated.txt").unwrap(),
-            bytes: b"generated".to_vec(),
+            bytes: bytes::Bytes::from_static(b"generated"),
             input_digest: Some(Digest::of_bytes(b"evicted-blob")),
         };
 

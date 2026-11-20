@@ -19,7 +19,7 @@ fn legacy_command_encoding_and_digest_domain_are_unchanged() {
 fn large_literal_artifact_hashes_match_the_legacy_json_encoding() {
     let action = Action::WriteFile {
         path: struo_core::WorkspacePath::try_from("out/large").unwrap(),
-        bytes: vec![b'x'; 2 * 1024 * 1024],
+        bytes: vec![b'x'; 2 * 1024 * 1024].into(),
         input_digest: None,
     };
     let mut legacy = b"struo.action.v11\0".to_vec();

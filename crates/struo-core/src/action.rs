@@ -209,7 +209,9 @@ pub enum Action {
     },
     WriteFile {
         path: WorkspacePath,
-        bytes: Vec<u8>,
+        /// Serializes as the same JSON byte array as `Vec<u8>`, so the
+        /// action digest is unchanged, while clones of the action share it.
+        bytes: bytes::Bytes,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         input_digest: Option<Digest>,
     },
@@ -618,6 +620,18 @@ mod tests {
             let legacy = Digest::of_bytes(&encoded);
             assert_eq!(action.digest() == legacy, format != ArchiveFormat::Zip);
         }
+    }
+
+    #[test]
+    fn write_file_bytes_keep_the_legacy_action_key_encoding() {
+        let action = Action::WriteFile {
+            path: WorkspacePath::try_from("out/file").unwrap(),
+            bytes: bytes::Bytes::from_static(&[0, 7, 255]),
+            input_digest: None,
+        };
+        let encoded = serde_json::to_string(&action).unwrap();
+        assert!(encoded.contains(r#""bytes":[0,7,255]"#), "{encoded}");
+        assert_eq!(serde_json::from_str::<Action>(&encoded).unwrap(), action);
     }
 
     #[test]

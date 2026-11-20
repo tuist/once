@@ -104,7 +104,7 @@ async fn accepted_nonzero_exit_code_unblocks_dependents_on_miss_and_hit() {
                 label: "dependent".into(),
                 action: Action::WriteFile {
                     path: WorkspacePath::try_from("marker").unwrap(),
-                    bytes: b"dependent ran".to_vec(),
+                    bytes: bytes::Bytes::from_static(b"dependent ran"),
                     input_digest: None,
                 },
                 deps: vec![0],

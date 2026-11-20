@@ -602,17 +602,15 @@ impl ActionOutputObserver for BusOutputObserver {
         if bytes.is_empty() {
             return;
         }
-        for chunk in bytes.chunks(RunEventBus::MAX_LOG_CHUNK_BYTES) {
-            self.bus.publish(RunEvent::LogChunk {
-                at_epoch_ms: now_epoch_ms(),
-                target_id: self.target_id.clone(),
-                stream: match stream {
-                    ActionOutputStream::Stdout => LogStream::Stdout,
-                    ActionOutputStream::Stderr => LogStream::Stderr,
-                },
-                bytes: chunk.to_vec(),
-            });
-        }
+        self.bus.publish(RunEvent::LogChunk {
+            at_epoch_ms: now_epoch_ms(),
+            target_id: self.target_id.clone(),
+            stream: match stream {
+                ActionOutputStream::Stdout => LogStream::Stdout,
+                ActionOutputStream::Stderr => LogStream::Stderr,
+            },
+            bytes: bytes::Bytes::copy_from_slice(bytes),
+        });
     }
 }
 
@@ -758,7 +756,7 @@ mod tests {
             } => {
                 assert_eq!(target_id, "//x:y");
                 assert_eq!(stream, LogStream::Stdout);
-                assert_eq!(bytes, b"hello");
+                assert_eq!(&bytes[..], b"hello");
             }
             other => panic!("unexpected event: {other:?}"),
         }

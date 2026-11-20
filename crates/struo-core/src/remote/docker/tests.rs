@@ -96,7 +96,7 @@ async fn portable_file_operations_can_use_a_docker_command_lease() {
         .await;
     let action = Action::WriteFile {
         path: WorkspacePath::try_from("prepared/input").unwrap(),
-        bytes: b"data".to_vec(),
+        bytes: bytes::Bytes::from_static(b"data"),
         input_digest: None,
     };
     crate::run_uncached_admitted(&action, workspace.path(), &cache, false, None, lease)

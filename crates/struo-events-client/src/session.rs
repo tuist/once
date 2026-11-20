@@ -60,7 +60,7 @@ pub struct EventSession {
     producer_dropped_events: u64,
     producer_loss_dirty: bool,
     last_sent_producer_loss: u64,
-    log_offsets: HashMap<(String, i32), i64>,
+    log_offsets: HashMap<(Option<crate::proto::LogScope>, i32), i64>,
     source_files: crate::SourceFileSnapshot,
 }
 
@@ -149,22 +149,20 @@ impl EventSession {
             if self.finalized_locally {
                 return self.next_seq - 1;
             }
-            let key = (format!("{:?}", chunk.scope), chunk.stream);
+            let key = (chunk.scope.clone(), chunk.stream);
             let offset = self.log_offsets.entry(key).or_default();
             chunk.offset = *offset;
             *offset = offset.saturating_add(i64::try_from(chunk.bytes.len()).unwrap_or(i64::MAX));
             let bytes = std::mem::take(&mut chunk.bytes);
             let mut last = self.next_seq - 1;
-            for (index, part) in bytes
-                .chunks(self.limits.max_log_chunk_bytes.max(1))
-                .enumerate()
-            {
+            let fragment_len = self.limits.max_log_chunk_bytes.max(1);
+            for byte_offset in (0..bytes.len()).step_by(fragment_len) {
                 let mut fragment = chunk.clone();
-                let byte_offset = index.saturating_mul(self.limits.max_log_chunk_bytes.max(1));
                 fragment.offset = chunk
                     .offset
                     .saturating_add(i64::try_from(byte_offset).unwrap_or(i64::MAX));
-                fragment.bytes = part.to_vec();
+                fragment.bytes =
+                    bytes.slice(byte_offset..(byte_offset + fragment_len).min(bytes.len()));
                 last = self.push_event(Payload::LogChunk(fragment), epoch_ms, mono_ns);
             }
             return last;
@@ -560,7 +558,7 @@ mod tests {
             scope: None,
             stream: 1,
             offset: 0,
-            bytes: b"abcde".to_vec(),
+            bytes: bytes::Bytes::from_static(b"abcde"),
         };
         session.push_ordinary(Payload::LogChunk(chunk.clone()), 0, 0);
         session.push_ordinary(Payload::LogChunk(chunk), 0, 0);
@@ -569,7 +567,7 @@ mod tests {
             .events
             .iter()
             .filter_map(|event| match &event.payload {
-                Some(Payload::LogChunk(chunk)) => Some((chunk.offset, chunk.bytes.as_slice())),
+                Some(Payload::LogChunk(chunk)) => Some((chunk.offset, &chunk.bytes[..])),
                 _ => None,
             })
             .collect();

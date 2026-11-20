@@ -30,6 +30,7 @@ anyhow = "1"
 bazel-remote-apis = "0.29"
 base64 = "0.23"
 blake3 = "1"
+bytes = { version = "1", features = ["serde"] }
 usage = { package = "usage-rs", version = "6.4.1" }
 console = "0.16"
 indicatif = "0.18"

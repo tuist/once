@@ -18,6 +18,7 @@ struo-frontend.workspace = true
 struo-host-tree.workspace = true
 
 anyhow.workspace = true
+bytes.workspace = true
 base64.workspace = true
 blake3.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }

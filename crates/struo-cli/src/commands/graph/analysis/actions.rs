@@ -2022,7 +2022,7 @@ fn operation_to_action(operation: DeclaredActionOperation, input_digest: Digest)
         }
         DeclaredActionOperation::WriteFile { path, bytes } => Action::WriteFile {
             path: workspace_path(&path, "write_path path")?,
-            bytes,
+            bytes: bytes.into(),
             input_digest: Some(input_digest),
         },
         DeclaredActionOperation::CopyPath {

@@ -60,7 +60,7 @@ mod tests {
             label: "node".into(),
             action: Action::WriteFile {
                 path: WorkspacePath::try_from("out").unwrap(),
-                bytes: Vec::new(),
+                bytes: bytes::Bytes::new(),
                 input_digest: None,
             },
             deps,

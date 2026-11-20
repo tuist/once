@@ -856,7 +856,7 @@ fn test_case_with_log(index: u32, message_size: usize) -> impl Iterator<Item = R
         at_epoch_ms: 2,
         target_id: "tests".into(),
         stream: struo_core::LogStream::Stdout,
-        bytes: vec![b'x'; RunEventBus::MAX_LOG_CHUNK_BYTES],
+        bytes: vec![b'x'; RunEventBus::MAX_LOG_CHUNK_BYTES].into(),
     });
     std::iter::once(case).chain(log)
 }

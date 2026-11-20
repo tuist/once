@@ -26,7 +26,7 @@ async fn restoring_a_tree_preserves_a_matching_newer_child() {
     digests.record_outputs(&result, workspace.path());
     let child = Action::WriteFile {
         path: WorkspacePath::try_from("out/tree/file").unwrap(),
-        bytes: b"new".to_vec(),
+        bytes: bytes::Bytes::from_static(b"new"),
         input_digest: None,
     };
     let updated = struo_core::run_uncached(&child, workspace.path(), &cache, false)

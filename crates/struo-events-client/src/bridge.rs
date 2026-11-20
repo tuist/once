@@ -667,7 +667,7 @@ mod tests {
                 at_epoch_ms: 10,
                 target_id: "//baz".into(),
                 stream: CoreStream::Stderr,
-                bytes: b"boom\n".to_vec(),
+                bytes: bytes::Bytes::from_static(b"boom\n"),
             },
             0,
         );
@@ -680,7 +680,7 @@ mod tests {
                         LogScopeVariant::TargetExecutionId(id) => assert_eq!(id, "//baz"),
                         other => panic!("wrong scope: {other:?}"),
                     }
-                    assert_eq!(c.bytes, b"boom\n");
+                    assert_eq!(&c.bytes[..], b"boom\n");
                 }
                 other => panic!("wrong payload: {other:?}"),
             },

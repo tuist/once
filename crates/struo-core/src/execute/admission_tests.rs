@@ -104,7 +104,7 @@ async fn a_cancelled_file_action_keeps_its_admission_until_its_file_work_stops()
     let lease = resources.acquire(Executor::Local, &request).await;
     let action = Action::WriteFile {
         path: WorkspacePath::try_from("out.fifo").unwrap(),
-        bytes: vec![b'x'; PAYLOAD_BYTES],
+        bytes: vec![b'x'; PAYLOAD_BYTES].into(),
         input_digest: None,
     };
 

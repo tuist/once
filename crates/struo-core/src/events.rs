@@ -150,7 +150,9 @@ pub enum RunEvent {
         at_epoch_ms: i64,
         target_id: String,
         stream: LogStream,
-        bytes: Vec<u8>,
+        /// Reference-counted so splitting a chunk and fanning it out to
+        /// every subscriber share one buffer.
+        bytes: bytes::Bytes,
     },
     /// A test suite (one test target's set of cases) has started.
     TestSuiteStarted {
@@ -288,12 +290,13 @@ impl RunEventBus {
                 stream,
                 bytes,
             } if bytes.len() > Self::MAX_LOG_CHUNK_BYTES => {
-                for chunk in bytes.chunks(Self::MAX_LOG_CHUNK_BYTES) {
+                for start in (0..bytes.len()).step_by(Self::MAX_LOG_CHUNK_BYTES) {
+                    let end = (start + Self::MAX_LOG_CHUNK_BYTES).min(bytes.len());
                     let _ = self.inner.send(RunEvent::LogChunk {
                         at_epoch_ms,
                         target_id: target_id.clone(),
                         stream,
-                        bytes: chunk.to_vec(),
+                        bytes: bytes.slice(start..end),
                     });
                 }
             }
@@ -377,7 +380,7 @@ mod tests {
             at_epoch_ms: 1,
             target_id: "target".into(),
             stream: LogStream::Stdout,
-            bytes: bytes.clone(),
+            bytes: bytes::Bytes::from(bytes.clone()),
         });
         let mut restored = Vec::new();
         for _ in 0..3 {

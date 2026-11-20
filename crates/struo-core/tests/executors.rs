@@ -219,7 +219,7 @@ async fn cached_output_restoration_respects_the_host_memory_budget() {
     let (workspace, _cache, resources, runner) = setup();
     let action = Action::WriteFile {
         path: WorkspacePath::try_from("out/value").unwrap(),
-        bytes: b"value".to_vec(),
+        bytes: bytes::Bytes::from_static(b"value"),
         input_digest: None,
     };
     let first = runner.run(&action).await.unwrap();
