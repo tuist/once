@@ -2019,14 +2019,23 @@ def _mix_dependency_index(dependencies):
 def _mix_source_globs(source_root):
     return [source_root + "/**/*"]
 
-def _mix_generated_source_excludes(source_root):
-    return [
+def _mix_generated_source_excludes(package, source_root):
+    excludes = [
         source_root + "/.struo/**/*",
         source_root + "/_build/**/*",
         source_root + "/deps/**/*",
         source_root + "/node_modules/**/*",
         source_root + "/**/node_modules/**/*",
     ]
+    # Mix's yecc and leex compilers write the Erlang source next to each
+    # grammar in the package's own directory, so a compile would otherwise
+    # change the inputs of the next one. Matches are workspace-relative and
+    # excludes are package-relative, like the patterns.
+    matched_root = _elixir_workspace_source_root(package, source_root)
+    for grammar in glob([source_root + "/**/*.yrl", source_root + "/**/*.xrl"], exclude = excludes):
+        relative = grammar if matched_root == "." else grammar[len(matched_root) + 1:]
+        excludes.append(source_root + "/" + relative[:-len(".yrl")] + ".erl")
+    return excludes
 
 def _mix_resolved_roots(ctx, dependencies, targets_by_app, identities):
     requested = ctx["attrs"].get("roots") or []
@@ -2619,7 +2628,7 @@ def _mix_package_impl(ctx):
     compile_script = script_dir + "/compile.exs"
     compile_log = ctx["build_dir"] + "/mix-compile.log"
     compile_warnings = ctx["build_dir"] + "/mix-compile-warnings.log"
-    srcs = glob(ctx["srcs"], exclude = _mix_generated_source_excludes(source_root))
+    srcs = glob(ctx["srcs"], exclude = _mix_generated_source_excludes(ctx["label"]["package"], source_root))
     root_config = _elixir_config_inputs(ctx)
     root_config_entry = _package_relative(ctx, _elixir_attr(ctx, "_mix_root_config_entry", ""))
     root_config_env = _elixir_attr(ctx, "_mix_root_config_env", mix_env)

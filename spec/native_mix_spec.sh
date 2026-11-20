@@ -171,6 +171,18 @@ PY
     grep -q '"cache":"hit"' "$SPEC_ROOT/unchanged-build.json"
   }
 
+  exercise_dependency_grammars() {
+    mkdir -p "$WORKSPACE/helper/src"
+    printf 'Nonterminals value.\nTerminals int.\nRootsymbol value.\nvalue -> int : %s.\n' "'\$1'" > "$WORKSPACE/helper/src/helper_parser.yrl"
+    printf 'Definitions.\nD = [0-9]\nRules.\n{D}+ : {token, {int, TokenLine, list_to_integer(TokenChars)}}.\nErlang code.\n' > "$WORKSPACE/helper/src/helper_lexer.xrl"
+    native_struo build mix_application_dev > "$SPEC_ROOT/grammar-cold.json" 2> "$SPEC_ROOT/grammar-cold.err" || { cat "$SPEC_ROOT/grammar-cold.err"; return 1; }
+    # Mix wrote the generated parser into the dependency's own sources.
+    test -f "$WORKSPACE/helper/src/helper_parser.erl" || return
+    rm -rf "$WORKSPACE/.struo"
+    native_struo build mix_application_dev > "$SPEC_ROOT/grammar-warm.json" 2> "$SPEC_ROOT/grammar-warm.err" || { cat "$SPEC_ROOT/grammar-warm.err"; return 1; }
+    grep -q '"cache":"hit"' "$SPEC_ROOT/grammar-warm.json"
+  }
+
   exercise_structured_counts() {
     cat > "$WORKSPACE/app/test/noise_test.exs" <<'EX'
 defmodule NoiseTest do
@@ -356,6 +368,13 @@ PY
     Skip if 'Mix toolchain unavailable on this host' mix_tools_unavailable
     prepare_native_workspace
     When call exercise_resource_invalidation
+    The status should be success
+  End
+
+  It 'keeps sources Mix generates from dependency grammars out of the cache key'
+    Skip if 'Mix toolchain unavailable on this host' mix_tools_unavailable
+    prepare_native_workspace
+    When call exercise_dependency_grammars
     The status should be success
   End
 
