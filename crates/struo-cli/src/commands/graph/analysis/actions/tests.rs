@@ -1,5 +1,12 @@
 use std::collections::BTreeMap;
 
+use struo_core::{NetworkPolicy, OutputSymlinkMode, WorkspacePath};
+use struo_frontend::analysis::{DeclaredArgFileFormat, DeclaredCopyPathMode};
+
+use super::lowering::{
+    compose_input_digest, compose_input_digest_with_available,
+    compose_input_fingerprint_with_available,
+};
 use super::*;
 
 #[test]

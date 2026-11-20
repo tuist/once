@@ -1,3 +1,7 @@
+use super::graph_tools::{
+    graph_tool_cache_fingerprint, graph_tool_cache_path_from, graph_tool_paths_fingerprint,
+    read_graph_tool_cache_at, write_graph_tool_cache_at,
+};
 use super::source_digest_cache::KnownChanges;
 use super::*;
 

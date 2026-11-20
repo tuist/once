@@ -1,3 +1,5 @@
+use struo_frontend::analysis::{DeclaredArgFileFormat, DeclaredCopyPathMode};
+
 use super::super::*;
 
 #[tokio::test]
