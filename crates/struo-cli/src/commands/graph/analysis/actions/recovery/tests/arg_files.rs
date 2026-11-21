@@ -12,7 +12,7 @@ async fn repairing_a_cached_producer_recreates_its_deferred_argument_files() {
         .push(struo_frontend::analysis::DeclaredArgFile {
             path: ".struo/args/produce.txt".into(),
             format: struo_frontend::analysis::DeclaredArgFileFormat::LineDelimited,
-            args: vec!["from-args".into()],
+            args: vec!["from-args".into()].into(),
         });
     workspace.build(draft.clone()).await.unwrap();
     std::fs::remove_file(workspace.path().join(".struo/args/produce.txt")).unwrap();

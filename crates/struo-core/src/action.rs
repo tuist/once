@@ -13,7 +13,7 @@ use crate::{ResourceRequest, WorkspacePath};
 /// that should invalidate the cache. Older action result JSON still
 /// deserializes through serde defaults; the domain only partitions new
 /// action lookups.
-pub(crate) const ACTION_DIGEST_DOMAIN: &[u8] = b"struo.action.v11\0";
+pub(crate) const ACTION_DIGEST_DOMAIN: &[u8] = b"struo.action.v12\0";
 
 static DEFAULT_RESOURCE_REQUEST: LazyLock<ResourceRequest> =
     LazyLock::new(ResourceRequest::default);
@@ -457,13 +457,13 @@ impl Action {
                 remote: Some(remote),
                 ..
             } if remote.provider == "tuist" => {
-                b"struo.action.run_command.tuist_snapshots.v1\0".as_slice()
+                b"struo.action.run_command.tuist_snapshots.v2\0".as_slice()
             }
             // Old normalized results cannot distinguish accepted exits from rejected zero.
             Action::RunCommand {
                 success_exit_codes, ..
             } if !success_exit_codes.contains(&0) => {
-                b"struo.action.run_command.exit_policy.v1\0".as_slice()
+                b"struo.action.run_command.exit_policy.v2\0".as_slice()
             }
             _ => ACTION_DIGEST_DOMAIN,
         };
@@ -680,7 +680,7 @@ mod tests {
         };
         // Snapshot taken before the network field landed on this digest
         // domain. Updating the domain above invalidates this value.
-        let expected = "a618b43e1c04c4c87439f88ce08b84e9ed83e0fc36bb984c364a2bfc56edf858";
+        let expected = "99a5b6997531aa51ecc6c2b32c98948766e73a7a2ad4c5b0e2af724f94773daf";
         assert_eq!(base.digest().to_string(), expected);
     }
 

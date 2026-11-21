@@ -3,12 +3,16 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use anyhow::{anyhow, Context, Result};
-use sea_orm::{ActiveValue::Set, DatabaseConnection, EntityTrait, QueryOrder, TransactionTrait};
+use sea_orm::sea_query::Expr;
+use sea_orm::{
+    ActiveValue::Set, ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter,
+    QueryOrder, QuerySelect, TransactionTrait,
+};
 use struo_cas::Digest;
 
 use super::entity;
 use super::{EvidenceCacheState, EvidenceRecord, EvidenceStatus, EvidenceSubject};
-use crate::WorkspaceStore;
+use crate::{FingerprintStore, WorkspaceStore};
 
 const EVIDENCE_INSERT_BATCH_SIZE: usize = 128;
 
@@ -22,15 +26,21 @@ static EVIDENCE_DATABASES: LazyLock<Mutex<BTreeMap<PathBuf, EvidenceDatabase>>> 
 
 #[derive(Debug, Clone)]
 pub struct EvidenceStore {
+    fingerprints: Arc<FingerprintStore>,
     store: WorkspaceStore,
     database: EvidenceDatabase,
 }
 
 impl EvidenceStore {
     pub fn open_workspace(workspace: impl AsRef<Path>) -> Self {
-        let store = WorkspaceStore::open(workspace);
+        let workspace = workspace.as_ref().to_path_buf();
+        let store = WorkspaceStore::open(&workspace);
         let database = evidence_database(store.path());
-        Self { store, database }
+        Self {
+            fingerprints: Arc::new(FingerprintStore::new(&workspace)),
+            store,
+            database,
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -52,7 +62,7 @@ impl EvidenceStore {
         for batch in records.chunks(EVIDENCE_INSERT_BATCH_SIZE) {
             let models = batch
                 .iter()
-                .map(record_to_active_model)
+                .map(|record| record_to_active_model(&self.fingerprints, record))
                 .collect::<Result<Vec<_>>>()?;
             entity::Entity::insert_many(models)
                 .exec(&transaction)
@@ -67,19 +77,46 @@ impl EvidenceStore {
     }
 
     pub async fn load(&self) -> Result<Vec<EvidenceRecord>> {
+        self.load_matching(None, None).await
+    }
+
+    /// Select history before expanding fingerprint components, in oldest-first order.
+    pub async fn load_matching(
+        &self,
+        subject: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<Vec<EvidenceRecord>> {
+        anyhow::ensure!(limit != Some(0), "evidence limit must be greater than zero");
         if !self.path().exists() {
             return Ok(Vec::new());
         }
         let lock = evidence_database_lock(self.path());
         let _guard = lock.lock().await;
         let db = self.database().await?;
-        entity::Entity::find()
-            .order_by_asc(entity::Column::CreatedAtUnixMs)
+        let mut query = entity::Entity::find();
+        if let Some(subject) = subject {
+            query = query.filter(
+                Condition::any()
+                    .add(entity::Column::SubjectId.eq(subject))
+                    .add(Expr::cust_with_values(
+                        "subject_id || ':' || subject_capability = ?",
+                        [subject],
+                    )),
+            );
+        }
+        let mut models = query
+            .order_by_desc(entity::Column::CreatedAtUnixMs)
+            .order_by_desc(Expr::cust("rowid"))
+            .limit(limit.map(|limit| limit as u64))
             .all(db)
             .await
-            .with_context(|| format!("reading evidence records from `{}`", self.path().display()))?
+            .with_context(|| {
+                format!("reading evidence records from `{}`", self.path().display())
+            })?;
+        models.reverse();
+        models
             .into_iter()
-            .map(record_from_model)
+            .map(|model| record_from_model(&self.fingerprints, model))
             .collect()
     }
 
@@ -133,7 +170,10 @@ fn evidence_database(path: &Path) -> EvidenceDatabase {
     )
 }
 
-fn record_to_active_model(record: &EvidenceRecord) -> Result<entity::ActiveModel> {
+fn record_to_active_model(
+    fingerprints: &FingerprintStore,
+    record: &EvidenceRecord,
+) -> Result<entity::ActiveModel> {
     Ok(entity::ActiveModel {
         id: Set(record.id.clone()),
         schema: Set(record.schema.clone()),
@@ -147,7 +187,10 @@ fn record_to_active_model(record: &EvidenceRecord) -> Result<entity::ActiveModel
         input_fingerprint_json: Set(record
             .input_fingerprint
             .as_ref()
-            .map(serde_json::to_string)
+            .map(|manifest| {
+                let stored = fingerprints.encode(manifest)?;
+                serde_json::to_string(&stored).context("serializing compact fingerprint")
+            })
             .transpose()
             .context("serializing evidence input fingerprint")?),
         cache: Set(record.cache.as_str().to_string()),
@@ -161,7 +204,10 @@ fn record_to_active_model(record: &EvidenceRecord) -> Result<entity::ActiveModel
     })
 }
 
-fn record_from_model(model: entity::Model) -> Result<EvidenceRecord> {
+fn record_from_model(
+    fingerprints: &FingerprintStore,
+    model: entity::Model,
+) -> Result<EvidenceRecord> {
     Ok(EvidenceRecord {
         schema: model.schema,
         id: model.id,
@@ -177,7 +223,7 @@ fn record_from_model(model: entity::Model) -> Result<EvidenceRecord> {
         input_fingerprint: model
             .input_fingerprint_json
             .as_deref()
-            .map(serde_json::from_str)
+            .map(|raw| fingerprints.decode(serde_json::from_str(raw)?))
             .transpose()
             .context("parsing evidence input fingerprint")?,
         cache: EvidenceCacheState::from_storage(&model.cache)?,
@@ -250,6 +296,31 @@ mod tests {
         assert_eq!(loaded, vec![record.clone()]);
         assert!(store.path().is_file());
 
+        let model = entity::Entity::find()
+            .one(store.database().await.unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let compact: serde_json::Value =
+            serde_json::from_str(model.input_fingerprint_json.as_deref().unwrap()).unwrap();
+        assert_eq!(compact["storage"], "struo.input_fingerprint.blocks.v2");
+        assert!(compact.get("components").is_none());
+        let fingerprints =
+            rusqlite::Connection::open(tmp.path().join(".struo/fingerprints/v2.sqlite")).unwrap();
+        fingerprints.execute("DELETE FROM nodes", []).unwrap();
+        drop(fingerprints);
+        assert!(store.load().await.is_err());
+
+        let mut legacy: entity::ActiveModel = model.into();
+        legacy.input_fingerprint_json = Set(Some(
+            serde_json::to_string(record.input_fingerprint.as_ref().unwrap()).unwrap(),
+        ));
+        entity::Entity::update(legacy)
+            .exec(store.database().await.unwrap())
+            .await
+            .unwrap();
+        assert_eq!(store.load().await.unwrap(), vec![record.clone()]);
+
         store.close().await.unwrap();
         std::fs::remove_dir_all(tmp.path().join(".struo")).unwrap();
         let store = EvidenceStore::open_workspace(tmp.path());
@@ -281,6 +352,69 @@ mod tests {
         store.append_many(&records).await.unwrap();
 
         assert_eq!(store.load().await.unwrap(), records);
+    }
+
+    #[tokio::test]
+    async fn evidence_query_selects_history_before_expanding_fingerprints() {
+        let tmp = TempDir::new().unwrap();
+        let store = EvidenceStore::open_workspace(tmp.path());
+        let result = ActionResult {
+            exit_code: 0,
+            stdout: None,
+            stderr: None,
+            outputs: BTreeMap::new(),
+        };
+        let mut records = ["tool", "tool", "tool", "other"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, subject)| {
+                let mut record = EvidenceRecord::from_action_result(
+                    EvidenceSubject::target(subject, "check:fast"),
+                    Digest::of_bytes(index.to_string().as_bytes()),
+                    None,
+                    EvidenceCacheState::Hit,
+                    &result,
+                )
+                .unwrap();
+                record.created_at_unix_ms = i64::try_from(index).unwrap();
+                record
+            })
+            .collect::<Vec<_>>();
+        records.swap(1, 2);
+        store.append_many(&records).await.unwrap();
+        entity::Entity::update_many()
+            .col_expr(
+                entity::Column::InputFingerprintJson,
+                Expr::value("invalid fingerprint"),
+            )
+            .filter(entity::Column::Id.eq(&records[0].id))
+            .exec(store.database().await.unwrap())
+            .await
+            .unwrap();
+
+        let expected = vec![records[2].clone(), records[1].clone()];
+        assert_eq!(
+            store.load_matching(Some("tool"), Some(2)).await.unwrap(),
+            expected
+        );
+        assert_eq!(
+            store
+                .load_matching(Some("tool:check:fast"), Some(2))
+                .await
+                .unwrap(),
+            expected
+        );
+        assert_eq!(
+            store.load_matching(None, Some(1)).await.unwrap(),
+            vec![records[3].clone()]
+        );
+        assert!(store
+            .load_matching(Some("missing"), None)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(store.load().await.is_err());
+        assert!(store.load_matching(None, Some(0)).await.is_err());
     }
 
     #[tokio::test]

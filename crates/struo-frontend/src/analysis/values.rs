@@ -5,8 +5,10 @@ use serde_json::Value as JsonValue;
 use starlark::eval::Evaluator;
 use starlark::values::dict::{AllocDict, DictRef};
 use starlark::values::list::ListRef;
-use starlark::values::Value;
+use starlark::values::{Value, ValueLike};
 
+use super::store::with_store;
+use super::transitive_set::{self, TransitiveSet};
 use crate::target::AttrValue;
 
 pub(super) fn attr_value_to_starlark<'v>(
@@ -37,8 +39,44 @@ pub(super) fn attr_value_to_starlark<'v>(
 }
 
 pub(super) fn json_to_value<'v>(eval: &Evaluator<'v, '_, '_>, json: &JsonValue) -> Value<'v> {
+    match convert_json(eval, json, &mut |_| {
+        None::<Result<_, std::convert::Infallible>>
+    }) {
+        Ok(value) => value,
+        Err(never) => match never {},
+    }
+}
+
+/// Like [`json_to_value`] for a dependency's provider, turning each set
+/// reference back into the set the dependency exported.
+pub(super) fn provider_json_to_value<'v>(
+    eval: &Evaluator<'v, '_, '_>,
+    json: &JsonValue,
+) -> anyhow::Result<Value<'v>> {
     let heap = eval.heap();
-    match json {
+    convert_json(eval, json, &mut |entries| {
+        let hex = transitive_set::reference(entries)?;
+        Some(
+            with_store(|store| {
+                let store =
+                    store.ok_or_else(|| anyhow!("transitive sets resolve only during analysis"))?;
+                store
+                    .host_cache
+                    .transitive_sets
+                    .resolve(&store.workspace_root, hex)
+            })
+            .map(|node| heap.alloc(TransitiveSet(node))),
+        )
+    })
+}
+
+fn convert_json<'v, E>(
+    eval: &Evaluator<'v, '_, '_>,
+    json: &JsonValue,
+    object: &mut impl FnMut(&serde_json::Map<String, JsonValue>) -> Option<Result<Value<'v>, E>>,
+) -> Result<Value<'v>, E> {
+    let heap = eval.heap();
+    Ok(match json {
         JsonValue::Null => Value::new_none(),
         JsonValue::Bool(boolean) => Value::new_bool(*boolean),
         JsonValue::Number(number) => {
@@ -52,18 +90,23 @@ pub(super) fn json_to_value<'v>(eval: &Evaluator<'v, '_, '_>, json: &JsonValue) 
         }
         JsonValue::String(string) => heap.alloc(string.clone()),
         JsonValue::Array(items) => {
-            let values: Vec<Value<'v>> =
-                items.iter().map(|item| json_to_value(eval, item)).collect();
+            let values = items
+                .iter()
+                .map(|item| convert_json(eval, item, object))
+                .collect::<Result<Vec<_>, E>>()?;
             heap.alloc(values)
         }
         JsonValue::Object(entries) => {
-            let pairs: Vec<(String, Value<'v>)> = entries
+            if let Some(value) = object(entries) {
+                return value;
+            }
+            let pairs = entries
                 .iter()
-                .map(|(key, value)| (key.clone(), json_to_value(eval, value)))
-                .collect();
+                .map(|(key, value)| Ok((key.clone(), convert_json(eval, value, object)?)))
+                .collect::<Result<Vec<(String, Value<'v>)>, E>>()?;
             heap.alloc(AllocDict(pairs))
         }
-    }
+    })
 }
 
 /// Deepest Starlark nesting `value_to_json` will follow before it stops
@@ -93,6 +136,17 @@ fn value_to_json_at(value: Value<'_>, depth: usize) -> JsonValue {
     }
     if let Some(string) = value.unpack_str() {
         return JsonValue::String(string.to_string());
+    }
+    if let Some(set) = value.downcast_ref::<TransitiveSet>() {
+        with_store(|store| {
+            if let Some(store) = store {
+                store
+                    .host_cache
+                    .transitive_sets
+                    .export(&store.workspace_root, &set.0);
+            }
+        });
+        return serde_json::json!({ transitive_set::REFERENCE_KEY: set.0.hex() });
     }
     if let Some(list) = ListRef::from_value(value) {
         return JsonValue::Array(

@@ -45,6 +45,45 @@ fn expansion_preserves_arguments_and_declared_outputs() {
 }
 
 #[test]
+fn expansion_context_materializes_replayed_input_sets_as_flat_paths() {
+    let engine = AnalysisEngine::from_source(
+        r#"
+def plan(ctx):
+    run_action(argv = ["consume"] + ctx["inputs"], inputs = ctx["inputs"], outputs = ctx["outputs"])
+def impl(ctx):
+    paths = transitive_set(direct = ["root"], transitive = [["leaf"]])
+    run_action(argv = ["scan"], inputs = ["direct", paths, "direct"])
+    expand_actions(implementation = "plan", inputs = [], outputs = ["result"], args = {})
+    return {}
+custom = {"_struo_target_kind": True, "kind": "custom", "impl": impl}
+"#
+        .to_string(),
+    )
+    .unwrap();
+    let workspace = TempDir::new().unwrap();
+    let target = target("custom");
+    let analysis = engine
+        .analyze_target(&target, workspace.path(), &[])
+        .unwrap();
+    let mut parent = analysis.actions[1].clone();
+    parent.inputs = analysis.actions[0].inputs.clone();
+    let mut replayed: DeclaredAction =
+        serde_json::from_value(serde_json::to_value(parent).unwrap()).unwrap();
+    replayed.resolve_inputs(workspace.path()).unwrap();
+    let result = engine
+        .expand_actions(&target, workspace.path(), &replayed)
+        .unwrap();
+    assert_eq!(
+        result.actions[0].argv,
+        ["consume", "direct", "root", "leaf", "direct"]
+    );
+    assert_eq!(
+        result.actions[0].inputs,
+        ["direct", "root", "leaf", "direct"]
+    );
+}
+
+#[test]
 fn expansion_inherits_platforms_and_context_but_not_package_ownership() {
     let result = expand("    write_path(ctx[\"outputs\"][0], \"content\")").unwrap();
     let metadata = result.actions[0].presentation.as_ref().unwrap();

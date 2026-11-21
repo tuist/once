@@ -612,14 +612,17 @@ async fn producers_that_need_each_other_fail_instead_of_waiting_forever() {
             index: 0,
             identifier: name.to_string(),
             report: ProducerReport::default(),
-            action: super::super::declared_to_action(
-                workspace.path(),
-                &declared,
-                Digest::of_bytes(b"modules"),
-                &[],
-                SandboxMode::Off,
-            )
-            .unwrap(),
+            action: {
+                let action = super::super::declared_to_action(
+                    workspace.path(),
+                    &declared,
+                    Digest::of_bytes(b"modules"),
+                    &[],
+                    SandboxMode::Off,
+                )
+                .unwrap();
+                StoredAction::new(&action, action.digest()).unwrap()
+            },
             setup: None,
             inputs: BTreeMap::from([(input.0.to_string(), input.1)]),
             outputs: BTreeMap::from([(output.0.to_string(), output.1)]),

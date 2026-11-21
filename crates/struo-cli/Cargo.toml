@@ -35,6 +35,7 @@ reqwest.workspace = true
 rodio = { version = "0.23", default-features = false, features = ["playback", "tracing"] }
 serde.workspace = true
 serde_json.workspace = true
+zstd.workspace = true
 sysinfo = { workspace = true }
 tar.workspace = true
 tempfile.workspace = true

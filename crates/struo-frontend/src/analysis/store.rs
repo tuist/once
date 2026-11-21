@@ -153,12 +153,12 @@ pub struct DeclaredAction {
     pub resources: struo_core::ResourceRequest,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation: Option<DeclaredActionOperation>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub argv: Vec<String>,
+    #[serde(default, skip_serializing_if = "super::DeclaredArgs::is_empty")]
+    pub argv: super::DeclaredArgs,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub arg_files: Vec<DeclaredArgFile>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub inputs: Vec<String>,
+    #[serde(default, skip_serializing_if = "super::DeclaredInputs::is_empty")]
+    pub inputs: super::DeclaredInputs,
     pub outputs: Vec<String>,
     /// Workspace-relative file the command's stdout is redirected into,
     /// captured as an ordinary output. `None` keeps stream capture.
@@ -216,7 +216,7 @@ pub struct DeclaredAction {
 pub struct DeclaredArgFile {
     pub path: String,
     pub format: DeclaredArgFileFormat,
-    pub args: Vec<String>,
+    pub args: super::DeclaredArgs,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -660,6 +660,9 @@ pub(super) struct HostCache {
     host_tree_digests: Arc<SingleFlight<PathBuf, String>>,
     host_env: Arc<HostEnvLookup>,
     tool_paths: Arc<BTreeMap<String, String>>,
+    /// Transitive sets the session's targets exported, so a dependent
+    /// receives the node its dependency built rather than a copy.
+    pub(super) transitive_sets: super::transitive_set::TransitiveSets,
 }
 
 impl std::fmt::Debug for HostCache {
@@ -683,6 +686,7 @@ impl Clone for HostCache {
             host_tree_digests: Arc::clone(&self.host_tree_digests),
             host_env: Arc::clone(&self.host_env),
             tool_paths: Arc::clone(&self.tool_paths),
+            transitive_sets: self.transitive_sets.clone(),
         }
     }
 }
@@ -708,6 +712,7 @@ impl HostCache {
             host_tree_digests: Arc::new(SingleFlight::new()),
             host_env: Arc::new(host_env),
             tool_paths: Arc::new(BTreeMap::new()),
+            transitive_sets: super::transitive_set::TransitiveSets::default(),
         }
     }
 

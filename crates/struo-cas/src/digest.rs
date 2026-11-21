@@ -65,11 +65,18 @@ impl Digest {
     /// Parse a 64-character lowercase hex string. Returns `None` for any
     /// other length, character set, or case.
     pub fn from_hex(s: &str) -> Option<Self> {
-        if s.len() != Self::LEN * 2 || s.chars().any(|c| !matches!(c, '0'..='9' | 'a'..='f')) {
+        if s.len() != Self::LEN * 2 {
             return None;
         }
+        let nibble = |byte| match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            _ => None,
+        };
         let mut out = [0u8; Self::LEN];
-        hex::decode_to_slice(s, &mut out).ok()?;
+        for (byte, pair) in out.iter_mut().zip(s.as_bytes().as_chunks::<2>().0) {
+            *byte = nibble(pair[0])? << 4 | nibble(pair[1])?;
+        }
         Some(Self(out))
     }
 }
@@ -96,7 +103,9 @@ impl fmt::Display for Digest {
 
 impl Serialize for Digest {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.to_hex())
+        let mut hex = [0; Self::LEN * 2];
+        hex::encode_to_slice(self.0, &mut hex).expect("fixed-width digest hex buffer");
+        serializer.serialize_str(std::str::from_utf8(&hex).expect("hex is ASCII"))
     }
 }
 
@@ -132,6 +141,19 @@ mod tests {
         assert!(Digest::from_hex("ABCD").is_none());
         assert!(Digest::from_hex(&"a".repeat(63)).is_none());
         assert!(Digest::from_hex(&"A".repeat(64)).is_none());
+        assert!(Digest::from_hex(&format!("é{}", "a".repeat(62))).is_none());
+        for byte in 0..=127 {
+            for index in [0, 1, 62, 63] {
+                let mut encoded = [b'a'; Digest::LEN * 2];
+                encoded[index] = byte;
+                let encoded = std::str::from_utf8(&encoded).unwrap();
+                assert_eq!(
+                    Digest::from_hex(encoded).is_some(),
+                    matches!(byte, b'0'..=b'9' | b'a'..=b'f'),
+                    "byte {byte} at {index}",
+                );
+            }
+        }
     }
 
     #[test]

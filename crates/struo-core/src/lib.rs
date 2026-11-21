@@ -21,6 +21,7 @@ mod execute;
 mod execution_path;
 mod executor;
 mod file_blob;
+mod fingerprint_store;
 mod input_digest;
 mod lint_results;
 mod local;
@@ -71,6 +72,9 @@ pub use execution_path::{
     EXECUTION_ROOT_MARKER,
 };
 pub use executor::{ExecutionPermit, Executor, ExecutorResources, RemoteIoLimits, ResourceDomain};
+pub use fingerprint_store::{
+    decode_fingerprint, encode_fingerprint, fingerprint_components_digest, FingerprintStore,
+};
 pub use input_digest::{
     digest_source_path, InputDigestBuilder, InputFingerprintComponent, InputFingerprintManifest,
     INPUT_FINGERPRINT_SCHEMA,

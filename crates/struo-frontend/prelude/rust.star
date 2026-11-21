@@ -809,8 +809,8 @@ def _rust_native_dep_link_inputs(deps):
     for dep in deps:
         out.extend(dep.get("transitive_native_link_inputs") or [])
         if dep.get("c_provider"):
-            out.extend(dep.get("transitive_static_libraries") or [])
-            out.extend(dep.get("transitive_dynamic_libraries") or [])
+            out.extend(_transitive_list(dep.get("transitive_static_libraries")))
+            out.extend(_transitive_list(dep.get("transitive_dynamic_libraries")))
     return _unique(out)
 
 def _rust_native_dep_linkopts(deps):

@@ -127,26 +127,40 @@ pub(crate) fn prelude_exports(source: &str) -> std::sync::Arc<PreludeExports> {
 }
 
 pub(super) fn evaluate_prelude_exports(source: &str) -> PreludeExports {
-    let path = crate::modules::BUILT_IN_MODULE_PATH;
     Module::with_temp_heap(|module| {
-        let ast = match AstModule::parse(path, source.to_string(), &Dialect::Standard) {
-            Ok(ast) => ast,
-            Err(error) => {
+        let globals = crate::analysis::globals_for_prelude();
+        let mut eval = Evaluator::new(&module);
+        let chunks = crate::modules::prelude_source_chunks(source);
+        // Built-in functions may reference helpers in a later source file.
+        // Register their slots without keeping every file's AST live at once.
+        if chunks.len() > 1 {
+            for (path, source) in &chunks {
+                if *path == crate::modules::COMBINED_MODULE_PATH {
+                    continue;
+                }
+                let ast = match AstModule::parse(path, (*source).to_string(), &Dialect::Standard) {
+                    Ok(ast) => ast,
+                    Err(error) => {
+                        let message = format!("{error:?}");
+                        return PreludeExports {
+                            target_kinds: Err(message.clone()),
+                            native_projects: Err(message),
+                        };
+                    }
+                };
+                register_function_names(ast.statement(), &module);
+            }
+        }
+        for (path, source) in chunks {
+            let result = AstModule::parse(path, source.to_string(), &Dialect::Standard)
+                .and_then(|ast| eval.eval_module(ast, &globals));
+            if let Err(error) = result {
                 let message = format!("{error:?}");
                 return PreludeExports {
                     target_kinds: Err(message.clone()),
                     native_projects: Err(message),
                 };
             }
-        };
-        let globals = crate::analysis::globals_for_prelude();
-        let mut eval = Evaluator::new(&module);
-        if let Err(error) = eval.eval_module(ast, &globals) {
-            let message = format!("{error:?}");
-            return PreludeExports {
-                target_kinds: Err(message.clone()),
-                native_projects: Err(message),
-            };
         }
         let exported = crate::modules::exported_target_kind_values(&module);
         let target_kinds = if exported.is_empty() {
@@ -160,6 +174,20 @@ pub(super) fn evaluate_prelude_exports(source: &str) -> PreludeExports {
             native_projects,
         }
     })
+}
+
+fn register_function_names(statement: &starlark::syntax::ast::AstStmt, module: &Module<'_>) {
+    use starlark::syntax::ast::Stmt;
+
+    match &statement.node {
+        Stmt::Def(def) => module.set(&def.name.node.ident, Value::new_none()),
+        Stmt::Statements(statements) => {
+            for statement in statements {
+                register_function_names(statement, module);
+            }
+        }
+        _ => {}
+    }
 }
 
 pub(super) fn parse_target_kind_schemas_with_context(

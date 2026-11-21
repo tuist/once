@@ -19,7 +19,7 @@ use super::store::{
     with_active_store, with_store, AnalysisObservations, AnalysisStore, CachedToolCommand,
     CommandPolicy, DeclaredAction, HostCache, HostToolFailure,
 };
-use super::values::{attr_value_to_starlark, json_to_value, value_to_json};
+use super::values::{attr_value_to_starlark, json_to_value, provider_json_to_value, value_to_json};
 use crate::graph::{Diagnostic, GraphTarget, TargetKindSchema};
 use crate::Target;
 
@@ -359,6 +359,10 @@ impl AnalysisEngine {
     #[must_use]
     pub fn cacheable_tool_commands(&self) -> Vec<CachedToolCommand> {
         self.host_cache.cacheable_tool_commands()
+    }
+
+    pub fn transitive_sets(&self) -> super::TransitiveSets {
+        self.host_cache.transitive_sets.clone()
     }
 
     pub fn observed_host_environment(&self) -> BTreeMap<String, Option<String>> {
@@ -740,7 +744,7 @@ fn analyze_in_starlark(
             return Ok(JsonValue::Null);
         }
         let mut eval = Evaluator::new(&module);
-        let ctx = build_ctx(&eval, analysis, build_dir, scratch_dir);
+        let ctx = build_ctx(&eval, analysis, build_dir, scratch_dir)?;
         let provider = eval
             .eval_function(impl_value, &[ctx], &[])
             .map_err(|error| {
@@ -1006,7 +1010,7 @@ fn build_ctx<'v>(
     analysis: &TargetAnalysis<'_>,
     build_dir: &str,
     scratch_dir: &str,
-) -> Value<'v> {
+) -> Result<Value<'v>> {
     let heap = eval.heap();
     let label = heap.alloc(AllocDict([
         ("package", heap.alloc(analysis.target.label.package.clone())),
@@ -1021,26 +1025,21 @@ fn build_ctx<'v>(
         .collect();
     let attr = heap.alloc(AllocDict(attr_pairs));
     let srcs_value = heap.alloc(analysis.target.srcs.clone());
-    let dep_values: Vec<Value<'v>> = analysis
+    let dep_values = analysis
         .dep_providers
         .iter()
-        .map(|provider| json_to_value(eval, provider))
-        .collect();
+        .map(|provider| provider_json_to_value(eval, provider))
+        .collect::<Result<Vec<Value<'v>>>>()?;
     let deps = heap.alloc(dep_values);
     let mut providers_by_role = Vec::with_capacity(analysis.dependency_providers.len() + 1);
     providers_by_role.push(("deps".to_string(), deps));
-    providers_by_role.extend(
-        analysis
-            .dependency_providers
+    for (role, providers) in analysis.dependency_providers {
+        let values = providers
             .iter()
-            .map(|(role, providers)| {
-                let values = providers
-                    .iter()
-                    .map(|provider| json_to_value(eval, provider))
-                    .collect::<Vec<_>>();
-                (role.clone(), heap.alloc(values))
-            }),
-    );
+            .map(|provider| provider_json_to_value(eval, provider))
+            .collect::<Result<Vec<_>>>()?;
+        providers_by_role.push((role.clone(), heap.alloc(values)));
+    }
     let deps_by_role = heap.alloc(AllocDict(providers_by_role));
     let is_run = analysis.capability == "run";
     let run = heap.alloc(AllocDict([
@@ -1069,7 +1068,7 @@ fn build_ctx<'v>(
         ),
     ]));
     let configuration = configuration_value(eval, analysis.configuration);
-    heap.alloc(AllocDict([
+    Ok(heap.alloc(AllocDict([
         ("label", label),
         ("attr", attr),
         ("srcs", srcs_value),
@@ -1085,7 +1084,7 @@ fn build_ctx<'v>(
             "execution",
             super::globals::selected_execution_context(eval),
         ),
-    ]))
+    ])))
 }
 
 fn configuration_value<'v>(

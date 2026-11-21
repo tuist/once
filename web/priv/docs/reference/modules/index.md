@@ -907,15 +907,23 @@ separate update workflow.
   remote execution root immediately before launching the process. Use it for
   tools that require absolute paths without embedding a host workspace path in
   the action digest.
-- `cmd_args(args, use_arg_file = None)` creates a structured
-  command-line fragment. `args` is a list of strings. When
+- `cmd_args(args, use_arg_file = None, format = None, before_each = None)`
+  creates a structured command-line fragment. `args` is a transitive set or a
+  list of strings and transitive sets; each set contributes its items in
+  place. `format` rewrites each item and must contain exactly one `{}`
+  placeholder, as in `format = "-D{}"`. `before_each` adds a separate argument
+  before each item, as in `before_each = "-I"`. When
   `use_arg_file` is set, it is a dictionary with `path` plus optional
   `format` and `arg_format`. The supported `format` value is
   `line-delimited`, which writes one argument per line without shell
   escaping. The caller chooses `path`; use `ctx["scratch_dir"]`
   for action-private helper files and `declare_output` for durable
   target outputs. `arg_format` defaults to `@{}` and must contain
-  exactly one `{}` placeholder.
+  exactly one `{}` placeholder. Arguments retain shared set references and
+  formatting until consumed, including arguments written to response files.
+  Repeated fragments, duplicate list entries, and empty arguments retain their
+  execution order. Line-delimited files still reject arguments containing a
+  newline, including newlines introduced by formatting or `before_each`.
 - `run_action(...)` records a command action for Struo to execute. Its optional keyword-only `history` reports a producer-owned logical identity for cross-run history, independently of execution and cache identity.
 - `action_history_key(namespace, components)` creates a bounded opaque descriptor for `run_action(history = ...)`. Use a versioned ASCII namespace (1–64 bytes) and 1–8 string components (2048 bytes total, no controls). Components are encoded as a canonical JSON array and SHA-256 hashed. Choose a stable owner, native operation and structural output variant; never use run IDs, action indices, cache digests, source revisions, display labels, absolute paths or credentials. Invalid optional metadata is omitted without failing analysis. Deferred children need their own explicit keys, while cached outcomes retain recorded keys. Older actions stay ungrouped.
 
@@ -1053,7 +1061,7 @@ and includes its identity in the action's cache key.
 
 - `argv`: command and arguments as strings or `cmd_args` fragments.
 - `inputs`: workspace-relative files and directories hashed into the
-  action digest.
+  action digest, as a transitive set or a list of strings and transitive sets.
 - `outputs`: workspace-relative outputs the action must produce. Struo creates
   their parent directories. If a previous action version left a file where a
   managed output now requires a directory, Struo replaces the stale file.
@@ -1272,6 +1280,85 @@ their consumer, and each restore attempt releases its admission before repairing
 missing producer. Cancellation does not release a reservation or action lock while
 its blocking filesystem work still runs. These execution guards do not change
 cache identity or authorize remote graph placement.
+
+## Transitive Sets
+
+Providers often pass a list up the graph that grows with every dependency, such
+as headers, include directories, or libraries to link. Copying each
+dependency's list into a new one makes the cost of a deep graph grow with the
+square of its depth. A transitive set avoids the copy: it holds the target's own
+items and references to its dependencies' sets.
+
+```python
+headers = transitive_set(
+    direct = own_headers,
+    transitive = [dep.get("transitive_headers") for dep in ctx["deps"]],
+)
+```
+
+- `transitive_set(direct = [], transitive = [])` returns a set of strings.
+  Entries of `transitive` may be transitive sets, lists of strings, or `None`,
+  which is skipped, so a target kind can read dependencies that still provide
+  lists.
+- The set's items are its direct items, then each entry of `transitive` in
+  order, keeping only the first occurrence of each item. That is the list a
+  target kind gets by concatenating its own items with each dependency's list
+  and removing duplicates, so switching to a set preserves execution inputs
+  and arguments. Cache identity also includes set structure; adopting a set
+  can invalidate an existing cache entry.
+- `set.to_list()` returns the items as a list. It costs the size of the whole
+  set; call it only where the items are consumed. Iterating a set, `len`,
+  `in`, and `+` fail with a message that points at `to_list()`, so a target
+  kind never flattens a set by accident.
+- `set.to_list(order = "topological")` places each node before its children,
+  including shared children reached through several parents. It uses reverse
+  postorder with right-to-left child traversal, preserving left-to-right
+  sibling order where dependency constraints allow. Direct items within a
+  node keep their order, and duplicate items appear once. The default order
+  is `"preorder"`; other order names are rejected. This option only affects
+  the returned list, not the set's identity or action-argument traversal.
+- `run_action(inputs = ...)` accepts a set or a list of strings and sets.
+  Action declarations retain shared set references rather than copying their
+  transitive items. Consumers see the same flattened order: list entries keep
+  their duplicates, and each set contributes its preorder, deduplicated items
+  in place. Persisted declarations use compact digest references for sets and
+  resolve them from the workspace before execution; missing references fail
+  resolution. Plain string lists keep their existing array representation.
+  Input identity composes child digests and binds each input's path, category
+  and resolved contents, so changing generated contents invalidates actions
+  even when their path sets stay unchanged.
+- `cmd_args` retains sets and formatting in the action declaration, including
+  response-file contents. Persisted fragments store compact set references;
+  replay resolves them from the workspace before materializing arguments.
+  Command identity includes the ordered literal arguments, set structure,
+  formatting, and `before_each` values without expanding the sets. Changing
+  fragment layout can change that identity even when execution arguments are
+  unchanged.
+- A set is true when it has at least one item, and two sets are equal when
+  they hold the same items in the same structure.
+- A set returned in a provider reaches dependents as the same set, not a copy.
+  Struo stores it under the workspace's `.struo` directory, so a provider kept
+  by one invocation still resolves in the next. Before reusing a cached
+  provider, Struo validates its referenced nodes and descendants through the
+  session's shared registry. Missing or damaged nodes trigger reanalysis,
+  which rewrites unverified nodes even when their parent files still exist.
+
+A provider field that may hold either a list or a set, such as one read from
+dependencies of several target kinds, can be read as a list with the common
+prelude helper `_transitive_list(value)`.
+
+The built-in C target kind provides its transitive headers, include
+directories, defines, libraries, archives, and data as sets.
+
+Link options keep their order and repetition within a library, since an
+option and its argument, such as `-framework Foo`, belong together. The common
+prelude helpers `_linkopt_groups`, `_dep_linkopt_groups`, and
+`_linkopts_of_groups` keep each library's options as one group in a
+transitive set, so a library reached along several paths contributes its
+options once. Flattening uses topological order so a shared dependency follows
+all libraries that depend on it, preserving static-library resolution. The C
+and Zig target kinds provide these groups as
+`transitive_linkopt_groups` beside the flat `transitive_linkopts` list.
 
 ## Deferred Action Planning
 

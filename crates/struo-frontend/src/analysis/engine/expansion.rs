@@ -35,7 +35,7 @@ impl AnalysisEngine {
                 let mut eval = Evaluator::new(&module);
                 let context = serde_json::json!({
                     "args": args,
-                    "inputs": action.inputs,
+                    "inputs": action.inputs.to_vec(),
                     "outputs": action.outputs,
                     "build_dir": build_dir,
                     "label": {"id": target.label.id, "package": target.label.package},

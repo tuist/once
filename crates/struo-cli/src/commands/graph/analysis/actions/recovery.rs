@@ -106,13 +106,61 @@ pub(in crate::commands::graph::analysis) struct Producer {
     pub(super) index: usize,
     pub(super) identifier: String,
     pub(super) report: ProducerReport,
-    pub(super) action: Action,
+    pub(super) action: StoredAction,
     /// Command setup run before the command, absent for built-in operations.
     pub(super) setup: Option<CommandSetup>,
     /// Outputs of other actions that must be on disk before it runs.
     pub(super) inputs: BTreeMap<String, Digest>,
     /// What it produced the time it was recorded.
     pub(super) outputs: BTreeMap<String, Digest>,
+}
+
+/// A producer's action kept as compressed JSON. Lowered actions carry their
+/// whole flattened input closure, the registry keeps one per action for the
+/// rest of the build, and a re-run needs one only rarely.
+pub(in crate::commands::graph::analysis) struct StoredAction {
+    digest: Digest,
+    log_paths: Vec<String>,
+    json: Box<[u8]>,
+}
+
+impl StoredAction {
+    pub(in crate::commands::graph::analysis) fn new(
+        action: &Action,
+        digest: Digest,
+    ) -> Result<Self> {
+        let mut encoder = zstd::stream::write::Encoder::new(Vec::new(), 1)?;
+        serde_json::to_writer(&mut encoder, action)?;
+        let log_paths = match action {
+            Action::RunCommand {
+                stdout_path,
+                stderr_path,
+                ..
+            } => stdout_path
+                .iter()
+                .chain(stderr_path)
+                .map(|path| path.as_str().to_string())
+                .collect(),
+            _ => Vec::new(),
+        };
+        Ok(Self {
+            digest,
+            log_paths,
+            json: encoder.finish()?.into_boxed_slice(),
+        })
+    }
+
+    fn load(&self) -> Result<Action> {
+        let action: Action =
+            serde_json::from_reader(zstd::stream::read::Decoder::new(&*self.json)?)
+                .with_context(|| format!("reading back action {}", self.digest))?;
+        anyhow::ensure!(
+            action.digest() == self.digest,
+            "action {} read back with a different digest",
+            self.digest
+        );
+        Ok(action)
+    }
 }
 
 /// What the producer's own events carried, so its repair reports the same
@@ -258,18 +306,7 @@ impl Producers {
     pub(in crate::commands::graph::analysis) fn log_paths(&self) -> Vec<String> {
         lock(&self.inner.by_output)
             .values()
-            .flat_map(|producer| match &producer.action {
-                Action::RunCommand {
-                    stdout_path,
-                    stderr_path,
-                    ..
-                } => stdout_path
-                    .iter()
-                    .chain(stderr_path)
-                    .map(|path| path.as_str().to_string())
-                    .collect::<Vec<_>>(),
-                _ => Vec::new(),
-            })
+            .flat_map(|producer| producer.action.log_paths.iter().cloned())
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect()
@@ -590,7 +627,7 @@ impl Repair<'_> {
                 limits.depth
             );
         }
-        let digest = producer.action.digest();
+        let digest = producer.action.digest;
         let _edge = waiter
             .map(|waiter| self.producers.begin_wait(waiter, digest))
             .transpose()?;
@@ -607,7 +644,7 @@ impl Repair<'_> {
         depth: usize,
     ) -> Shared<BoxFuture<'static, RepairOutcome>> {
         let env = self.owned();
-        let digest = producer.action.digest();
+        let digest = producer.action.digest;
         let task = tokio::spawn(async move {
             let repair = env.repair();
             if !repair.producers.spend_repair() {
@@ -642,7 +679,8 @@ impl Repair<'_> {
     }
 
     async fn rerun(&self, producer: &Producer, depth: usize) -> Result<()> {
-        let digest = producer.action.digest();
+        let digest = producer.action.digest;
+        let action = &producer.action.load()?;
         if !producer.inputs.is_empty() {
             self.restore_at(
                 &ActionResult {
@@ -659,14 +697,14 @@ impl Repair<'_> {
         }
         let reporting = self.producers.inner.reporting.get();
         let resources = self.producers.executors(self.resources)?;
-        let executor = struo_core::Executor::resolve(&producer.action)?;
+        let executor = struo_core::Executor::resolve(action)?;
         let clean_paths = producer.setup.iter().flat_map(|setup| &setup.clean_paths);
         let paths = producer.outputs.keys().chain(clean_paths);
         let result = with_action_lock_and_permit(
             self.workspace,
             digest,
             paths.map(String::as_str),
-            || resources.acquire(executor, producer.action.resource_request()),
+            || resources.acquire(executor, action.resource_request()),
             |lease| async move {
                 let attempt = match reporting {
                     Some(reporting) => Some(AttemptReport::start(reporting, producer).await),
@@ -675,9 +713,7 @@ impl Repair<'_> {
                 let outcome = async {
                     let setup = producer.setup.as_ref();
                     if let Some(setup) = setup {
-                        if struo_core::Executor::resolve(&producer.action)?
-                            == struo_core::Executor::Local
-                        {
+                        if struo_core::Executor::resolve(action)? == struo_core::Executor::Local {
                             super::prepare_command_setup_admitted(
                                 self.workspace,
                                 &setup.clean_paths,
@@ -692,7 +728,7 @@ impl Repair<'_> {
                     let outputs = producer.outputs.keys().cloned().collect::<Vec<_>>();
                     super::preparation::output_parents(self.workspace, &outputs, &lease).await?;
                     let result = super::provider::execute(
-                        &producer.action,
+                        action,
                         self.workspace,
                         self.cache,
                         None,

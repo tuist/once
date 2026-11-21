@@ -27,6 +27,7 @@ use super::output_state;
 use super::source_digest_cache::SourceDigestCache;
 use super::{AvailableInput, BuildOutcome, PerActionOutcome};
 
+mod input_sets;
 pub(super) mod legacy_outputs;
 mod lowering;
 mod output_locks;
@@ -780,9 +781,7 @@ fn apply_tool_execution(
         if action.operation.is_some() {
             continue;
         }
-        let mut argv = prefix.to_vec();
-        argv.append(&mut action.argv);
-        action.argv = argv;
+        action.argv.prepend(prefix);
         for (key, value) in tool_env {
             // The tool environment now contributes a curated PATH. A target
             // kind may already have set a PATH the action needs at execution
@@ -1092,7 +1091,7 @@ async fn run_cacheable_declared_action(
         }
         .into());
     }
-    record_producer(&context, &action, declared, &outcome.result);
+    record_producer(&context, &action, outcome.action, declared, &outcome.result);
     let cache_tag = crate::commands::util::cache_tag(outcome.cache);
     let cache_state = EvidenceCacheState::from(outcome.cache);
     tracing::debug!(
@@ -1137,12 +1136,20 @@ async fn run_cacheable_declared_action(
 fn record_producer(
     context: &DeclaredActionContext<'_>,
     action: &Action,
+    digest: Digest,
     declared: &DeclaredAction,
     result: &ActionResult,
 ) {
     if result.outputs.is_empty() {
         return;
     }
+    let action = match recovery::StoredAction::new(action, digest) {
+        Ok(action) => action,
+        Err(error) => {
+            tracing::warn!(%digest, error = %error, "could not keep action for recovery");
+            return;
+        }
+    };
     let mut inputs = prior_results_for(context.prior_cached_results, declared)
         .into_iter()
         .flat_map(|result| result.outputs)
@@ -1188,7 +1195,7 @@ fn record_producer(
             presentation: declared.presentation.clone(),
             history: declared.history.clone(),
         },
-        action: action.clone(),
+        action,
         setup: declared
             .operation
             .is_none()

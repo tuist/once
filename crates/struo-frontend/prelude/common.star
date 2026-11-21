@@ -250,12 +250,47 @@ def _unique(values):
 def _action_source_files(paths):
     return {"_struo_workspace_source_files": paths}
 
+def _transitive_list(value):
+    """Items of a provider field that holds a list or a transitive set."""
+    if type(value) == "transitive_set":
+        return value.to_list()
+    return value or []
+
+def _linkopt_group(label_id, linkopts):
+    return label_id + "\x00" + "\x00".join(linkopts)
+
+def _linkopt_groups(label_id, own, transitive):
+    """Each library's link options once, as a transitive set of groups.
+
+    Options are not deduplicated one by one, because an option and its
+    argument, such as `-framework Foo`, must stay together, and a library
+    reached along several paths contributes its group once. `transitive`
+    holds what `_dep_linkopt_groups` returns for each dependency.
+    """
+    return transitive_set(direct = [_linkopt_group(label_id, own)] if own else [], transitive = transitive)
+
+def _dep_linkopt_groups(dep, flat):
+    """A dependency's link option groups, or its flat `flat` list as one group
+    when its target kind does not provide groups."""
+    groups = dep.get("transitive_linkopt_groups")
+    if groups != None:
+        return groups
+    if flat:
+        return [_linkopt_group(dep.get("label_id") or "", flat)]
+    return None
+
+def _linkopts_of_groups(groups):
+    out = []
+    for group in groups.to_list(order = "topological"):
+        out.extend(group.split("\x00")[1:])
+    return out
+
 def _collect_transitive(deps, key, own_values):
     out = []
     for value in own_values:
         out.append(value)
     for dep in deps:
-        for value in dep.get(key) or []:
+        for value in _transitive_list(dep.get(key)):
             out.append(value)
     return _unique(out)
 
@@ -295,7 +330,7 @@ def _unique_args(values, option_arity = {}, forwarder = "", forwarded_option_ari
 def _collect_transitive_args(deps, key, own_values):
     out = list(own_values)
     for dep in deps:
-        out.extend(dep.get(key) or [])
+        out.extend(_transitive_list(dep.get(key)))
     return out
 
 def _struo_executable_fields(path, runtime_files = [], os = "", architecture = "", variant = "", linkage = "unknown"):

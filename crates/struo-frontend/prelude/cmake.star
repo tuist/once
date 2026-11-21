@@ -44,7 +44,7 @@ def _cmake_collect(deps, key, own):
     values = []
     values.extend(own)
     for dep in deps:
-        values.extend(dep.get(key) or [])
+        values.extend(_transitive_list(dep.get(key)))
     return _unique(values)
 
 # Arguments are rendered as quoted CMake arguments because passing them through
@@ -89,10 +89,10 @@ def _cmake_project_inputs(ctx, headers):
     inputs.extend(headers)
     inputs.extend(_cmake_globs(_cmake_attr(ctx, "data", [])))
     for dep in ctx["deps"]:
-        inputs.extend(dep.get("transitive_headers") or [])
-        inputs.extend(dep.get("transitive_static_libraries") or [])
-        inputs.extend(dep.get("transitive_dynamic_libraries") or [])
-        inputs.extend(dep.get("transitive_data") or [])
+        inputs.extend(_transitive_list(dep.get("transitive_headers")))
+        inputs.extend(_transitive_list(dep.get("transitive_static_libraries")))
+        inputs.extend(_transitive_list(dep.get("transitive_dynamic_libraries")))
+        inputs.extend(_transitive_list(dep.get("transitive_data")))
     return _unique(inputs)
 
 def _cmake_build_program(ctx, generator):

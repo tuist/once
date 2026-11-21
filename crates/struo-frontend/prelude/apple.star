@@ -3898,7 +3898,7 @@ def _collect_dep_compile_inputs(deps, build_dir):
         for h in dep.get("transitive_hmaps") or []:
             if h and h not in hmaps:
                 hmaps.append(h)
-        for ar in dep.get("transitive_archives") or []:
+        for ar in _transitive_list(dep.get("transitive_archives")):
             if ar and ar not in archives:
                 archives.append(ar)
         for bundle in _apple_dep_framework_bundles(dep, "transitive_link_framework_bundles", False):
@@ -4063,7 +4063,7 @@ def _apple_mixed_framework_impl(ctx):
         link_argv.append("-l" + dylib_name)
     for option in library.get("transitive_linkopts") or []:
         link_argv.append(option)
-    archives = library.get("transitive_archives") or []
+    archives = _transitive_list(library.get("transitive_archives"))
     alwayslink_archives = _apple_collect_alwayslink_archives(framework_deps)
     own_archive = library.get("archive") or ""
     if own_archive and own_archive not in alwayslink_archives:

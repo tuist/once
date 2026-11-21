@@ -135,7 +135,7 @@ fn special_permission_entries(root: &Path) -> std::io::Result<Vec<(String, u32)>
 /// contract.
 #[must_use]
 pub struct InputDigestBuilder {
-    buf: Vec<u8>,
+    hasher: blake3::Hasher,
     components: Vec<InputFingerprintComponent>,
 }
 
@@ -145,10 +145,10 @@ impl InputDigestBuilder {
     /// portable way to invalidate an entire plugin's cache namespace
     /// when its encoding changes.
     pub fn new(domain: &[u8]) -> Self {
-        let mut buf = Vec::with_capacity(domain.len() + 64);
-        buf.extend_from_slice(domain);
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(domain);
         Self {
-            buf,
+            hasher,
             components: Vec::new(),
         }
     }
@@ -157,10 +157,10 @@ impl InputDigestBuilder {
     /// source files (label = workspace path) and for dep records
     /// (label = `dep:<label>` or similar prefix).
     pub fn push_keyed(&mut self, label: &[u8], digest: &Digest) -> &mut Self {
-        self.buf.extend_from_slice(label);
-        self.buf.push(0);
-        self.buf.extend_from_slice(digest.as_bytes());
-        self.buf.push(0);
+        self.hasher.update(label);
+        self.hasher.update(&[0]);
+        self.hasher.update(digest.as_bytes());
+        self.hasher.update(&[0]);
         self
     }
 
@@ -179,8 +179,8 @@ impl InputDigestBuilder {
 
     /// Append arbitrary bytes (e.g. a toolchain identifier).
     pub fn push_bytes(&mut self, bytes: &[u8]) -> &mut Self {
-        self.buf.extend_from_slice(bytes);
-        self.buf.push(0);
+        self.hasher.update(bytes);
+        self.hasher.update(&[0]);
         self
     }
 
@@ -230,12 +230,12 @@ impl InputDigestBuilder {
 
     /// Finalise the buffer into a [`Digest`].
     pub fn finish(self) -> Digest {
-        Digest::of_bytes(&self.buf)
+        Digest::from_bytes(*self.hasher.finalize().as_bytes())
     }
 
     #[must_use]
     pub fn finish_with_fingerprint(self) -> InputFingerprintManifest {
-        let input_digest = Digest::of_bytes(&self.buf);
+        let input_digest = Digest::from_bytes(*self.hasher.finalize().as_bytes());
         InputFingerprintManifest::new(input_digest, self.components)
     }
 }

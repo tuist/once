@@ -192,7 +192,7 @@ def _go_collect(deps, key, own = []):
     out = []
     out.extend(own)
     for dep in deps:
-        out.extend(dep.get(key) or [])
+        out.extend(_transitive_list(dep.get(key)))
     return _unique(out)
 
 def _go_source_inputs(ctx):

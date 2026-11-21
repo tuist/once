@@ -23,7 +23,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use struo_frontend::analysis::{AnalysisObservations, AnalysisResult, DeclaredAction};
+use struo_frontend::analysis::{
+    AnalysisObservations, AnalysisResult, DeclaredAction, TransitiveSets,
+};
 
 const SCHEMA: &str = "struo.analysis-memo.v1";
 
@@ -39,6 +41,8 @@ struct Record {
 
 #[derive(Clone)]
 pub struct AnalysisMemo {
+    workspace: PathBuf,
+    sets: TransitiveSets,
     root: PathBuf,
     /// Identity of the running executable, part of every name because the
     /// globals an implementation calls are compiled into it.
@@ -47,9 +51,11 @@ pub struct AnalysisMemo {
 }
 
 impl AnalysisMemo {
-    pub fn open(workspace: &Path) -> Self {
+    pub fn open(workspace: &Path, sets: TransitiveSets) -> Self {
         let executable_identity = executable_identity();
         Self {
+            workspace: workspace.to_path_buf(),
+            sets,
             root: workspace.join(".struo").join("analysis"),
             // With no identity for the executable there is no way to notice
             // that the code behind the globals changed, so remember nothing.
@@ -74,9 +80,20 @@ impl AnalysisMemo {
             return None;
         }
         let raw = std::fs::read(self.path(key)).ok()?;
-        let record = serde_json::from_slice::<Record>(&raw).ok()?;
+        let mut record = serde_json::from_slice::<Record>(&raw).ok()?;
         if record.schema != SCHEMA {
             return None;
+        }
+        // A provider naming a set that is no longer stored could not be handed
+        // to a dependent, so the target is analysed again.
+        if !self
+            .sets
+            .provider_available(&self.workspace, &record.provider)
+        {
+            return None;
+        }
+        for action in &mut record.actions {
+            self.sets.resolve_action(&self.workspace, action).ok()?;
         }
         Some((
             AnalysisResult {

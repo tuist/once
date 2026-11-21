@@ -562,6 +562,31 @@ fn select_on_non_configurable_attribute_emits_a_diagnostic() {
 }
 
 #[test]
+fn built_in_discovery_matches_whole_module_evaluation() {
+    let workspace_source = r#"
+def _custom_docs():
+    return _later_docs()
+
+def _later_docs():
+    return c_library["docs"]
+
+custom_kind = target_kind(docs = _custom_docs())
+custom_native = native_project(target_kind = "custom_kind", docs = _custom_docs(), markers = ["project.custom"])
+"#;
+    for suffix in ["", workspace_source] {
+        let source = format!("{}{suffix}", crate::modules::built_in_module_source());
+        let chunked = super::prelude_schemas::evaluate_prelude_exports(&source);
+        // A leading newline selects the unsplit path without changing the program.
+        let whole = super::prelude_schemas::evaluate_prelude_exports(&format!("\n{source}"));
+        assert_eq!(chunked.target_kinds.unwrap(), whole.target_kinds.unwrap());
+        assert_eq!(
+            chunked.native_projects.unwrap(),
+            whole.native_projects.unwrap()
+        );
+    }
+}
+
+#[test]
 fn built_in_schema_contains_expected_core_target_kinds() {
     let kinds = built_in_target_kind_schemas()
         .into_iter()

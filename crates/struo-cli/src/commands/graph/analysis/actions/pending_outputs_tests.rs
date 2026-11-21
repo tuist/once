@@ -312,7 +312,7 @@ async fn arg_file_mutation_restores_its_cached_tree_before_execution() {
     action.arg_files.push(DeclaredArgFile {
         path: "tree/item.txt".into(),
         format: DeclaredArgFileFormat::LineDelimited,
-        args: vec!["replacement".into()],
+        args: vec!["replacement".into()].into(),
     });
     let outcome = run(workspace.path(), &cache, vec![tree, action]).await;
     materialize_prior_cached_results(workspace.path(), &cache, &outcome.cached_results, None)

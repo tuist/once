@@ -239,7 +239,7 @@ impl BuildSession {
         )?
         .with_configuration(resolved.configuration.clone(), resolved.path_suffix.clone());
         let resolution_cache = ResolutionCache::open(workspace);
-        let memo = AnalysisMemo::open(workspace);
+        let memo = AnalysisMemo::open(workspace, analyzer.transitive_sets());
         let resolution_key = memo.executable_identity().and_then(|identity| {
             resolution_cache::key(
                 analyzer.module_source(),
@@ -347,6 +347,7 @@ impl BuildSession {
         sandbox: SandboxMode,
     ) -> Self {
         let module_source_digest = Digest::of_bytes(analyzer.module_source().as_bytes());
+        let sets = analyzer.transitive_sets();
         Self {
             workspace: workspace.to_path_buf(),
             cache: cache.clone(),
@@ -364,7 +365,7 @@ impl BuildSession {
             cached_tool_commands: Arc::from([]),
             resources: struo_frontend::analysis::analysis_resource_pool(),
             source_digest_cache: SourceDigestCache::open(workspace),
-            analysis_memo: AnalysisMemo::open(workspace),
+            analysis_memo: AnalysisMemo::open(workspace, sets.clone()),
             resolution: None,
             unchanged: Arc::new(UnchangedWorkspace::Unknown),
             changes: Arc::new(KnownChanges::Unknown),
@@ -374,6 +375,7 @@ impl BuildSession {
                 sandbox,
                 "",
                 recorded_digest_position(workspace).as_ref(),
+                sets,
             )),
             uncached_work: AtomicBool::new(false),
             sandbox,
@@ -1283,11 +1285,9 @@ async fn build_one(
                 Some(struo_frontend::analysis::DeclaredActionOperation::ExpandActions { .. })
             )
     });
-    let declared_inputs = analysis
-        .actions
-        .iter()
-        .flat_map(|action| action.inputs.iter().cloned())
-        .collect::<BTreeSet<_>>();
+    let declared_inputs = struo_frontend::analysis::DeclaredInputs::concat(
+        analysis.actions.iter().map(|action| action.inputs.clone()),
+    );
     tracing::trace!(
         target = %target_id,
         declared_actions = analysis.actions.len(),
@@ -1320,7 +1320,14 @@ async fn build_one(
         .map(|key| target_outcomes::key(key, &action_digests, &available_inputs))
     {
         if !requires_action_replay {
-            target_outcomes.record(&target, key, &observations, &declared_inputs, &outcome);
+            target_outcomes.record_with_inputs(
+                &target,
+                key,
+                &observations,
+                &declared_inputs,
+                &available_inputs,
+                &outcome,
+            );
         }
     }
     if publish_lifecycle {

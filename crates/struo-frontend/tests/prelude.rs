@@ -6036,10 +6036,13 @@ fn prelude_c_collect_linkopts_preserves_paired_flags() {
     let prelude = all_prelude_source();
     let out = eval_prelude_function_in(
         prelude,
-        "_c_collect_linkopts",
-        r#"([
-            {"transitive_linkopts": ["-framework", "Foundation", "-framework", "CoreData"]},
-        ], [])"#,
+        "_linkopts_of_groups",
+        r#"(_linkopt_groups("pkg/app", [], [
+            _dep_linkopt_groups(
+                {"transitive_linkopts": ["-framework", "Foundation", "-framework", "CoreData"]},
+                ["-framework", "Foundation", "-framework", "CoreData"],
+            ),
+        ]))"#,
     )
     .unwrap();
 
@@ -6054,10 +6057,10 @@ fn prelude_zig_collect_linkopts_preserves_paired_flags() {
     let prelude = all_prelude_source();
     let out = eval_prelude_function_in(
         prelude,
-        "_zig_collect_linkopts",
-        r#"([
+        "_linkopts_of_groups",
+        r#"(_zig_collect_linkopt_groups({"label": {"id": "pkg/app"}}, [
             {"c_provider": True, "transitive_linkopts": ["-framework", "Foundation", "-framework", "CoreData"]},
-        ], [])"#,
+        ], []))"#,
     )
     .unwrap();
 

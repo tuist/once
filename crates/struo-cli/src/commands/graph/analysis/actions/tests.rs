@@ -172,12 +172,13 @@ fn missing_declared_inputs_reports_only_absent_paths() {
         history: None,
         presentation: None,
         operation: None,
-        argv: vec!["tool".to_string()],
+        argv: vec!["tool".to_string()].into(),
         arg_files: Vec::new(),
         inputs: vec![
             "present.rs".to_string(),
             ".struo/out/x/generated.rlib".to_string(),
-        ],
+        ]
+        .into(),
         outputs: Vec::new(),
         stdout: None,
         stderr: None,
@@ -244,9 +245,9 @@ fn declared_action_uses_direct_argv_without_creating_output_parents() {
         operation: None,
         history: None,
         presentation: None,
-        argv: vec!["tool".to_string(), "--version".to_string()],
+        argv: vec!["tool".to_string(), "--version".to_string()].into(),
         arg_files: Vec::new(),
-        inputs: Vec::new(),
+        inputs: Vec::new().into(),
         outputs: vec![
             ".struo/out/x/A.out".to_string(),
             ".struo/out/x/sub/B.meta".to_string(),
@@ -346,9 +347,9 @@ async fn declared_command_setup_cleans_paths_and_creates_dirs() {
     let declared = DeclaredAction {
         resources: ResourceRequest::default(),
         operation: None,
-        argv: vec!["tool".to_string()],
+        argv: vec!["tool".to_string()].into(),
         arg_files: Vec::new(),
-        inputs: Vec::new(),
+        inputs: Vec::new().into(),
         history: None,
         presentation: None,
         outputs: vec![".struo/out/tree".to_string()],
@@ -390,7 +391,7 @@ fn materialize_declared_arg_files_writes_line_delimited_args() {
     let arg_files = vec![DeclaredArgFile {
         path: ".struo/out/tool/args.txt".to_string(),
         format: DeclaredArgFileFormat::LineDelimited,
-        args: vec!["--flag".to_string(), "value with spaces".to_string()],
+        args: vec!["--flag".to_string(), "value with spaces".to_string()].into(),
     }];
 
     materialize_declared_arg_files(workspace.path(), &arg_files).unwrap();
@@ -407,7 +408,7 @@ fn materialize_declared_arg_files_rejects_newline_args() {
     let arg_files = vec![DeclaredArgFile {
         path: ".struo/out/tool/args.txt".to_string(),
         format: DeclaredArgFileFormat::LineDelimited,
-        args: vec!["value\n--flag".to_string()],
+        args: vec!["value\n--flag".to_string()].into(),
     }];
 
     let err = materialize_declared_arg_files(workspace.path(), &arg_files)
@@ -501,7 +502,7 @@ async fn declared_action_failure_message_appends_arg_file_context() {
     let arg_files = vec![DeclaredArgFile {
         path: ".struo/tmp/analysis/app/tool.args".to_string(),
         format: DeclaredArgFileFormat::LineDelimited,
-        args: response_args,
+        args: response_args.into(),
     }];
 
     let command_argv = vec![
@@ -911,9 +912,10 @@ async fn single_action_outcome_preserves_streams_for_capability_evidence() {
                 "-c".to_string(),
                 "printf visible-stdout; printf visible-stderr >&2; printf ok > .struo/out/one.txt"
                     .to_string(),
-            ],
+            ]
+            .into(),
             arg_files: Vec::new(),
-            inputs: Vec::new(),
+            inputs: Vec::new().into(),
             outputs: vec![".struo/out/one.txt".to_string()],
             stdout: None,
             stderr: None,
@@ -1075,9 +1077,10 @@ fn cached_test_analysis(dependency_path: &str) -> AnalysisResult {
                 "/bin/sh".to_string(),
                 "-c".to_string(),
                 "printf ok > .struo/out/out.txt".to_string(),
-            ],
+            ]
+            .into(),
             arg_files: Vec::new(),
-            inputs: vec![dependency_path.to_string()],
+            inputs: vec![dependency_path.to_string()].into(),
             outputs: vec![".struo/out/out.txt".to_string()],
             stdout: None,
             stderr: None,
@@ -1235,7 +1238,8 @@ async fn uncacheable_action_materializes_dependency_inputs() {
         "/bin/sh".to_string(),
         "-c".to_string(),
         format!("cat {dependency_path} > .struo/out/out.txt"),
-    ];
+    ]
+    .into();
 
     let outcome = run_declared_actions(
         None,
@@ -1290,7 +1294,8 @@ async fn materialized_dependency_inputs_are_not_restored_again() {
         "/bin/sh".to_string(),
         "-c".to_string(),
         format!("cat {dependency_path} > .struo/out/out.txt"),
-    ];
+    ]
+    .into();
 
     run_declared_actions(
         None,
@@ -1328,7 +1333,7 @@ async fn incomplete_direct_cache_hit_falls_back_to_execution() {
     let target = cached_test_target();
     let analysis = || {
         let mut analysis = cached_test_analysis("unused");
-        analysis.actions[0].inputs.clear();
+        analysis.actions[0].inputs = Vec::new().into();
         analysis
     };
 
@@ -1539,9 +1544,10 @@ async fn declared_actions_record_success_evidence_per_action() {
             "/bin/sh".to_string(),
             "-c".to_string(),
             format!("printf {name} > .struo/out/{name}.txt"),
-        ],
+        ]
+        .into(),
         arg_files: Vec::new(),
-        inputs: Vec::new(),
+        inputs: Vec::new().into(),
         outputs: vec![format!(".struo/out/{name}.txt")],
         stdout: None,
         stderr: None,
@@ -1645,9 +1651,10 @@ async fn declared_action_can_skip_prior_same_target_digests() {
                     "/bin/sh".to_string(),
                     "-c".to_string(),
                     format!("printf {first_value} > .struo/out/first.txt"),
-                ],
+                ]
+                .into(),
                 arg_files: Vec::new(),
-                inputs: Vec::new(),
+                inputs: Vec::new().into(),
                 outputs: vec![".struo/out/first.txt".to_string()],
                 stdout: None,
                 stderr: None,
@@ -1676,9 +1683,10 @@ async fn declared_action_can_skip_prior_same_target_digests() {
                     "/bin/sh".to_string(),
                     "-c".to_string(),
                     "printf second > .struo/out/second.txt; printf run >> second_runs".to_string(),
-                ],
+                ]
+                .into(),
                 arg_files: Vec::new(),
-                inputs: Vec::new(),
+                inputs: Vec::new().into(),
                 outputs: vec![".struo/out/second.txt".to_string()],
                 stdout: None,
                 stderr: None,
@@ -1805,9 +1813,9 @@ fn input_digest_changes_with_toolchain_identity() {
     let declared = DeclaredAction {
         resources: ResourceRequest::default(),
         operation: None,
-        argv: vec!["tool".to_string()],
+        argv: vec!["tool".to_string()].into(),
         arg_files: Vec::new(),
-        inputs: vec!["input.txt".to_string()],
+        inputs: vec!["input.txt".to_string()].into(),
         outputs: vec![".struo/out/A.a".to_string()],
         stdout: None,
         stderr: None,
@@ -1878,9 +1886,9 @@ fn input_fingerprint_explains_inputs_without_exposing_values() {
         operation: None,
         history: None,
         presentation: None,
-        argv: vec!["tool".to_string(), "--token=command-secret".to_string()],
+        argv: vec!["tool".to_string(), "--token=command-secret".to_string()].into(),
         arg_files: Vec::new(),
-        inputs: vec!["input.txt".to_string()],
+        inputs: vec!["input.txt".to_string()].into(),
         outputs: vec![".struo/out/A.a".to_string()],
         stdout: None,
         stderr: None,
@@ -2004,9 +2012,9 @@ fn input_digest_changes_with_command_setup_paths() {
     let declared = DeclaredAction {
         resources: ResourceRequest::default(),
         operation: None,
-        argv: vec!["tool".to_string()],
+        argv: vec!["tool".to_string()].into(),
         arg_files: Vec::new(),
-        inputs: Vec::new(),
+        inputs: Vec::new().into(),
         outputs: vec![".struo/out/A.a".to_string()],
         stdout: None,
         stderr: None,
@@ -2049,13 +2057,13 @@ fn input_digest_changes_with_declared_arg_files() {
         operation: None,
         history: None,
         presentation: None,
-        argv: vec!["tool".to_string(), "@.struo/out/args.rsp".to_string()],
+        argv: vec!["tool".to_string(), "@.struo/out/args.rsp".to_string()].into(),
         arg_files: vec![DeclaredArgFile {
             path: ".struo/out/args.rsp".to_string(),
             format: DeclaredArgFileFormat::LineDelimited,
-            args: vec!["--cfg".to_string(), "feature=\"alloc\"".to_string()],
+            args: vec!["--cfg".to_string(), "feature=\"alloc\"".to_string()].into(),
         }],
-        inputs: vec!["input.txt".to_string()],
+        inputs: vec!["input.txt".to_string()].into(),
         outputs: vec![".struo/out/A.a".to_string()],
         stdout: None,
         stderr: None,
@@ -2080,7 +2088,7 @@ fn input_digest_changes_with_declared_arg_files() {
         arg_files: vec![DeclaredArgFile {
             path: ".struo/out/args.rsp".to_string(),
             format: DeclaredArgFileFormat::LineDelimited,
-            args: vec!["--cfg".to_string(), "feature=\"std\"".to_string()],
+            args: vec!["--cfg".to_string(), "feature=\"std\"".to_string()].into(),
         }],
         ..declared
     };
@@ -2096,9 +2104,9 @@ fn input_digest_ignores_unrelated_module_source_changes() {
     let declared = DeclaredAction {
         resources: ResourceRequest::default(),
         operation: None,
-        argv: vec!["tool".to_string()],
+        argv: vec!["tool".to_string()].into(),
         arg_files: Vec::new(),
-        inputs: vec!["input.txt".to_string()],
+        inputs: vec!["input.txt".to_string()].into(),
         outputs: vec![".struo/out/A.a".to_string()],
         stdout: None,
         stderr: None,
@@ -2145,9 +2153,9 @@ fn same_target_generated_input_uses_its_content_digest() {
     let declared = DeclaredAction {
         resources: ResourceRequest::default(),
         operation: None,
-        argv: vec!["tool".to_string()],
+        argv: vec!["tool".to_string()].into(),
         arg_files: Vec::new(),
-        inputs: vec![input.to_string()],
+        inputs: vec![input.to_string()].into(),
         outputs: vec![".struo/out/result.txt".to_string()],
         stdout: None,
         stderr: None,
@@ -2209,9 +2217,9 @@ fn dependency_generated_input_uses_its_content_digest() {
     let declared = DeclaredAction {
         resources: ResourceRequest::default(),
         operation: None,
-        argv: vec!["tool".to_string()],
+        argv: vec!["tool".to_string()].into(),
         arg_files: Vec::new(),
-        inputs: vec![input.to_string()],
+        inputs: vec![input.to_string()].into(),
         outputs: vec![".struo/out/result.txt".to_string()],
         stdout: None,
         stderr: None,
@@ -2284,9 +2292,9 @@ fn input_digest_ignores_unconsumed_dependency_digests() {
     let declared = DeclaredAction {
         resources: ResourceRequest::default(),
         operation: None,
-        argv: vec!["tool".to_string()],
+        argv: vec!["tool".to_string()].into(),
         arg_files: Vec::new(),
-        inputs: vec!["input.txt".to_string()],
+        inputs: vec!["input.txt".to_string()].into(),
         outputs: vec![".struo/out/A.a".to_string()],
         stdout: None,
         stderr: None,
@@ -2392,7 +2400,8 @@ async fn emits_each_action_before_a_later_action_fails() {
         "/bin/sh".to_string(),
         "-c".to_string(),
         "exit 7".to_string(),
-    ];
+    ]
+    .into();
     analysis.actions.push(failure);
     let bus = struo_core::RunEventBus::new(8);
     let mut rx = bus.subscribe();
@@ -2476,8 +2485,8 @@ async fn file_plumbing_runs_without_being_reported_as_an_action() {
         path: ".struo/out/recipe.txt".to_string(),
         bytes: b"recipe".to_vec(),
     });
-    write.argv = Vec::new();
-    write.inputs = Vec::new();
+    write.argv = Vec::new().into();
+    write.inputs = Vec::new().into();
     write.outputs = vec![".struo/out/recipe.txt".to_string()];
     write.identifier = Some("write_path:.struo/out/recipe.txt".to_string());
     analysis.actions.insert(0, write);
@@ -2550,8 +2559,8 @@ async fn failing_file_plumbing_is_still_reported() {
         destination: ".struo/out/copied.txt".to_string(),
         mode: DeclaredCopyPathMode::File,
     });
-    copy.argv = Vec::new();
-    copy.inputs = vec!["missing.txt".to_string()];
+    copy.argv = Vec::new().into();
+    copy.inputs = vec!["missing.txt".to_string()].into();
     copy.outputs = vec![".struo/out/copied.txt".to_string()];
     copy.identifier = Some("copy_path:.struo/out/copied.txt".to_string());
     analysis.actions = vec![copy];
@@ -2610,7 +2619,7 @@ fn shell_action(
     DeclaredAction {
         resources: ResourceRequest::default(),
         operation: None,
-        argv: vec!["/bin/sh".to_string(), "-c".to_string(), script.to_string()],
+        argv: vec!["/bin/sh".to_string(), "-c".to_string(), script.to_string()].into(),
         arg_files: Vec::new(),
         inputs: inputs.iter().map(ToString::to_string).collect(),
         outputs: outputs.iter().map(ToString::to_string).collect(),
@@ -2838,7 +2847,7 @@ async fn a_cached_output_a_later_action_removes_stays_removed() {
     let workspace = tempfile::tempdir().unwrap();
     let cache = CacheProvider::Local(struo_cas::Cas::open(workspace.path().join("cas")));
     let mut remove = shell_action("remove", "", &[], &[], false);
-    remove.argv = Vec::new();
+    remove.argv = Vec::new().into();
     remove.cacheable = false;
     remove.operation = Some(DeclaredActionOperation::PreparePath {
         path: ".struo/out/file.txt".to_string(),
@@ -2925,7 +2934,9 @@ async fn a_batch_writing_into_a_cached_directory_keeps_it_for_later_readers() {
     std::fs::remove_dir_all(workspace.path().join(".struo/out")).unwrap();
 
     let mut changed = analysis("second");
-    changed.actions[3].argv[2].push_str(" && true");
+    let mut argv = changed.actions[3].argv.to_vec();
+    argv[2].push_str(" && true");
+    changed.actions[3].argv = argv.into();
     run_chain(workspace.path(), &cache, changed).await;
 
     let tree = workspace.path().join(".struo/out/tree");
@@ -2950,7 +2961,7 @@ async fn an_ordered_action_finds_the_cached_intermediate_outputs_it_reads_undecl
     let cache = CacheProvider::Local(struo_cas::Cas::open(workspace.path().join("cas")));
     let analysis = |suffix: &str| {
         let mut analysis = intermediate_chain_analysis(suffix);
-        analysis.actions[1].inputs = Vec::new();
+        analysis.actions[1].inputs = Vec::new().into();
         analysis.actions[1].depends_on_prior_actions = true;
         analysis
     };

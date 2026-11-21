@@ -10,8 +10,8 @@ use anyhow::{Context, Result};
 use struo_cas::Digest;
 use struo_core::{
     Action, ArchiveEntry, ArchiveEntryKind, ArchiveFormat, CopyPathMode, InputDigestBuilder,
-    InputFingerprintManifest, NetworkPolicy, OutputSymlinkMode, PreparePathMode, SandboxMode,
-    WorkspacePath,
+    InputFingerprintComponent, InputFingerprintManifest, NetworkPolicy, OutputSymlinkMode,
+    PreparePathMode, SandboxMode, WorkspacePath,
 };
 use struo_frontend::analysis::{
     DeclaredAction, DeclaredActionOperation, DeclaredArchiveEntryKind, DeclaredArchiveFormat,
@@ -120,7 +120,7 @@ pub(super) fn prepare_declared_action_with_inputs(
         .map(Box::new);
     let action = match &declared.operation {
         None => Action::RunCommand {
-            argv: declared.argv.clone(),
+            argv: declared.argv.to_vec(),
             env: declared.env.clone(),
             cwd: declared
                 .cwd
@@ -567,17 +567,7 @@ pub(super) fn resolve_available_input<'a>(
     available_inputs: &'a BTreeMap<String, AvailableInput>,
     input: &str,
 ) -> Option<&'a AvailableInput> {
-    if let Some(available) = available_inputs.get(input) {
-        return Some(available);
-    }
-    let mut candidate = input;
-    while let Some((parent, _)) = candidate.rsplit_once('/') {
-        if let Some(available) = available_inputs.get(parent) {
-            return Some(available);
-        }
-        candidate = parent;
-    }
-    None
+    enclosing_available_output(available_inputs, input).map(|(_, available)| available)
 }
 
 /// The output path whose materialization puts `input` on disk, paired with its
@@ -586,6 +576,12 @@ pub(super) fn enclosing_available_output<'a>(
     available_inputs: &'a BTreeMap<String, AvailableInput>,
     input: &str,
 ) -> Option<(&'a String, &'a AvailableInput)> {
+    let (first, _) = available_inputs.first_key_value()?;
+    let (last, _) = available_inputs.last_key_value()?;
+    // Whole components are not ordered like paths: `a-` sorts before `a/file`.
+    if input < first.as_str() || input.as_bytes().first() > last.as_bytes().first() {
+        return None;
+    }
     if let Some((path, available)) = available_inputs.get_key_value(input) {
         return Some((path, available));
     }
@@ -617,17 +613,9 @@ pub(super) fn compose_input_fingerprint_with_available(
     available_inputs: &BTreeMap<String, AvailableInput>,
     source_digest_cache: Option<&SourceDigestCache>,
 ) -> Result<InputFingerprintManifest> {
-    let mut builder = InputDigestBuilder::new(b"struo.declared_action.input.v5\0");
+    let mut builder = InputDigestBuilder::new(b"struo.declared_action.input.v6\0");
     push_declared_action_metadata(&mut builder, declared, workspace)?;
-
-    let mut sorted_inputs = declared
-        .inputs
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-    sorted_inputs.sort_unstable();
-    sorted_inputs.dedup();
-    for input in &sorted_inputs {
+    super::input_sets::compose(&declared.inputs, &mut builder, |input| {
         if let Some(available) = resolve_available_input(available_inputs, input) {
             let digest = &available.blob_digest;
             let category = if available.same_target {
@@ -635,7 +623,7 @@ pub(super) fn compose_input_fingerprint_with_available(
             } else {
                 "dependency-output"
             };
-            builder.push_keyed_component(category, *input, input.as_bytes(), digest);
+            Ok(InputFingerprintComponent::new(category, input, *digest))
         } else {
             let generated_directory = generated_input_children(available_inputs, input)
                 .next()
@@ -645,9 +633,9 @@ pub(super) fn compose_input_fingerprint_with_available(
                 _ => struo_core::digest_source_path(workspace, input),
             }
             .with_context(|| format!("hashing declared input `{input}`"))?;
-            builder.push_keyed_component("source", *input, input.as_bytes(), &digest);
+            Ok(InputFingerprintComponent::new("source", input, digest))
         }
-    }
+    })?;
 
     for (label, digest) in dep_action_digests {
         if label.starts_with("same-target:") {
@@ -678,18 +666,12 @@ pub(super) fn push_declared_action_metadata(
             serde_json::to_vec(operation).context("serializing declared action operation")?;
         builder.push_bytes_component("command", "operation", &encoded);
     }
-    let canonical_argv = declared
-        .argv
-        .iter()
-        .map(|arg| canonical_action_value(arg, workspace))
-        .collect::<Vec<_>>();
-    for arg in &canonical_argv {
-        builder.push_bytes(arg.as_bytes());
-    }
-    if !canonical_argv.is_empty() {
-        let encoded =
-            serde_json::to_vec(&canonical_argv).context("serializing declared action arguments")?;
-        builder.record_bytes("command", "arguments", &encoded);
+    let encoded_argv =
+        serde_json::to_string(&declared.argv).context("serializing declared action arguments")?;
+    let canonical_argv = canonical_action_value(&encoded_argv, workspace);
+    builder.push_bytes(canonical_argv.as_bytes());
+    if !declared.argv.is_empty() {
+        builder.record_bytes("command", "arguments", canonical_argv.as_bytes());
     }
     if let Some(stdout) = &declared.stdout {
         builder.push_keyed_component(

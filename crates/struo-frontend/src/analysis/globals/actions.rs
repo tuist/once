@@ -7,6 +7,7 @@ use starlark::environment::GlobalsBuilder;
 use starlark::eval::Evaluator;
 use starlark::starlark_module;
 use starlark::values::dict::AllocDict;
+use starlark::values::list::ListRef;
 use starlark::values::none::NoneType;
 use starlark::values::Value;
 
@@ -18,10 +19,23 @@ use super::{
 use crate::analysis::action_history::unpack_history;
 use crate::analysis::presentation::{record_action, unpack_presentation, unpack_source_files};
 use crate::analysis::store::{with_store_mut, DeclaredAction, DeclaredActionOperation};
+use crate::analysis::transitive_set;
 use crate::analysis::values::{unpack_string_dict, unpack_string_list};
 
 #[starlark_module]
 pub(super) fn action_globals(builder: &mut GlobalsBuilder) {
+    /// A set of strings built from this target's `direct` items and the
+    /// `transitive` sets of its dependencies, in time proportional to its own
+    /// items. Entries of `transitive` may be sets, lists of strings, or `None`.
+    /// Flatten it with `.to_list()`, or pass it to `run_action(inputs = ...)`
+    /// or `cmd_args`, which retain shared references until consumed.
+    fn transitive_set<'v>(
+        #[starlark(require = named)] direct: Option<Value<'v>>,
+        #[starlark(require = named)] transitive: Option<Value<'v>>,
+    ) -> anyhow::Result<transitive_set::TransitiveSet> {
+        transitive_set::build(direct, transitive)
+    }
+
     /// Reserve a workspace-relative output path under the active
     /// target's build directory and return it. Outside analysis this
     /// returns the bare name.
@@ -63,9 +77,9 @@ pub(super) fn action_globals(builder: &mut GlobalsBuilder) {
                         args,
                         build_dir: store.build_dir.clone(),
                     }),
-                    argv: Vec::new(),
+                    argv: Vec::new().into(),
                     arg_files: Vec::new(),
-                    inputs,
+                    inputs: inputs.into(),
                     outputs,
                     stdout: None,
                     stderr: None,
@@ -90,29 +104,42 @@ pub(super) fn action_globals(builder: &mut GlobalsBuilder) {
         Ok(NoneType)
     }
 
-    /// Build a structured command-line fragment. `args` is a list of
-    /// string arguments. When `use_arg_file` is set, it must be a dict
-    /// with `path` plus optional `format` and `arg_format`. The supported
+    /// Build a structured command-line fragment. `args` is a transitive set
+    /// or a list of strings and transitive sets. `format` rewrites each item,
+    /// replacing its one `{}` with the item, and `before_each` adds a separate
+    /// argument before each item. When `use_arg_file` is set, it must be a
+    /// dict with `path` plus optional `format` and `arg_format`. The supported
     /// format is `"line-delimited"`.
     fn cmd_args<'v>(
         args: Value<'v>,
         use_arg_file: Option<Value<'v>>,
+        #[starlark(require = named)] format: Option<String>,
+        #[starlark(require = named)] before_each: Option<String>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
-        let args = unpack_string_list(args, "cmd_args.args")?;
+        let declared =
+            crate::analysis::DeclaredArgs::unpack(args, format.clone(), before_each.clone())?;
         let arg_file = match use_arg_file {
             Some(value) => unpack_cmd_args_arg_file(value)?,
             None => None,
         };
         if let Some(arg_file) = &arg_file {
-            validate_declared_arg_file_args(arg_file.format, &args, &arg_file.path)?;
+            validate_declared_arg_file_args(arg_file.format, &declared, &arg_file.path)?;
             apply_arg_format(&arg_file.arg_format, &arg_file.path)?;
         }
         let heap = eval.heap();
+        let args = ListRef::from_value(args)
+            .map_or(args, |list| heap.alloc(list.iter().collect::<Vec<_>>()));
         let mut pairs = vec![
             (CMD_ARGS_MARKER.to_string(), Value::new_bool(true)),
-            ("args".to_string(), heap.alloc(args)),
+            ("args".to_string(), args),
         ];
+        if let Some(format) = format {
+            pairs.push(("format".to_string(), heap.alloc(format)));
+        }
+        if let Some(before_each) = before_each {
+            pairs.push(("before_each".to_string(), heap.alloc(before_each)));
+        }
         if let Some(arg_file) = arg_file {
             pairs.extend([
                 ("arg_file_path".to_string(), heap.alloc(arg_file.path)),
@@ -182,7 +209,7 @@ pub(super) fn action_globals(builder: &mut GlobalsBuilder) {
         let resources = unpack_resources(resources)?;
         let argv = unpack_action_argv(argv, "argv")?;
         let inputs = inputs
-            .map(|value| unpack_string_list(value, "inputs"))
+            .map(|value| super::super::DeclaredInputs::unpack(value, "inputs"))
             .transpose()?
             .unwrap_or_default();
         let outputs = outputs

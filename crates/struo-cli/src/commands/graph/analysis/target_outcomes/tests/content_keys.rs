@@ -113,3 +113,67 @@ fn intermediate_replacement_cannot_hide_changed_contents_from_historical_target_
         )
         .is_none());
 }
+
+/// A record keeps only what the target changed on top of its dependencies,
+/// so it does not grow with everything beneath it, and reusing it on the same
+/// dependencies gives back exactly what the build left available.
+#[test]
+fn a_record_stores_only_what_the_target_changed_on_top_of_its_dependencies() {
+    let workspace = TempDir::new().unwrap();
+    let target = target("apps/tool", "tool");
+    let own = |bytes: &[u8]| AvailableInput {
+        same_target: true,
+        ..available(bytes)
+    };
+    let dependencies = BTreeMap::from([
+        ("deps/untouched".to_string(), available(b"untouched")),
+        ("deps/replaced".to_string(), available(b"replaced before")),
+        ("deps/tree".to_string(), available(b"tree")),
+        ("deps/tree/child".to_string(), available(b"child")),
+    ]);
+    let mut built = outcome(&[]);
+    built.available_inputs = BTreeMap::from([
+        ("deps/untouched".to_string(), available(b"untouched")),
+        ("deps/replaced".to_string(), own(b"replaced after")),
+        ("deps/tree".to_string(), own(b"rewritten tree")),
+        ("apps/tool/out".to_string(), own(b"out")),
+    ]);
+    let key = super::super::key("analysis", &[], &dependencies);
+    let reopened = round_trip(&workspace, |outcomes| {
+        outcomes.record_with_inputs(
+            &target,
+            key.clone(),
+            &AnalysisObservations::default(),
+            &inputs(&[]),
+            &dependencies,
+            &built,
+        );
+    });
+    let raw = std::fs::read(reopened.record_path(&reopened.stored[&target.label.id])).unwrap();
+    assert!(!String::from_utf8_lossy(&raw).contains("deps/untouched"));
+
+    let reused = reopened
+        .reuse_with_inputs(
+            &target,
+            &key,
+            &changed(&[], &[]),
+            &dependencies,
+            &Producers::default(),
+            |_| true,
+        )
+        .expect("an untouched target is reused");
+    let summary = |inputs: &BTreeMap<String, AvailableInput>| {
+        inputs
+            .iter()
+            .map(|(path, input)| (path.clone(), input.blob_digest, input.same_target))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        summary(&reused.available_inputs),
+        summary(&built.available_inputs)
+    );
+    assert!(reused
+        .available_inputs
+        .values()
+        .all(|input| !input.materialized));
+}

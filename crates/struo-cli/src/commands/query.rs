@@ -1158,18 +1158,7 @@ pub(crate) async fn evidence_records(
     limit: Option<usize>,
 ) -> Result<Vec<EvidenceRecord>> {
     let store = EvidenceStore::open_workspace(workspace);
-    let mut records = store.load().await?;
-    if let Some(subject) = subject {
-        records.retain(|record| record.subject.matches(subject));
-    }
-    if let Some(limit) = limit {
-        if limit == 0 {
-            anyhow::bail!("evidence limit must be greater than zero");
-        }
-        let remove = records.len().saturating_sub(limit);
-        records.drain(..remove);
-    }
-    Ok(records)
+    store.load_matching(subject, limit).await
 }
 
 pub(crate) fn test_results_value(workspace: &Path, target_id: &str) -> Result<serde_json::Value> {

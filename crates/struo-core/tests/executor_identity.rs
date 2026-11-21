@@ -6,11 +6,11 @@ use struo_core::{
 };
 
 #[test]
-fn legacy_command_encoding_and_digest_domain_are_unchanged() {
+fn legacy_command_encoding_uses_the_composed_input_digest_domain() {
     let wire = br#"{"kind":"run_command","argv":["tool"]}"#;
     let action: Action = serde_json::from_slice(wire).unwrap();
     assert_eq!(serde_json::to_vec(&action).unwrap(), wire);
-    let mut expected = b"struo.action.v11\0".to_vec();
+    let mut expected = b"struo.action.v12\0".to_vec();
     expected.extend_from_slice(wire);
     assert_eq!(action.digest(), Digest::of_bytes(&expected));
 }
@@ -22,7 +22,7 @@ fn large_literal_artifact_hashes_match_the_legacy_json_encoding() {
         bytes: vec![b'x'; 2 * 1024 * 1024].into(),
         input_digest: None,
     };
-    let mut legacy = b"struo.action.v11\0".to_vec();
+    let mut legacy = b"struo.action.v12\0".to_vec();
     legacy.extend_from_slice(&serde_json::to_vec(&action).unwrap());
     assert_eq!(action.digest(), Digest::of_bytes(&legacy));
 }

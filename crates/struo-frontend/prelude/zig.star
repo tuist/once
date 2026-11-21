@@ -65,7 +65,7 @@ def _zig_collect_dep_sources(deps):
 def _zig_collect_dep_data(deps):
     inputs = []
     for dep in deps:
-        for path in dep.get("transitive_data") or []:
+        for path in _transitive_list(dep.get("transitive_data")):
             inputs.append(path)
     return _unique(inputs)
 
@@ -425,21 +425,22 @@ def _zig_collect_list(deps, prefixed_key, c_key, own):
     out = []
     out.extend(own)
     for dep in deps:
-        out.extend(dep.get(prefixed_key) or [])
+        out.extend(_transitive_list(dep.get(prefixed_key)))
         if dep.get("c_provider"):
-            out.extend(dep.get(c_key) or [])
+            out.extend(_transitive_list(dep.get(c_key)))
     return _unique(out)
 
-def _zig_collect_linkopts(deps, own):
-    out = []
-    out.extend(own)
+def _zig_collect_linkopt_groups(ctx, deps, own):
+    transitive = []
     for dep in deps:
-        out.extend(dep.get("transitive_c_linkopts") or [])
+        flat = list(dep.get("transitive_c_linkopts") or [])
         if dep.get("c_provider"):
-            out.extend(dep.get("transitive_linkopts") or [])
-    return out
+            flat.extend(dep.get("transitive_linkopts") or [])
+        transitive.append(_dep_linkopt_groups(dep, flat))
+    return _linkopt_groups(ctx["label"]["id"], own, transitive)
 
 def _zig_collect_c_provider(ctx, deps, own_static = [], own_dynamic = [], own_linkopts = []):
+    linkopt_groups = _zig_collect_linkopt_groups(ctx, deps, own_linkopts)
     return {
         "headers": _zig_collect_list(deps, "transitive_c_headers", "transitive_headers", []),
         "include_dirs": _zig_collect_list(deps, "transitive_c_include_dirs", "transitive_include_dirs", []),
@@ -449,12 +450,13 @@ def _zig_collect_c_provider(ctx, deps, own_static = [], own_dynamic = [], own_li
         "defines": _zig_collect_list(deps, "transitive_c_defines", "transitive_defines", []),
         "static_libraries": _zig_collect_list(deps, "transitive_c_static_libraries", "transitive_static_libraries", own_static),
         "dynamic_libraries": _zig_collect_list(deps, "transitive_c_dynamic_libraries", "transitive_dynamic_libraries", own_dynamic),
-        "linkopts": _zig_collect_linkopts(deps, own_linkopts),
+        "linkopts": _linkopts_of_groups(linkopt_groups),
+        "linkopt_groups": linkopt_groups,
         "data": _zig_collect_list(deps, "transitive_c_data", "transitive_data", []),
     }
 
 def _zig_c_provider_has_headers(dep):
-    return len(dep.get("transitive_headers") or dep.get("headers") or []) > 0
+    return len(_transitive_list(dep.get("transitive_headers") or dep.get("headers"))) > 0
 
 def _zig_uses_c_module(deps, direct_c_deps):
     if len(direct_c_deps) > 0:
@@ -857,6 +859,7 @@ def _zig_provider(ctx, provider_kind, root, output, cinfo, output_kind):
         "transitive_c_static_libraries": c_provider["static_libraries"],
         "transitive_c_dynamic_libraries": c_provider["dynamic_libraries"],
         "transitive_c_linkopts": c_provider["linkopts"],
+        "transitive_linkopt_groups": c_provider["linkopt_groups"],
         "transitive_c_data": c_provider["data"],
     }
     if is_module:

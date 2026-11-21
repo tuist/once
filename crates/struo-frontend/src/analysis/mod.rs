@@ -11,6 +11,8 @@
 //! plumbing.
 
 mod action_history;
+mod declared_args;
+mod declared_inputs;
 mod engine;
 mod globals;
 mod metadata;
@@ -25,12 +27,15 @@ pub use resources::{
 
 pub use globals::{flush_host_tree_digest_caches, inherited_environment_sha256};
 mod store;
+mod transitive_set;
 mod values;
 
 use std::collections::BTreeMap;
 
 use crate::target::AttrValue;
 
+pub use declared_args::DeclaredArgs;
+pub use declared_inputs::{DeclaredInputs, InputFragment};
 pub use engine::{
     analyze_target, target_kind_has_impl, AnalysisEngine, AnalysisFailure, AnalysisOptions,
     AnalysisResult,
@@ -45,6 +50,7 @@ pub use store::{
     DeclaredArchiveFormat, DeclaredArgFile, DeclaredArgFileFormat, DeclaredCopyPathMode,
     DeclaredPreparePathMode, Observation,
 };
+pub use transitive_set::{transitive_sets_available, Node, TransitiveSets};
 /// If `value` is the canonical select-shape Map (`{ "select": { ... }
 /// }`), return the inner branch map. Otherwise return `None`. The
 /// resolution mechanism itself lives in the Starlark prelude so that

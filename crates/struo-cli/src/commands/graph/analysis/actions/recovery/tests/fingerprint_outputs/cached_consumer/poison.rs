@@ -7,7 +7,7 @@ async fn historical_poison_is_never_reused_even_with_intact_fingerprint_inputs()
         let mut graph = cached_graph(false);
         if implicit {
             let consumer = graph.actions.last_mut().unwrap();
-            consumer.inputs.clear();
+            consumer.inputs = Vec::new().into();
             consumer.depends_on_prior_actions = true;
         }
         let first = workspace

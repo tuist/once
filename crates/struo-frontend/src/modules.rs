@@ -36,6 +36,21 @@ pub(crate) fn built_in_module_source() -> &'static str {
     BUILT_IN_MODULE_SOURCE.as_str()
 }
 
+pub(crate) fn prelude_source_chunks(source: &str) -> Vec<(&str, &str)> {
+    let Some(suffix) = source.strip_prefix(built_in_module_source()) else {
+        return vec![(BUILT_IN_MODULE_PATH, source)];
+    };
+    let mut chunks = PRELUDE_INDEX
+        .sources
+        .iter()
+        .map(|path| (path.as_str(), prelude_source(path)))
+        .collect::<Vec<_>>();
+    if !suffix.is_empty() {
+        chunks.push((COMBINED_MODULE_PATH, suffix));
+    }
+    chunks
+}
+
 pub(crate) fn common_module_source() -> &'static str {
     prelude_source(COMMON_PRELUDE_PATH)
 }

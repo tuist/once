@@ -217,7 +217,7 @@ def _swift_android_collect_strings(deps, key, own_values):
     out = []
     out.extend(own_values)
     for dep in deps:
-        out.extend(dep.get(key) or [])
+        out.extend(_transitive_list(dep.get(key)))
     return _unique(out)
 
 def _swift_android_collect_linkopts(deps, own_values):

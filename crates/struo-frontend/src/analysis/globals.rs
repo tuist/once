@@ -167,7 +167,7 @@ fn read_bounded_host_file(path: &str) -> Result<Vec<u8>> {
 }
 
 struct ActionArgv {
-    args: Vec<String>,
+    args: super::DeclaredArgs,
     arg_files: Vec<DeclaredArgFile>,
 }
 
@@ -427,7 +427,7 @@ fn unpack_action_argv(value: Value<'_>, field: &str) -> anyhow::Result<ActionArg
         )
     })?;
     let mut argv = ActionArgv {
-        args: Vec::new(),
+        args: super::DeclaredArgs::default(),
         arg_files: Vec::new(),
     };
     for (index, item) in list.iter().enumerate() {
@@ -470,9 +470,15 @@ fn unpack_cmd_args_value(
     let fragment_args = dict
         .get_str("args")
         .ok_or_else(|| anyhow!("expected `{field}` entry {index} cmd_args to contain `args`"))
-        .and_then(|value| unpack_string_list(value, "cmd_args.args"))?;
+        .and_then(|value| {
+            super::DeclaredArgs::unpack(
+                value,
+                optional_string_field(dict, "format")?,
+                optional_string_field(dict, "before_each")?,
+            )
+        })?;
     let Some(path) = optional_string_field(dict, "arg_file_path")? else {
-        argv.args.extend(fragment_args);
+        argv.args.append(fragment_args);
         return Ok(());
     };
     let format = parse_arg_file_format(
@@ -530,21 +536,11 @@ fn parse_arg_file_format(value: &str, field: &str) -> anyhow::Result<DeclaredArg
 
 fn validate_declared_arg_file_args(
     format: DeclaredArgFileFormat,
-    args: &[String],
+    args: &super::DeclaredArgs,
     path: &str,
 ) -> anyhow::Result<()> {
     match format {
-        DeclaredArgFileFormat::LineDelimited => {
-            for arg in args {
-                if arg.contains('\n') || arg.contains('\r') {
-                    return Err(anyhow!(
-                        "{} arg file `{path}` contains an argument with a newline",
-                        format.as_str()
-                    ));
-                }
-            }
-            Ok(())
-        }
+        DeclaredArgFileFormat::LineDelimited => args.validate_line_delimited(path),
     }
 }
 
@@ -714,6 +710,7 @@ mod observation_completeness_tests {
         "prepare_path",
         "run_action",
         "toml_decode",
+        "transitive_set",
         "workspace_root",
         "write_archive",
         "write_path",

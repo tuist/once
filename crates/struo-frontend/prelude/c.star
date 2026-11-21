@@ -24,18 +24,7 @@ def _c_include_dirs(ctx, headers):
     return _unique(includes)
 
 def _c_collect_transitive(deps, key, own):
-    out = []
-    out.extend(own)
-    for dep in deps:
-        out.extend(dep.get(key) or [])
-    return _unique(out)
-
-def _c_collect_linkopts(deps, own):
-    out = []
-    out.extend(own)
-    for dep in deps:
-        out.extend(dep.get("transitive_linkopts") or [])
-    return out
+    return transitive_set(direct = own, transitive = [dep.get(key) for dep in deps])
 
 def _c_dynamic_library_records(paths, abi):
     records = []
@@ -84,17 +73,17 @@ def _c_headers(ctx):
     return _unique(headers)
 
 def _c_compile_args(src, obj, attrs, compile_context):
-    args = ["-c", src, "-o", obj]
-    for define in compile_context.get("defines") or []:
-        args.append("-D" + define)
-    for include in compile_context.get("include_dirs") or []:
-        args.extend(["-I", include])
-    for include in compile_context.get("quote_include_dirs") or []:
-        args.extend(["-I", include])
-    for include in compile_context.get("system_include_dirs") or []:
-        args.extend(["-isystem", include])
-    for include in compile_context.get("framework_include_dirs") or []:
-        args.extend(["-F", include])
+    args = [
+        "-c",
+        src,
+        "-o",
+        obj,
+        cmd_args(compile_context["defines"], format = "-D{}"),
+        cmd_args(compile_context["include_dirs"], before_each = "-I"),
+        cmd_args(compile_context["quote_include_dirs"], before_each = "-I"),
+        cmd_args(compile_context["system_include_dirs"], before_each = "-isystem"),
+        cmd_args(compile_context["framework_include_dirs"], before_each = "-F"),
+    ]
     args.extend(attrs.get("copts") or [])
     return args
 
@@ -116,11 +105,16 @@ def _c_link_context(ctx, archive):
     own_linkopts = _c_attr(ctx, "linkopts", [])
     static_libraries = _c_collect_transitive(deps, "transitive_static_libraries", own_static)
     dynamic_libraries = _c_collect_transitive(deps, "transitive_dynamic_libraries", own_dynamic)
-    linkopts = _c_collect_linkopts(deps, own_linkopts)
+    linkopt_groups = _linkopt_groups(
+        ctx["label"]["id"],
+        own_linkopts,
+        [_dep_linkopt_groups(dep, dep.get("transitive_linkopts")) for dep in deps],
+    )
     return {
         "static_libraries": static_libraries,
         "dynamic_libraries": dynamic_libraries,
-        "linkopts": linkopts,
+        "linkopts": _linkopts_of_groups(linkopt_groups),
+        "linkopt_groups": linkopt_groups,
     }
 
 def _c_toolchain(ctx, sources):
@@ -166,7 +160,7 @@ def _c_library_impl(ctx):
                 presentation = _action_metadata(context = [_action_context("c.language", "C++" if _c_source_uses_cxx(src) else "C")]),
                 source_files = _action_source_files([src]),
                 argv = [compiler] + _c_compile_args(src, obj, attrs, compile_context),
-                inputs = _unique([src] + compile_context["headers"]),
+                inputs = transitive_set(direct = [src], transitive = [compile_context["headers"]]),
                 outputs = [obj],
                 depends_on_prior_actions = False,
                 env = _c_attr(ctx, "env", {}),
@@ -221,8 +215,9 @@ def _c_library_impl(ctx):
         "transitive_static_libraries": link_context["static_libraries"],
         "transitive_dynamic_libraries": link_context["dynamic_libraries"],
         "transitive_linkopts": link_context["linkopts"],
+        "transitive_linkopt_groups": link_context["linkopt_groups"],
         "transitive_data": transitive_data,
-        "affected_inputs": _unique(sources + headers + transitive_data),
+        "affected_inputs": _unique(sources + headers + transitive_data.to_list()),
         "default_output": archive,
         "transitive_archives": link_context["static_libraries"],
         "transitive_android_native_libraries": transitive_android_native_libraries,

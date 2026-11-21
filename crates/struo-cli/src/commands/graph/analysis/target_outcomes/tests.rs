@@ -6,7 +6,7 @@ mod host_observations;
 
 use struo_cas::{ActionResult, Digest};
 use struo_core::{EvidenceCacheState, SandboxMode};
-use struo_frontend::analysis::{AnalysisObservations, Observation};
+use struo_frontend::analysis::{AnalysisObservations, Observation, TransitiveSets};
 use struo_frontend::Target;
 use tempfile::TempDir;
 
@@ -73,7 +73,7 @@ fn expansion_observations(
     recorded
 }
 
-fn inputs(paths: &[&str]) -> BTreeSet<String> {
+fn inputs(paths: &[&str]) -> struo_frontend::analysis::DeclaredInputs {
     paths.iter().map(|p| (*p).to_string()).collect()
 }
 
@@ -92,9 +92,24 @@ fn position() -> ChangePosition {
     }
 }
 
+/// Rewrite the record stored for `target_id` in place.
+fn edit_record(outcomes: &TargetOutcomes, target_id: &str, edit: impl FnOnce(&mut super::Record)) {
+    let path = outcomes.record_path(&outcomes.stored[target_id]);
+    let mut record = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    edit(&mut record);
+    std::fs::write(path, serde_json::to_vec(&record).unwrap()).unwrap();
+}
+
 /// Records survive to the next invocation, which is the whole point.
 fn round_trip(workspace: &TempDir, write: impl FnOnce(&TargetOutcomes)) -> TargetOutcomes {
-    let outcomes = TargetOutcomes::open(workspace.path(), "build", SandboxMode::Off, "", None);
+    let outcomes = TargetOutcomes::open(
+        workspace.path(),
+        "build",
+        SandboxMode::Off,
+        "",
+        None,
+        TransitiveSets::default(),
+    );
     write(&outcomes);
     outcomes.save(Some(&position()));
     TargetOutcomes::open(
@@ -103,6 +118,7 @@ fn round_trip(workspace: &TempDir, write: impl FnOnce(&TargetOutcomes)) -> Targe
         SandboxMode::Off,
         "",
         Some(&position()),
+        TransitiveSets::default(),
     )
 }
 
@@ -278,7 +294,6 @@ fn an_uncacheable_outcome_is_never_recorded() {
 
 #[test]
 fn mandatory_uncached_actions_cannot_be_recorded_or_replayed_as_hits() {
-    let workspace = TempDir::new().unwrap();
     let target = target("apps/tool", "tool");
     let mut built = outcome(&[]);
     built.per_action_outcomes = vec![super::super::PerActionOutcome {
@@ -294,7 +309,8 @@ fn mandatory_uncached_actions_cannot_be_recorded_or_replayed_as_hits() {
         exit_code: 0,
     }];
     for aggregate_bypass in [false, true] {
-        let mut reopened = round_trip(&workspace, |outcomes| {
+        let workspace = TempDir::new().unwrap();
+        let reopened = round_trip(&workspace, |outcomes| {
             outcomes.record(
                 &target,
                 "key".to_string(),
@@ -303,12 +319,13 @@ fn mandatory_uncached_actions_cannot_be_recorded_or_replayed_as_hits() {
                 &built,
             );
         });
-        let record = reopened.stored.get_mut(&target.label.id).unwrap();
-        if aggregate_bypass {
-            record.cache_state = EvidenceCacheState::Bypass;
-        } else {
-            record.per_action_outcomes[0].cache_state = EvidenceCacheState::Bypass;
-        }
+        edit_record(&reopened, &target.label.id, |record| {
+            if aggregate_bypass {
+                record.cache_state = EvidenceCacheState::Bypass;
+            } else {
+                record.per_action_outcomes[0].cache_state = EvidenceCacheState::Bypass;
+            }
+        });
         assert!(reopened.reuse(&target, "key", &changed(&[], &[])).is_none());
     }
 
@@ -326,6 +343,51 @@ fn mandatory_uncached_actions_cannot_be_recorded_or_replayed_as_hits() {
     assert!(reopened.reuse(&target, "key", &changed(&[], &[])).is_none());
 }
 
+/// Each target's record stands alone: losing one costs only that target a
+/// visit, and a target the next build no longer reaches takes its record file
+/// with it, so the directory stays the size of the graph.
+#[test]
+fn each_target_keeps_its_own_record() {
+    let workspace = TempDir::new().unwrap();
+    let kept = target("apps/kept", "kept");
+    let lost = target("apps/lost", "lost");
+    let reopened = round_trip(&workspace, |outcomes| {
+        for (target, output) in [(&kept, ".struo/out/kept"), (&lost, ".struo/out/lost")] {
+            outcomes.record(
+                target,
+                "key".to_string(),
+                &AnalysisObservations::default(),
+                &inputs(&[]),
+                &outcome(&[output]),
+            );
+        }
+    });
+    let lost_record = reopened.record_path(&reopened.stored[&lost.label.id]);
+    std::fs::write(&lost_record, b"{").unwrap();
+    let reopened = TargetOutcomes::open(
+        workspace.path(),
+        "build",
+        SandboxMode::Off,
+        "",
+        Some(&position()),
+        TransitiveSets::default(),
+    );
+
+    assert!(reopened.reuse(&kept, "key", &changed(&[], &[])).is_some());
+    assert!(reopened.reuse(&lost, "key", &changed(&[], &[])).is_none());
+
+    reopened.carry_forward(&kept.label.id);
+    reopened.save(Some(&position()));
+    let records = std::fs::read_dir(lost_record.parent().unwrap())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        records,
+        [reopened.record_path(&reopened.stored[&kept.label.id])]
+    );
+}
+
 /// With no watcher there is nothing to say what moved, so nothing is reused.
 /// Records describe one moment. When the caller's account of the window is
 /// relative to a different one, nothing can be said about what moved since,
@@ -334,7 +396,14 @@ fn mandatory_uncached_actions_cannot_be_recorded_or_replayed_as_hits() {
 fn records_from_another_moment_are_not_used() {
     let workspace = TempDir::new().unwrap();
     let target = target("apps/tool", "tool");
-    let outcomes = TargetOutcomes::open(workspace.path(), "build", SandboxMode::Off, "", None);
+    let outcomes = TargetOutcomes::open(
+        workspace.path(),
+        "build",
+        SandboxMode::Off,
+        "",
+        None,
+        TransitiveSets::default(),
+    );
     outcomes.record(
         &target,
         "key".to_string(),
@@ -354,6 +423,7 @@ fn records_from_another_moment_are_not_used() {
         SandboxMode::Off,
         "",
         Some(&elsewhere),
+        TransitiveSets::default(),
     );
 
     assert!(reopened.reuse(&target, "key", &changed(&[], &[])).is_none());
@@ -518,4 +588,48 @@ fn a_reused_outcome_does_not_claim_its_outputs_are_on_disk() {
     let input = reused.available_inputs[output];
     assert!(!input.materialized);
     assert_eq!(input.blob_digest, Digest::of_bytes(b"tool"));
+}
+
+#[test]
+fn fingerprint_references_round_trip_and_missing_nodes_prevent_reuse() {
+    use struo_core::{InputFingerprintComponent, InputFingerprintManifest};
+
+    let workspace = TempDir::new().unwrap();
+    let target = target("apps/tool", "tool");
+    let digest = Digest::of_bytes(b"input");
+    let fingerprint = InputFingerprintManifest::new(
+        digest,
+        vec![InputFingerprintComponent::new(
+            "source",
+            "src/history.rs",
+            digest,
+        )],
+    );
+    let mut built = outcome(&[]);
+    built.input_digest = Some(digest);
+    built.input_fingerprint = Some(fingerprint.clone());
+    let reopened = round_trip(&workspace, |outcomes| {
+        outcomes.record(
+            &target,
+            "key".to_string(),
+            &AnalysisObservations::default(),
+            &inputs(&[]),
+            &built,
+        );
+    });
+    let raw = std::fs::read(reopened.record_path(&reopened.stored[&target.label.id])).unwrap();
+    assert!(!String::from_utf8_lossy(&raw).contains("src/history.rs"));
+    let reused = reopened.reuse(&target, "key", &changed(&[], &[])).unwrap();
+    assert_eq!(reused.input_fingerprint, Some(fingerprint));
+    drop(reopened);
+    std::fs::remove_dir_all(workspace.path().join(".struo/fingerprints")).unwrap();
+    let reopened = TargetOutcomes::open(
+        workspace.path(),
+        "build",
+        SandboxMode::Off,
+        "",
+        Some(&position()),
+        TransitiveSets::default(),
+    );
+    assert!(reopened.reuse(&target, "key", &changed(&[], &[])).is_none());
 }
