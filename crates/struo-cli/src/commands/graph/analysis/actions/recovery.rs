@@ -37,7 +37,8 @@ use struo_core::ResourceRequest;
 use struo_core::{Action, ResourcePool, RunEvent, RunEventBus, TargetResult};
 
 use super::legacy_outputs::{self, FingerprintKind};
-use super::{cacheable_action_locks, restore_outputs, SourceDigestCache};
+use super::output_locks::OutputLock;
+use super::{restore_outputs, SourceDigestCache};
 
 /// The attempt a repair reports: the producer's first attempt was the run or
 /// cache hit that recorded it.
@@ -659,10 +660,12 @@ impl Repair<'_> {
         let reporting = self.producers.inner.reporting.get();
         let resources = self.producers.executors(self.resources)?;
         let executor = struo_core::Executor::resolve(&producer.action)?;
+        let clean_paths = producer.setup.iter().flat_map(|setup| &setup.clean_paths);
+        let paths = producer.outputs.keys().chain(clean_paths);
         let result = with_action_lock_and_permit(
             self.workspace,
             digest,
-            producer.outputs.keys().map(String::as_str),
+            paths.map(String::as_str),
             || resources.acquire(executor, producer.action.resource_request()),
             |lease| async move {
                 let attempt = match reporting {
@@ -850,7 +853,7 @@ where
     F: FnOnce(struo_core::ExecutionPermit) -> Fut,
     Fut: Future<Output = Result<T>>,
 {
-    let locks = Arc::new(cacheable_action_locks(workspace, digest, outputs)?);
+    let locks = Arc::new(OutputLock::open_all(workspace, digest, outputs)?);
     let mut work = Some(work);
     loop {
         let permit = acquire().await;
@@ -867,7 +870,7 @@ where
 
 /// Lock every file, or none of them and return the first one another holder
 /// has.
-fn try_lock_all(locks: &[std::fs::File]) -> Result<Option<usize>> {
+fn try_lock_all(locks: &[OutputLock]) -> Result<Option<usize>> {
     for (index, lock) in locks.iter().enumerate() {
         match lock.try_lock() {
             Ok(()) => {}
@@ -883,7 +886,7 @@ fn try_lock_all(locks: &[std::fs::File]) -> Result<Option<usize>> {
     Ok(None)
 }
 
-async fn wait_for_action_lock(lock: &std::fs::File, digest: Digest) -> Result<()> {
+async fn wait_for_action_lock(lock: &OutputLock, digest: Digest) -> Result<()> {
     loop {
         match lock.try_lock() {
             Ok(()) => {

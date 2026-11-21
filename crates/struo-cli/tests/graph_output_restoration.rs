@@ -86,6 +86,33 @@ mandatory_check = target_kind(
     capabilities = [capability("build", ["default"])],
     impl = _mandatory_check_impl,
 )
+
+def _overlap_impl(ctx):
+    if ctx["label"]["name"] == "writer":
+        run_action(
+            argv = ["/bin/sh", "-c", "printf retained > shared/bundle/record; touch writer-ready; for i in $(seq 1 1500); do [ -f release ] && exit 0; sleep 0.02; done; exit 1"],
+            outputs = ["shared/bundle/record"],
+            create_dirs = ["shared/bundle"],
+        )
+    else:
+        mode = ctx["attr"]["mode"]
+        root = "shared/neighbor" if mode in ["sibling", "cleanup"] else "shared/bundle"
+        run_action(argv = ["/bin/sh", "-c", "touch contender-ready"], outputs = ["contender-ready"])
+        run_action(
+            argv = ["/bin/sh", "-c", "printf changed > " + root + "/changed"],
+            inputs = ["contender-ready"],
+            outputs = [root],
+            clean_paths = ["shared/bundle" if mode == "cleanup" else root],
+            create_dirs = [root],
+            cacheable = mode != "uncached",
+        )
+    return {}
+
+overlap = target_kind(
+    attrs = [attr("mode", "string", default = "cached")],
+    capabilities = [capability("build", ["default"])],
+    impl = _overlap_impl,
+)
 "#;
 
 struct Workspace {
@@ -246,6 +273,81 @@ fn an_action_cache_build_reruns_after_gc_evicts_its_intermediate() {
     assert_eq!(std::fs::read(workspace.output("app")).unwrap(), b"object");
     workspace.build_succeeds();
     assert_eq!(workspace.runs(), "compilelinkcompilelink");
+}
+
+#[test]
+fn concurrent_tree_writers_do_not_remove_active_child_outputs() {
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    for mode in ["cached", "uncached", "cleanup", "restore", "sibling"] {
+        let workspace = Workspace::new("overlap");
+        std::fs::write(
+            workspace.path().join("struo.toml"),
+            format!(
+                "[modules]\npaths = [\"modules/*.star\"]\n\
+                 [[target]]\nname = \"writer\"\nkind = \"overlap\"\n\
+                 [[target]]\nname = \"contender\"\nkind = \"overlap\"\n\
+                 [target.attrs]\nmode = \"{mode}\"\n"
+            ),
+        )
+        .unwrap();
+        if mode == "restore" {
+            let warm = workspace
+                .command()
+                .args(["build", "contender"])
+                .output()
+                .unwrap();
+            assert!(
+                warm.status.success(),
+                "{}",
+                String::from_utf8_lossy(&warm.stderr)
+            );
+            std::fs::remove_file(workspace.path().join("contender-ready")).unwrap();
+        }
+        let mut writer = workspace.command();
+        let writer = writer
+            .args(["build", "writer"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let wait_for = |path: &str| {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !workspace.path().join(path).exists() {
+                assert!(Instant::now() < deadline, "{mode}: waiting for {path}");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        wait_for("writer-ready");
+        let mut contender = workspace.command();
+        let contender = contender
+            .args(["build", "contender"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        if mode == "sibling" {
+            wait_for("shared/neighbor/changed");
+        } else {
+            if mode != "restore" {
+                wait_for("contender-ready");
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
+        let retained = std::fs::read(workspace.path().join("shared/bundle/record")).ok();
+        std::fs::write(workspace.path().join("release"), "").unwrap();
+        let writer = writer.wait_with_output().unwrap();
+        let contender = contender.wait_with_output().unwrap();
+        assert_eq!(retained.as_deref(), Some(b"retained".as_slice()), "{mode}");
+        for output in [writer, contender] {
+            assert!(
+                output.status.success(),
+                "{mode}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
 }
 
 #[test]

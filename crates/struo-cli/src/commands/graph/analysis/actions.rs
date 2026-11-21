@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::OsStr;
 use std::fmt::Write as _;
-use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -30,6 +29,7 @@ use super::{AvailableInput, BuildOutcome, PerActionOutcome};
 
 pub(super) mod legacy_outputs;
 mod lowering;
+mod output_locks;
 mod pending_outputs;
 mod preparation;
 mod provider;
@@ -1233,7 +1233,11 @@ async fn resolve_cacheable_declared_action(
     let outcome = recovery::with_action_lock_and_permit(
         context.workspace,
         action_digest,
-        declared.outputs.iter().map(String::as_str),
+        declared
+            .outputs
+            .iter()
+            .chain(&declared.clean_paths)
+            .map(String::as_str),
         || resources.acquire(executor, action.resource_request()),
         |lease| async move {
             // Another task or process may have produced the result since the
@@ -1308,44 +1312,6 @@ async fn probe_cached_action(
         }
         result => result.with_context(probe),
     }
-}
-
-/// One lock per path the action writes, or one for its digest when it
-/// declares no outputs.
-///
-/// Concurrent processes can compute different digests for the same outputs,
-/// for example after restoring different bytes of a non-reproducible input,
-/// and a tool such as rustc keeps scratch files next to its output. Keying
-/// by path keeps those runs from writing the same files at once.
-fn cacheable_action_locks<'a>(
-    workspace: &Path,
-    digest: Digest,
-    outputs: impl IntoIterator<Item = &'a str>,
-) -> Result<Vec<std::fs::File>> {
-    let directory = workspace.join(".struo/locks/actions");
-    std::fs::create_dir_all(&directory)
-        .with_context(|| format!("creating action lock directory `{}`", directory.display()))?;
-    let mut keys = outputs
-        .into_iter()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .map(|path| Digest::of_bytes(path.as_bytes()))
-        .collect::<Vec<_>>();
-    if keys.is_empty() {
-        keys.push(digest);
-    }
-    keys.into_iter()
-        .map(|key| {
-            let path = directory.join(format!("{key}.lock"));
-            OpenOptions::new()
-                .create(true)
-                .truncate(false)
-                .read(true)
-                .write(true)
-                .open(&path)
-                .with_context(|| format!("opening action lock `{}`", path.display()))
-        })
-        .collect()
 }
 
 async fn action_result_blobs_present(
@@ -1522,24 +1488,34 @@ async fn run_uncacheable_declared_action(
     declared: &DeclaredAction,
 ) -> Result<DeclaredActionOutcome> {
     let action_digest = action.digest();
-    let lease = context
-        .producers
-        .executors(context.resources)?
-        .acquire(
-            struo_core::Executor::resolve(&action)?,
-            action.resource_request(),
+    let resources = context.producers.executors(context.resources)?;
+    let executor = struo_core::Executor::resolve(&action)?;
+    let result = recovery::with_action_lock_and_permit(
+        context.workspace,
+        action_digest,
+        declared
+            .outputs
+            .iter()
+            .chain(&declared.clean_paths)
+            .map(String::as_str),
+        || resources.acquire(executor, action.resource_request()),
+        |lease| {
+            let context = &context;
+            let action = &action;
+            async move {
+                context.claim_worker().await;
+                preparation::setup(context, action, declared, &lease).await?;
+                uncached::execute_declared(context, action, declared, &lease).await
+            }
+        },
+    )
+    .await
+    .with_context(|| {
+        format!(
+            "executing action {} for {} ({})",
+            context.index, context.target_id, context.identifier
         )
-        .await;
-    context.claim_worker().await;
-    preparation::setup(&context, &action, declared, &lease).await?;
-    let result = uncached::execute_declared(&context, &action, declared, &lease)
-        .await
-        .with_context(|| {
-            format!(
-                "executing action {} for {} ({})",
-                context.index, context.target_id, context.identifier
-            )
-        })?;
+    })?;
     let exit_code = result.exit_code;
     if exit_code != 0 {
         record_declared_action_evidence(
