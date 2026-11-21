@@ -182,8 +182,8 @@ jobs:
           push: false
           platforms: linux/amd64
           tags: struo-web:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=web-ci
+          cache-to: type=gha,scope=web-ci,mode=max
 
   helm:
     name: helm
