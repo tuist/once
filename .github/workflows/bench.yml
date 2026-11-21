@@ -54,7 +54,7 @@ jobs:
           # "latest" pointer into a release whose assets have not been
           # published yet (v2026.9.3's linux-x64 tarball 404s at the
           # time of writing and takes down every downstream job).
-          version: "2026.11.10"
+          version: "2026.11.12"
           experimental: true
           cache: true
           # GitHub-hosted runners share the default key, and their cached
