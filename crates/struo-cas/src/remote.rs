@@ -536,18 +536,21 @@ impl RemoteCache {
                 "action record exceeds the maximum supported size".to_string(),
             ));
         }
-        let _memory = self.budget.reserve_memory(size.0).await?;
+        let memory = self.budget.reserve_memory(size.0).await?;
         let mut record =
             Vec::with_capacity(usize::try_from(size.0).expect("record is at most 16 MiB"));
         serde_json::to_writer(&mut record, result).expect("ActionResult is serializable");
-        let _permit = self
-            .transfers
-            .acquire()
+        let permit = Arc::clone(&self.transfers)
+            .acquire_owned()
             .await
             .expect("transfer semaphore remains open");
-        self.store
-            .put_bytes(&action_key(action), Bytes::from(record))
-            .await
+        let store = Arc::clone(&self.store);
+        let key = action_key(action);
+        self.finish_upload(async move {
+            let _owner = (memory, permit);
+            store.put_bytes(&key, Bytes::from(record)).await
+        })
+        .await
     }
 
     async fn upload_bytes(&self, digest: &Digest, bytes: &[u8]) -> Result<()> {
@@ -559,18 +562,22 @@ impl RemoteCache {
         if self.head_remote(&key).await? == Some(size) {
             return Ok(());
         }
-        let _memory = self.budget.reserve_memory(size).await?;
-        let _permit = self
-            .transfers
-            .acquire()
+        let memory = self.budget.reserve_memory(size).await?;
+        let permit = Arc::clone(&self.transfers)
+            .acquire_owned()
             .await
             .expect("transfer semaphore remains open");
-        let started = Instant::now();
-        self.store
-            .put_bytes(&key, Bytes::copy_from_slice(bytes))
-            .await?;
-        transfer::record(TransferDirection::Upload, *digest, size, started.elapsed());
-        Ok(())
+        let bytes = Bytes::copy_from_slice(bytes);
+        let store = Arc::clone(&self.store);
+        let digest = *digest;
+        self.finish_upload(async move {
+            let _owner = (memory, permit);
+            let started = Instant::now();
+            store.put_bytes(&key, bytes).await?;
+            transfer::record(TransferDirection::Upload, digest, size, started.elapsed());
+            Ok(())
+        })
+        .await
     }
 
     /// Publish a local blob from a verified copy in temporary space, which
@@ -606,10 +613,27 @@ impl RemoteCache {
                 std::io::copy(&mut reader, writer).map(|_| ())
             })
             .await?;
-        let started = Instant::now();
-        self.store.put_file(&key, &path, size).await?;
-        transfer::record(TransferDirection::Upload, *digest, size, started.elapsed());
-        Ok(())
+        let store = Arc::clone(&self.store);
+        let digest = *digest;
+        self.finish_upload(async move {
+            let _owner = owner;
+            let started = Instant::now();
+            store.put_file(&key, &path, size).await?;
+            transfer::record(TransferDirection::Upload, digest, size, started.elapsed());
+            Ok(())
+        })
+        .await
+    }
+
+    async fn finish_upload(
+        &self,
+        upload: impl std::future::Future<Output = Result<()>> + Send + 'static,
+    ) -> Result<()> {
+        // Backends can detach blocking writes on cancellation. Keep their
+        // future and admission alive until those writes actually finish.
+        tokio::spawn(upload)
+            .await
+            .map_err(|_| self.error("put", ErrorKind::Unavailable, "upload task failed".into()))?
     }
 
     async fn head_remote(&self, key: &str) -> Result<Option<u64>> {
@@ -721,3 +745,6 @@ mod tests;
 
 #[cfg(test)]
 mod admission_tests;
+
+#[cfg(test)]
+mod upload_tests;

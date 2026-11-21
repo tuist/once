@@ -21,6 +21,11 @@ use super::aws_credentials::{self, AwsChainCredentials};
 use super::{RemoteBody, RemoteStore};
 use crate::{Error, ErrorKind, Result};
 
+mod client;
+
+#[cfg(test)]
+mod credential_tests;
+
 /// Namespace for the key layout and record format this client writes.
 const LAYOUT_VERSION: &str = "v1";
 const MIN_PART_BYTES: u64 = 8 * 1024 * 1024;
@@ -81,6 +86,7 @@ impl ObjectStoreRemote {
                     configure(
                         GoogleCloudStorageBuilder::from_env()
                             .with_url(url)
+                            .with_http_connector(client::CredentialConnector)
                             .with_retry(retry_config()),
                         options,
                         |b, k, v| Ok(b.with_config(k.parse()?, v)),
@@ -95,6 +101,7 @@ impl ObjectStoreRemote {
                     configure(
                         MicrosoftAzureBuilder::from_env()
                             .with_url(url)
+                            .with_http_connector(client::CredentialConnector)
                             .with_retry(retry_config()),
                         options,
                         |b, k, v| Ok(b.with_config(k.parse()?, v)),
@@ -150,10 +157,16 @@ impl ObjectStoreRemote {
             | object_store::Error::NotImplemented { .. }
             | object_store::Error::UnknownConfigurationKey { .. } => ErrorKind::Misconfigured,
             object_store::Error::NotFound { .. } => ErrorKind::NotFound,
-            // Requests that reach here exhausted the store's own retries.
+            _ if client::refused(error) => ErrorKind::Refused,
             _ => ErrorKind::Unavailable,
         };
-        Error::remote(self.provider, operation, kind, error.to_string())
+        let message = match kind {
+            ErrorKind::Refused => "credentials or permissions refused; check the selected identity and access policy",
+            ErrorKind::Misconfigured => "invalid object store configuration; check the provider settings",
+            ErrorKind::NotFound => "object not found",
+            _ => "object store or credential provider unavailable; check connectivity and renew the credential session if applicable",
+        };
+        Error::remote(self.provider, operation, kind, message)
     }
 
     fn part_bytes(size: u64) -> u64 {
@@ -182,7 +195,9 @@ impl RemoteStore for ObjectStoreRemote {
             Err(error) => return Err(self.error("get", &error)),
         };
         let size = result.meta.size;
-        let stream = result.into_stream().map_err(std::io::Error::other);
+        let stream = result.into_stream().map_err(|_| {
+            std::io::Error::other("object data stream failed; check connectivity and credentials")
+        });
         Ok(Some(RemoteBody {
             size,
             reader: Box::pin(StreamReader::new(stream)),
@@ -264,7 +279,7 @@ impl RemoteStore for ObjectStoreRemote {
                 .map_err(|error| self.error("put", &error)),
             Err(error) => {
                 if let Err(abort) = writer.abort().await {
-                    tracing::warn!(provider = self.provider, error = %abort, "could not abort multipart upload");
+                    tracing::warn!(provider = self.provider, error = %self.error("abort", &abort), "could not abort multipart upload");
                 }
                 Err(error)
             }

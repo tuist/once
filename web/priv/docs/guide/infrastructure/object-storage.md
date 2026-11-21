@@ -144,17 +144,20 @@ deleted is treated as a miss, and Struo runs the action again.
   profile that does not exist or no credentials anywhere in the AWS chain. Fix
   the credentials, or set `STRUO_CACHE_PROVIDER=local` to bypass the bucket for
   one invocation. An explicit STS authentication or role-permission refusal
-  also fails the command rather than falling back to local execution.
+  also fails the command rather than falling back to local execution, as do
+  rejected Azure or Google OAuth token exchanges.
 - **Unreachable credential source:** when the source exists but cannot answer,
   such as the SSO portal or STS while offline, or when an SSO session has
   expired, the action runs locally. The warning gives safe recovery guidance;
-  credential helper output and AWS diagnostic details are not logged because
-  they can contain secrets.
+  credential helper output, including Azure CLI stderr, and raw provider
+  diagnostic details are not logged because they can contain secrets.
 - **Corrupt or truncated content:** it is rejected before it enters the local
   cache, and the command reports the corruption.
 
 Publishing is best effort. A failed upload is logged as a warning, and the
-command still succeeds with its local result.
+command still succeeds with its local result. Cancelling an action does not
+release an upload's memory, staging space, or transfer slot before the
+backend finishes the admitted upload.
 
 Reads issue a metadata request before downloading an object so Struo can
 reserve memory and staging disk before starting the body transfer. These
