@@ -20,6 +20,12 @@
       "matchPackageNames": ["!rust"],
       "groupName": "mise tools",
       "schedule": ["* 0-5 * * 1"]
+    },
+    {
+      "description": "Renovate reads Java versions from Adoptium's semver field, which encodes a respin such as 17.0.20.1+1 as 17.0.20+101. mise names that release by its OpenJDK version, so the semver form cannot be installed. Allow only releases whose two forms agree.",
+      "matchManagers": ["mise"],
+      "matchDepNames": ["java"],
+      "allowedVersions": "/^\\d+\\.\\d+\\.\\d+\\+\\d{1,2}$/"
     }
   ]
 }
