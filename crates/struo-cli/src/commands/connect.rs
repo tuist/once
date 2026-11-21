@@ -214,7 +214,9 @@ fn existing_workspace_binding(workspace: &Path, xdg: &Xdg) -> Option<ProjectRef>
             account: config.account?,
             project: config.project?,
         }),
-        crate::cache_provider::ResolvedCacheProviderConfig::Local => None,
+        crate::cache_provider::ResolvedCacheProviderConfig::Local
+        | crate::cache_provider::ResolvedCacheProviderConfig::ObjectStore(_)
+        | crate::cache_provider::ResolvedCacheProviderConfig::HttpCache(_) => None,
     }
 }
 

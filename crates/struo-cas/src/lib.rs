@@ -22,6 +22,7 @@ mod gc;
 mod integrity;
 mod model;
 mod provider;
+pub mod remote;
 mod stats;
 mod store;
 pub mod transfer;
@@ -36,6 +37,10 @@ pub use error::{Error, ErrorKind, Result};
 pub use gc::GcReport;
 pub use model::{ActionResult, Stats};
 pub use provider::{ActionCacheHit, CacheProvider};
+pub use remote::{
+    HttpCacheAuth, HttpCacheRemote, ObjectStoreRemote, RemoteAccess, RemoteCache, RemoteStore,
+    STRUO_CACHE_READ_ONLY_ENV,
+};
 pub use store::{Cas, StagedBlob, StagedBlobReader};
 pub use tuist::{
     Executed, ProjectCreateError, RemoteProject, TuistAuth, TuistAuthPrompt, TuistCacheConfig,

@@ -3,12 +3,13 @@ use std::path::{Path, PathBuf};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt};
 
+use crate::remote::{RemoteAccess, RemoteCache, RemoteStore};
 use crate::tuist::{TuistCache, TuistCacheConfig};
 use crate::{ActionResult, Cas, Digest, GcReport, Result, Stats, TransferBudget};
 
 mod producer;
 
-const TUIST_STREAM_REMOTE_UPLOAD_LIMIT: u64 = 8 * 1024 * 1024;
+const STREAM_REMOTE_UPLOAD_LIMIT: u64 = 8 * 1024 * 1024;
 
 /// The cache a command talks to: a local store, optionally fronting a
 /// remote tier.
@@ -23,6 +24,9 @@ pub enum CacheProvider {
     /// Local store fronting a Tuist remote tier, which is consulted on a
     /// local miss and mirrored to on write.
     Tuist(TuistCache),
+    /// Local store fronting a keyed [`RemoteStore`], such as an object
+    /// storage bucket, consulted on a local miss and published to on write.
+    Remote(RemoteCache),
 }
 
 /// An action result and the availability established by this lookup.
@@ -60,6 +64,15 @@ impl CacheProvider {
         )?))
     }
 
+    /// Open a local store fronting `store`.
+    pub fn remote(
+        local_root: impl Into<PathBuf>,
+        store: std::sync::Arc<dyn RemoteStore>,
+        access: RemoteAccess,
+    ) -> Self {
+        Self::Remote(RemoteCache::new(Cas::open(local_root), store, access))
+    }
+
     /// Draw this provider's remote transfers, and those of every clone made
     /// from it afterwards, from `budget`.
     ///
@@ -69,8 +82,10 @@ impl CacheProvider {
     /// transfers and keeps no budget.
     #[must_use]
     pub fn with_transfer_budget(mut self, budget: TransferBudget) -> Self {
-        if let Self::Tuist(cache) = &mut self {
-            cache.set_transfer_budget(budget);
+        match &mut self {
+            Self::Local(_) => {}
+            Self::Tuist(cache) => cache.set_transfer_budget(budget),
+            Self::Remote(cache) => cache.set_transfer_budget(budget),
         }
         self
     }
@@ -81,6 +96,7 @@ impl CacheProvider {
         match self {
             Self::Local(_) => None,
             Self::Tuist(cache) => Some(cache.transfer_budget()),
+            Self::Remote(cache) => Some(cache.transfer_budget()),
         }
     }
 
@@ -89,6 +105,7 @@ impl CacheProvider {
         match self {
             Self::Local(cas) => cas.root(),
             Self::Tuist(cache) => cache.local().root(),
+            Self::Remote(cache) => cache.local().root(),
         }
     }
 
@@ -99,6 +116,7 @@ impl CacheProvider {
         match self {
             Self::Local(cas) => cas.put_blob(bytes).await,
             Self::Tuist(cache) => cache.put_blob(bytes).await,
+            Self::Remote(cache) => cache.put_blob(bytes).await,
         }
     }
 
@@ -113,7 +131,14 @@ impl CacheProvider {
             Self::Local(cas) => cas.put_stream(reader).await,
             Self::Tuist(cache) => {
                 let digest = cache.local().put_stream(reader).await?;
-                if cache.local().blob_size(&digest).await? <= TUIST_STREAM_REMOTE_UPLOAD_LIMIT {
+                if cache.local().blob_size(&digest).await? <= STREAM_REMOTE_UPLOAD_LIMIT {
+                    cache.publish_local_blob(&digest).await;
+                }
+                Ok(digest)
+            }
+            Self::Remote(cache) => {
+                let digest = cache.local().put_stream(reader).await?;
+                if cache.local().blob_size(&digest).await? <= STREAM_REMOTE_UPLOAD_LIMIT {
                     cache.publish_local_blob(&digest).await;
                 }
                 Ok(digest)
@@ -131,6 +156,7 @@ impl CacheProvider {
         match self {
             Self::Local(cas) => cas.get_blob(digest).await,
             Self::Tuist(cache) => cache.get_blob(digest).await,
+            Self::Remote(cache) => cache.get_blob(digest).await,
         }
     }
 
@@ -146,6 +172,7 @@ impl CacheProvider {
         match self {
             Self::Local(cas) => cas.copy_blob_to_file(digest, destination).await,
             Self::Tuist(cache) => cache.copy_blob_to_file(digest, destination).await,
+            Self::Remote(cache) => cache.copy_blob_to_file(digest, destination).await,
         }
     }
 
@@ -166,6 +193,10 @@ impl CacheProvider {
         match self {
             Self::Local(_) => Ok(()),
             Self::Tuist(cache) => {
+                let owner = std::sync::Arc::new(std::sync::Mutex::new(guard));
+                cache.prefetch_blobs_guarded(digests, owner).await
+            }
+            Self::Remote(cache) => {
                 let owner = std::sync::Arc::new(std::sync::Mutex::new(guard));
                 cache.prefetch_blobs_guarded(digests, owner).await
             }
@@ -194,6 +225,29 @@ impl CacheProvider {
         match self {
             Self::Local(cas) => cas.stage_blob_guarded(digest, parent, guard).await,
             Self::Tuist(cache) => {
+                // Share a Send-only guard without adding a Sync bound to the API.
+                let owner = std::sync::Arc::new(std::sync::Mutex::new(guard));
+                cache
+                    .ensure_blob_local_guarded(digest, std::sync::Arc::clone(&owner))
+                    .await?;
+                match cache
+                    .local()
+                    .stage_blob_guarded(digest, parent, std::sync::Arc::clone(&owner))
+                    .await
+                {
+                    Err(error) if error.is_corrupt() => {
+                        cache
+                            .ensure_blob_local_guarded(digest, std::sync::Arc::clone(&owner))
+                            .await?;
+                        cache
+                            .local()
+                            .stage_blob_guarded(digest, parent, owner)
+                            .await
+                    }
+                    result => result,
+                }
+            }
+            Self::Remote(cache) => {
                 // Share a Send-only guard without adding a Sync bound to the API.
                 let owner = std::sync::Arc::new(std::sync::Mutex::new(guard));
                 cache
@@ -279,6 +333,7 @@ impl CacheProvider {
         match self {
             Self::Local(cas) => cas.blob_size(digest).await,
             Self::Tuist(cache) => cache.local().blob_size(digest).await,
+            Self::Remote(cache) => cache.local().blob_size(digest).await,
         }
     }
 
@@ -292,6 +347,7 @@ impl CacheProvider {
         match self {
             Self::Local(cas) => cas.has_blob(digest).await,
             Self::Tuist(cache) => cache.has_blob(digest).await,
+            Self::Remote(cache) => cache.has_blob(digest).await,
         }
     }
 
@@ -305,6 +361,7 @@ impl CacheProvider {
         match self {
             Self::Local(cas) => cas.has_blob(digest).await,
             Self::Tuist(cache) => cache.has_local_blob(digest).await,
+            Self::Remote(cache) => cache.local().has_blob(digest).await,
         }
     }
 
@@ -313,6 +370,7 @@ impl CacheProvider {
         match self {
             Self::Local(cas) => cas.put_action_result(action, result).await,
             Self::Tuist(cache) => cache.put_action_result(action, result).await,
+            Self::Remote(cache) => cache.put_action_result(action, result).await,
         }
     }
 
@@ -344,6 +402,7 @@ impl CacheProvider {
                     }))
             }
             Self::Tuist(cache) => cache.lookup_action_result(action).await,
+            Self::Remote(cache) => cache.lookup_action_result(action).await,
         }
     }
 
@@ -352,6 +411,7 @@ impl CacheProvider {
         match self {
             Self::Local(cas) => cas.forget_action(action).await,
             Self::Tuist(cache) => cache.forget_action(action).await,
+            Self::Remote(cache) => cache.local().forget_action(action).await,
         }
     }
 
@@ -360,6 +420,7 @@ impl CacheProvider {
         match self {
             Self::Local(cas) => cas.stats().await,
             Self::Tuist(cache) => cache.local().stats().await,
+            Self::Remote(cache) => cache.local().stats().await,
         }
     }
 
@@ -371,6 +432,7 @@ impl CacheProvider {
         match self {
             Self::Local(cas) => cas.gc(max_bytes, dry_run).await,
             Self::Tuist(cache) => cache.local().gc(max_bytes, dry_run).await,
+            Self::Remote(cache) => cache.local().gc(max_bytes, dry_run).await,
         }
     }
 

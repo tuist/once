@@ -20,7 +20,9 @@ pub async fn login(
     output: Output,
 ) -> Result<()> {
     match cache_provider::resolve_auth_provider(workspace, xdg, provider)? {
-        ResolvedCacheProviderConfig::Local => Err(unsupported_auth_provider(provider)),
+        ResolvedCacheProviderConfig::Local
+        | ResolvedCacheProviderConfig::ObjectStore(_)
+        | ResolvedCacheProviderConfig::HttpCache(_) => Err(unsupported_auth_provider(provider)),
         ResolvedCacheProviderConfig::Tuist(config) => {
             let provider_name = config.provider_name.clone();
             let provider_name_for_prompt = provider_name.clone();
@@ -49,7 +51,9 @@ pub async fn login(
 
 pub async fn logout(workspace: &Path, xdg: &Xdg, provider: &str, output: Output) -> Result<()> {
     match cache_provider::resolve_auth_provider(workspace, xdg, provider)? {
-        ResolvedCacheProviderConfig::Local => Err(unsupported_auth_provider(provider)),
+        ResolvedCacheProviderConfig::Local
+        | ResolvedCacheProviderConfig::ObjectStore(_)
+        | ResolvedCacheProviderConfig::HttpCache(_) => Err(unsupported_auth_provider(provider)),
         ResolvedCacheProviderConfig::Tuist(config) => {
             let provider_name = config.provider_name.clone();
             let credentials_root = cache_provider::credentials_root(xdg);

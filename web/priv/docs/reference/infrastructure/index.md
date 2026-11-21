@@ -9,7 +9,10 @@ top-to-bottom cache integration guide.
 
 - **[Cache](/reference/infrastructure/cache):** store opaque blobs and action
   results; restore verified content across machines. Current implementations
-  are local storage and a local tier backed by Tuist's REAPI cache.
+  are local storage, a local tier backed by Tuist's REAPI cache, and a local
+  tier backed by an object storage bucket (S3-compatible, Google Cloud Storage,
+  Azure Blob Storage, or a directory), and a local tier backed by an HTTP
+  build cache.
 - **[Execution](/reference/infrastructure/execution):** run a prepared command
   in an isolated environment and return declared outputs, streams, and exit
   status. Current implementations are native local execution, Docker,
@@ -25,7 +28,10 @@ protocol, not an execution or cache protocol.
 
 ## Integration Status
 
-Provider dispatch is currently compiled into Struo. There is no dynamic
+Provider dispatch is currently compiled into Struo. Object storage needs no
+adapter: any service that speaks the S3, Google Cloud Storage, or Azure Blob
+Storage API can be configured with `kind = "object_store"`, and any HTTP cache with `GET`,
+`HEAD`, and `PUT` on a key path with `kind = "http_cache"`. There is no dynamic
 provider registration API, generic REAPI cache configuration, or REAPI
 `Execution.Execute` transport. A new provider needs an adapter and
 configuration/resolution changes in Struo. The cache reference separates the

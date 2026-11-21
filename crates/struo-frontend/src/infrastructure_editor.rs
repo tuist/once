@@ -298,7 +298,7 @@ name = "tuist"
                 config.account.expect("account"),
                 config.project.expect("project"),
             ),
-            ResolvedCacheProviderConfig::Local => panic!("expected tuist provider"),
+            other => panic!("expected tuist provider, got {other:?}"),
         }
     }
 }

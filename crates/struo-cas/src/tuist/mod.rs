@@ -16,6 +16,8 @@ pub(crate) mod test_env;
 
 use reqwest::Url;
 
+pub(crate) use flights::Flights;
+
 use crate::{Error, Result};
 
 pub use auth::{TuistAuth, TuistAuthPrompt, TUIST_APP_OAUTH_CLIENT_ID, TUIST_OAUTH_CLIENT_ID_ENV};

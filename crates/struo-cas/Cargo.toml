@@ -8,10 +8,16 @@ repository.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+async-trait.workspace = true
+aws-config.workspace = true
+aws-credential-types.workspace = true
+aws-sdk-sts = { version = "1", default-features = false }
 bazel-remote-apis.workspace = true
 blake3.workspace = true
+bytes.workspace = true
 futures.workspace = true
 hex.workspace = true
+object_store.workspace = true
 # Decodes `google.rpc` error details; the version bazel-remote-apis already uses.
 prost = "0.14"
 serde.workspace = true
@@ -29,6 +35,8 @@ uuid.workspace = true
 zstd.workspace = true
 
 [dev-dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+aws-runtime = "1"
 http-body = "1"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 

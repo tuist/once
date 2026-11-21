@@ -49,6 +49,56 @@ modes, and symlinks; the cache must not extract or rewrite them. Digests
 identify uncompressed content, independent of compression used for storage
 or transfer.
 
+## Object Storage Layout
+
+The [object storage provider](/guide/infrastructure/object-storage) needs no
+service-side code. It writes plain objects under the configured prefix:
+
+```text
+<prefix>/v1/cas/<struo-digest-hex>   exact uncompressed blob bytes
+<prefix>/v1/ac/<action-digest-hex>   native action result as JSON
+```
+
+The action result JSON is the native record described above. Struo uploads
+every referenced blob before the record, checks that a remote record's blobs
+exist before reusing it, and verifies each downloaded blob's size and BLAKE3
+digest before it enters the local cache. A missing object is the only miss;
+authentication and permission errors are refusals, and other failures after
+retries are outages. `v1` versions the layout, so a later incompatible layout
+uses a new namespace instead of reinterpreting existing objects.
+Credentials come from the client environment, never from the record or the
+key: the AWS SDK credential chain for S3, including `~/.aws` profiles and SSO
+sessions, and each service's standard environment variables and ambient
+identity for Google Cloud Storage and Azure Blob Storage.
+
+Object storage and HTTP cache action records are limited to 16 MiB of JSON.
+Struo keeps larger results locally without publishing their records, so a
+fresh client sees a miss rather than an unreadable cache entry.
+
+## HTTP Cache Layout
+
+The [HTTP cache provider](/guide/infrastructure/http-cache) also needs no
+service-side code beyond plain key storage. Each key is one path segment
+appended to the configured URL and key prefix:
+
+```text
+<url>/<key_prefix>v1.cas.<struo-digest-hex>   exact uncompressed blob bytes
+<url>/<key_prefix>v1.ac.<action-digest-hex>   native action result as JSON
+```
+
+The server must answer:
+
+- **`GET`:** `200` with the exact stored bytes and a `Content-Length`, or
+  `404` when the key is absent.
+- **`HEAD`:** `200` with the stored length in `Content-Length`, or `404`.
+- **`PUT`:** any `2xx` once the whole body is stored. `409` is accepted as
+  "already stored", because content keys are immutable and a concurrent writer
+  publishes the same bytes. Never make a partial body readable.
+
+`401` and `403` are refusals. `408`, `429`, `5xx`, and connection failures are
+outages. Any other status is a protocol error. Ordering and verification match
+the object storage layout above.
+
 ## Existing REAPI Transport
 
 To serve the current Tuist adapter, implement the following gRPC REAPI v2

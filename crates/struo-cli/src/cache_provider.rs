@@ -15,6 +15,8 @@ use struo_frontend::{
 pub(crate) enum ResolvedCacheProviderConfig {
     Local,
     Tuist(TuistCacheConfig),
+    ObjectStore(struo_frontend::ResolvedObjectStoreCacheProviderConfig),
+    HttpCache(struo_frontend::ResolvedHttpCacheProviderConfig),
 }
 
 const DEFAULT_EXECUTION_PROVIDER: &str = "microsandbox";
@@ -216,6 +218,12 @@ fn resolve_config_with_env(
                 config.oauth_client_id,
             ))
         }
+        struo_frontend::ResolvedCacheProviderConfig::ObjectStore(config) => {
+            ResolvedCacheProviderConfig::ObjectStore(config)
+        }
+        struo_frontend::ResolvedCacheProviderConfig::HttpCache(config) => {
+            ResolvedCacheProviderConfig::HttpCache(config)
+        }
     })
 }
 
@@ -226,7 +234,58 @@ fn build_provider(xdg: &Xdg, config: ResolvedCacheProviderConfig) -> Result<Cach
             CacheProvider::tuist(xdg.struo_cas(), credentials_root(xdg), config)
                 .context("configuring Tuist cache provider")
         }
+        ResolvedCacheProviderConfig::ObjectStore(config) => {
+            let store =
+                struo_cas::ObjectStoreRemote::from_url(&config.store.url, &config.store.options)
+                    .with_context(|| {
+                        format!(
+                            "configuring cache infrastructure `{}`",
+                            config.provider_name
+                        )
+                    })?;
+            let access = struo_cas::RemoteAccess::from_config(config.store.read_only)?;
+            tracing::debug!(
+                provider = %config.provider_name,
+                ?access,
+                "using object storage cache provider"
+            );
+            Ok(CacheProvider::remote(
+                xdg.struo_cas(),
+                std::sync::Arc::new(store),
+                access,
+            ))
+        }
+        ResolvedCacheProviderConfig::HttpCache(config) => {
+            let store = http_cache_remote(&config.cache).with_context(|| {
+                format!(
+                    "configuring cache infrastructure `{}`",
+                    config.provider_name
+                )
+            })?;
+            let access = struo_cas::RemoteAccess::from_config(config.cache.read_only)?;
+            tracing::debug!(
+                provider = %config.provider_name,
+                ?access,
+                "using HTTP cache provider"
+            );
+            Ok(CacheProvider::remote(
+                xdg.struo_cas(),
+                std::sync::Arc::new(store),
+                access,
+            ))
+        }
     }
+}
+
+fn http_cache_remote(
+    config: &struo_frontend::HttpCacheProviderConfig,
+) -> struo_cas::Result<struo_cas::HttpCacheRemote> {
+    let auth = struo_cas::HttpCacheAuth::from_env(
+        config.token_env.as_deref(),
+        config.username_env.as_deref(),
+        config.password_env.as_deref(),
+    )?;
+    struo_cas::HttpCacheRemote::new(&config.url, config.key_prefix.as_deref(), auth)
 }
 
 fn take_named_user_provider(config: &mut UserConfig, name: &str) -> Option<UserCacheProvider> {
@@ -258,6 +317,18 @@ fn resolve_named_provider(
             binding_project.or(project),
             oauth_client_id,
         )),
+        UserCacheProvider::ObjectStore(store) => ResolvedCacheProviderConfig::ObjectStore(
+            struo_frontend::ResolvedObjectStoreCacheProviderConfig {
+                provider_name: name,
+                store,
+            },
+        ),
+        UserCacheProvider::HttpCache(cache) => ResolvedCacheProviderConfig::HttpCache(
+            struo_frontend::ResolvedHttpCacheProviderConfig {
+                provider_name: name,
+                cache,
+            },
+        ),
     }
 }
 
@@ -287,6 +358,22 @@ fn resolve_named_workspace_provider(
                 config.oauth_client_id,
             )))
         }
+        InfrastructureProviderConfig::ObjectStore(store) => {
+            Ok(ResolvedCacheProviderConfig::ObjectStore(
+                struo_frontend::ResolvedObjectStoreCacheProviderConfig {
+                    provider_name: name,
+                    store,
+                },
+            ))
+        }
+        InfrastructureProviderConfig::HttpCache(cache) => {
+            Ok(ResolvedCacheProviderConfig::HttpCache(
+                struo_frontend::ResolvedHttpCacheProviderConfig {
+                    provider_name: name,
+                    cache,
+                },
+            ))
+        }
     }
 }
 
@@ -296,7 +383,7 @@ fn resolve_execution_binding(
     binding: ExecutionProviderConfig,
 ) -> Result<RemoteExecution> {
     if let Some(provider) = workspace_config.providers.get(&binding.name) {
-        return Ok(remote_from_workspace_provider(binding, provider.clone()));
+        return remote_from_workspace_provider(binding, provider.clone());
     }
 
     if let Some(config) = maybe_load_user_config(xdg)? {
@@ -320,7 +407,7 @@ fn resolve_execution_user_binding(
     mut config: UserConfig,
 ) -> Result<RemoteExecution> {
     if let Some(provider) = take_named_user_provider(&mut config, &binding.name) {
-        return Ok(remote_from_user_provider(binding, provider));
+        return remote_from_user_provider(binding, provider);
     }
     if is_builtin_execution_provider(&binding.name) {
         return Ok(remote_from_binding(binding));
@@ -335,14 +422,14 @@ fn resolve_execution_user_binding(
 fn remote_from_workspace_provider(
     binding: ExecutionProviderConfig,
     provider: InfrastructureProviderConfig,
-) -> RemoteExecution {
+) -> Result<RemoteExecution> {
     let ExecutionProviderConfig {
         name,
         account: binding_account,
         project: binding_project,
         properties,
     } = binding;
-    match provider {
+    Ok(match provider {
         InfrastructureProviderConfig::Local => RemoteExecution {
             provider: name,
             properties,
@@ -391,20 +478,24 @@ fn remote_from_workspace_provider(
             account: binding_account.or(config.account),
             project: binding_project.or(config.project),
         },
-    }
+        InfrastructureProviderConfig::ObjectStore(_)
+        | InfrastructureProviderConfig::HttpCache(_) => {
+            bail!("infrastructure `{name}` provides shared caching but not execution")
+        }
+    })
 }
 
 fn remote_from_user_provider(
     binding: ExecutionProviderConfig,
     provider: UserCacheProvider,
-) -> RemoteExecution {
+) -> Result<RemoteExecution> {
     let ExecutionProviderConfig {
         name,
         account: binding_account,
         project: binding_project,
         properties,
     } = binding;
-    match provider {
+    Ok(match provider {
         UserCacheProvider::Tuist {
             account, project, ..
         } => RemoteExecution {
@@ -415,7 +506,10 @@ fn remote_from_user_provider(
             account: binding_account.or(account),
             project: binding_project.or(project),
         },
-    }
+        UserCacheProvider::ObjectStore(_) | UserCacheProvider::HttpCache(_) => {
+            bail!("infrastructure `{name}` provides shared caching but not execution")
+        }
+    })
 }
 
 fn remote_from_binding(binding: ExecutionProviderConfig) -> RemoteExecution {
@@ -510,6 +604,8 @@ enum UserCacheProvider {
         account: Option<String>,
         project: Option<String>,
     },
+    ObjectStore(struo_frontend::ObjectStoreCacheProviderConfig),
+    HttpCache(struo_frontend::HttpCacheProviderConfig),
 }
 
 fn maybe_load_user_config(xdg: &Xdg) -> Result<Option<UserConfig>> {
@@ -601,7 +697,9 @@ pub fn account(workspace: &std::path::Path) -> Option<String> {
     let xdg = struo_core::Xdg::from_env();
     match resolve_config(workspace, &xdg).ok()? {
         ResolvedCacheProviderConfig::Tuist(config) => config.account,
-        ResolvedCacheProviderConfig::Local => None,
+        ResolvedCacheProviderConfig::Local
+        | ResolvedCacheProviderConfig::ObjectStore(_)
+        | ResolvedCacheProviderConfig::HttpCache(_) => None,
     }
 }
 
@@ -612,7 +710,9 @@ pub fn project(workspace: &std::path::Path) -> Option<String> {
     let xdg = struo_core::Xdg::from_env();
     match resolve_config(workspace, &xdg).ok()? {
         ResolvedCacheProviderConfig::Tuist(config) => config.project,
-        ResolvedCacheProviderConfig::Local => None,
+        ResolvedCacheProviderConfig::Local
+        | ResolvedCacheProviderConfig::ObjectStore(_)
+        | ResolvedCacheProviderConfig::HttpCache(_) => None,
     }
 }
 
@@ -698,7 +798,7 @@ mod tests {
     fn expect_tuist(config: ResolvedCacheProviderConfig) -> struo_cas::TuistCacheConfig {
         match config {
             ResolvedCacheProviderConfig::Tuist(config) => config,
-            ResolvedCacheProviderConfig::Local => panic!("expected tuist cache provider"),
+            other => panic!("expected tuist cache provider, got {other:?}"),
         }
     }
 

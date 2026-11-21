@@ -38,12 +38,14 @@ pub const BUILD_FILE_NAME: &str = TOML_BUILD_FILE_NAME;
 pub use analysis::flush_host_tree_digest_caches;
 pub use cache_provider::{
     CacheProviderConfig, DaytonaExecutionProviderConfig, DockerExecutionProviderConfig,
-    E2bExecutionProviderConfig, ExecutionProviderConfig, InfrastructureConfig,
-    InfrastructureProviderConfig, MicrosandboxExecutionProviderConfig, NamedCacheProviderConfig,
-    TuistCacheProviderConfig, DEFAULT_TUIST_URL,
+    E2bExecutionProviderConfig, ExecutionProviderConfig, HttpCacheProviderConfig,
+    InfrastructureConfig, InfrastructureProviderConfig, MicrosandboxExecutionProviderConfig,
+    NamedCacheProviderConfig, ObjectStoreCacheProviderConfig, TuistCacheProviderConfig,
+    DEFAULT_TUIST_URL,
 };
 pub use cache_resolution::{
-    resolve_cache_provider, ResolvedCacheProviderConfig, ResolvedTuistCacheProviderConfig,
+    resolve_cache_provider, ResolvedCacheProviderConfig, ResolvedHttpCacheProviderConfig,
+    ResolvedObjectStoreCacheProviderConfig, ResolvedTuistCacheProviderConfig,
 };
 pub use error::{CacheProviderError, Error, ManifestSchemaError, Result, ScriptHeaderError};
 pub use examples::{load_example_bundle, load_target_kind_example};

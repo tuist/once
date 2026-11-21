@@ -168,6 +168,8 @@ defmodule StruoSiteWeb.Docs.Sidebar do
           %Item{label: "Triggers (Experimental)", slug: "/docs/guide/infrastructure/triggers"},
           %Item{label: "Buildkite", slug: "/docs/guide/infrastructure/buildkite"},
           %Item{label: "Docker", slug: "/docs/guide/infrastructure/docker"},
+          %Item{label: "Object Storage", slug: "/docs/guide/infrastructure/object-storage"},
+          %Item{label: "HTTP Cache", slug: "/docs/guide/infrastructure/http-cache"},
           %Item{
             label: "Microsandbox",
             slug: "/docs/guide/infrastructure/microsandbox",

@@ -24,6 +24,17 @@ impl Cas {
         destination: &Path,
         copy: impl FnOnce(&mut dyn io::Read, &mut dyn io::Write) -> io::Result<T> + Send + 'static,
     ) -> Result<T> {
+        self.copy_blob_to_file_guarded(digest, destination, (), copy)
+            .await
+    }
+
+    pub(crate) async fn copy_blob_to_file_guarded<T: Send + 'static, G: Send + 'static>(
+        &self,
+        digest: &Digest,
+        destination: &Path,
+        guard: G,
+        copy: impl FnOnce(&mut dyn io::Read, &mut dyn io::Write) -> io::Result<T> + Send + 'static,
+    ) -> Result<T> {
         let stored_path = self.blob_path(digest);
         if !fs::try_exists(&stored_path).await.unwrap_or(false) {
             return Err(Error::BlobNotFound(*digest));
@@ -35,6 +46,7 @@ impl Cas {
         let _stop = blob::StopOnDrop(std::sync::Arc::clone(&stop));
         let source_path = stored_path.clone();
         let decoded = tokio::task::spawn_blocking(move || {
+            let _guard = guard;
             blob::decode_file(&stored_path, &output_path, &expected, &stop, copy)
         })
         .await
@@ -62,6 +74,44 @@ impl Cas {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cancelled_decode_keeps_its_guard_until_the_worker_stops() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = Cas::open(tmp.path().join("cas"));
+        let digest = cas.put_blob(b"payload").await.unwrap();
+        let budget = crate::TransferBudget::new(4096, 4096);
+        let memory = budget.reserve_memory(4096).await.unwrap();
+        let (entered, started) = tokio::sync::oneshot::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        let task = tokio::spawn(async move {
+            cas.copy_blob_to_file_guarded(
+                &digest,
+                &tmp.path().join("copy"),
+                memory,
+                move |reader, writer| {
+                    entered.send(()).unwrap();
+                    wait.recv_timeout(std::time::Duration::from_secs(5))
+                        .unwrap();
+                    io::copy(reader, writer)
+                },
+            )
+            .await
+        });
+        started.await.unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert_eq!(budget.available().0, 0);
+        release.send(()).unwrap();
+        let memory = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            budget.reserve_memory(4096),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        drop(memory);
+    }
 
     #[tokio::test]
     async fn buffered_copies_cover_empty_small_raw_compressed_and_literal_magic() {

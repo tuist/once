@@ -1,4 +1,4 @@
-use super::{CacheProvider, TUIST_STREAM_REMOTE_UPLOAD_LIMIT};
+use super::{CacheProvider, STREAM_REMOTE_UPLOAD_LIMIT};
 use crate::{Digest, Result};
 use std::io::{self, Write};
 
@@ -19,6 +19,7 @@ impl CacheProvider {
         let digest = match self {
             Self::Local(cas) => cas.put_produced(guard, produce).await?,
             Self::Tuist(cache) => cache.local().put_produced(guard, produce).await?,
+            Self::Remote(cache) => cache.local().put_produced(guard, produce).await?,
         };
         self.mirror_produced(digest).await
     }
@@ -38,15 +39,21 @@ impl CacheProvider {
         let digest = match self {
             Self::Local(cas) => cas.put_produced_pipelined(guard, produce).await?,
             Self::Tuist(cache) => cache.local().put_produced_pipelined(guard, produce).await?,
+            Self::Remote(cache) => cache.local().put_produced_pipelined(guard, produce).await?,
         };
         self.mirror_produced(digest).await
     }
 
     async fn mirror_produced(&self, digest: Digest) -> Result<Digest> {
         if let Self::Tuist(cache) = self {
-            if cache.local().blob_size(&digest).await? <= TUIST_STREAM_REMOTE_UPLOAD_LIMIT {
+            if cache.local().blob_size(&digest).await? <= STREAM_REMOTE_UPLOAD_LIMIT {
                 let bytes = cache.local().get_blob(&digest).await?;
                 let _ = cache.put_blob(&bytes).await?;
+            }
+        }
+        if let Self::Remote(cache) = self {
+            if cache.local().blob_size(&digest).await? <= STREAM_REMOTE_UPLOAD_LIMIT {
+                cache.publish_local_blob(&digest).await;
             }
         }
         Ok(digest)

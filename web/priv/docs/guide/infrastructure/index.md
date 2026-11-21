@@ -76,6 +76,10 @@ project = "app"
 provider = "tuist"
 ```
 
+A bucket you already have works as well; see
+[Object Storage Cache](/guide/infrastructure/object-storage). So does an HTTP
+build cache; see [HTTP Cache](/guide/infrastructure/http-cache).
+
 The execution and cache capabilities are independent. A repository can run
 actions through E2B or Daytona while storing reusable results through Tuist.
 It can also use either capability on its own.
@@ -89,6 +93,8 @@ It can also use either capability on its own.
 | [E2B](/guide/infrastructure/e2b) | Execution | Hosted template | Start a prepared hosted environment quickly. |
 | [Daytona](/guide/infrastructure/daytona) | Execution | Hosted container image | Build a hosted environment from a familiar image. |
 | [Tuist](/guide/infrastructure/tuist) | Shared cache, artifacts | Not applicable | Reuse action results and share installable applications. |
+| [Object storage](/guide/infrastructure/object-storage) | Shared cache | Your S3, Google Cloud Storage, or Azure bucket | Share results through storage you already run, without a cache service. |
+| [HTTP cache](/guide/infrastructure/http-cache) | Shared cache | Any server with `GET`, `HEAD`, and `PUT` | Reuse a build cache your CI runners already reach. |
 
 ## Keep A Local Escape Hatch
 

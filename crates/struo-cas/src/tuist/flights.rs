@@ -6,12 +6,12 @@ use tokio::sync::{Mutex, OwnedMutexGuard};
 use crate::Digest;
 
 #[derive(Debug, Default)]
-pub(super) struct Flights {
+pub(crate) struct Flights {
     active: Mutex<HashMap<Digest, Weak<Mutex<()>>>>,
 }
 
 impl Flights {
-    pub(super) async fn acquire(&self, digest: Digest) -> OwnedMutexGuard<()> {
+    pub(crate) async fn acquire(&self, digest: Digest) -> OwnedMutexGuard<()> {
         let lock = {
             let mut active = self.active.lock().await;
             active.retain(|_, lock| lock.strong_count() > 0);

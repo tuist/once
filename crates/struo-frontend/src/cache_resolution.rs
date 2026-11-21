@@ -5,8 +5,8 @@ use serde::Deserialize;
 
 use crate::{
     load_infrastructure_config, CacheProviderConfig, CacheProviderError, Error,
-    InfrastructureProviderConfig, NamedCacheProviderConfig, Result, TuistCacheProviderConfig,
-    DEFAULT_TUIST_URL,
+    HttpCacheProviderConfig, InfrastructureProviderConfig, NamedCacheProviderConfig,
+    ObjectStoreCacheProviderConfig, Result, TuistCacheProviderConfig, DEFAULT_TUIST_URL,
 };
 
 mod tuist_swift;
@@ -18,6 +18,20 @@ use user::{load_user_config, maybe_load_user_config, take_named_user_provider, U
 pub enum ResolvedCacheProviderConfig {
     Local,
     Tuist(ResolvedTuistCacheProviderConfig),
+    ObjectStore(ResolvedObjectStoreCacheProviderConfig),
+    HttpCache(ResolvedHttpCacheProviderConfig),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedHttpCacheProviderConfig {
+    pub provider_name: String,
+    pub cache: HttpCacheProviderConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedObjectStoreCacheProviderConfig {
+    pub provider_name: String,
+    pub store: ObjectStoreCacheProviderConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +85,18 @@ fn resolve_provider_config(
         CacheProviderConfig::Local => Ok(ResolvedCacheProviderConfig::Local),
         CacheProviderConfig::Tuist(config) => Ok(ResolvedCacheProviderConfig::Tuist(
             direct_tuist_config(config),
+        )),
+        CacheProviderConfig::ObjectStore(store) => Ok(ResolvedCacheProviderConfig::ObjectStore(
+            ResolvedObjectStoreCacheProviderConfig {
+                provider_name: "object_store".to_string(),
+                store,
+            },
+        )),
+        CacheProviderConfig::HttpCache(cache) => Ok(ResolvedCacheProviderConfig::HttpCache(
+            ResolvedHttpCacheProviderConfig {
+                provider_name: "http_cache".to_string(),
+                cache,
+            },
         )),
         CacheProviderConfig::Named(binding) => {
             if let Some(provider) = workspace_providers.get(&binding.name) {
@@ -136,6 +162,18 @@ fn resolve_named_provider(
             project: binding_project.or(project),
             oauth_client_id,
         }),
+        UserCacheProvider::ObjectStore(store) => {
+            ResolvedCacheProviderConfig::ObjectStore(ResolvedObjectStoreCacheProviderConfig {
+                provider_name: name,
+                store,
+            })
+        }
+        UserCacheProvider::HttpCache(cache) => {
+            ResolvedCacheProviderConfig::HttpCache(ResolvedHttpCacheProviderConfig {
+                provider_name: name,
+                cache,
+            })
+        }
     }
 }
 
@@ -166,6 +204,18 @@ fn resolve_named_workspace_provider(
                 oauth_client_id: config.oauth_client_id,
             },
         )),
+        InfrastructureProviderConfig::ObjectStore(store) => Ok(
+            ResolvedCacheProviderConfig::ObjectStore(ResolvedObjectStoreCacheProviderConfig {
+                provider_name: name,
+                store,
+            }),
+        ),
+        InfrastructureProviderConfig::HttpCache(cache) => Ok(
+            ResolvedCacheProviderConfig::HttpCache(ResolvedHttpCacheProviderConfig {
+                provider_name: name,
+                cache,
+            }),
+        ),
     }
 }
 

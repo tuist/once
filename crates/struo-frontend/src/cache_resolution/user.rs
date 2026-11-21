@@ -49,6 +49,8 @@ pub(super) enum UserCacheProvider {
         account: Option<String>,
         project: Option<String>,
     },
+    ObjectStore(crate::ObjectStoreCacheProviderConfig),
+    HttpCache(crate::HttpCacheProviderConfig),
 }
 
 pub(super) fn take_named_user_provider(

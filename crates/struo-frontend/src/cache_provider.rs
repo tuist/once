@@ -12,6 +12,8 @@ pub enum CacheProviderConfig {
     Local,
     Named(NamedCacheProviderConfig),
     Tuist(TuistCacheProviderConfig),
+    ObjectStore(ObjectStoreCacheProviderConfig),
+    HttpCache(HttpCacheProviderConfig),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -48,6 +50,46 @@ pub struct TuistCacheProviderConfig {
     pub execution_image: Option<String>,
 }
 
+/// A bucket, container, or directory that holds the shared cache.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObjectStoreCacheProviderConfig {
+    /// `s3://bucket/prefix`, `gs://bucket/prefix`, `az://container/prefix`,
+    /// or `file:///directory`.
+    pub url: String,
+    /// Store settings such as `endpoint` or `region`. Credentials belong in
+    /// the environment, not here.
+    #[serde(default)]
+    pub options: BTreeMap<String, String>,
+    /// Read the shared cache without publishing to it.
+    #[serde(default)]
+    pub read_only: bool,
+}
+
+/// An HTTP cache that stores values with `GET`, `HEAD`, and `PUT` on a key
+/// path, such as a `WebDAV` build cache.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HttpCacheProviderConfig {
+    /// Base URL the keys are appended to.
+    pub url: String,
+    /// Path prepended to every key, such as a tenant or cache name.
+    #[serde(default)]
+    pub key_prefix: Option<String>,
+    /// Environment variable holding a bearer token.
+    #[serde(default)]
+    pub token_env: Option<String>,
+    /// Environment variable holding the basic authentication user name.
+    #[serde(default)]
+    pub username_env: Option<String>,
+    /// Environment variable holding the basic authentication password.
+    #[serde(default)]
+    pub password_env: Option<String>,
+    /// Read the shared cache without publishing to it.
+    #[serde(default)]
+    pub read_only: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MicrosandboxExecutionProviderConfig {
     pub image: String,
@@ -76,6 +118,8 @@ pub enum InfrastructureProviderConfig {
     Daytona(DaytonaExecutionProviderConfig),
     Docker(DockerExecutionProviderConfig),
     Tuist(TuistCacheProviderConfig),
+    ObjectStore(ObjectStoreCacheProviderConfig),
+    HttpCache(HttpCacheProviderConfig),
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -145,6 +189,8 @@ pub(crate) enum DirectCacheProviderToml {
         project: Option<String>,
         oauth_client_id: Option<String>,
     },
+    ObjectStore(ObjectStoreCacheProviderConfig),
+    HttpCache(HttpCacheProviderConfig),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -170,6 +216,8 @@ pub(crate) enum InfrastructureProviderToml {
         oauth_client_id: Option<String>,
         execution_image: Option<String>,
     },
+    ObjectStore(ObjectStoreCacheProviderConfig),
+    HttpCache(HttpCacheProviderConfig),
 }
 
 impl CacheProviderToml {
@@ -193,6 +241,12 @@ impl CacheProviderToml {
                     oauth_client_id: non_empty(oauth_client_id),
                     execution_image: None,
                 }))
+            }
+            Self::Direct(DirectCacheProviderToml::ObjectStore(config)) => {
+                Ok(CacheProviderConfig::ObjectStore(config))
+            }
+            Self::Direct(DirectCacheProviderToml::HttpCache(config)) => {
+                Ok(CacheProviderConfig::HttpCache(config))
             }
         }
     }
@@ -268,6 +322,8 @@ impl InfrastructureProviderToml {
                 oauth_client_id: non_empty(oauth_client_id),
                 execution_image: non_empty(execution_image),
             }),
+            Self::ObjectStore(config) => InfrastructureProviderConfig::ObjectStore(config),
+            Self::HttpCache(config) => InfrastructureProviderConfig::HttpCache(config),
         })
     }
 }

@@ -73,6 +73,33 @@ impl Cache {
                     },
                 )?
             }
+            struo_frontend::ResolvedCacheProviderConfig::ObjectStore(config) => {
+                CacheProvider::remote(
+                    xdg.struo_cas(),
+                    std::sync::Arc::new(struo_cas::ObjectStoreRemote::from_url(
+                        &config.store.url,
+                        &config.store.options,
+                    )?),
+                    struo_cas::RemoteAccess::from_config(config.store.read_only)?,
+                )
+            }
+            struo_frontend::ResolvedCacheProviderConfig::HttpCache(config) => {
+                let cache = config.cache;
+                let auth = struo_cas::HttpCacheAuth::from_env(
+                    cache.token_env.as_deref(),
+                    cache.username_env.as_deref(),
+                    cache.password_env.as_deref(),
+                )?;
+                CacheProvider::remote(
+                    xdg.struo_cas(),
+                    std::sync::Arc::new(struo_cas::HttpCacheRemote::new(
+                        &cache.url,
+                        cache.key_prefix.as_deref(),
+                        auth,
+                    )?),
+                    struo_cas::RemoteAccess::from_config(cache.read_only)?,
+                )
+            }
         };
         Ok(Self::with_provider(provider))
     }

@@ -156,8 +156,10 @@ impl Provisioner {
 /// the same credentials.
 pub fn resolve(workspace: &Path, xdg: &Xdg, provider: &str) -> Result<Provisioner> {
     match resolve_provider_config(workspace, xdg, provider)? {
-        ResolvedCacheProviderConfig::Local => bail!(
-            "provider `{provider}` provides a local cache and cannot create projects. \
+        ResolvedCacheProviderConfig::Local
+        | ResolvedCacheProviderConfig::ObjectStore(_)
+        | ResolvedCacheProviderConfig::HttpCache(_) => bail!(
+            "provider `{provider}` provides a storage-only cache and cannot create projects. \
              Choose a project-hosting provider, for example `--provider tuist`."
         ),
         ResolvedCacheProviderConfig::Tuist(config) => Ok(Provisioner::Tuist(TuistProjects::new(
